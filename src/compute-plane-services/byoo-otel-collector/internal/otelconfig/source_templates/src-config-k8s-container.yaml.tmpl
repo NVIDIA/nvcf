@@ -1,0 +1,161 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "${env:OTEL_POD_IP:-0.0.0.0}:14357"
+      http:
+        endpoint: "${env:OTEL_POD_IP:-0.0.0.0}:14358"
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: "nvcf-worker"
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          honor_labels: true
+          metrics_path: "/federate"
+          static_configs:
+            - targets:
+              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+          params:
+            "match[]":
+              - '{job=~"nvcf-worker", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"utils", __name__=~"([[container_nvcf_worker_metric_allow_list]])"}'
+          metric_relabel_configs:
+            - action: labelkeep
+              regex: "([[container_nvcf_worker_attr_allow_list]])"
+        - job_name: "nvca"
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          honor_labels: true
+          metrics_path: "/federate"
+          static_configs:
+            - targets:
+              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+          params:
+            "match[]":
+              - '{job=~"nvca", namespace="nvca-system", pod=~"nvca.*", container="agent", __name__=~"([[container_nvca_metric_allow_list]])"}'
+          metric_relabel_configs:
+            - action: labelkeep
+              regex: "([[container_nvca_attr_allow_list]])"
+        - job_name: "kubernetes-cadvisor"
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          honor_labels: true
+          honor_timestamps: false
+          metrics_path: "/federate"
+          static_configs:
+            - targets:
+              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+          params:
+            "match[]":
+              # kubelet (relabel rules aligned with byoo-prometheus servicemonitor_kubelet.yaml)
+              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"inference|task|", __name__=~"([[container_kubernetes_cadvisor_metric_allow_list]])"}'
+          metric_relabel_configs:
+            # for container_fs_.+ metrics
+            - source_labels: [device]
+              regex: '(^$|/dev/root|/dev/shm|/run)'
+              action: keep
+            # rename the job to kubernetes-cadvisor
+            - source_labels: [job]
+              regex: "kubelet"
+              replacement: "kubernetes-cadvisor"
+              target_label: job
+            - action: labelkeep
+              regex: "([[container_kubernetes_cadvisor_attr_allow_list]])"
+        - job_name: "kube-state-metrics"
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          honor_labels: true
+          metrics_path: "/federate"
+          static_configs:
+            - targets:
+              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+          params:
+            "match[]":
+              # kube-state-metrics (relabel rules aligned with byoo-prometheus servicemonitor_kube-state-metrics.yaml)
+              - '{job=~"kube-state-metrics", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"inference|task", __name__=~"([[container_kube_state_metrics_metric_allow_list]])"}'
+          metric_relabel_configs:
+            - action: labelkeep
+              regex: "([[container_kube_state_metrics_attr_allow_list]])"
+        - job_name: "nvidia-dcgm-exporter"
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          honor_labels: true
+          metrics_path: "/federate"
+          static_configs:
+            - targets:
+              - "nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090"
+          params:
+            "match[]":
+              # nvidia-dcgm-exporter (relabel rules aligned with byoo-prometheus servicemonitor_dcgm-exporter.yaml)
+              - '{job=~"nvidia-dcgm-exporter", exported_namespace="nvcf-backend", exported_pod=~".*{{ .InstanceID }}.*", exported_container=~"inference|task", __name__=~"[[container_nvidia_dcgm_exporter_metric_allow_list]]"}'
+          metric_relabel_configs:
+            - action: labelmap
+              regex: exported_(.+)
+              replacement: $1
+            - action: labelkeep
+              regex: "([[container_nvidia_dcgm_exporter_attr_allow_list]])"
+        - job_name: opentelemetry-collector
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          static_configs:
+            - targets:
+              - "${env:OTEL_POD_IP:-0.0.0.0}:18888"
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              action: keep
+              regex: "([[container_opentelemetry_collector_metric_allow_list]])"
+
+processors:
+  batch:
+    send_batch_size: 4096
+    timeout: 400ms
+    send_batch_max_size: 8192
+  filter/metrics:
+    metrics:
+      exclude:
+        match_type: strict
+        metric_names:
+          - scrape_duration_seconds
+          - scrape_samples_post_metric_relabeling
+          - scrape_samples_scraped
+          - scrape_series_added
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 10
+  resource:
+    attributes:
+      - key: service.instance.id
+        action: delete
+  attributes/add-metadata:
+    actions:
+[[non_gfn_attributes | indent(2, true)]]
+
+  metricstransform:
+    transforms:
+      - include: ^.*$
+        match_type: regexp
+        action: update
+        operations:
+[[non_gfn_metricstransform | indent(2, true)]]
+
+extensions:
+  cgroupruntime:
+    gomaxprocs:
+      enabled: true
+    gomemlimit:
+      enabled: true
+      ratio: 0.8
+  healthcheckv2:
+    use_v2: true
+    component_health:
+      include_permanent_errors: true
+      include_recoverable_errors: true
+      recovery_duration: 1m
+    http:
+      endpoint: "${env:OTEL_POD_IP:-0.0.0.0}:13133"
+      status:
+        enabled: true
+        path: "/health"
+      config:
+        enabled: false

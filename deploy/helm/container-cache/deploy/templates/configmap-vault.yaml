@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if .Values.vault.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+    name: {{ $.Release.Name }}-vault-config
+    namespace: {{ $.Release.Namespace | quote }}
+data:
+  config.hcl: |                        # Config for Vault Agent Sidecar container
+    "auto_auth" = {
+      "method" = {
+        "type" = "jwt"
+        "mount_path" = "auth/jwt/{{ .Values.vault.clusterCSP }}/{{ .Values.vault.clusterAccountName }}/regions/{{ .Values.vault.clusterRegion }}/{{ .Values.vault.clusterName }}"
+        "namespace" = "{{ .Values.vault.namespace }}"
+        "config" = {
+          "path" = "/var/run/secrets/kubernetes.io/serviceaccount-vault/token"
+          "role" = "container-cache"
+          skip_jwt_cleanup = true
+        }
+      }
+      "sink" = {
+        "config" = {
+          "path" = "/home/vault/.token"        # Use different paths for containers
+        }
+        "type" = "file"
+      }
+    }
+
+    "exit_after_auth" = false                  # false for Vault Agent Sidecar container
+
+    "pid_file" = "/home/vault/.pid"
+
+    "template" {
+      "source" = "/vault/configs/template.hcl"
+      "destination" = "/vault/secrets/secrets_pkiCert.tmp"
+      "exec" {
+        "command" = "cat /vault/secrets/certs/nginx-intermediate.pem <(echo) /vault/secrets/certs/ca_chain_proxy.pem > /certs/ssl-bundle.crt  && wget -O- http://127.0.0.1:13129/reload || echo"
+      }
+      error_on_missing_key = true
+    }
+
+    "vault" = {
+      "address" = "{{ .Values.vault.vaultAddress }}"
+    }
+
+  config-init.hcl: |                   # Config for Vault Agent Init container
+    "auto_auth" = {
+      "method" = {
+        "type" = "jwt"
+        "mount_path" = "auth/jwt/{{ .Values.vault.clusterCSP }}/{{ .Values.vault.clusterAccountName }}/regions/{{ .Values.vault.clusterRegion }}/{{ .Values.vault.clusterName }}"
+        "namespace" = "{{ .Values.vault.namespace }}"
+        "config" = {
+          "path" = "/var/run/secrets/kubernetes.io/serviceaccount-vault/token"
+          "role" = "container-cache"
+          skip_jwt_cleanup = true
+        }
+      }
+      "sink" = {
+        "config" = {
+         "path" = "/home/vault/.token-init"    # Use different paths for containers
+        }
+        "type" = "file"
+      }
+    }
+    "exit_after_auth" = true                   # true for Vault Agent Init container
+    "pid_file" = "/home/vault/.pid"
+
+    "template" {
+      "source" = "/vault/configs/template.hcl"
+      "destination" = "/vault/secrets/secrets_pkiCert.tmp"
+      "exec" {
+        "command" = "cat /vault/secrets/certs/nginx-intermediate.pem <(echo) /vault/secrets/certs/ca_chain_proxy.pem > /certs/ssl-bundle.crt"
+      }
+      error_on_missing_key = true
+    }
+
+    "vault" = {
+      "address" = "{{ .Values.vault.vaultAddress }}"
+    }
+
+  template.hcl: |
+    {{ "{{" }} with secret `/cloud/{{ .Values.vault.clusterCSP }}/{{ .Values.vault.clusterAccountName }}/services/proxy-cache/regions/{{ .Values.vault.clusterRegion }}/{{ .Values.vault.clusterName }}/pki/server/01/cert/ca_chain` {{ "}}" }}
+    {{ "{{" }} .Data.ca_chain | writeToFile "/vault/secrets/certs/ca_chain_proxy.pem" "" "" "0644" {{ "}}" }}
+    {{ "{{" }} end {{ "}}" }}
+    {{ "{{" }}  with $csrContents := file "/certs/leaf-ca.csr" {{ "}}" }}
+    {{ "{{" }}  with $arg := printf "csr=%s" $csrContents {{ "}}" }}
+    {{ "{{" }}  with secret `/cloud/{{ .Values.vault.clusterCSP }}/{{ .Values.vault.clusterAccountName }}/services/proxy-cache/regions/{{ .Values.vault.clusterRegion }}/{{ .Values.vault.clusterName }}/pki/server/01/root/sign-intermediate` $arg {{ "}}" }}
+    {{ "{{"}}  .Data.certificate |  writeToFile "/vault/secrets/certs/nginx-intermediate.pem" "" "" "0644" {{ "}}" }}
+    {{ "{{" }} end {{ "}}" }}
+    {{ "{{" }} end {{ "}}" }}
+    {{ "{{" }} end {{ "}}" }}
+{{- end }}

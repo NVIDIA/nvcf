@@ -1,0 +1,333 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Walk the whole repo tree and roll up third-party notice and license locations.
+#
+# Output (repo root by default): NOTICE
+#
+# The scan includes:
+# - repo NOTICE files anywhere in the repo, outside checked-in third-party trees
+# - NOTICE / LICENSE / COPYING files found under checked-in third-party source
+#   trees such as vendor/
+#
+# Run from repo root: ./tools/scripts/collect-notices
+# Write elsewhere:   ./tools/scripts/collect-notices --output /tmp/NOTICE
+
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+
+ROOT_NOTICE_FILE_NAMES=(
+    NOTICE
+    NOTICE.txt
+    NOTICE.md
+)
+
+SKIP_DIR_NAMES=(
+    .git
+    .hg
+    .svn
+    .venv
+    venv
+    __pycache__
+    .pytest_cache
+    .mypy_cache
+    .tox
+    target
+)
+
+SOURCE_CODE_EXTENSIONS=(
+    .c
+    .cc
+    .cpp
+    .cs
+    .go
+    .h
+    .hpp
+    .java
+    .js
+    .jsx
+    .kt
+    .m
+    .php
+    .py
+    .rb
+    .rs
+    .scala
+    .sh
+    .swift
+    .ts
+    .tsx
+)
+
+OUTPUT_ARG="NOTICE"
+
+REPO_NOTICE_FILES=0
+VENDORED_NOTICE_FILES=0
+
+declare -A SEEN_PATHS=()
+
+usage() {
+    cat <<'EOF'
+Usage: ./tools/scripts/collect-notices [--output PATH]
+
+Collect repo notice and third-party license paths into a top-level NOTICE.
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o|--output)
+                [[ $# -ge 2 ]] || {
+                    echo "missing value for $1" >&2
+                    exit 1
+                }
+                OUTPUT_ARG="$2"
+                shift 2
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                echo "unexpected argument: $1" >&2
+                usage >&2
+                exit 1
+                ;;
+        esac
+    done
+}
+
+has_utf8_bom() {
+    local path="$1"
+    local prefix
+
+    prefix="$(LC_ALL=C od -An -tx1 -N3 -v "${path}" 2>/dev/null | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
+    [[ "${prefix}" == "ef bb bf" ]]
+}
+
+notice_has_content() {
+    local path="$1"
+    local start=1
+
+    [[ -f "${path}" ]] || return 1
+
+    if LC_ALL=C od -An -tx1 -v "${path}" 2>/dev/null | grep -qw '00'; then
+        return 1
+    fi
+
+    if has_utf8_bom "${path}"; then
+        start=4
+    fi
+
+    tail -c +"${start}" "${path}" 2>/dev/null | tr -d '\r\n' | grep -q .
+}
+
+is_source_code_extension() {
+    local suffix="$1"
+    local ext
+
+    for ext in "${SOURCE_CODE_EXTENSIONS[@]}"; do
+        [[ "${suffix}" == "${ext}" ]] && return 0
+    done
+    return 1
+}
+
+is_notice_or_license_filename() {
+    local name="$1"
+    local lower="${name,,}"
+    local suffix=""
+
+    if [[ "${name}" == *.* ]]; then
+        suffix=".${name##*.}"
+        suffix="${suffix,,}"
+    fi
+
+    if is_source_code_extension "${suffix}"; then
+        return 1
+    fi
+
+    [[ "${lower}" == "notice" || "${lower}" == notice.* ||
+       "${lower}" == "license" || "${lower}" == license.* ||
+       "${lower}" == "licence" || "${lower}" == licence.* ||
+       "${lower}" == "copying" || "${lower}" == copying.* ]]
+}
+
+is_skipped_path() {
+    local path="$1"
+    local skip_dir
+
+    for skip_dir in "${SKIP_DIR_NAMES[@]}"; do
+        [[ "${path}" == */"${skip_dir}"/* ]] && return 0
+    done
+    return 1
+}
+
+relative_notice_path() {
+    local path="$1"
+    echo "${path#"${REPO_ROOT}/"}"
+}
+
+repo_file_paths() {
+    local repo_root="$1"
+    local prune_args=()
+    local skip_dir
+    local filepath
+    local relpath
+
+    if git -C "${repo_root}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        while IFS= read -r relpath; do
+            [[ -n "${relpath}" ]] || continue
+            filepath="${repo_root}/${relpath}"
+            is_skipped_path "${filepath}" && continue
+            printf '%s\n' "${filepath}"
+        done < <(git -C "${repo_root}" ls-files -co --exclude-standard --full-name)
+        return
+    fi
+
+    for skip_dir in "${SKIP_DIR_NAMES[@]}"; do
+        prune_args+=(-name "${skip_dir}" -o)
+    done
+    unset 'prune_args[${#prune_args[@]}-1]'
+
+    find "${repo_root}" \( "${prune_args[@]}" \) -prune -o -type f -print 2>/dev/null | LC_ALL=C sort
+}
+
+record_path() {
+    local path="$1"
+    local kind="$2"
+    local rel_path
+
+    if ! notice_has_content "${path}"; then
+        return
+    fi
+
+    rel_path="$(relative_notice_path "${path}")"
+    if [[ -n "${SEEN_PATHS["${rel_path}"]+x}" ]]; then
+        return
+    fi
+
+    SEEN_PATHS["${rel_path}"]=1
+    COLLECTED_PATHS+=("${rel_path}")
+
+    if [[ "${kind}" == "repo" ]]; then
+        REPO_NOTICE_FILES=$((REPO_NOTICE_FILES + 1))
+    else
+        VENDORED_NOTICE_FILES=$((VENDORED_NOTICE_FILES + 1))
+    fi
+}
+
+top_level_notice_files() {
+    local repo_root="$1"
+    local output_path="$2"
+    local filepath
+    local name
+
+    while IFS= read -r filepath; do
+        [[ -n "${filepath}" ]] || continue
+        [[ "${filepath}" == "${repo_root}/NOTICE" ]] && continue
+        [[ "${filepath}" == "${output_path}" ]] && continue
+        is_third_party_path "${filepath}" && continue
+        name="${filepath##*/}"
+        case "${name}" in
+            NOTICE|NOTICE.txt|NOTICE.md)
+                record_path "${filepath}" "repo"
+                ;;
+        esac
+    done < <(repo_file_paths "${repo_root}")
+}
+
+is_third_party_path() {
+    local path="$1"
+
+    case "${path}" in
+        */vendor/*|*/third_party/*|*/third-party/*|*/3rdparty/*|*/node_modules/*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+third_party_notice_files() {
+    local repo_root="$1"
+    local output_path="$2"
+    local filepath
+    local name
+
+    while IFS= read -r filepath; do
+        [[ -n "${filepath}" ]] || continue
+        [[ "${filepath}" == "${output_path}" ]] && continue
+        is_third_party_path "${filepath}" || continue
+        name="${filepath##*/}"
+        is_notice_or_license_filename "${name}" || continue
+        record_path "${filepath}" "vendored"
+    done < <(repo_file_paths "${repo_root}")
+}
+
+render_notice() {
+    cat <<EOF
+                          THIRD-PARTY LICENSES
+
+This repository includes third-party dependencies, each governed by their own
+license terms. When repo notice files or checked-in third-party code change,
+regenerate this file by running:
+
+    ./tools/scripts/update-license
+
+The following third-party licenses are included in this repository:
+
+EOF
+
+    local path
+    for path in "${SORTED_PATHS[@]}"; do
+        printf '    %s\n' "${path}"
+    done
+}
+
+main() {
+    parse_args "$@"
+
+    local output_path="${OUTPUT_ARG}"
+    if [[ "${output_path}" != /* ]]; then
+        output_path="${REPO_ROOT}/${output_path}"
+    fi
+
+    if [[ ! -d "$(dirname "${output_path}")" ]]; then
+        echo "missing parent directory for ${output_path}" >&2
+        exit 1
+    fi
+
+    top_level_notice_files "${REPO_ROOT}" "${output_path}"
+    third_party_notice_files "${REPO_ROOT}" "${output_path}"
+
+    mapfile -t SORTED_PATHS < <(printf '%s\n' "${COLLECTED_PATHS[@]-}" | sed '/^$/d' | LC_ALL=C sort -f)
+    render_notice > "${output_path}"
+
+    local output_label="${output_path}"
+    if [[ "${output_path}" == "${REPO_ROOT}" ]]; then
+        output_label="."
+    elif [[ "${output_path}" == "${REPO_ROOT}/"* ]]; then
+        output_label="${output_path#"${REPO_ROOT}/"}"
+    fi
+
+    echo "wrote ${output_label} (${#SORTED_PATHS[@]} paths; ${REPO_NOTICE_FILES} repo NOTICE files; ${VENDORED_NOTICE_FILES} vendored notice/license files)" >&2
+}
+
+COLLECTED_PATHS=()
+SORTED_PATHS=()
+
+main "$@"

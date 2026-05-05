@@ -1,0 +1,76 @@
+#! /usr/bin/env bash
+#
+# Generates clientset, listers, informers, and deepcopy from pkg/apis.
+# Uses k8s.io/code-generator at version 0.35.0 (override with CODEGEN_VERSION).
+# With 0.35.0, generated informers use WatchList semantics and the fake
+# clientset implements IsWatchListSemanticsUnSupported() so tests work without
+# cache-sync workarounds.
+set -eu -o pipefail
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+CODEGEN_VERSION="${CODEGEN_VERSION:-0.35.0}"
+export PATH="$(go env GOPATH)/bin:${PATH}"
+echo "Installing code-generator tools at v${CODEGEN_VERSION}..."
+go install "k8s.io/code-generator/cmd/deepcopy-gen@v${CODEGEN_VERSION}"
+go install "k8s.io/code-generator/cmd/client-gen@v${CODEGEN_VERSION}"
+go install "k8s.io/code-generator/cmd/lister-gen@v${CODEGEN_VERSION}"
+go install "k8s.io/code-generator/cmd/informer-gen@v${CODEGEN_VERSION}"
+
+deepcopy() {
+  local -r header_file="${repo_root}/scripts/boilerplate.go.txt"
+  local -r pkg_name="github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+  local -r api=${1:?"API path needed"}
+
+  cd "${repo_root}"
+
+  echo "Generating pkg/apis/${api}/zz_generated.deepcopy.go"
+  deepcopy-gen \
+    --output-file zz_generated.deepcopy.go \
+    --bounding-dirs "${pkg_name}/pkg/apis" \
+    --go-header-file "${header_file}" \
+    ./pkg/apis/${api}
+}
+
+clientgen_all() {
+  local -r header_file="${repo_root}/scripts/boilerplate.go.txt"
+  local -r pkg_name="github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+
+  cd "${repo_root}"
+
+  rm -fr "${repo_root}/pkg/client"
+  mkdir -p "${repo_root}/pkg/client"
+
+  echo "Generating pkg/client/clientset"
+  client-gen \
+    --clientset-name versioned \
+    --input-base "${pkg_name}/pkg/apis" \
+    --input "nvcf/v1,nvca/v1,nvca/v1alpha1,nvca/v2beta1" \
+    --output-pkg "${pkg_name}/pkg/client/clientset" \
+    --go-header-file "${header_file}" \
+    --output-dir "${repo_root}/pkg/client/clientset"
+
+  echo "Generating pkg/client/listers"
+  lister-gen \
+    --output-pkg "${pkg_name}/pkg/client/listers" \
+    --go-header-file "${header_file}" \
+    --output-dir "${repo_root}/pkg/client/listers" \
+    "${pkg_name}/pkg/apis/nvcf/v1" "${pkg_name}/pkg/apis/nvca/v1" "${pkg_name}/pkg/apis/nvca/v1alpha1" "${pkg_name}/pkg/apis/nvca/v2beta1"
+
+  echo "Generating pkg/client/informers"
+  informer-gen \
+    --versioned-clientset-package "${pkg_name}/pkg/client/clientset/versioned" \
+    --listers-package "${pkg_name}/pkg/client/listers" \
+    --output-pkg "${pkg_name}/pkg/client/informers" \
+    --go-header-file "${header_file}" \
+    --output-dir "${repo_root}/pkg/client/informers" \
+    "${pkg_name}/pkg/apis/nvcf/v1" "${pkg_name}/pkg/apis/nvca/v1" "${pkg_name}/pkg/apis/nvca/v1alpha1" "${pkg_name}/pkg/apis/nvca/v2beta1"
+}
+
+main() {
+  deepcopy "nvcf/v1"
+  deepcopy "nvca/v1"
+  deepcopy "nvca/v1alpha1"
+  deepcopy "nvca/v2beta1"
+  clientgen_all
+}
+
+main "$@"

@@ -1,0 +1,11 @@
+{
+  "type": "code_interpreter_call",
+  "id": "ci_303",
+  "status": "completed",
+  "code": "print('Hello, world!')",
+  "container_id": "container_123",
+  "outputs": [
+    "Output line 1",
+    "Output line 2"
+  ]
+}

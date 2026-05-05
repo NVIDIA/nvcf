@@ -1,0 +1,6 @@
+# Lock byte-identity for the embedded agent-skill mirror. internal/agentskill/data/
+# is a SHA256-verified mirror of mcamp/docs/nvcf/one-click-deploy/agent-skill/;
+# auto-CRLF / BOM injection on Windows checkouts would corrupt the bytes and
+# break the manifest verification chain. -text disables line-ending conversion;
+# -crlf is the equivalent for older Git versions.
+internal/agentskill/data/** -text -crlf

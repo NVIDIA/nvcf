@@ -1,0 +1,11 @@
+Admin Token Issuer Proxy deployed.
+
+Verify the HTTPRoute is accepted by the gateway:
+
+  kubectl describe httproute -n {{ .Values.adminIssuerProxy.gateway.namespace }} {{ include "admin-issuer-proxy.fullname" . }} | grep -A5 "Conditions:"
+
+Expect: Reason: Accepted, Status: True
+
+Test the endpoint:
+
+  curl -s -X POST "http://{{ .Values.adminIssuerProxy.gateway.hostname }}/v1/admin/keys" | jq .

@@ -1,0 +1,14 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+package logrus
+
+import (
+	"golang.org/x/sys/unix"
+)
+
+// IsTerminal returns true if the given file descriptor is a terminal.
+func isTerminal(fd int) bool {
+	_, err := unix.IoctlGetTermio(fd, unix.TCGETA)
+	return err == nil
+}

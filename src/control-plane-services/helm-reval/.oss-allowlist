@@ -1,0 +1,30 @@
+# Allowlist for GitLab -> GitHub copy.
+# Same format as .gitignore; only paths matching a pattern below are copied.
+#
+# This is an opt-in mirror list for the OSS-safe repo contents. GitLab-only CI
+# (for example .gitlab-ci.yml, pipelines/, .components.yaml) and internal/local
+# metadata that should stay private (for example .env) are intentionally
+# omitted and not listed here.
+
+# GitHub and repo metadata
+.gitignore
+.allowed-licenses.txt
+.dockerignore
+.golangci.yml
+.license-baseline.txt
+.oss-allowlist
+Makefile
+README.md
+go.mod
+go.sum
+
+# Source, packaging, docs, examples, and tests
+api-tests/**
+cmd/**
+deploy/**
+docker/**
+examples/**
+pkg/**
+reval/**
+scripts/**
+test/**

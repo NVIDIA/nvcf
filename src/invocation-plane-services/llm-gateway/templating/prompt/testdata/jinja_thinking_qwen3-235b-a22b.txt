@@ -1,0 +1,20 @@
+<|im_start|>user
+user message<|im_end|>
+<|im_start|>assistant
+assistant message<|im_end|>
+<|im_start|>user
+<|im_end|>
+<|im_start|>assistant
+<think>
+reasoning message 2
+</think>
+
+assistant message 2
+<tool_call>
+{"name": "function_name", "arguments": {"argument": "value"}}
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+tool call result
+</tool_response><|im_end|>
+<|im_start|>assistant

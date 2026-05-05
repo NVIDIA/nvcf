@@ -1,0 +1,12 @@
+NVCF self-hosted teardown: ncp-local
+Elapsed:                   07s
+Target:                    https://nvcf.nvidia.com
+Stack:                     v1.14.2@sha256:deadbeef
+
+Reverse-pipeline (helmfile destroy)
+
+    [✓]  1. Pre-flight checks                   02s
+    [✓]  2. Render uninstall manifests          01s
+    [▶]  3. Helmfile destroy                    04s running
+
+press q to quit

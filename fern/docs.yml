@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+instances:
+  - url: nvidia-nvcf.docs.buildwithfern.com/nvcf
+    custom-domain: docs.nvidia.com/nvcf
+
+title: NVIDIA Cloud Functions
+
+metadata:
+  canonical-host: "docs.nvidia.com/nvcf"
+
+footer: ./components/CustomFooter.tsx
+
+layout:
+  searchbar-placement: header
+  page-width: 1376px
+  sidebar-width: 248px
+  content-width: 812px
+  tabs-placement: header
+  hide-feedback: true
+
+colors:
+  accentPrimary:
+    dark: '#76B900'
+    light: '#76B900'
+  background:
+    light: '#FFFFFF'
+    dark: '#000000'
+
+theme:
+  page-actions: toolbar
+  footer-nav: minimal
+
+logo:
+  dark: ./assets/NVIDIA_dark.svg
+  light: ./assets/NVIDIA_light.svg
+  height: 20
+  href: /nvcf/overview
+  right-text: Cloud Functions
+
+favicon: ./assets/NVIDIA_symbol.svg
+
+js:
+- url: https://assets.adobedtm.com/5d4962a43b79/c1061d2c5e7b/launch-191c2462b890.min.js
+  strategy: beforeInteractive
+
+css:
+- ./main.css
+
+navbar-links:
+- type: github
+  value: https://github.com/NVIDIA/nvcf-mono
+
+versions:
+- display-name: main
+  path: versions/main.yml
+  slug: ""
+- display-name: "0.5"
+  path: versions/v0.5.yml
+  slug: "v0.5"
+
+redirects:
+  - source: "/nvcf/index.html"
+    destination: "/nvcf/"
+  - source: "/nvcf/v0.5/index.html"
+    destination: "/nvcf/v0.5/"
+
+experimental:
+  mdx-components:
+    - ./components
+  basepath-aware: true

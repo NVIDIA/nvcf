@@ -1,0 +1,27 @@
+.jfrogignore
+vendor
+bin
+/.idea/
+# Remove this once we can configure a proper destination for swagger docs in gen-api target
+api/proto/*/v[0-9]/*.swagger.json
+
+
+# Ignore DevSpace cache and log folder
+.devspace/
+
+# Code coverage files and reports
+coverage/
+*.out
+*.html
+
+# Database files
+data/
+*.db
+
+# Development tools
+tmp/
+build-errors.log
+.air.toml.bak
+
+# Binary
+/nvcf-nats-auth-callout-service

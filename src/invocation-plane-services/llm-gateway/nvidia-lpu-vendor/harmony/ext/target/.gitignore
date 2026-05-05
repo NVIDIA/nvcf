@@ -1,0 +1,16 @@
+*
+!.gitignore
+!aarch64-apple-darwin
+!aarch64-apple-darwin/dist
+!aarch64-apple-darwin/dist/libharmony_cabi.dylib
+!x86_64-apple-darwin
+!x86_64-apple-darwin/dist
+!x86_64-apple-darwin/dist/libharmony_cabi.dylib
+!x86_64-unknown-linux-musl
+!x86_64-unknown-linux-musl/dist
+!x86_64-unknown-linux-musl/dist/libharmony_cabi.a
+!x86_64-unknown-linux-musl/dist/libharmony_cabi.so
+!aarch64-unknown-linux-musl
+!aarch64-unknown-linux-musl/dist
+!aarch64-unknown-linux-musl/dist/libharmony_cabi.a
+!aarch64-unknown-linux-musl/dist/libharmony_cabi.so

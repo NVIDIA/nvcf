@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "rs-autoscaler"
+version = "1.9.1"
+authors = ["root"]
+edition = "2021"
+description = "NVCF Autoscaler"
+license = "Apache-2.0"
+
+[[bin]]
+name = "server"
+path = "src/server.rs"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_with = { version = "3.0", features = ["chrono_0_4"] }
+tokio = { version = "1", features = ["full", "macros", "rt-multi-thread"] }
+chrono = { version = "0.4", features = ["serde"] }
+scylla = { version = "1.2.0", features = ["chrono-04", "openssl-010", "unstable-cloud"] }
+config = { version = "0.14", features = ["yaml"] }
+opentelemetry = "0.28"
+opentelemetry-otlp = { version = "0.28", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
+opentelemetry_sdk = "0.28"
+tracing-opentelemetry = "0.29"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+axum = "0.8"
+axum-server = "0.7"
+metrics-exporter-prometheus = { version = "0.17", default-features = false, features = ["http-listener"] }
+metrics = "0.24"
+metrics-process = "2.4.0"
+clap = { version = "4.5", features = ["derive", "env"] }
+futures = "0.3.31"
+openssl = { version= "0.10.72", features= ["vendored"] }
+reqwest = { version = "0.12", features = ["json"] }
+reqwest-middleware = "0.4"
+reqwest-tracing = { version = "0.5", features = ["opentelemetry_0_28"] }
+url = "2"
+async-trait = "0.1"
+notify = "8.0.0"
+tracing = "0.1"
+uuid = { version = "1.16.0", features=["serde"] }
+gethostname = "1.0"
+opentelemetry-semantic-conventions = { version = "0.28.0", features = ["semconv_experimental"] }
+leaky-bucket = "1.1.2"
+metrics-util = "0.20.0"
+backon = "1.5.1"
+rand = "0.9.2"
+tokio-util = "0.7.16"
+moka = { version = "0.12", features = ["future", "sync"] }
+tonic = { version = "0.13", features = ["tls-native-roots", "tls-ring"] }
+prost = "0.13"
+prost-types = "0.13"
+
+[dev-dependencies]
+tempfile = "3.20.0"
+uuid = "1.16.0"
+hyper = "1"
+hyper-util = "0.1"
+http-body-util = "0.1"
+mockito = "1.5"
+
+[build-dependencies]
+tonic-build = "0.13.1"
+protoc-bin-vendored = "3"

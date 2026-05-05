@@ -1,0 +1,80 @@
+{{- if eq .Values.ngcConfig.clusterSource "self-managed" }}
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvcfbackend-self-managed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcaop.labels" . | nindent 4 }}
+data:
+  cluster-dto.yaml: |
+    clusterId: {{ .Values.clusterID | quote }}
+    clusterGroupId: {{ .Values.clusterGroupID | quote }}
+    clusterName: {{ .Values.clusterName | default "nvcf-default" | quote }}
+    clusterDescription: {{ .Values.clusterName | default "nvcf-default" | quote }}
+    clusterGroupName: "nvcf-default"
+    ncaID: {{ .Values.ncaID | default "nvcf-default" | quote }}
+    nvcaVersion: {{ .Values.selfManaged.nvcaVersion | quote }}
+    ssaClientId: ""
+    cloudProvider: "NCP"
+    region: {{ .Values.selfManaged.region | default "us-west-1" | quote }}
+    attributes: {{ include "nvcaop.jsonListOrEmpty" .Values.selfManaged.clusterAttributes }}
+    capabilities: {{ include "nvcaop.jsonListOrEmpty" .Values.selfManaged.featureGateValues }}
+    gpusB64: {{ .Values.selfManaged.gpuManualInstanceConfigB64 | default "" | quote }}
+    cacheCSIVolumeMountOptionsConfig:
+      disabled: false
+      mountOptions: "ro,norecovery,nouuid"
+    icmsConfig:
+      publicKeysetEndpoint: ""
+      tokenURL: ""
+      icmsServiceURL: {{ .Values.selfManaged.icmsServiceURL | quote }}
+    miniService:
+      helmReValServiceURL: {{ .Values.selfManaged.revalServiceURL | quote }}
+    {{- with .Values.selfManaged.imageCredHelper }}
+    imageCredentialHelper:
+      imageConfig:
+        repository: {{ include "nvcaop.imageCredHelperRepository" (dict "imageRepository" .imageRepository "defaultRepository" $.Values.image.repository) | quote }}
+        tag: {{ .imageTag | quote }}
+    {{- end }}
+    {{- with .Values.selfManaged.sharedStorage }}
+    sharedStorage:
+      imageRepository: {{ .imageRepository | quote }}
+      imageTag: {{ .imageTag | quote }}
+    {{- end }}
+    {{- with .Values.selfManaged.otelCollector }}
+    otelCollector:
+      enabled: {{ .enabled }}
+      imageConfig:
+        repository: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .imageRepository "defaultRepository" $.Values.image.repository) | quote }}
+        tag: {{ .imageTag | quote }}
+    {{- end }}
+    agent:
+      natsURL: {{ .Values.selfManaged.natsURL | quote }}
+    {{- with .Values.agent.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+{{- else }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvcfbackend-self-managed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcaop.labels" . | nindent 4 }}
+data: {}
+{{- end }}

@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+.idea
+.cache
+.vscode
+.github
+codeql
+rust-db
+
+# generated files
+_*/
+
+/target
+
+tools/target
+
+settings.yaml
+settings.toml
+
+crates/server/src/handlers/grpc/entry_point.rs
+crates/server/src/handlers/grpc/metrics/mod.rs
+tarpaulin-report.html
+
+# documentation
+doc-generated/
+doc-src/doc
+doc-src/proto
+
+# sensitive files
+kubeconfig.json
+settings-local.yaml
+local_env/vault/secrets.json
+local_env/vault/secrets_*_local.json
+
+# macOS
+.DS_Store
+
+# reuse/license tooling (managed at monorepo level)
+.license-template.txt
+.reuse/
+LICENSES/
+LICENSE.txt
+
+# generated artifacts
+clippy-report.json
+codeql.zip
+results.sarif
+dependency-urls.txt
+sonar-project.properties
+

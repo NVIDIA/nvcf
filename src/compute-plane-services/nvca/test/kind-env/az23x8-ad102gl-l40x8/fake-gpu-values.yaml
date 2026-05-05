@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+topology:
+  nodePools:
+    default:
+      gpuProduct: AD102GL-L40
+      gpuCount: 8
+      gpuMemory: 65536
+  nodePoolLabelKey: test.example.com/node-pool
+  migStrategy: mixed

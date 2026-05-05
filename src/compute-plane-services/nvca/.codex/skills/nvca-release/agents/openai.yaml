@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+interface:
+  display_name: "NVCA Release"
+  short_description: "Tag NVCA and create release MRs"
+  default_prompt: "Use $nvca-release to release NVCA from this monorepo."

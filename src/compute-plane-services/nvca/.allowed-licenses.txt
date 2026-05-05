@@ -1,0 +1,12 @@
+Apache-2.0
+MIT
+BSD-2-Clause
+BSD-3-Clause
+BSD-4-Clause
+ISC
+Unlicense
+CC0-1.0
+Zlib
+PSF-2.0
+BlueOak-1.0.0
+MPL-2.0

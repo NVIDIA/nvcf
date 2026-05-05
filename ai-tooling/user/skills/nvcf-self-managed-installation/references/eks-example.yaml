@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Example environment file for EKS deployment
+# Copy to nvcf-self-managed-stack/environments/<your-env>.yaml and customize.
+#
+# Only keys listed here are propagated by global.yaml.gotmpl to charts.
+# For arbitrary chart overrides, use helmfile release values: blocks instead
+# (see "Overriding Helm Chart Values" in SKILL.md).
+
+global:
+  # Domain: external address of your Envoy Gateway / load balancer.
+  # On AWS EKS this is typically the NLB DNS name, e.g.:
+  #   k8s-envoygateway-xxxxxxxx.us-west-2.elb.amazonaws.com
+  # See "Set the gateway address" in SKILL.md for how to obtain this.
+  domain: "<GATEWAY_ADDRESS>"
+
+  helm:
+    sources:
+      # OCI registry where NVCF Helm charts are stored
+      registry: nvcr.io
+      # NGC org + team path, e.g. "nvidian/nvcf-ncp-staging"
+      repository: "<your-org>/nvcf-ncp-staging"
+
+  image:
+    # OCI registry where NVCF container images are stored (often same as chart registry)
+    registry: nvcr.io
+    repository: "<your-org>/nvcf-ncp-staging"
+
+  # Storage class for persistent volumes (Cassandra, NATS JetStream, OpenBao)
+  # On EKS, common choices: gp3, gp2, io1
+  storageClass: "gp3"
+
+  # Node selectors: set enabled: true to restrict NVCF pods to labeled nodes.
+  # When enabled, pods require the label "nvcf-node: true" on target nodes.
+  nodeSelectors:
+    enabled: false
+
+# --- Per-service overrides (optional) ---
+
+cassandra:
+  # Number of Cassandra replicas: 1 for dev/test, 3 for production
+  replicaCount: 1
+  # persistence.size controls the PVC size for Cassandra data
+  # persistence:
+  #   size: 50Gi
+
+# nats:
+#   config:
+#     jetstream:
+#       fileStore:
+#         pvc:
+#           storageClassName: "gp3"
+
+# openbao:
+#   server:
+#     dataStorage:
+#       size: "10Gi"
+#       storageClass: "gp3"

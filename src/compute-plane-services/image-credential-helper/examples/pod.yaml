@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: test-pod
+imagePullSecrets:
+- name: workload-sr-ab93ff3b-a94a-4a7d-808f-54e1546a9fc4-regcred-0
+- name: workload-sr-ab93ff3b-a94a-4a7d-808f-54e1546a9fc4-regcred-1
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pull-test
+spec:
+  serviceAccountName: test-pod
+  automountServiceAccountToken: false
+  containers:
+  - name: ecr
+    image: 779846801111.dkr.ecr.us-west-2.amazonaws.com/project-mine/registry/test-container-image:1.0.0
+    imagePullPolicy: Always
+    resources:
+      limits:
+        memory: "256Mi"
+        cpu: "100m"
+  - name: volcengine
+    image: project-mine-cn-shanghai.cr.volces.com/namespace-mine-private/test-container-image:1.0.0
+    imagePullPolicy: Always
+    resources:
+      limits:
+        memory: "256Mi"
+        cpu: "100m"

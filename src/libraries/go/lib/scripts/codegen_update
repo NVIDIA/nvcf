@@ -1,0 +1,31 @@
+#! /usr/bin/env bash
+set -eu -o pipefail
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+
+main() {
+  local -r header_file="${repo_root}/scripts/boilerplate.go.txt"
+  local -r pkg_name="github.com/NVIDIA/nvcf/src/libraries/go/lib"
+
+  cd "${repo_root}"
+
+  echo "Generating pkg/types/nvca/config/zz_generated.deepcopy.go"
+  deepcopy-gen \
+    --output-file zz_generated.deepcopy.go \
+    --bounding-dirs "${pkg_name}/pkg/types" \
+    --go-header-file "${header_file}" \
+    ./pkg/types/nvca/config
+
+  # deepcopy-gen derives the package name from the directory name ("config"),
+  # but the Go package is "nvcaconfig". Fix it in the generated output.
+  sed -i 's/^package config$/package nvcaconfig/' \
+    "${repo_root}/pkg/types/nvca/config/zz_generated.deepcopy.go"
+
+  echo "Generating pkg/icms-translate/translate/zz_generated.deepcopy.go files"
+  deepcopy-gen \
+    ./pkg/icms-translate/translate/common ./pkg/icms-translate/translate/function ./pkg/icms-translate/translate/task \
+    --output-file zz_generated.deepcopy.go \
+    --bounding-dirs "${pkg_name}/pkg/icms-translate/translate" \
+    --go-header-file "${header_file}"
+}
+
+main "$@"

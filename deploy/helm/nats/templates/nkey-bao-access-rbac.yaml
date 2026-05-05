@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if .Values.nats.rbac.openbao.enabled }}
+
+# Grants the openbao-migrations Job read access to both source Secrets that
+# 03_setup_shared_secrets.sh mirrors into vault KV:
+#   - the shared-worker nkeys Secret (`user.pub` / `user.key` → nats/creds);
+#   - the auth-callout NKey Secret (`nkey_seed` / `nkey_signature` plus the
+#     shared-worker `user.pub` → nats/auth-callout-creds).
+# The auth-callout pod's vault-agent sidecar reads from the auth-callout-creds
+# KV path at startup; this chart no longer renders a `secrets.json` data key.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nkey-bao-access
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    resourceNames:
+      - {{ .Values.nats.natsBox.contexts.default.nkey.secretName }}
+      - {{ include "nvcf-nats.authCalloutSecretName" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nkey-bao-access
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.nats.rbac.openbao.serviceAccountName }}
+    namespace: {{ .Values.nats.rbac.openbao.namespace }}
+roleRef:
+  kind: Role
+  name: nkey-bao-access
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

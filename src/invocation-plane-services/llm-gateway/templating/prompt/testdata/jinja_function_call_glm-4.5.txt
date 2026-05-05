@@ -1,0 +1,30 @@
+[gMASK]<sop><|system|>
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"function": {"description": "Get the current weather in a given location", "name": "weather_info", "parameters": {"properties": {"location": {"description": "The city and state, e.g. San Francisco, CA", "type": "string"}}, "required": ["location"], "type": "object"}}, "type": "function"}
+</tools>
+
+For each function call, output the function name and arguments within the following XML format:
+<tool_call>{function-name}
+<arg_key>{arg-key-1}</arg_key>
+<arg_value>{arg-value-1}</arg_value>
+<arg_key>{arg-key-2}</arg_key>
+<arg_value>{arg-value-2}</arg_value>
+...
+</tool_call><|system|>
+System message<|user|>
+What's the weather in boston and tokyo?<|assistant|>
+<think>First we need to get the weather in boston, then we need to get the weather in tokyo.</think>
+<tool_call>weather_info
+<arg_key>location</arg_key>
+<arg_value>boston</arg_value>
+<arg_key>unit</arg_key>
+<arg_value>fahrenheit</arg_value>
+</tool_call><|observation|>
+<tool_response>
+85
+</tool_response><|assistant|>

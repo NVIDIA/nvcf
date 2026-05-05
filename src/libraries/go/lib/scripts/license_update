@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# Updates the NOTICE file with the current list of vendor license paths.
+set -eu -o pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${repo_root}"
+
+NOTICE_FILE="NOTICE"
+
+# Static header (everything before the vendor list)
+NOTICE_HEADER='NVIDIA nvcf-go
+Copyright 2026 NVIDIA Corporation
+
+This product includes third-party dependencies, each governed by their own
+license terms. When dependencies change (go.mod updates), regenerate the
+list below by running:
+
+    make license-update
+
+The following third-party licenses are included in the vendor directory:
+'
+
+# Get the current list of vendor licenses
+vendor_licenses=$(find vendor -name "LICENSE*" -type f | sort)
+
+# Write NOTICE: header + indented list
+{
+    echo "$NOTICE_HEADER"
+    if [[ -n "$vendor_licenses" ]]; then
+        echo "$vendor_licenses" | sed 's/^/    /'
+    fi
+} > "$NOTICE_FILE"
+
+# Count licenses safely
+if [[ -z "$vendor_licenses" ]]; then
+    count=0
+else
+    count=$(echo "$vendor_licenses" | wc -l)
+fi
+
+echo "NOTICE file updated with $count third-party license references."

@@ -1,0 +1,4 @@
+2026-04-29T01:23:45Z [01/8] ctx=admin@cp preflight: starting
+2026-04-29T01:23:53Z [01/8] ctx=admin@cp preflight: complete (8s)
+2026-04-29T01:30:08Z [06/8] ctx=admin@gpu1 register: starting
+2026-04-29T01:30:12Z [06/8] ctx=admin@gpu1 register: complete (4s)

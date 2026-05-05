@@ -1,0 +1,12 @@
+[gMASK]<sop><|system|>
+system message 1
+system message 2<|user|>
+<|assistant|>
+<think></think>
+assistant message 1<|user|>
+<|assistant|>
+<think></think>
+assistant message 2<|user|>
+user message 1<|assistant|>
+<think></think><|user|>
+user message 2<|assistant|>

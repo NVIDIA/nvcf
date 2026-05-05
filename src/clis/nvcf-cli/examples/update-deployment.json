@@ -1,0 +1,8 @@
+{
+  "functionId": "00000000-0000-0000-0000-000000000000",
+  "versionId":  "00000000-0000-0000-0000-000000000000",
+  "gpu":          "L40S",
+  "instanceType": "NCP.GPU.L40S_1x",
+  "minInstances": 2,
+  "maxInstances": 3
+}

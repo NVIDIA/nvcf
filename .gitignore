@@ -1,0 +1,65 @@
+.worktrees/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# AI agent local config (per-user settings, ephemeral plans)
+.claude/settings.local.json
+.claude/plans/
+.codex/settings.local.json
+.cursor/settings.local.json
+
+# Local overrides
+.secrets
+.env
+/go.work
+/go.work.sum
+
+# Local CI/test artifacts.
+/public/
+
+# Transient symlink created by root Makefile's link-secrets target;
+# points at ../../../../secrets/<env>-secrets.yaml (root-level user file).
+deploy/stacks/nvcf-self-managed-stack/secrets/*-secrets.yaml
+
+# OS
+.DS_Store
+
+# Packaged Helm charts under examples/ (produced by `helm package`).
+examples/**/*.tgz
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Built from tools/sync-synthetic-imports/
+/tools/scripts/sync-synthetic-imports
+# Wrong -o path: with `go build -C tools/sync-synthetic-imports`, `-o scripts/...` is under the module.
+/tools/sync-synthetic-imports/scripts/sync-synthetic-imports
+# Built from tools/collect-dependencies/
+/tools/collect-dependencies/collect-dependencies
+# Built from tools/generate-subproject-ci/
+/tools/generate-subproject-ci/generate-subproject-ci
+
+# Go vendor trees not committed in this repo (tracked vendor: helm-reval-service-go, image-credential-helper-go,
+# nvca-go, nvcf-function-deployment-stages-go/common, nvcf-go, nvcf-icms-translate-go).
+admin-token-issuer-proxy-go/vendor/
+byoo-otel-collector-go/vendor/
+ess-agent-go/vendor/
+ess-agent-go/api/auth/approle/vendor/
+ess-agent-go/api/auth/aws/vendor/
+ess-agent-go/api/auth/azure/vendor/
+ess-agent-go/api/auth/gcp/vendor/
+ess-agent-go/api/auth/kubernetes/vendor/
+ess-agent-go/api/auth/ldap/vendor/
+ess-agent-go/api/auth/userpass/vendor/
+ess-agent-go/sdk/vendor/
+nvcf-ai-api-gateway-service-go/vendor/
+nvcf-function-deployment-stages-go/vendor/
+nvcf-grpc-proxy-go/vendor/
+nvcf-nats-auth-callout-service-go/vendor/
+otelconfig-go/vendor/
+nvcf-ratelimiter-go/vendor/
+tools/sync-synthetic-imports/vendor/

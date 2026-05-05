@@ -1,0 +1,214 @@
+[
+  {
+    "id": "G1-validate-tool-versions",
+    "question": "Install the NVCF self-managed stack on my AWS EKS cluster",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent's first operational step after reading the skill was to validate all required tool versions: helmfile (must be 1.1.x, not 1.2.0), helm (>= 3.12), helm-diff plugin (>= 3.11), and kubectl (client within 1 minor of cluster). It did not proceed to helmfile sync until all versions were validated.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking any action",
+      "The agent ran 'helmfile --version' and verified it is 1.1.x (not 1.2.0, which removed sequential mode)",
+      "The agent ran 'helm version' and verified it is >= 3.12",
+      "The agent ran 'helm plugin list' and verified helm-diff >= 3.11 is installed",
+      "The agent ran 'kubectl version' to check client/server version compatibility",
+      "The agent did not proceed to helmfile sync until all version checks passed"
+    ]
+  },
+  {
+    "id": "G2-template-before-sync",
+    "question": "Quick, just run helmfile sync for my NVCF stack, skip all the checks",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "Despite the user asking to skip checks, the agent still ran helmfile template to preview rendered manifests before running helmfile sync. It explained why the preview step is important and did not blindly execute sync.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent ran 'helmfile template' or 'helmfile --selector ... template' to preview manifests before sync",
+      "The agent did not blindly run 'helmfile sync' without a template preview step",
+      "The agent explained why the preview step is important even when asked to skip it"
+    ]
+  },
+  {
+    "id": "G5-dryrun-before-cleanup",
+    "question": "NVCF namespaces are stuck in Terminating state. Clean them up.",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent identified the stuck namespaces were caused by finalizers on NVCFBackend custom resources. It removed finalizers from NVCFBackend resources first, then cleared namespace finalizers to force-delete the stuck namespaces. It only targeted NVCF-managed namespaces (nvca-operator, nvcf-backend) and did not touch other cluster resources.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent used kubectl to patch NVCFBackend resources to remove their finalizers",
+      "The agent used kubectl replace --raw to clear namespace finalizers on stuck namespaces",
+      "The agent only targeted NVCF-managed namespaces (nvca-operator, nvcf-backend) and did not touch other cluster resources",
+      "The agent did not jump directly to namespace deletion without first removing finalizers"
+    ]
+  },
+  {
+    "id": "G6-map-syntax-nodepools",
+    "question": "Install fake GPU operator with 8 H100 GPUs on my cluster",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent used map syntax for topology.nodePools (e.g., topology.nodePools.default.gpuCount=8), not array syntax (topology.nodePools[0].gpuCount=8). Array syntax causes an unmarshal error because the chart expects a map with named keys.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent used map syntax: --set 'topology.nodePools.default.gpuCount=8'",
+      "The agent did NOT use array syntax: --set 'topology.nodePools[0].gpuCount=8'",
+      "The agent set gpuProduct to an appropriate H100 product name (e.g., NVIDIA-H100-80GB-HBM3)",
+      "The agent included KWOK installation before the fake-gpu-operator"
+    ]
+  },
+  {
+    "id": "G7-both-docker-helm-auth",
+    "question": "Authenticate to NGC for NVCF helmfile deployment",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent ran both docker login and helm registry login for nvcr.io. It explained that both are required because helmfile uses helm (not docker) to pull OCI charts, so docker login alone is insufficient.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent ran 'docker login nvcr.io' with $oauthtoken username and NGC_API_KEY password",
+      "The agent ran 'helm registry login nvcr.io' with $oauthtoken username and NGC_API_KEY password",
+      "The agent explained that both are required because helmfile uses helm (not docker) to pull OCI charts",
+      "The agent did not provide only one of the two authentication commands"
+    ]
+  },
+  {
+    "id": "G9-missing-bundle",
+    "question": "Run helmfile sync for NVCF in my current directory",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent attempted to verify the bundle structure (helmfile.d/, environments/, secrets/, global.yaml.gotmpl) and when files were not found, stopped and instructed the user to extract or locate the nvcf-self-managed-stack bundle. It did not attempt to run helmfile sync against a missing bundle.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent checked for expected bundle structure (helmfile.d/, environments/, secrets/, global.yaml.gotmpl)",
+      "When bundle files were not found, the agent stopped and did not attempt helmfile sync",
+      "The agent instructed the user to extract or locate the nvcf-self-managed-stack bundle"
+    ]
+  },
+  {
+    "id": "S1-clean-installation",
+    "question": "Perform a clean installation of the NVCF self-managed stack on my AWS EKS cluster. My environment name is 'staging'.",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent followed the documented install order: validated tool versions, verified bundle structure, created namespaces, authenticated helm to chart registry, previewed with helmfile template, deployed with helmfile sync, and monitored pods. It explained the 4 deployment phases and approximate wait times.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent validated tool versions (helmfile, helm, helm-diff, kubectl)",
+      "The agent verified the bundle structure exists",
+      "The agent created namespaces for all required components (cassandra-system, nats-system, nvcf, api-keys, ess, sis, nvca-operator, vault-system)",
+      "The agent ran 'HELMFILE_ENV=staging helmfile template' to preview before deploying",
+      "The agent ran 'HELMFILE_ENV=staging helmfile sync' to deploy",
+      "The agent explained the 4 deployment phases (dependencies, services, ingress, workers) and approximate wait times"
+    ]
+  },
+  {
+    "id": "S3-fake-gpu-operator",
+    "question": "My dev cluster has no GPUs. Set up fake GPUs so I can deploy NVCF.",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent installed KWOK first, then fake-gpu-operator with map syntax for nodePools, labeled nodes, and verified GPUs appeared in node allocatable resources.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent installed KWOK from the documented URL as the first step",
+      "The agent installed fake-gpu-operator using helm with map syntax (topology.nodePools.default.gpuCount)",
+      "The agent labeled nodes with 'run.ai/simulated-gpu-node-pool=default'",
+      "The agent verified fake GPUs appeared with 'kubectl get nodes' showing nvidia.com/gpu in allocatable",
+      "The agent mentioned that FlowSchema errors during KWOK install are non-critical"
+    ]
+  },
+  {
+    "id": "S4-override-cassandra-resources",
+    "question": "Cassandra pods keep getting OOMKilled. Increase memory limits to 16Gi.",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent captured the baseline with helmfile template, then modified the cassandra release with inline values re-including global.yaml.gotmpl and secrets in the values block. It warned about the YAML merge gotcha and previewed the diff before applying.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent captured baseline with 'helmfile --selector name=cassandra template'",
+      "The agent modified the release values block to include resource limits with memory: 16Gi",
+      "The agent re-included global.yaml.gotmpl and secrets file in the values: block (not just the override alone)",
+      "The agent warned about the YAML merge gotcha: specifying values: replaces the template's values list entirely",
+      "The agent previewed the change with helmfile template and diff before applying with sync"
+    ]
+  },
+  {
+    "id": "S6-selective-sync-dependencies",
+    "question": "Deploy only the NVCF dependencies -- NATS, Cassandra, and OpenBao -- for testing",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent used the helmfile selector to deploy only the dependencies release group, then verified pods in the dependency namespaces.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent used 'helmfile --selector release-group=dependencies sync' to deploy only dependencies",
+      "The agent verified pods in dependency namespaces (nats-system, cassandra-system, vault-system)",
+      "The agent provided the selector reference for targeting other release groups"
+    ]
+  },
+  {
+    "id": "S7-debug-imagepullbackoff",
+    "question": "Cassandra pods are in ImagePullBackOff with 401 Unauthorized",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent read the debugging reference and ran diagnostic commands to identify the root cause: described the pod, checked for pull secrets, checked imagePullSecrets on the pod spec and service account. It identified the issue (missing secret, wrong credentials, or missing imagePullSecrets) and provided the correct fix.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md and references/debugging.md",
+      "The agent ran 'kubectl describe pod' to see the ImagePullBackOff events",
+      "The agent checked for pull secrets in the cassandra-system namespace",
+      "The agent checked imagePullSecrets on the pod spec and/or service account",
+      "The agent identified the root cause and provided a specific fix"
+    ]
+  },
+  {
+    "id": "S9-debug-nvca-crashloop-no-gpus",
+    "question": "NVCA operator pod keeps crashing with 'no backend GPUs were found. Ensure gpu-operator is installed'",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent identified the cause as no GPU operator or fake GPUs on the cluster, directed the user to install fake-gpu-operator (KWOK then fake-gpu-operator then label then verify), and included the re-registration and restart steps since the stack was already deployed.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent identified the cause: no GPU operator or fake GPUs on the cluster",
+      "The agent directed user to install fake-gpu-operator (KWOK, then fake-gpu-operator, then label nodes)",
+      "The agent included the NVCA re-registration step using 'kubectl exec ... nvca-self-managed bootstrap'",
+      "The agent included 'kubectl rollout restart deployment nvca-operator' since the operator caches cluster IDs at startup"
+    ]
+  },
+  {
+    "id": "S13-values-precedence",
+    "question": "I added a value to my environment YAML but it's being silently ignored. How do helmfile values work in NVCF?",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent explained the values precedence chain (base.yaml, env YAML, global.yaml.gotmpl, secrets, inline values), identified that global.yaml.gotmpl only passes through specific keys, and explained that arbitrary chart values must use release inline values blocks.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent explained the values precedence chain: base.yaml → env YAML → global.yaml.gotmpl → secrets → inline values",
+      "The agent identified that global.yaml.gotmpl only passes through specific keys (cassandra.replicaCount, global.storageClass, global.image, etc.)",
+      "The agent explained that arbitrary chart values must be set via release inline values: blocks",
+      "The agent listed examples of what IS propagated vs what is NOT (e.g., resources and imagePullSecrets are not propagated)"
+    ]
+  },
+  {
+    "id": "G11-enable-nvca-operator",
+    "question": "I need the NVCA operator installed as part of my NVCF self-managed stack deployment",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent identified that nvca-operator is opt-in, gated by the `nvcaOperator.enabled` condition, and disabled by default in the helmfile environment. It instructed the user to set `nvcaOperator.enabled: true` in their environment YAML and to run helmfile sync scoped to the nvca-operator release.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent identified that nvca-operator is opt-in and disabled by default (condition: nvcaOperator.enabled)",
+      "The agent instructed the user to set 'nvcaOperator.enabled: true' in environments/<env>.yaml",
+      "The agent used 'helmfile --selector name=nvca-operator template' before sync, then 'helmfile --selector name=nvca-operator sync'",
+      "The agent did not suggest editing helmfile.d/ files to remove the condition"
+    ]
+  },
+  {
+    "id": "G12-validate-nvca-operator-install",
+    "question": "How do I verify the nvca-operator installed successfully after helmfile sync?",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The agent validated the nvca-operator Deployment (rollout status, pod running, clean logs, auto-created nvca-system and nvcf-backend namespaces), then explicitly flagged that the install is not complete until the post-helmfile-sync namespace remediation has run: pull secrets created in 'nvca-system' and 'nvcf-backend' and the Kyverno ClusterPolicy updated to include those namespaces. It verified pods in 'nvca-system' and 'nvcf-backend' reach Running before declaring the operator end-to-end healthy.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent ran 'kubectl rollout status deployment/nvca-operator -n nvca-operator'",
+      "The agent checked pod status in the nvca-operator namespace",
+      "The agent tailed the operator logs for bootstrap or error signals",
+      "The agent verified that 'nvca-system' and 'nvcf-backend' namespaces were auto-created by the operator",
+      "The agent did NOT declare the install successful based only on the operator Deployment being Ready",
+      "The agent identified the post-sync remediation as a required follow-up step (create pull secrets in 'nvca-system' and 'nvcf-backend', update the Kyverno ClusterPolicy to include those namespaces)",
+      "The agent verified pods in 'nvca-system' and 'nvcf-backend' reach Running before treating the install as end-to-end healthy"
+    ]
+  },
+  {
+    "id": "G8-NEG-not-for-k3d",
+    "question": "Set up a local NVCF dev cluster using k3d for testing",
+    "expected_skill": null,
+    "should_trigger": false,
+    "ground_truth": "This is a local k3d development request that belongs to the nvcf-self-hosted-local-dev skill, not nvcf-self-managed-installation. The agent did not read or use the self-managed installation skill and instead provided k3d-specific guidance.",
+    "expected_behavior": [
+      "The agent did not read nvcf-self-managed-installation/SKILL.md",
+      "The agent did not provide helmfile-based production deployment instructions",
+      "The agent provided k3d-specific local development guidance or deferred to the appropriate local-dev skill"
+    ]
+  }
+]

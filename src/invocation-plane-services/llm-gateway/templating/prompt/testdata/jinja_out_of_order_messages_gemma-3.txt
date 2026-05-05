@@ -1,0 +1,18 @@
+<start_of_turn>user
+system message 1
+system message 2
+
+<end_of_turn>
+<start_of_turn>model
+assistant message 1<end_of_turn>
+<start_of_turn>user
+<end_of_turn>
+<start_of_turn>model
+assistant message 2<end_of_turn>
+<start_of_turn>user
+user message 1<end_of_turn>
+<start_of_turn>model
+<end_of_turn>
+<start_of_turn>user
+user message 2<end_of_turn>
+<start_of_turn>model

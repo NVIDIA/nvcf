@@ -1,0 +1,56 @@
+{
+  "scenarios": {
+    "ramping_vus_scenario": {
+      "executor": "ramping-vus",
+      "startTime": "0s",
+      "gracefulStop": "30s",
+      "env": {
+        "SENT_MESSAGE_SIZE": "2048",
+        "RESPONSE_COUNT": "1",
+        "RESPONSE_DELAY_TIME": "0.05"
+      },
+      "stages": [
+        {
+          "duration": "5m",
+          "target": 100
+        },
+        {
+          "duration": "15m",
+          "target": 100
+        },
+        {
+          "duration": "5m",
+          "target": 500
+        },
+        {
+          "duration": "15m",
+          "target": 500
+        },
+        {
+          "duration": "5m",
+          "target": 200
+        },
+        {
+          "duration": "15m",
+          "target": 200
+        },
+        {
+          "duration": "5m",
+          "target": 50
+        },
+        {
+          "duration": "15m",
+          "target": 50
+        },
+        {
+          "duration": "5m",
+          "target": 1000
+        },
+        {
+          "duration": "15m",
+          "target": 1000
+        }
+      ]
+    }
+  }
+}

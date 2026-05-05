@@ -1,0 +1,2 @@
+system message 1
+system message 2<｜User｜><｜Assistant｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜><｜User｜><｜Assistant｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜><｜User｜>user message 1<｜Assistant｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜><｜User｜>user message 2<｜Assistant｜>

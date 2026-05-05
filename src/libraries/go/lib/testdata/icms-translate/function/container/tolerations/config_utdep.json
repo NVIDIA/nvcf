@@ -1,0 +1,53 @@
+{
+    "namespace": "my-ns",
+    "objectNameBase": "fake-object-name",
+    "commonLabels": {
+        "lk": "lv"
+    },
+    "commonAnnotations": {
+        "ak": "av"
+    },
+    "sidecarAsDeployment": true,
+    "serviceAccountName": "my-sa",
+    "nodeAffinity": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [
+                {
+                    "matchExpressions": [
+                        {
+                            "key": "my-ns/foo",
+                            "operator": "DoesNotExist"
+                        }
+                    ]
+                },
+                {
+                    "matchExpressions": [
+                        {
+                            "key": "my-ns/bar",
+                            "operator": "In",
+                            "values": [
+                                "baz"
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    },
+    "tolerations": [
+        {
+            "key": "custom-workload",
+            "operator": "Equal",
+            "value": "enabled",
+            "effect": "NoSchedule"
+        }
+    ],
+    "instanceTypeLabelSelectorKey": "nvca.nvcf.nvidia.io/instance-type",
+    "workloadResources": {
+        "limits": {
+            "cpu": "500m",
+            "memory": "256Mi",
+            "nvidia.com/gpu": 2
+        }
+    }
+}

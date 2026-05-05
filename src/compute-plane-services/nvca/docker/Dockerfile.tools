@@ -1,0 +1,31 @@
+# Gitlab runners will use dockerhub.nvidia.com as a pull-through cache
+FROM goreleaser/goreleaser:v2.15.4 AS builder
+
+WORKDIR /go/egx
+COPY .goreleaser.yaml ./
+COPY go.mod go.sum ./
+COPY vendor ./vendor
+COPY cmd ./cmd
+COPY pkg ./pkg
+COPY internal ./internal
+
+ARG EGX_VERSION
+ARG EGX_GITHASH
+ARG EGX_WORKING_DIR_DIRTY
+ARG NVCA_RELEASE_TAG
+ARG NVCF_GOMAXPROCS=4
+ENV GOTOOLCHAIN=auto
+ENV CGO_ENABLED=0
+ENV GOPRIVATE="github.com/NVIDIA,github.com/NVIDIA"
+ENV NVCF_GO_PACKAGE="github.com/NVIDIA/nvcf/src/libraries/go/lib"
+ENV NVCF_GO_LD_FLAGS="-X ${NVCF_GO_PACKAGE}/pkg/version.Version=${EGX_VERSION} -X ${NVCF_GO_PACKAGE}/pkg/version.GitHash=${EGX_GITHASH} -X ${NVCF_GO_PACKAGE}/pkg/version.Dirty=${EGX_WORKING_DIR_DIRTY} -X ${NVCF_GO_PACKAGE}/pkg/version.ReleaseTag=${NVCA_RELEASE_TAG} -extldflags \"-static\" -w -s"
+RUN goreleaser release --snapshot --clean --parallelism "${NVCF_GOMAXPROCS}" --fail-fast
+
+RUN rm -rf ./vendor/github.com/NVIDIA
+
+# Latest version available from https://github.com/NVIDIA/gfn/security/container-hardening/distroless-sample-projects#machine-queryable-status
+FROM nvcr.io/nvidia/distroless/go:v4.0.4
+LABEL io.k8s.display-name="NV Cluster Agent tools"
+
+COPY --from=builder /go/egx/_output/dist/ /usr/dist/
+COPY --from=builder /go/egx/vendor/ /usr/pkgsrc/

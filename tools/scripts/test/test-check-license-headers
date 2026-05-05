@@ -1,0 +1,467 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHECK_LICENSE_HEADERS="${SCRIPT_DIR}/../../ci/check-license-headers"
+
+TEMP_DIRS=()
+TEMP_FILES=()
+RUN_STATUS=0
+RUN_STDOUT=""
+RUN_STDERR=""
+
+GO_HEADER='// SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+'
+
+PYTHON_HEADER='# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+'
+
+HELM_HEADER='# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+'
+
+MPL_HEADER='// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+'
+
+cleanup() {
+    local path
+
+    for path in "${TEMP_DIRS[@]}"; do
+        rm -rf "${path}"
+    done
+
+    for path in "${TEMP_FILES[@]}"; do
+        rm -f "${path}"
+    done
+}
+
+make_tempdir() {
+    local tmpdir
+
+    tmpdir="$(mktemp -d)"
+    TEMP_DIRS+=("${tmpdir}")
+    echo "${tmpdir}"
+}
+
+make_tempfile() {
+    local tmpfile
+
+    tmpfile="$(mktemp)"
+    TEMP_FILES+=("${tmpfile}")
+    echo "${tmpfile}"
+}
+
+trap cleanup EXIT
+
+assert_equals() {
+    local expected="$1"
+    local actual="$2"
+    local message="$3"
+
+    if [[ "${actual}" != "${expected}" ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "expected: ${expected}" >&2
+        echo "actual:   ${actual}" >&2
+        exit 1
+    fi
+}
+
+assert_contains() {
+    local needle="$1"
+    local haystack="$2"
+    local message="$3"
+
+    if [[ "${haystack}" != *"${needle}"* ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "missing: ${needle}" >&2
+        exit 1
+    fi
+}
+
+assert_not_contains() {
+    local needle="$1"
+    local haystack="$2"
+    local message="$3"
+
+    if [[ "${haystack}" == *"${needle}"* ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "unexpected: ${needle}" >&2
+        exit 1
+    fi
+}
+
+assert_status() {
+    local expected="$1"
+    local actual="$2"
+    local message="$3"
+
+    if [[ "${actual}" -ne "${expected}" ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "expected status: ${expected}" >&2
+        echo "actual status:   ${actual}" >&2
+        exit 1
+    fi
+}
+
+assert_order() {
+    local first="$1"
+    local second="$2"
+    local haystack="$3"
+    local message="$4"
+    local after_first
+
+    after_first="${haystack#*"${first}"}"
+    if [[ "${after_first}" == "${haystack}" || "${after_first}" != *"${second}"* ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "expected order: ${first} before ${second}" >&2
+        exit 1
+    fi
+}
+
+write_file() {
+    local path="$1"
+    local content="$2"
+
+    mkdir -p "$(dirname "${path}")"
+    printf '%s' "${content}" > "${path}"
+}
+
+run_checker() {
+    local repo_root="$1"
+    shift
+
+    local stdout_file stderr_file
+    stdout_file="$(make_tempfile)"
+    stderr_file="$(make_tempfile)"
+
+    set +e
+    REPO_ROOT="${repo_root}" "${CHECK_LICENSE_HEADERS}" "$@" >"${stdout_file}" 2>"${stderr_file}"
+    RUN_STATUS=$?
+    set -e
+
+    RUN_STDOUT="$(<"${stdout_file}")"
+    RUN_STDERR="$(<"${stderr_file}")"
+}
+
+test_groups_failures_by_import_path_and_top_level_dir() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+  - path: src/service-a
+    repo: https://example.com/service-a.git
+'
+    write_file "${repo_root}/.oss-allowlist" 'src/service-a/**
+tools/**
+'
+    write_file "${repo_root}/src/service-a/main.go" 'package main
+'
+    write_file "${repo_root}/tools/helper.py" "print('hi')"$'\n'
+
+    run_checker "${repo_root}"
+
+    assert_status 1 "${RUN_STATUS}" "missing headers should fail"
+    assert_contains "ERROR: missing or invalid Apache 2.0 license headers in 2 files across 2 repo/path groups." "${RUN_STDERR}" "summary should count failures and groups"
+    assert_contains "Checked 2 files." "${RUN_STDERR}" "summary should report checked files"
+    assert_contains "[src/service-a] https://example.com/service-a.git" "${RUN_STDERR}" "import path section should include repo URL"
+    assert_contains "  1 files missing headers (go=1)" "${RUN_STDERR}" "Go failure should be counted"
+    assert_contains "  - src/service-a/main.go" "${RUN_STDERR}" "Go failure path should be listed"
+    assert_contains "[tools]" "${RUN_STDERR}" "top-level tools section should be present"
+    assert_contains "  1 files missing headers (python=1)" "${RUN_STDERR}" "Python failure should be counted"
+    assert_contains "  - tools/helper.py" "${RUN_STDERR}" "Python failure path should be listed"
+}
+
+test_lists_only_repo_groups_when_requested() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+  - path: src/service-a
+    repo: https://example.com/service-a.git
+'
+    write_file "${repo_root}/.oss-allowlist" 'src/service-a/**
+tools/**
+'
+    write_file "${repo_root}/src/service-a/main.go" 'package main
+'
+    write_file "${repo_root}/tools/helper.py" "print('hi')"$'\n'
+
+    run_checker "${repo_root}" --list-repos-only
+
+    assert_status 1 "${RUN_STATUS}" "missing headers should still fail in repo-only mode"
+    assert_contains "ERROR: missing or invalid Apache 2.0 license headers in 2 files across 2 repo/path groups." "${RUN_STDERR}" "summary should still count failures and groups"
+    assert_contains "[src/service-a] https://example.com/service-a.git" "${RUN_STDERR}" "import path should still be listed"
+    assert_contains "[tools]" "${RUN_STDERR}" "top-level dir should still be listed"
+    assert_not_contains "files missing headers" "${RUN_STDERR}" "repo-only mode should omit per-group counts"
+    assert_not_contains "  - src/service-a/main.go" "${RUN_STDERR}" "repo-only mode should omit file paths"
+    assert_not_contains "  - tools/helper.py" "${RUN_STDERR}" "repo-only mode should omit file paths"
+}
+
+test_skips_vendor_go_files_and_detects_helm_files_under_chart_roots() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+  - path: deploy/app-chart
+    repo: https://example.com/app-chart.git
+'
+    write_file "${repo_root}/.oss-allowlist" 'deploy/app-chart/**
+'
+    write_file "${repo_root}/deploy/app-chart/Chart.yaml" "${HELM_HEADER}apiVersion: v2"$'\n'
+    write_file "${repo_root}/deploy/app-chart/templates/deployment.yaml" 'kind: Deployment
+'
+    write_file "${repo_root}/deploy/app-chart/vendor/example/lib.go" 'package example
+'
+
+    run_checker "${repo_root}"
+
+    assert_status 1 "${RUN_STATUS}" "missing Helm header should fail"
+    assert_contains "Checked 2 files." "${RUN_STDERR}" "vendor Go file should be skipped"
+    assert_contains "  1 files missing headers (helm=1)" "${RUN_STDERR}" "Helm failure should be counted"
+    assert_contains "  - deploy/app-chart/templates/deployment.yaml" "${RUN_STDERR}" "template file should be reported"
+    assert_not_contains "vendor/example/lib.go" "${RUN_STDERR}" "vendor Go file should not be reported"
+}
+
+test_accepts_valid_headers() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+'
+    write_file "${repo_root}/.oss-allowlist" 'tools/**
+'
+    write_file "${repo_root}/tools/helper.py" "${PYTHON_HEADER}print('ok')"$'\n'
+
+    run_checker "${repo_root}"
+
+    assert_status 0 "${RUN_STATUS}" "valid headers should pass"
+    assert_equals "All checked files have Apache 2.0 SPDX headers (1 files checked)." "${RUN_STDOUT}" "success message should match"
+    assert_equals "" "${RUN_STDERR}" "success should not write to stderr"
+}
+
+test_accepts_allowlisted_spdx_headers_only_in_matching_dir() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+'
+    write_file "${repo_root}/.oss-allowlist" 'src/compute-plane-services/ess-agent/**
+tools/**
+'
+    write_file "${repo_root}/src/compute-plane-services/ess-agent/main.go" "${MPL_HEADER}package main"$'\n'
+    write_file "${repo_root}/tools/helper.go" "${MPL_HEADER}package helper"$'\n'
+
+    run_checker "${repo_root}" --allow-spdx-dir "src/compute-plane-services/ess-agent:MPL-2.0"
+
+    assert_status 1 "${RUN_STATUS}" "non-allowlisted MPL header should still fail"
+    assert_contains "ERROR: missing or invalid required license headers in 1 files across 1 repo/path groups." "${RUN_STDERR}" "summary should switch to generic wording when alternate SPDX ids are allowed"
+    assert_contains "Checked 2 files." "${RUN_STDERR}" "both files should still be counted as checked"
+    assert_contains "  - tools/helper.go" "${RUN_STDERR}" "file outside allowlisted dir should still be reported"
+    assert_not_contains "src/compute-plane-services/ess-agent/main.go" "${RUN_STDERR}" "file inside allowlisted dir should pass"
+}
+
+test_accepts_allowlisted_spdx_headers() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+'
+    write_file "${repo_root}/.oss-allowlist" 'src/compute-plane-services/ess-agent/**
+'
+    write_file "${repo_root}/src/compute-plane-services/ess-agent/main.go" "${MPL_HEADER}package main"$'\n'
+
+    run_checker "${repo_root}" --allow-spdx-dir "src/compute-plane-services/ess-agent:MPL-2.0"
+
+    assert_status 0 "${RUN_STATUS}" "allowlisted MPL header should pass"
+    assert_equals "All checked files have valid license headers (1 files checked)." "${RUN_STDOUT}" "success message should reflect alternate SPDX allowlist"
+    assert_equals "" "${RUN_STDERR}" "success should not write to stderr"
+}
+
+test_warns_and_skips_missing_allowlisted_dir() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+'
+    write_file "${repo_root}/.oss-allowlist" 'tools/**
+'
+    write_file "${repo_root}/tools/helper.py" "${PYTHON_HEADER}print('ok')"$'\n'
+
+    run_checker "${repo_root}" --allow-spdx-dir "src/compute-plane-services/ess-agent:MPL-2.0"
+
+    assert_status 0 "${RUN_STATUS}" "missing allowlisted dir should warn and continue"
+    assert_equals "All checked files have Apache 2.0 SPDX headers (1 files checked)." "${RUN_STDOUT}" "missing allowlist should not switch success wording"
+    assert_contains "WARN: allowlisted directory does not exist, skipping: src/compute-plane-services/ess-agent" "${RUN_STDERR}" "missing allowlisted dir should warn"
+}
+
+test_skips_sonar_project_properties() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+'
+    write_file "${repo_root}/.oss-allowlist" 'tools/**
+'
+    write_file "${repo_root}/tools/sonar-project.properties" 'sonar.projectKey=test
+'
+    write_file "${repo_root}/tools/application.properties" 'app.name=test
+'
+
+    run_checker "${repo_root}"
+
+    assert_status 1 "${RUN_STATUS}" "missing properties header should fail"
+    assert_contains "Checked 1 files." "${RUN_STDERR}" "sonar-project.properties should be skipped"
+    assert_contains "  - tools/application.properties" "${RUN_STDERR}" "application.properties should be reported"
+    assert_not_contains "sonar-project.properties" "${RUN_STDERR}" "sonar-project.properties should not be reported"
+}
+
+test_sorts_reported_paths_with_c_locale_order() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+'
+    write_file "${repo_root}/.oss-allowlist" 'tools/**
+'
+    write_file "${repo_root}/tools/api/auth.go" 'package api
+'
+    write_file "${repo_root}/tools/api/auth/approle.go" 'package auth
+'
+
+    run_checker "${repo_root}" tools
+
+    assert_status 1 "${RUN_STATUS}" "missing headers should fail for ordered path test"
+    assert_order \
+        "  - tools/api/auth.go" \
+        "  - tools/api/auth/approle.go" \
+        "${RUN_STDERR}" \
+        "reported file paths should use deterministic C-locale ordering"
+}
+
+test_skips_files_outside_oss_allowlists() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+'
+    write_file "${repo_root}/.oss-allowlist" 'tools/**
+'
+    write_file "${repo_root}/tools/helper.py" "print('hi')"$'\n'
+    write_file "${repo_root}/internal/private.go" 'package internal
+'
+
+    run_checker "${repo_root}"
+
+    assert_status 1 "${RUN_STATUS}" "allowlisted file missing a header should fail"
+    assert_contains "Checked 1 files." "${RUN_STDERR}" "only allowlisted source files should be checked"
+    assert_contains "  - tools/helper.py" "${RUN_STDERR}" "allowlisted file should be reported"
+    assert_not_contains "internal/private.go" "${RUN_STDERR}" "non-allowlisted file should not be reported"
+}
+
+test_nested_oss_allowlists_are_relative_to_their_directory() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+  - path: src/service-a
+    repo: https://example.com/service-a.git
+'
+    write_file "${repo_root}/src/service-a/.oss-allowlist" 'main.go
+cmd/**
+'
+    write_file "${repo_root}/src/service-a/main.go" "${GO_HEADER}package main"$'\n'
+    write_file "${repo_root}/src/service-a/cmd/server/main.go" 'package main
+'
+    write_file "${repo_root}/src/service-a/internal/private.go" 'package internal
+'
+
+    run_checker "${repo_root}"
+
+    assert_status 1 "${RUN_STATUS}" "nested allowlisted file missing a header should fail"
+    assert_contains "Checked 2 files." "${RUN_STDERR}" "nested allowlist should include only its matched files"
+    assert_contains "  - src/service-a/cmd/server/main.go" "${RUN_STDERR}" "nested allowlisted file should be reported"
+    assert_not_contains "src/service-a/internal/private.go" "${RUN_STDERR}" "file outside nested allowlist should not be reported"
+}
+
+test_allowlist_root_file_patterns_do_not_match_nested_basenames() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+'
+    write_file "${repo_root}/.oss-allowlist" 'main.go
+'
+    write_file "${repo_root}/main.go" 'package main
+'
+    write_file "${repo_root}/src/main.go" 'package src
+'
+
+    run_checker "${repo_root}"
+
+    assert_status 1 "${RUN_STATUS}" "root allowlisted file missing a header should fail"
+    assert_contains "Checked 1 files." "${RUN_STDERR}" "root file pattern should not check nested basenames"
+    assert_contains "  - main.go" "${RUN_STDERR}" "root allowlisted file should be reported"
+    assert_not_contains "src/main.go" "${RUN_STDERR}" "nested basename should not be reported"
+}
+
+test_warns_for_unsupported_oss_allowlist_negation_patterns() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+'
+    write_file "${repo_root}/.oss-allowlist" 'tools/**
+!tools/excluded.go
+'
+    write_file "${repo_root}/tools/excluded.go" 'package tools
+'
+
+    run_checker "${repo_root}"
+
+    assert_status 1 "${RUN_STATUS}" "negation pattern should not suppress an included file"
+    assert_contains "WARNING: negation patterns are not supported in .oss-allowlist (${repo_root}/.oss-allowlist: !tools/excluded.go)" "${RUN_STDERR}" "unsupported negation should warn"
+    assert_contains "  - tools/excluded.go" "${RUN_STDERR}" "file matched by positive pattern should still be reported"
+}
+
+main() {
+    test_groups_failures_by_import_path_and_top_level_dir
+    test_lists_only_repo_groups_when_requested
+    test_skips_vendor_go_files_and_detects_helm_files_under_chart_roots
+    test_accepts_valid_headers
+    test_accepts_allowlisted_spdx_headers_only_in_matching_dir
+    test_accepts_allowlisted_spdx_headers
+    test_warns_and_skips_missing_allowlisted_dir
+    test_skips_sonar_project_properties
+    test_sorts_reported_paths_with_c_locale_order
+    test_skips_files_outside_oss_allowlists
+    test_nested_oss_allowlists_are_relative_to_their_directory
+    test_allowlist_root_file_patterns_do_not_match_nested_basenames
+    test_warns_for_unsupported_oss_allowlist_negation_patterns
+    echo "PASS: test-check-license-headers"
+}
+
+main "$@"

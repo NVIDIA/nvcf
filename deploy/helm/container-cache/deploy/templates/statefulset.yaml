@@ -1,0 +1,329 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $.Release.Name }}
+  namespace: {{ $.Release.Namespace | quote }}
+  labels:
+    app: {{ $.Release.Name }}
+    {{- include "nvcf-container-cache.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "nvcf-container-cache.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      {{- if $.Values.vault.enabled | default false }}
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-init-first: "false"  # should be injected last to pick up the CSR to get signed by Vault CA
+        vault.hashicorp.com/agent-inject-status: update
+        vault.hashicorp.com/agent-configmap: {{ $.Release.Name }}-vault-config
+        vault.hashicorp.com/secret-volume-path: "/vault/secrets"
+        vault.hashicorp.com/agent-copy-volume-mounts: certs  #this copies all the mounts from the certs container and attaches to the injected vault container(s) both init and regular
+      {{- end }}
+      {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        app: nvcf-proxy-cache
+        {{- include "nvcf-container-cache.labels" . | nindent 8 }}
+      {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+    {{- with $.Values.nodeSelector }}
+      nodeSelector:
+        {{ toYaml $.Values.nodeSelector | nindent 8 }}
+    {{- end }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - nvcf-proxy-cache
+            topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: init-chown-data
+          image: nvcr.io/nvidia/cuda:12.3.2-base-ubuntu22.04
+          command: [ "/bin/bash" ]
+          args:
+            - -c
+            - "chown -R 1000:1000 /proxy_cache && chown -R 1000:1000 /container_cache"
+          resources: {}
+          volumeMounts:
+            - name: proxy-cache
+              mountPath: /proxy_cache
+            - name: cache
+              mountPath: /container_cache
+          securityContext:
+            capabilities:
+              add:
+                - CHOWN
+            runAsNonRoot: false
+            runAsUser: 0
+        - name: certs
+          image:  {{ $.Values.images.certificates }}
+          env:
+            - name: VAULT_ENABLED
+              value: {{ $.Values.vault.enabled | default false | quote }}
+          command: [ "/bin/bash" ]
+          args:
+            - -c
+            - |
+              set -euo pipefail
+
+              if [ "${VAULT_ENABLED}" = "false" ]; then
+                cp /etc/ssl/private/intermediate.key.pem /certs/leaf-ca.key
+                cp /etc/ssl/certs/intermediate.crt.pem  /certs/leaf-ca.crt
+                cat /certs/leaf-ca.crt /etc/ssl/certs/root.crt.pem > /certs/ssl-bundle.crt
+                chmod +r /certs/leaf-ca.key
+                exit 0
+              fi
+
+              openssl req -new -newkey rsa:4096 -nodes \
+              -keyout /certs/leaf-ca.key \
+              -out /certs/leaf-ca.csr \
+              -subj '/C=US/ST=California/L=Santa Clara/O=NVIDIA Corporation/OU=NVCF/CN=nvcf-proxy-leaf-ca'
+
+              chmod +r /certs/leaf-ca.key
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+          resources: { }
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      serviceAccountName: container-cache
+    {{- with $.Values.images.secrets }}
+      imagePullSecrets:
+    {{- range $idx, $item := . }}
+      - name: {{ $item }}
+    {{- end }}
+    {{- end }}
+      containers:
+        - name: nginx-proxy
+          image: {{ required "Property '.images.server' is required." $.Values.images.server | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          ports:
+            - name: http
+              containerPort: 13129
+              protocol: TCP
+            - name: https
+              containerPort: 13128
+              protocol: TCP
+{{- $crioPorts := include "nvcf-container-cache.crioRegistryPorts" . | fromYaml -}}
+{{- if $crioPorts }}
+{{- range $name, $val := $crioPorts }}
+            - name: crio-{{ $name }}
+              containerPort: {{ $val.port }}
+              protocol: TCP
+{{- end }}
+{{- end }}
+            - name: https-proxy
+              containerPort: 14128
+              protocol: TCP
+            - name: https-nucleus
+              containerPort: 14129
+              protocol: TCP
+            - name: cache-metrics
+              containerPort: 9145
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          volumeMounts:
+            - name: cache
+              mountPath: /container_cache
+            - name: proxy-cache
+              mountPath: /proxy_cache
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: nginx-default-config
+              mountPath: /etc/nginx/conf.d/sites/default.conf
+              subPath: default.conf
+            - name: nginx-container-config
+              mountPath: /etc/nginx/conf.d/sites/container-cache.conf
+              subPath: container-cache.conf
+            - name: nginx-proxy-config
+              mountPath: /etc/nginx/conf.d/sites/proxy-cache.conf
+              subPath: proxy-cache.conf
+          {{- if (.Values.nucleus).enabled | default true }}
+            - name: nginx-proxy-nucleus-config
+              mountPath: /etc/nginx/conf.d/sites/proxy-nucleus-cache.conf
+              subPath: proxy-nucleus-cache.conf
+          {{- end }}
+            - name: nginx-ngc-config
+              mountPath: /etc/nginx/conf.d/sites/ngc.conf
+              subPath: ngc.conf
+            - name: nginx-hf-config
+              mountPath: /etc/nginx/conf.d/sites/hf.conf
+              subPath: hf.conf
+            - name: nginx-proxy-common-config
+              mountPath: /etc/nginx/conf.d/sites/proxy-common.conf
+              subPath: proxy-common.conf
+            - name: nginx-logging-formats-config
+              mountPath: /etc/nginx/conf.d/sites/logging-formats.conf
+              subPath: logging-formats.conf
+            - name: nginx-lua-config
+              mountPath: /etc/nginx/conf.d/lua
+              readOnly: true
+          {{- if $.Values.vault.enabled }}
+            - name: token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount-vault
+          {{- end }}
+            - name: certs
+              mountPath: /etc/certs
+          resources:
+            requests:
+              memory: {{ .Values.resources.requests.memory | default "12Gi" | quote }}
+              cpu: {{ .Values.resources.requests.cpu | default "4" | quote }}
+            limits:
+              memory: {{ .Values.resources.limits.memory | default "64Gi" | quote }}
+              cpu: {{ .Values.resources.limits.cpu | default "32" | quote }}
+    {{- if $.Values.monitoring.enabled }}
+        - name: nginx-prometheus-exporter
+          image: {{ required "Property '.images.exporter' is required." $.Values.images.exporter | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - '-nginx.scrape-uri=http://localhost:9145/nginx_status'
+          ports:
+            - name: metrics
+              containerPort: 9113
+    {{- end }}
+    {{- if (.Values.traces).enabled }}
+        - name: opentelemetry-collector
+          image: {{ required "Property '.images.collector' is required." $.Values.images.collector | quote }}
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: otel-collector-access-token
+          volumeMounts:
+            - name: nvcf-collector-config
+              mountPath: /etc/otelcol-contrib/config.yaml
+              subPath: config.yaml
+          ports:
+            - name: grpc
+              containerPort: 4317
+            - name: http
+              containerPort: 4318
+    {{- end }}
+      volumes:
+      {{- if $.Values.vault.enabled }}
+        - name: token
+          projected:
+            sources:
+            - serviceAccountToken:
+                path: token
+                audience: {{ required "vault.vaultAddress is required when vault.enabled=true" .Values.vault.vaultAddress }}
+      {{- end }}
+        - name: nginx-config
+          configMap: 
+            name: nvcf-nginx-config
+        - name: nginx-logging-formats-config
+          configMap:
+            name: nvcf-nginx-config
+        - name: nginx-lua-config
+          configMap:
+            name: nvcf-nginx-config
+            items:
+            - key: lua-access.lua
+              path: lua-access.lua
+            - key: lua-gen-key.lua
+              path: lua-gen-key.lua
+            - key: lua-ssl.lua
+              path: lua-ssl.lua
+        - name: nginx-default-config
+          configMap:
+            name: nvcf-default-config
+        - name: nginx-container-config
+          configMap:
+            name: nvcf-container-config
+        - name: nginx-proxy-config
+          configMap:
+            name: nvcf-proxy-config
+        - name: nginx-ngc-config
+          configMap:
+            name: nvcf-proxy-config
+        - name: nginx-hf-config
+          configMap:
+            name: nvcf-proxy-config
+      {{- if (.Values.nucleus).enabled | default true }}
+        - name: nginx-proxy-nucleus-config
+          configMap:
+            name: nvcf-proxy-config
+      {{- end }}
+        - name: nginx-proxy-common-config
+          configMap:
+            name: nvcf-proxy-config
+{{- if (.Values.traces).enabled }}
+        - name: nvcf-collector-config
+          configMap:
+            name: nvcf-collector-config
+{{- end }}
+        - name: certs
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+{{- if eq $.Values.persistentVolumeClaim.storageClassName "emptydir" }}
+        - name: cache
+          emptyDir:
+            sizeLimit: {{ printf "%dGi" (default 100 (int $.Values.persistentVolumeClaim.sizeGB)) | quote }}
+        - name: proxy-cache
+          emptyDir:
+            sizeLimit: {{ printf "%dGi" (default 200 (int $.Values.persistentVolumeClaim.sizeProxyGB)) | quote }}
+{{- else }}
+  volumeClaimTemplates:
+    - metadata:
+        name: cache
+        namespace: {{ $.Release.Namespace | quote }}
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: {{ printf "%dGi" (default 100 (int $.Values.persistentVolumeClaim.sizeGB)) | quote }}
+        storageClassName: {{ $.Values.persistentVolumeClaim.storageClassName | default "azurefile" | quote }}
+    - metadata:
+        name: proxy-cache
+        namespace: {{ $.Release.Namespace | quote }}
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: {{ printf "%dGi" (default 200 (int $.Values.persistentVolumeClaim.sizeProxyGB)) | quote }}
+        storageClassName: {{ $.Values.persistentVolumeClaim.storageClassName | default "azurefile" | quote }}
+  {{- end }}

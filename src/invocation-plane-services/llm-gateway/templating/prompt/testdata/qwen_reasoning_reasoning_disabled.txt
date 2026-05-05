@@ -1,0 +1,7 @@
+<|im_start|>user
+user message<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+

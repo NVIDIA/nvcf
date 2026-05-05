@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# NATS Configuration (reference: https://github.com/nats-io/k8s/tree/main/helm/charts/nats)
+nats:
+  enabled: true
+  global:
+    image:
+      pullSecretNames: []
+      registry: docker.io
+      pullPolicy: IfNotPresent
+  container:
+    image:
+      registry: docker.io
+      repository: synadia/nats-server
+      tag: 2.11.10-alpine3.22
+      pullPolicy: IfNotPresent
+    env:
+      NKEY_USER_KEY:
+        valueFrom:
+          secretKeyRef:
+            name: nats-nkeys
+            key: user.pub
+      # Auth callout public NKeys — resolved by NATS server config via $ENV substitution.
+      # Read from nats.authCallout.secretName, provisioned at deploy time.
+      # The OpenBao migration reads the same Secret to store the private seeds.
+      AUTH_CALLOUT_USER_NKEY:
+        valueFrom:
+          secretKeyRef:
+            name:
+              $tplYaml: '{{ default "nats-auth-callout-nkeys" ((.Values.authCallout).secretName) }}'
+            key: user_pub
+      AUTH_CALLOUT_ACCOUNT_NKEY:
+        valueFrom:
+          secretKeyRef:
+            name:
+              $tplYaml: '{{ default "nats-auth-callout-nkeys" ((.Values.authCallout).secretName) }}'
+            key: account_pub
+    # Use js-server-only health probes. With explicit accounts (AUTH/APP),
+    # the default $G account has no streams, causing the standard JetStream
+    # health check to fail with 503.
+    patch:
+      - op: replace
+        path: /startupProbe/httpGet/path
+        value: "/healthz?js-server-only"
+      - op: replace
+        path: /readinessProbe/httpGet/path
+        value: "/healthz?js-server-only"
+      - op: replace
+        path: /livenessProbe/httpGet/path
+        value: "/healthz?js-server-only"
+  reloader:
+    enabled: true
+    image:
+      registry: docker.io
+      repository: natsio/nats-server-config-reloader
+      tag: 0.20.0
+      pullPolicy: IfNotPresent
+  natsBox:
+    enabled: true
+    container:
+      image:
+        registry: docker.io
+        repository: natsio/nats-box
+        tag: 0.19.2-nonroot
+        pullPolicy: IfNotPresent
+    # Add contexts configuration to mount the nkeys secret
+    contexts:
+      default:
+        nkey:
+          secretName: nats-nkeys
+          key: user.key
+  # Auth callout NKey bootstrap.
+  # The default secret name is shared with openbao-migrations; override it only
+  # when every downstream consumer is configured to read the same Secret.
+  authCallout:
+    createNkeySecret: true
+    secretName: nats-auth-callout-nkeys
+  # RBAC - primarily to allow the bao migrations job to read the nkeys secret
+  rbac:
+    openbao:
+      enabled: true
+      serviceAccountName: openbao-server-initialize-cluster
+      namespace: vault-system
+  config:
+    cluster:
+      enabled: true # Enable clustering for NATS.
+    jetstream:
+      enabled: true # Enable Jetstream for NATS
+      fileStore:
+        enabled: true
+      memoryStore:
+        enabled: true
+    merge:
+      server_tags:
+        - "dc:ncp"
+      # Auth callout delegates authentication to an external service (nvcf-nats-auth-callout-service).
+      # The AUTH account holds the auth callout service's NKey identity.
+      # The APP account is the default for authenticated clients (NVCA, workers).
+      # The auth callout verifies JWTs via ICMS token introspection and assigns
+      # clients to the APP account with cluster-scoped permissions.
+      accounts:
+        AUTH:
+          users:
+            - nkey: << $AUTH_CALLOUT_USER_NKEY >>
+        APP:
+          jetstream: enabled
+      authorization:
+        auth_callout:
+          issuer: << $AUTH_CALLOUT_ACCOUNT_NKEY >>
+          account: AUTH
+          auth_users:
+            - << $AUTH_CALLOUT_USER_NKEY >>
+
+# Auth callout NKeys are sourced from the configured nats.authCallout.secretName
+# K8s secret (fields: user_pub, account_pub, nkey_seed, nkey_signature).
+# The OpenBao migration (03_setup_shared_secrets.sh) reads this Secret to
+# store the private seeds in vault for the auth-callout pod's vault-agent
+# sidecar to consume at startup.

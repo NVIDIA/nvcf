@@ -1,0 +1,203 @@
+LLM API Gateway
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+========================================================================
+Third-Party Dependencies and Licenses
+========================================================================
+
+This project includes the following third-party direct dependencies:
+
+------------------------------------------------------------------------
+cloud.google.com/go/pubsub/v2 v2.4.0
+License: Apache License 2.0
+https://pkg.go.dev/cloud.google.com/go/pubsub/v2
+
+------------------------------------------------------------------------
+github.com/daulet/tokenizers v1.24.0
+License: MIT License
+https://github.com/daulet/tokenizers
+
+------------------------------------------------------------------------
+github.com/go-viper/mapstructure/v2 v2.4.0
+License: MIT License
+https://github.com/go-viper/mapstructure
+
+------------------------------------------------------------------------
+github.com/google/uuid v1.6.0
+License: BSD 3-Clause
+https://github.com/google/uuid
+
+------------------------------------------------------------------------
+github.com/kaptinlin/jsonrepair v0.2.6
+License: MIT License
+https://github.com/kaptinlin/jsonrepair
+
+------------------------------------------------------------------------
+github.com/labstack/echo/v4 v4.14.0
+License: MIT License
+https://github.com/labstack/echo
+
+------------------------------------------------------------------------
+github.com/maypok86/otter v1.2.4
+License: Apache License 2.0
+https://github.com/maypok86/otter
+
+------------------------------------------------------------------------
+github.com/nats-io/nats.go v1.49.0
+License: Apache License 2.0
+https://github.com/nats-io/nats.go
+
+------------------------------------------------------------------------
+github.com/nvidia-lpu/harmony v0.27.0
+License: Apache License 2.0
+https://github.com/nvidia-lpu/harmony
+
+------------------------------------------------------------------------
+github.com/nvidia-lpu/minijinja v0.4.0
+License: Apache License 2.0
+https://github.com/nvidia-lpu/minijinja
+
+------------------------------------------------------------------------
+github.com/nvidia-lpu/parsec v1.14.0
+License: Apache License 2.0
+https://github.com/nvidia-lpu/parsec
+
+------------------------------------------------------------------------
+github.com/olric-data/olric v0.7.3 (replaced by github.com/max007-008/olric v0.0.0-20260422213820-d93417d6e8c8)
+License: Apache License 2.0
+Upstream: https://github.com/olric-data/olric
+Fork: https://github.com/max007-008/olric
+
+------------------------------------------------------------------------
+github.com/rs/zerolog v1.34.0
+License: MIT License
+https://github.com/rs/zerolog
+
+------------------------------------------------------------------------
+github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+License: Apache License 2.0
+https://github.com/santhosh-tekuri/jsonschema
+
+------------------------------------------------------------------------
+github.com/stretchr/testify v1.11.1
+License: MIT License
+https://github.com/stretchr/testify
+
+------------------------------------------------------------------------
+go.jetify.com/sse v0.1.0
+License: Apache License 2.0
+https://github.com/jetify-com/sse
+
+------------------------------------------------------------------------
+go.jetify.com/typeid v1.3.0
+License: Apache License 2.0
+https://github.com/jetify-com/typeid
+
+------------------------------------------------------------------------
+go.mway.dev/chrono v0.7.0
+License: MIT License
+https://github.com/mwaylabs/chrono
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel v1.42.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.42.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.42.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.42.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/metric v1.42.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/sdk v1.42.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/sdk/metric v1.42.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/trace v1.42.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.uber.org/mock v0.5.2
+License: Apache License 2.0
+https://github.com/uber-go/mock
+
+------------------------------------------------------------------------
+golang.org/x/sync v0.20.0
+License: BSD 3-Clause
+https://golang.org/x/sync
+
+------------------------------------------------------------------------
+google.golang.org/api v0.272.0
+License: BSD 3-Clause
+https://github.com/googleapis/google-api-go-client
+
+------------------------------------------------------------------------
+google.golang.org/grpc v1.79.2
+License: Apache License 2.0
+https://github.com/grpc/grpc-go
+
+------------------------------------------------------------------------
+google.golang.org/protobuf v1.36.11
+License: BSD 3-Clause
+https://github.com/protocolbuffers/protobuf-go
+
+------------------------------------------------------------------------
+gotest.tools/v3 v3.5.2
+License: Apache License 2.0
+https://github.com/gotestyourself/gotest.tools
+
+------------------------------------------------------------------------
+k8s.io/api v0.34.2
+License: Apache License 2.0
+https://github.com/kubernetes/api
+
+------------------------------------------------------------------------
+k8s.io/apimachinery v0.34.2
+License: Apache License 2.0
+https://github.com/kubernetes/apimachinery
+
+------------------------------------------------------------------------
+k8s.io/client-go v0.34.2
+License: Apache License 2.0
+https://github.com/kubernetes/client-go
+
+========================================================================
+Transitive Dependencies (indirect)
+========================================================================
+
+All transitive dependencies use permissive open-source licenses
+(Apache 2.0, MIT, BSD, or ISC). See go.sum for the complete module graph.

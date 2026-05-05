@@ -1,0 +1,62 @@
+#!/usr/bin/env sh
+set -eu
+
+(set -o pipefail) >/dev/null 2>&1 && set -o pipefail
+
+require_cmd() {
+  if command -v "$1" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v apk >/dev/null 2>&1; then
+    apk add -q "$1"
+    return 0
+  fi
+
+  echo "Missing required command: $1" >&2
+  exit 1
+}
+
+require_cmd curl
+require_cmd jq
+
+fern_version="$(node -e "console.log(require('./fern/fern.config.json').version)")"
+npm install -g "fern-api@${fern_version}"
+
+project_name="${CI_PROJECT_NAME:-}"
+mr_iid="${CI_MERGE_REQUEST_IID:-}"
+mr_project_id="${CI_MERGE_REQUEST_PROJECT_ID:-}"
+preview_id="${DOCS_PREVIEW_ID:-}"
+
+if [ -z "${preview_id}" ]; then
+  if [ -z "${project_name}" ] || [ -z "${mr_iid}" ]; then
+    echo "Set DOCS_PREVIEW_ID, or provide CI_PROJECT_NAME and CI_MERGE_REQUEST_IID." >&2
+    exit 1
+  fi
+  preview_id="${project_name}-mr-${mr_iid}"
+fi
+
+set -o pipefail
+fern generate --docs --preview --id "${preview_id}" --force 2>&1 | tee /tmp/fern-output.log || true
+preview_url="$(grep -oE -m1 '(https://[^[:space:]]+-preview-[^[:space:]]+) ' /tmp/fern-output.log | tr -d ' ')"
+echo "Preview URL: ${preview_url}"
+
+if [ -z "${preview_url}" ]; then
+  echo "No preview URL found" >&2
+  exit 1
+fi
+
+if [ "${DOCS_PREVIEW_SKIP_COMMENT:-}" = "1" ]; then
+  exit 0
+fi
+
+if [ -z "${mr_project_id}" ] || [ -z "${mr_iid}" ] || [ -z "${FERN_BOT:-}" ]; then
+  echo "Skipping MR comment: set CI_MERGE_REQUEST_PROJECT_ID, CI_MERGE_REQUEST_IID, and FERN_BOT to post it." >&2
+  exit 0
+fi
+
+curl --silent --fail --location \
+  --header "PRIVATE-TOKEN: ${FERN_BOT}" \
+  --header "Content-Type: application/json" \
+  --url "https://github.com/NVIDIA/api/v4/projects/${mr_project_id}/merge_requests/${mr_iid}/notes" \
+  --data-raw "{ \"body\": \"Preview your docs at ${preview_url}\" }"

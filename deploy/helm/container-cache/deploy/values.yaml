@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# Specify labels for selecting nodes. Leave empty for cluster-agnostic scheduling.
+nodeSelector: {}
+
+# Number of replicas to create of container-cache.
+replicaCount: 1
+
+# Domain(s) of target hosts where the proxy passes requests (comma-separated).
+targetHost: nvcr.io,stg.nvcr.io
+
+# Container image information used by container-cache.
+images:
+  # Name of the container image containing container-cache Nginx proxy.
+  server: nvcr.io/nv-ngc-devops/nvcf-container-cache:v1.1.34
+  # Name of the container image containing Nginx Prometheus exporter.
+  exporter: nvcr.io/nv-ngc-devops/nginx-prometheus-exporter:1.0
+  # Certificate bundle used for cache certificates.
+  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:1.2.5
+  # Optional pull secrets for private registries.
+  secrets:
+    - nvidia-ngcuser-pull-secret
+
+# Configuration options related to cache behavior.
+cache:
+  # Size for storing cache keys.
+  keyStorageSize: 50m
+  # Max cache size.
+  maxSize: 500g
+  # Period a resource can remain in cache without being accessed.
+  # Immutable blobs (SHA256-addressed) are safe to keep long; disk pressure
+  # is handled by min_free watermark, so this only cleans truly abandoned entries.
+  inactive: 30d
+  # Cache validity period.
+  valid: 12h
+  # HTTP/2 for ingress listeners where applicable.
+  http2: off
+  # Nginx worker connections.
+  workerConnection: 1000
+
+# Resource requests/limits for nginx-proxy container.
+resources:
+  requests:
+    memory: "4Gi"
+    cpu: "4"
+  limits:
+    memory: "64Gi"
+    cpu: "32"
+
+# Configuration options related to persistent/ephemeral storage.
+# Default to emptydir for open-source/cluster-agnostic deployments.
+persistentVolumeClaim:
+  storageClassName: emptydir
+  # Proxy cache volume size (Gi).
+  sizeProxyGB: 200
+  # Container cache volume size (Gi).
+  sizeGB: 100
+  # Cleanup watermark percentage (keep this much free on proxy cache volume).
+  freeProxyPct: 10
+
+# Service configuration.
+service:
+  type: NodePort
+  port: 30345
+
+# Metrics configuration.
+metrics:
+  cacheMetricsStorageSize: 300m
+  throughputHistogramBuckets: 25000000, 30000000, 35000000, 40000000, 50000000, 60000000, 80000000, 100000000
+
+# Custom annotations and labels for pods.
+podAnnotations: {}
+podLabels: {}
+
+# Nucleus proxy configuration.
+nucleus:
+  enabled: false
+
+# Vault configuration.
+# Disabled by default for open-source deployments.
+vault:
+  enabled: false
+  # Used by projected service-account token audience in StatefulSet.
+  vaultAddress: https://vault.example.com
+  # Used only when vault.enabled=true by the containerd daemonset.
+  certLocation: ""
+
+# Tracing configuration.
+traces:
+  enabled: false
+
+# CRI-O configuration.
+# When CRI-O is detected on nodes, the DaemonSet configures registry mirrors.
+# CRI-O needs a dedicated listener port per registry (it cannot pass `?ns=`
+# query params the way containerd does), so each entry in `targetHost` gets
+# its own NodePort. Mirrors are referenced as `${NODE_IP}:${port}` because the
+# CRI-O daemon runs in the host network namespace and typically cannot resolve
+# cluster service DNS.
+crio:
+  # Per-registry port mappings (auto-derived from targetHost if not set).
+  registryPorts: []
+  # Base port for auto-derived CRI-O ports (default: service.port + 1).
+  # basePort: 30346
+
+# Monitoring configuration.
+monitoring:
+  enabled: false

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# Exit non-zero if LICENSE is missing, NOTICE is out of sync, or headers are missing.
+set -eu -o pipefail
+
+repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "${repo_root}"
+
+license_file="LICENSE"
+notice_file="NOTICE"
+
+if [[ ! -s "${license_file}" ]]; then
+    echo "ERROR: ${license_file} is missing or empty."
+    exit 1
+fi
+
+if [[ ! -f "${notice_file}" ]]; then
+    echo "ERROR: ${notice_file} is missing."
+    echo "Run './tools/scripts/update-license' to generate it."
+    exit 1
+fi
+
+tmp_notice="$(mktemp)"
+trap 'rm -f "${tmp_notice}"' EXIT
+
+./tools/scripts/collect-notices --output "${tmp_notice}" >/dev/null
+
+if ! diff -u "${notice_file}" "${tmp_notice}" >/dev/null; then
+    echo "ERROR: ${notice_file} is out of sync with repo notice / third-party license paths."
+    echo ""
+    diff -u "${notice_file}" "${tmp_notice}" || true
+    echo ""
+    echo "Run './tools/scripts/update-license' to fix this."
+    exit 1
+fi
+
+./tools/ci/check-license-headers \
+    --allow-spdx-dir "src/compute-plane-services/ess-agent:MPL-2.0"
+
+./tools/ci/check-private-go-module-paths
+
+echo "${license_file} is present, ${notice_file} is up to date, source headers passed, and native Go roots are free of private GitLab module paths."

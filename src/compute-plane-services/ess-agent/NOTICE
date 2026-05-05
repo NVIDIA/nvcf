@@ -1,0 +1,276 @@
+ESS Agent
+Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+========================================================================
+Third-Party Dependencies and Licenses
+========================================================================
+
+This project is derived from HashiCorp consul-template and includes
+vendored components from the HashiCorp Vault API and SDK. These
+components are used under the Mozilla Public License 2.0 (MPL-2.0).
+
+This project includes the following third-party direct dependencies:
+
+------------------------------------------------------------------------
+github.com/hashicorp/consul-template (vendored, modified)
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/consul-template
+
+------------------------------------------------------------------------
+github.com/hashicorp/vault/api (vendored, modified)
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/vault
+
+------------------------------------------------------------------------
+github.com/hashicorp/vault/sdk (vendored, modified)
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/vault
+
+------------------------------------------------------------------------
+github.com/BurntSushi/toml v1.2.1
+License: MIT License
+https://github.com/BurntSushi/toml
+
+------------------------------------------------------------------------
+github.com/Masterminds/sprig/v3 v3.2.3
+License: MIT License
+https://github.com/Masterminds/sprig
+
+------------------------------------------------------------------------
+github.com/davecgh/go-spew v1.1.2
+License: ISC License
+https://github.com/davecgh/go-spew
+
+------------------------------------------------------------------------
+github.com/hashicorp/consul/api v1.32.1
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/consul
+
+------------------------------------------------------------------------
+github.com/hashicorp/consul/sdk v0.16.1
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/consul
+
+------------------------------------------------------------------------
+github.com/hashicorp/go-gatedio v0.5.0
+License: MIT License
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/go-gatedio
+
+------------------------------------------------------------------------
+github.com/hashicorp/go-hclog v1.6.3
+License: MIT License
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/go-hclog
+
+------------------------------------------------------------------------
+github.com/hashicorp/go-multierror v1.1.1
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/go-multierror
+
+------------------------------------------------------------------------
+github.com/hashicorp/go-rootcerts v1.0.2
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/go-rootcerts
+
+------------------------------------------------------------------------
+github.com/hashicorp/go-sockaddr v1.0.2
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/go-sockaddr
+
+------------------------------------------------------------------------
+github.com/hashicorp/go-syslog v1.0.0
+License: MIT License
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/go-syslog
+
+------------------------------------------------------------------------
+github.com/hashicorp/go-uuid v1.0.3
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/go-uuid
+
+------------------------------------------------------------------------
+github.com/hashicorp/hcl v1.0.0
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/hcl
+
+------------------------------------------------------------------------
+github.com/hashicorp/logutils v1.0.0
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/logutils
+
+------------------------------------------------------------------------
+github.com/hashicorp/nomad/api v0.0.0
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/nomad
+
+------------------------------------------------------------------------
+github.com/hashicorp/vault/api/auth/kubernetes v0.3.0
+License: Mozilla Public License 2.0
+Copyright: HashiCorp, Inc.
+https://github.com/hashicorp/vault
+
+------------------------------------------------------------------------
+github.com/imdario/mergo v0.3.13
+License: BSD 3-Clause
+https://github.com/imdario/mergo
+
+------------------------------------------------------------------------
+github.com/mitchellh/go-homedir v1.1.0
+License: MIT License
+https://github.com/mitchellh/go-homedir
+
+------------------------------------------------------------------------
+github.com/mitchellh/hashstructure v1.1.0
+License: MIT License
+https://github.com/mitchellh/hashstructure
+
+------------------------------------------------------------------------
+github.com/mitchellh/mapstructure v1.5.0
+License: MIT License
+https://github.com/mitchellh/mapstructure
+
+------------------------------------------------------------------------
+github.com/pkg/errors v0.9.1
+License: BSD 2-Clause
+https://github.com/pkg/errors
+
+------------------------------------------------------------------------
+github.com/prometheus/client_golang v1.23.2
+License: Apache License 2.0
+Copyright: The Prometheus Authors
+https://github.com/prometheus/client_golang
+
+------------------------------------------------------------------------
+github.com/stretchr/testify v1.11.1
+License: MIT License
+Copyright: Stretchr, Inc.
+https://github.com/stretchr/testify
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel v1.40.0
+License: Apache License 2.0
+Copyright: The OpenTelemetry Authors
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/exporters/prometheus v0.62.0
+License: Apache License 2.0
+Copyright: The OpenTelemetry Authors
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/sdk v1.40.0
+License: Apache License 2.0
+Copyright: The OpenTelemetry Authors
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/sdk/metric v1.40.0
+License: Apache License 2.0
+Copyright: The OpenTelemetry Authors
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+golang.org/x/exp v0.0.0
+License: BSD 3-Clause
+Copyright: The Go Authors
+https://golang.org/x/exp
+
+------------------------------------------------------------------------
+golang.org/x/sys v0.40.0
+License: BSD 3-Clause
+Copyright: The Go Authors
+https://golang.org/x/sys
+
+------------------------------------------------------------------------
+golang.org/x/text v0.32.0
+License: BSD 3-Clause
+Copyright: The Go Authors
+https://golang.org/x/text
+
+------------------------------------------------------------------------
+gopkg.in/yaml.v2 v2.4.0
+License: Apache License 2.0
+https://github.com/go-yaml/yaml
+
+========================================================================
+Transitive Dependencies (indirect)
+========================================================================
+
+All transitive dependencies use permissive open-source licenses
+(Apache 2.0, MIT, BSD, MPL-2.0, or ISC). Key transitive dependencies
+include:
+
+Apache License 2.0:
+  - github.com/go-logr/logr
+  - github.com/go-logr/stdr
+  - github.com/prometheus/client_model
+  - github.com/prometheus/common
+  - github.com/prometheus/procfs
+  - go.opentelemetry.io/* (multiple sub-packages)
+  - google.golang.org/genproto/*
+  - google.golang.org/grpc
+  - google.golang.org/protobuf
+
+MIT License:
+  - github.com/Masterminds/goutils
+  - github.com/Masterminds/semver/v3
+  - github.com/beorn7/perks
+  - github.com/cespare/xxhash/v2
+  - github.com/fatih/color
+  - github.com/mattn/go-colorable
+  - github.com/mattn/go-isatty
+  - github.com/mitchellh/copystructure
+  - github.com/mitchellh/reflectwalk
+  - github.com/munnerz/goautoneg
+  - github.com/shopspring/decimal
+  - github.com/spf13/cast
+  - go.uber.org/atomic
+
+Mozilla Public License 2.0:
+  - github.com/hashicorp/errwrap
+  - github.com/hashicorp/go-cleanhttp
+  - github.com/hashicorp/go-immutable-radix
+  - github.com/hashicorp/go-plugin
+  - github.com/hashicorp/go-retryablehttp
+  - github.com/hashicorp/go-secure-stdlib/*
+  - github.com/hashicorp/go-version
+  - github.com/hashicorp/golang-lru
+  - github.com/hashicorp/serf
+  - github.com/hashicorp/yamux
+
+BSD 3-Clause:
+  - github.com/golang/protobuf
+  - github.com/google/uuid
+  - github.com/pmezard/go-difflib
+  - golang.org/x/crypto
+  - golang.org/x/net
+  - golang.org/x/time
+
+BSD 2-Clause:
+  - github.com/pkg/errors

@@ -1,0 +1,1 @@
+../../../.cursor/skills/nvcf-explore-stack/SKILL.md

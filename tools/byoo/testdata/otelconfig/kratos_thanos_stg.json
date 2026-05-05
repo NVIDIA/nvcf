@@ -1,0 +1,15 @@
+{
+   "telemetries": {
+      "metricsTelemetry": {
+         "telemetryId": "fd28fc13-b44c-4e21-9132-1e1883f9dec5",
+         "name": "kratos-thanos-sandbox",
+         "endpoint": "https://prometheus-rw.example.com/api/v1/receive",
+         "protocol": "HTTP",
+         "provider": "KRATOS_THANOS",
+         "types": [
+            "METRICS"
+         ],
+         "createdAt": "2025-04-16T17:41:34.013Z"
+      }
+   }
+}

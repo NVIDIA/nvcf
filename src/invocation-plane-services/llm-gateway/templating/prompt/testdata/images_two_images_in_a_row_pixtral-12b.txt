@@ -1,0 +1,4 @@
+<s>[INST]
+[IMAGE url=https://example.com/image1.png detail=]
+[IMAGE url=https://example.com/image2.png detail=]
+[/INST]

@@ -1,0 +1,38 @@
+]~!b[]~b]system
+System message
+
+# Tools
+You may call one or more tools to assist with the user query.
+Here are the tools available in JSONSchema format:
+
+<tools>
+<tool>{"description": "Get the current weather in a given location", "name": "weather_info", "parameters": {"properties": {"location": {"description": "The city and state, e.g. San Francisco, CA", "type": "string"}}, "required": ["location"], "type": "object"}}</tool>
+</tools>
+
+When making tool calls, use XML format to invoke tools and pass parameters:
+
+<minimax:tool_call>
+<invoke name="tool-name-1">
+<parameter name="param-key-1">param-value-1</parameter>
+<parameter name="param-key-2">param-value-2</parameter>
+...
+</invoke>
+</minimax:tool_call>[e~[
+]~b]user
+What's the weather in boston and tokyo?[e~[
+]~b]ai
+<think>
+First we need to get the weather in boston, then we need to get the weather in tokyo.
+</think>
+
+
+<minimax:tool_call>
+<invoke name="weather_info">
+<parameter name="location">boston</parameter>
+<parameter name="unit">fahrenheit</parameter>
+</invoke>
+</minimax:tool_call>[e~[
+]~b]tool
+<response>85</response>[e~[
+]~b]ai
+<think>

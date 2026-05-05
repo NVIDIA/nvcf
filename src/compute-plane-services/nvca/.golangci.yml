@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: "2"
+run:
+  modules-download-mode: vendor
+  issues-exit-code: 1
+  tests: false
+  allow-parallel-runners: false
+linters:
+  enable:
+    - dupl
+    - goconst
+    - gocritic
+    - gocyclo
+    - gosec
+    - lll
+    - misspell
+    - nakedret
+    - revive
+    - staticcheck
+    - unconvert
+    - whitespace
+  settings:
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    gosec:
+      excludes:
+        - G601
+      config:
+        G306: "0644"
+    lll:
+      line-length: 150
+    staticcheck:
+      # Disable deprecation warnings during v1/v1alpha1 to v2beta1 transition.
+      checks: ["all", "-SA1019"]
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - ca
+      - deployment
+      - docker
+      - docs
+      - gitlab-runners
+      - ha
+      - iso
+      - ota
+      - scripts
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - ca
+      - deployment
+      - docker
+      - docs
+      - gitlab-runners
+      - ha
+      - iso
+      - ota
+      - scripts
+      - third_party$
+      - builtin$
+      - examples$

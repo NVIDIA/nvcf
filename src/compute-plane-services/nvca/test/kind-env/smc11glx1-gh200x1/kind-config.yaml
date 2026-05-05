@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      test.example.com/node-pool: default
+      nvidia.com/gpu.family: hopper
+      nvidia.com/gpu.machine: generic-gpu-host
+      nvidia.com/cuda.driver.major: "555"
+      nvidia.com/cuda.driver.minor: "42"
+      nvidia.com/cuda.driver.rev: "02"

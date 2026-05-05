@@ -1,0 +1,24 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+package nvcfratelimiter;
+
+service RateLimitService {
+  rpc RateLimit (RateLimitRequest) returns (RateLimitResponse) {}
+}
+
+message RateLimitRequest {
+  string ncaId = 1;
+  string functionId = 2;
+  string functionVersionId = 3;
+}
+
+message RateLimitResponse {
+  RateLimitResult result = 1;
+}
+
+enum RateLimitResult {
+  ALLOW = 0;
+  DISALLOW = 1;
+}

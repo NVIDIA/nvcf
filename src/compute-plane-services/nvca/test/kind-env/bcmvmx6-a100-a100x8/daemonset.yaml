@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-smi-daemonset
+  labels:
+    app: nvidia-smi
+spec:
+  selector:
+    matchLabels:
+      app: nvidia-smi
+  template:
+    metadata:
+      labels:
+        app: nvidia-smi
+    spec:
+      nodeSelector:
+        test.example.com/node-pool: default
+      automountServiceAccountToken: false
+      containers:
+      - name: nvidia-smi
+        image: nvidia/cuda:12.6.2-base-ubuntu22.04
+        command: ["/bin/sh", "-c"]
+        args:
+        - while true; do nvidia-smi; sleep 5; done
+        resources:
+          requests:
+            nvidia.com/gpu: "1"
+            memory: "128Mi"
+          limits:
+            nvidia.com/gpu: "1"
+            memory: "256Mi"
+        securityContext:
+          privileged: true

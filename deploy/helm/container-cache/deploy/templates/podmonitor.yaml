@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  labels:
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/instance: prometheus-agent
+    app.kubernetes.io/name: metrics-proxy-agent
+    jobLabel: metrics-proxy-agent
+    release: prometheus-agent
+    prometheus.agent/podmonitor-discover: "true"
+  name: metrics-proxy-agent
+  namespace: monitoring
+spec:
+  podMetricsEndpoints:
+  - scheme: http
+    path: /metrics
+    port: metrics
+    params:
+      format: [prometheus]
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_container_name]
+      regex: "nginx-prometheus-exporter"
+      action: keep
+  - scheme: http
+    path: /cache_metrics
+    port: cache-metrics
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_container_name]
+      regex: "nginx-proxy"
+      action: keep
+  jobLabel: jobLabel
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: nvcf-container-cache
+      app.kubernetes.io/name: nvcf-container-cache
+  namespaceSelector:
+    matchNames:
+    - container-caching
+{{- end }}

@@ -1,0 +1,317 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nvcaop.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcaop.labels" . | nindent 4 }}
+spec:
+  {{- include "nvcaop.validateImagePullSecret" . | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "nvcaop.baseSelectorLabels" . | nindent 6 }}
+  replicas: {{ .Values.replicaCount }}
+  template:
+    metadata:
+      labels:
+        {{- include "nvcaop.baseSelectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "nvcaop.serviceAccountName" . }}
+      automountServiceAccountToken: true
+      {{- if or .Values.generateImagePullSecret (gt (len .Values.imagePullSecrets) 0) }}
+      imagePullSecrets:
+      {{- if .Values.generateImagePullSecret }}
+      - name: {{  (.Values.imagePullSecretName) | default "nvca-operator-image-pull" | quote }}
+      {{- end }}
+      {{- range .Values.imagePullSecrets }}
+      - name: {{ .name | quote }}
+      {{- end }}
+      {{- end }}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1010
+        fsGroup: 1010
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end}}
+      {{- if .Values.nodeSelector.value }}
+      nodeSelector:
+        {{ .Values.nodeSelector.key }}: {{ .Values.nodeSelector.value }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ ((.Values.gracefulShutdown).terminationGracePeriodSeconds) | default 600 }}
+      {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+      initContainers:
+      - name: cluster-validator
+        image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" .Values.clusterValidator.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.Version .Values.clusterValidator.image.tag }}
+        imagePullPolicy: {{ .Values.clusterValidator.image.pullPolicy }}
+        env:
+        - name: VALIDATOR_CONFIG_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: VALIDATOR_CONFIG_NAME
+          value: {{ .Values.clusterValidator.configMapName | default "cluster-validator-network-checks" | quote }}
+        resources:
+          requests:
+            cpu: {{ .Values.clusterValidator.resources.requests.cpu | quote }}
+            memory: {{ .Values.clusterValidator.resources.requests.memory | quote }}
+          limits:
+            cpu: {{ .Values.clusterValidator.resources.limits.cpu | quote }}
+            memory: {{ .Values.clusterValidator.resources.limits.memory | quote }}
+        securityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+      {{- end }}
+      containers:
+      - name: {{ include "nvcaop.fullname" . }}
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: DEPLOYMENT_NAME
+          value: {{ include "nvcaop.fullname" . | quote }}
+        - name: NGC_API_URL
+          value: {{ .Values.ngcConfig.apiURL }}
+        - name: NGC_SERVICE_KEY_FILE
+          value: /var/run/secrets/ngc-service-key/{{ default "ngcServiceKey" .Values.ngcConfig.serviceKeySecretKeyName }}
+        - name: NVCA_CLUSTER_SOURCE
+          value: {{ .Values.ngcConfig.clusterSource | default "ngc-managed" }}
+        {{- if and .Values.vaultConfig .Values.vaultConfig.oAuthClientMountPathTemplate }}
+        - name: VAULT_OAUTH_CLIENT_MOUNT_PATH_TEMPLATE
+          value: {{ .Values.vaultConfig.oAuthClientMountPathTemplate | quote }}
+        {{- end }}
+        {{- if and .Values.vaultConfig .Values.vaultConfig.oAuthClientMountPath }}
+        - name: VAULT_OAUTH_CLIENT_MOUNT_PATH
+          value: {{ .Values.vaultConfig.oAuthClientMountPath | quote }}
+        {{- end }}
+        {{- if .Values.nvcaImage.repositoryOverride }}
+        - name: NVCA_IMAGE_REPO
+          value: "{{ .Values.nvcaImage.repositoryOverride }}"
+        {{- end}}
+        {{- if and .Values.networkPolicy (hasKey .Values.networkPolicy "clusterNetworkCIDRs") }}
+        - name: K8S_CLUSTER_NETWORK_CIDRS
+          value: {{ join "," .Values.networkPolicy.clusterNetworkCIDRs | quote }}
+        {{- end}}
+        {{- if ((.Values.agent).resources) }}
+        - name: AGENT_RESOURCES_B64
+          value: {{ .Values.agent.resources | toJson | b64enc | quote }}
+        {{- end}}
+        {{- if ((.Values.webhook).resources) }}
+        - name: WEBHOOK_RESOURCES_B64
+          value: {{ .Values.webhook.resources | toJson | b64enc | quote }}
+        {{- end}}
+        - name: GENERATE_IMAGE_PULL_SECRET
+          value: {{ .Values.generateImagePullSecret | quote }}
+        {{- if and .Values.imagePullSecrets (gt (len .Values.imagePullSecrets) 0) }}
+        - name: ADDITIONAL_IMAGE_PULL_SECRETS_B64
+          value: {{ .Values.imagePullSecrets | toJson | b64enc | quote }}
+        {{- end}}
+        {{- if .Values.otelCollector }}
+        - name: OTEL_COLLECTOR_ENABLED
+          value: {{ .Values.otelCollector.enabled | quote }}
+        - name: OTEL_COLLECTOR_IMAGE_REPO
+          value: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .Values.otelCollector.imageRepository "defaultRepository" .Values.image.repository) | quote }}
+        - name: OTEL_COLLECTOR_IMAGE_TAG
+          value: {{ .Values.otelCollector.imageTag | default "0.143.2" | quote }}
+        {{- if .Values.otelCollector.resources }}
+        - name: OTEL_COLLECTOR_RESOURCES_B64
+          value: {{ .Values.otelCollector.resources | toJson | b64enc | quote }}
+        {{- end}}
+        {{- end}}
+        {{- if ((.Values.agent).overrideEnvironmentVariables) }}
+        - name: AGENT_OVERRIDE_ENV_VARS_JSON_B64
+          value: {{ .Values.agent.overrideEnvironmentVariables | toJson | b64enc | quote }}
+        {{- end}}
+        {{- if (((.Values.agent).workload).tolerations) }}
+        - name: WORKLOAD_TOLERATIONS_B64
+          value: {{ .Values.agent.workload.tolerations | toJson | b64enc | quote }}
+        {{- end}}
+        {{- if ((.Values.agent).tolerations) }}
+        - name: AGENT_TOLERATIONS_B64
+          value: {{ .Values.agent.tolerations | toJson | b64enc | quote }}
+        {{- end}}
+        - name: OPERATOR_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        {{- if .Values.otel.enabled }}
+        envFrom:
+        - secretRef:
+            name: otel-{{ include "nvcaop.fullname" . }}-config
+        {{- end}}
+        args:
+          - /tini
+          - --
+          - /usr/bin/nvca-operator
+          - --nca-id
+          - "{{ .Values.ncaID }}"
+          - --system-namespace
+          - "{{ .Release.Namespace }}"
+          - --cluster-name
+          - "{{ .Values.clusterName }}"
+          - --log-level
+          - "{{ .Values.logLevel }}"
+          - --priority-class-name
+          - {{ (.Values.priorityClassName) | default "" | quote }}
+          {{- if .Values.k8sVersionOverride }}
+          - --k8s-version-override
+          - "{{ .Values.k8sVersionOverride }}"
+          {{- end}}
+          - --node-selector-key
+          - "{{ .Values.nodeSelector.key }}"
+          - --node-selector-value
+          - "{{ .Values.nodeSelector.value }}"
+          - --nvca-helm-repository-prefix
+          - "{{ .Values.nvcaHelmRepositoryPrefix}}"
+          - --cluster-id
+          - "{{ .Values.clusterID }}"
+          {{- if .Values.enableGXCache }}
+          - --enable-gxcache
+          {{- end}}
+          {{- if .Values.ddcsIPAllowList}}
+          - --ddcs-ip-allowlist
+          - "{{ .Values.ddcsIPAllowList }}"
+          {{- end}}
+          {{- if ne ((.Values.agent).cacheMountOptionsEnabled) false }}
+          - --nvca-cache-mount-options-enabled
+          {{- end }}
+          - --nvca-cache-mount-options
+          - {{ ((.Values.agent).cacheMountOptions) | default "ro,norecovery,nouuid" | quote }}
+          {{- if ((.Values.agent).workerDegradationPeriod) }}
+          - --nvca-worker-degradation-period
+          - {{ .Values.agent.workerDegradationPeriod | quote }}
+          {{- end }}
+          {{- if and ((.Values.agent).secretMirrorLabelSelector) ((.Values.agent).secretMirrorNamespace) }}
+          - --nvca-secret-mirror-source-namespace
+          - "{{ .Values.agent.secretMirrorNamespace }}"
+          - --nvca-secret-mirror-label-selector
+          - "{{ .Values.agent.secretMirrorLabelSelector }}"
+          {{- end }}
+          {{- if ((.Values.agent).functionEnvOverrides) }}
+          - --function-env-overrides-b64
+          - {{ .Values.agent.functionEnvOverrides | toJson | b64enc | quote }}
+          {{- end }}
+          {{- if ((.Values.agent).taskEnvOverrides) }}
+          - --task-env-overrides-b64
+          - {{ .Values.agent.taskEnvOverrides | toJson | b64enc | quote }}
+          {{- end }}
+        image: {{ .Values.image.repository }}:{{ default .Chart.Version .Values.image.tag }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext:
+          # Set here so openbao injection can copy it upon injection
+          runAsUser: 1000
+          runAsGroup: 1010
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+        lifecycle:
+          preStop:
+            httpGet:
+              path: /shutdown
+              port: 8002
+        volumeMounts:
+        - name: ngc-service-key
+          mountPath: /var/run/secrets/ngc-service-key
+          readOnly: true
+        - name: nvcfbackend-config
+          mountPath: /etc/nvcf/backend
+          readOnly: true
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /version
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: {{ ((((.Values.agent).resources).requests).cpu) | default "50m" | quote }}
+            memory: {{ ((((.Values.agent).resources).requests).memory) | default "50Mi" | quote }}
+          limits:
+            cpu: {{ ((((.Values.agent).resources).limits).cpu) | default "500m" | quote }}
+            memory: {{ ((((.Values.agent).resources).limits).memory) | default "500Mi" | quote }}
+      - name: nvca-mirror
+        image: {{ .Values.image.repository }}:{{ default .Chart.Version .Values.image.tag }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1010
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+        args:
+          - /tini
+          - --
+          - /usr/bin/nvca-mirror
+          - run
+          - --target-namespace
+          - "nvca-system"
+          - --log-level
+          - "{{ .Values.logLevel }}"
+        env:
+        - name: NVCA_MIRROR_SOURCE_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        {{- if and .Values.imagePullSecrets (gt (len .Values.imagePullSecrets) 0) }}
+        - name: NVCA_ADDITIONAL_IMAGE_PULL_SECRETS_JSON_BASE64
+          value: {{ .Values.imagePullSecrets | toJson | b64enc | quote }}
+        {{- end }}
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+      volumes:
+      - name: ngc-service-key
+        secret:
+          secretName: {{ .Values.ngcConfig.serviceKeySecretName }}
+          # optional only if clusterSource is self-managed
+          optional: {{ eq .Values.ngcConfig.clusterSource "self-managed" }}
+      - name: nvcfbackend-config
+        configMap:
+          {{- if eq .Values.ngcConfig.clusterSource "self-managed" }}
+          name: nvcfbackend-self-managed
+          {{- else }}
+          name: nvcfbackend-helm-managed
+          {{- end }}

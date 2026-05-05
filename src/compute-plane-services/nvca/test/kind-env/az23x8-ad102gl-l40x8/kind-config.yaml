@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      nodeGroup: monitoring
+  - role: worker
+    labels:
+      test.example.com/node-pool: default
+      nvidia.com/gpu.family: undefined
+      nvidia.com/gpu.machine: generic-gpu-host
+      nvidia.com/cuda.driver.major: "unknown"
+      nvidia.com/cuda.driver.minor: "unknown"
+      nvidia.com/cuda.driver.rev: "unknown"
+  - role: worker
+    labels:
+      test.example.com/node-pool: default
+      nvidia.com/gpu.family: undefined
+      nvidia.com/gpu.machine: generic-gpu-host
+      nvidia.com/cuda.driver.major: "unknown"
+      nvidia.com/cuda.driver.minor: "unknown"
+      nvidia.com/cuda.driver.rev: "unknown"
+  - role: worker
+    labels:
+      test.example.com/node-pool: default
+      nvidia.com/gpu.family: undefined
+      nvidia.com/gpu.machine: generic-gpu-host
+      nvidia.com/cuda.driver.major: "unknown"
+      nvidia.com/cuda.driver.minor: "unknown"
+      nvidia.com/cuda.driver.rev: "unknown"
+  - role: worker
+    labels:
+      test.example.com/node-pool: default
+      nvidia.com/gpu.family: undefined
+      nvidia.com/gpu.machine: generic-gpu-host
+      nvidia.com/cuda.driver.major: "unknown"
+      nvidia.com/cuda.driver.minor: "unknown"
+      nvidia.com/cuda.driver.rev: "unknown"
+  - role: worker
+    labels:
+      test.example.com/node-pool: default
+      nvidia.com/gpu.family: undefined
+      nvidia.com/gpu.machine: generic-gpu-host
+      nvidia.com/cuda.driver.major: "unknown"
+      nvidia.com/cuda.driver.minor: "unknown"
+      nvidia.com/cuda.driver.rev: "unknown"
+  - role: worker
+    labels:
+      test.example.com/node-pool: default
+      nvidia.com/gpu.family: undefined
+      nvidia.com/gpu.machine: generic-gpu-host
+      nvidia.com/cuda.driver.major: "unknown"
+      nvidia.com/cuda.driver.minor: "unknown"
+      nvidia.com/cuda.driver.rev: "unknown"
+  - role: worker
+    labels:
+      test.example.com/node-pool: default
+      nvidia.com/gpu.family: undefined
+      nvidia.com/gpu.machine: generic-gpu-host
+      nvidia.com/cuda.driver.major: "unknown"
+      nvidia.com/cuda.driver.minor: "unknown"
+      nvidia.com/cuda.driver.rev: "unknown"
+  - role: worker
+    labels:
+      test.example.com/node-pool: default
+      nvidia.com/gpu.family: undefined
+      nvidia.com/gpu.machine: generic-gpu-host
+      nvidia.com/cuda.driver.major: "unknown"
+      nvidia.com/cuda.driver.minor: "unknown"
+      nvidia.com/cuda.driver.rev: "unknown"

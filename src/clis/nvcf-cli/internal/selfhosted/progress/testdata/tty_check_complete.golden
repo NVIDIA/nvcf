@@ -1,0 +1,18 @@
+Pre-flight checks for NVCF self-hosted install
+
+Local host
+
+   [✓] kubectl 1.30.2 on PATH (1.30.2)
+   [✓] helmfile 1.1.9 on PATH (1.1.9)
+   [✓] helm 3.15.4 on PATH (3.15.4)
+
+Kubernetes API
+
+   [✓] can initialize the client
+   [✓] API server version: 1.30.2
+
+Cluster setup
+
+   [✘] Gateway API CRDs not installed
+
+Status: ✘ failed  (5/14 passed, 1 failed)

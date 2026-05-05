@@ -1,0 +1,235 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package nvcf
+
+import (
+	"context"
+	"net"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/test/bufconn"
+
+	llmgatewaypb "github.com/NVIDIA/nvcf/llm-api-gateway/nvcf/pb"
+)
+
+func TestGRPCClientAuthorizeInvocation(t *testing.T) {
+	t.Parallel()
+
+	invocationService := &stubInvocationService{
+		t:               t,
+		clientProjectID: "project-789",
+	}
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	llmgatewaypb.RegisterLlmGatewayServer(server, invocationService)
+
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+	)
+	if err != nil {
+		t.Fatalf("create client conn: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	client := NewClientWithConn(conn, func() string { return "service-token" }, time.Second)
+
+	authResponse, err := client.AuthorizeInvocation(context.Background(), "client-token", "fn-123")
+	if err != nil {
+		t.Fatalf("authorize invocation: %v", err)
+	}
+	if authResponse.RoutingKey != "fn-123" {
+		t.Fatalf("routing key = %q, want fn-123", authResponse.RoutingKey)
+	}
+	if authResponse.ClientAuthID != "subject-123" {
+		t.Fatalf("client auth id = %q, want subject-123", authResponse.ClientAuthID)
+	}
+	if authResponse.RateLimitKey != "nca-456" {
+		t.Fatalf("rate limit key = %q, want nca-456", authResponse.RateLimitKey)
+	}
+	if authResponse.ProjectID != "project-789" {
+		t.Fatalf("project id = %q, want project-789", authResponse.ProjectID)
+	}
+	if authResponse.AuthContext["ncaId"] != "nca-456" {
+		t.Fatalf("auth context ncaId = %q, want nca-456", authResponse.AuthContext["ncaId"])
+	}
+	if authResponse.AuthContext["projectId"] != "project-789" {
+		t.Fatalf("auth context projectId = %q, want project-789", authResponse.AuthContext["projectId"])
+	}
+	spec, ok := authResponse.ModelSpecs["gateway-model"]
+	if !ok {
+		t.Fatalf("model specs missing gateway-model: %#v", authResponse.ModelSpecs)
+	}
+	if spec.TokenRateLimit != "5-M,20-D" {
+		t.Fatalf("token rate limit = %q, want 5-M,20-D", spec.TokenRateLimit)
+	}
+	if spec.Tokenizer != "tokenizer-model" {
+		t.Fatalf("tokenizer = %q, want tokenizer-model", spec.Tokenizer)
+	}
+	if spec.RoutingMethod != "round_robin" {
+		t.Fatalf("routing method = %q, want round_robin", spec.RoutingMethod)
+	}
+	if len(spec.URIs) != 1 || spec.URIs[0] != "https://example.com/model" {
+		t.Fatalf("uris = %#v, want [https://example.com/model]", spec.URIs)
+	}
+}
+
+func TestGRPCClientAuthorizeInvocationDoesNotFallbackRateLimitKey(t *testing.T) {
+	t.Parallel()
+
+	invocationService := &stubInvocationService{
+		t:            t,
+		clientNCAID:  "",
+		clientAuthID: "subject-only",
+	}
+
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	llmgatewaypb.RegisterLlmGatewayServer(server, invocationService)
+
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+	)
+	if err != nil {
+		t.Fatalf("create client conn: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+
+	client := NewClientWithConn(conn, func() string { return "service-token" }, time.Second)
+
+	authResponse, err := client.AuthorizeInvocation(context.Background(), "client-token", "fn-123")
+	if err != nil {
+		t.Fatalf("authorize invocation: %v", err)
+	}
+	if authResponse.RateLimitKey != "" {
+		t.Fatalf("rate limit key = %q, want empty", authResponse.RateLimitKey)
+	}
+}
+
+type stubInvocationService struct {
+	llmgatewaypb.UnimplementedLlmGatewayServer
+
+	t               *testing.T
+	clientAuthID    string
+	clientNCAID     string
+	clientProjectID string
+}
+
+func (s *stubInvocationService) AuthLlmInvocation(
+	ctx context.Context,
+	req *llmgatewaypb.AuthLlmInvokeRequest,
+) (*llmgatewaypb.AuthLlmInvokeResponse, error) {
+	s.t.Helper()
+
+	authHeader := incomingAuthorizationHeader(ctx)
+	if authHeader != "Bearer service-token" {
+		s.t.Fatalf("authorization header = %q, want Bearer service-token", authHeader)
+	}
+	if req.GetClientAuthorizationToken() != "client-token" {
+		tok := req.GetClientAuthorizationToken()
+		s.t.Fatalf("client authorization token = %q, want client-token", tok)
+	}
+	if req.GetRoutingKey() != "fn-123" {
+		routingKey := req.GetRoutingKey()
+		s.t.Fatalf("routing key = %q, want fn-123", routingKey)
+	}
+
+	clientAuthID := s.clientAuthID
+	if clientAuthID == "" {
+		clientAuthID = "subject-123"
+	}
+	clientNCAID := s.clientNCAID
+	if s.clientNCAID == "" && s.clientAuthID == "" {
+		clientNCAID = "nca-456"
+	}
+
+	resp := &llmgatewaypb.AuthLlmInvokeResponse{
+		RoutingKey:        "fn-123",
+		ClientAuthSubject: clientAuthID,
+		ModelSpecs: map[string]*llmgatewaypb.AuthLlmInvokeResponse_ModelSpec{
+			"gateway-model": {
+				Uris:           []string{"https://example.com/model"},
+				TokenRateLimit: stringPtr("5-M,20-D"),
+				Tokenizer:      stringPtr("tokenizer-model"),
+				RoutingMethod:  stringPtr("round_robin"),
+			},
+		},
+	}
+	if clientNCAID != "" {
+		resp.AuthContext = map[string]string{
+			"ncaId": clientNCAID,
+		}
+		if s.clientProjectID != "" {
+			resp.AuthContext["projectId"] = s.clientProjectID
+		}
+	}
+
+	return resp, nil
+}
+
+func incomingAuthorizationHeader(ctx context.Context) string {
+	return incomingMetadataValue(ctx, "authorization")
+}
+
+func incomingMetadataValue(ctx context.Context, key string) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	values := md.Get(key)
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func stringPtr(value string) *string {
+	return &value
+}

@@ -1,0 +1,10 @@
+This repository is licensed under the Apache License, Version 2.0.
+
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+
+This Helm chart depends on the upstream OpenBao Helm chart published by the
+`openbao/openbao-helm` project:
+https://github.com/openbao/openbao-helm
+
+This NOTICE file is provided for attribution and informational purposes only
+and does not modify the terms of the Apache License, Version 2.0.

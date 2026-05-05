@@ -1,0 +1,40 @@
+{
+  "cloud": {
+    "projectID": 3695020,
+    "distribution": {
+      "zone_1": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 20
+      },
+      "zone_2": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 20
+      },
+      "zone_3": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 20
+      },
+      "zone_4": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 20
+      },
+      "zone_5": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 20
+      }
+    }
+  },
+  "scenarios": {
+    "vu_scenario": {
+      "executor": "constant-vus",
+      "startTime": "0s",
+      "gracefulStop": "30s",
+      "env": {
+        "SENT_MESSAGE_SIZE": "2000000",
+        "RESPONSE_COUNT": "0"
+      },
+      "duration": "5m",
+      "vus": 256
+    }
+  }
+}

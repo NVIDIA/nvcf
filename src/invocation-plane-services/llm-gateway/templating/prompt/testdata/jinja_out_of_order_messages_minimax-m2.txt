@@ -1,0 +1,19 @@
+]~!b[]~b]system
+system message 1
+system message 2[e~[
+]~b]user
+[e~[
+]~b]ai
+assistant message 1[e~[
+]~b]user
+[e~[
+]~b]ai
+assistant message 2[e~[
+]~b]user
+user message 1[e~[
+]~b]ai
+[e~[
+]~b]user
+user message 2[e~[
+]~b]ai
+<think>

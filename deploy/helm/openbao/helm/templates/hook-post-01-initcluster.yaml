@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Contains the initialization script and a job to run it as a hook
+
+# The script runs in an image that must contain:
+# - bash
+# - kubectl
+# - jq
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-initialize-cluster
+  annotations:
+    helm.sh/hook: post-install
+    helm.sh/hook-weight: "-5"
+spec:
+  template:
+    spec:
+      {{- with .Values.openbao.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: bao-init
+          image: "{{ include "openbao.image" (dict "image" .Values.openbao.migrations.image "name" "openbao.migrations.image") }}"
+          command: ["/bin/bash"]
+          args:
+            - -c
+            - /scripts/deploy.sh {{ .Release.Namespace }} {{ .Release.Name }} helm
+          volumeMounts:
+            - name: init-script
+              readOnly: true
+              mountPath: "/scripts"
+            - name: utils-script
+              readOnly: true
+              mountPath: "/scripts/utils"
+      restartPolicy: Never
+      serviceAccountName: {{ .Release.Name }}-initialize-cluster
+      volumes:
+        - name: init-script
+          configMap:
+            name: {{ .Release.Name }}-init-script
+            defaultMode: 0500
+        - name: utils-script
+          configMap:
+            name: {{ .Release.Name }}-utils-script
+            defaultMode: 0500
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-init-script
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-6"
+    helm.sh/hook-delete-policy: hook-failed,hook-succeeded
+data:
+  deploy.sh: |-
+    {{- .Files.Get "scripts/deploy.sh" | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-utils-script
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-6"
+    helm.sh/hook-delete-policy: hook-failed,hook-succeeded
+data:
+  utils.sh: |-
+    {{- .Files.Get "scripts/utils.sh" | nindent 4 }}
+  log.sh: |-
+    {{- .Files.Get "scripts/log.sh" | nindent 4 }}
+  install_deps.sh: |-
+    {{- .Files.Get "scripts/install_deps.sh" | nindent 4 }}
+

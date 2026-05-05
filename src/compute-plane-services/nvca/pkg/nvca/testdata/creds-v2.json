@@ -1,0 +1,20 @@
+{
+    "creationQueue": {
+        "A100": {
+            "url": "http://192.168.65.2:4566/000000000000/q_gdn_icms_byoc_13e2b598-96cf-41b5-b419-8ea7f700d5d2.fifo",
+            "queueType": "FifoQueue",
+            "accessKeyId": "ASIAQAAAAAAAKQ563GZD",
+            "secretAccessKey": "VuwiYiuZ54FpjJNoKi4+xLmItKsuSkL4JM7Gibg/",
+            "sessionToken": "FQoGZXIvYXdzEBYaDWBDIgdpw+WFwbMJjzWlBUY8Tz8VkPa4m7GD6pF006Pu5J2q82CeF08FYzgBFK1KsfZbenSykRH01TifaKDnghJMtHIQMXo1cerGTbXeqyCpvsl42gRiFqmiR1Hwy5sVUhlqQ05ZnVYUGPoWGu6OpA/9jWQbKK3ITVTXMhrbTXl0AN/e05Gxk16zCnPwsO1FFFDbOkd6Y5g1raAgtGZmst/6NkBpxAjehzUFfZvhQOg1FGJUsYkg3Y11QQ39DB4Ytl1AZTqmB//jCJiTPfJXGF+7MuX3Ufb/yC66Q89ENx9jpL8/lC66hliPrQKC1BOOYLBYgopaFMHTuVcL/wA=",
+            "expiresAt": "2023-05-31T05:26:04.433Z"
+        }
+    },
+    "terminationQueue": {
+        "url": "http://192.168.65.2:4566/000000000000/q_gdn_icms_byoc_nvssa-stg-0CBtUXmR8i1HFNvm7t6I1M9VD2NBqpgETUolWrlSv68.fifo",
+        "queueType": "FifoQueue",
+        "accessKeyId": "ASIAQAAAAAAAD6FWY6K6",
+        "secretAccessKey": "tlxkupYvYw5W5PkxOnZCP2GX8GqDk7i0w2tKN4oY",
+        "sessionToken": "FQoGZXIvYXdzEBYaDkZEjNzHSLiYWlztWai9L21wXsZxYP31GgDnQWVcVp1qC9rBSXiRJBUeO9s/91y0qOU3PWIzUTnhhpNDJK4xg+nlCjsjRqESYYIW3aM+OxmFAQrSFoSWLLI+bo2Q6gKXL1KuoLxa7RplsOu892ZbBLhaqX3XAkHUIoCH3+28gsqjXCjGwuReKR3XWREuDAj3Aa2jhUAZFdZMlhSC6WUApU2V/qSbWlQDmvgL0XQWhLWU1r6qaPrBZtFYc7Rkj8LeZmvmb9kJi3XEAfjiX7jb9ZdjI22ZtQXss018M062wVfRQD9ioyW3QI5hGh3SBQwfNaWlT8G5MzYV8Xb0SGs=",
+        "expiresAt": "2023-05-31T05:26:04.461Z"
+    }
+}

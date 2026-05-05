@@ -1,0 +1,36 @@
+{
+  "requestId": "9f93ffa2-0376-495e-a723-f6c653ed1e34",
+  "ncaId": "_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq",
+  "accountName": "foobar",
+  "functionId": "5a3d4a7e-9ee3-4762-8d37-d3b40a6f84c6",
+  "functionVersionId": "2c948d9b-db5d-4f93-8c29-f5d8a5d89cb9",
+  "clusterGroup": "mcamp-kind-cluster",
+  "action": "RequestICMSInstances",
+  "instanceCount": 1,
+  "instanceType": "ON-PREM.GPU.H100",
+  "gpuType": "foobar",
+  "requestedGPUCount": 1,
+  "messageBatchId": "14d2ec9c-25d8-4712-9288-b682570671d6",
+  "launchSpecification": {
+    "clusters": null,
+    "regions": null,
+    "attributes": null,
+    "instanceTypeName": "ON-PREM.GPU.H100_1x",
+    "instanceTypeValue": "ON-PREM.GPU.H100",
+    "gpuName": "H100"
+  },
+  "launchArtifacts": [
+    {
+      "artifactType": "POD_SPEC",
+      "artifactSpec": "dmFsdWUK"
+    },
+    {
+      "artifactType": "SECRET_SPEC",
+      "artifactSpec": "dmFsdWUK"
+    },
+    {
+      "artifactType": "SECRET_SPEC",
+      "artifactSpec": "dmFsdWUK"
+    }
+  ]
+}

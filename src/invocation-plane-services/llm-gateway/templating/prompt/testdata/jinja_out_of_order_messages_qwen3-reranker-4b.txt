@@ -1,0 +1,18 @@
+<|im_start|>system
+system message 1
+system message 2<|im_end|>
+<|im_start|>user
+<|im_end|>
+<|im_start|>assistant
+assistant message 1<|im_end|>
+<|im_start|>user
+<|im_end|>
+<|im_start|>assistant
+assistant message 2<|im_end|>
+<|im_start|>user
+user message 1<|im_end|>
+<|im_start|>assistant
+<|im_end|>
+<|im_start|>user
+user message 2<|im_end|>
+<|im_start|>assistant

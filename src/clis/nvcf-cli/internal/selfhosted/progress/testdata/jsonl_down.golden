@@ -1,0 +1,12 @@
+{"event":"schemaVersion","version":1}
+{"event":"phase_started","ts":"2026-04-29T01:23:45Z","phaseNum":1,"phase":"preflight","totalPhases":7}
+{"event":"phase_completed","ts":"2026-04-29T01:23:45Z","phaseNum":1,"phase":"preflight","durationSec":0}
+{"event":"phase_started","ts":"2026-04-29T01:23:45Z","phaseNum":2,"phase":"drain-active","totalPhases":7}
+{"event":"drain_progress","ts":"2026-04-29T01:23:45Z","phaseNum":2,"deployment":"function-deploy-1","state":"REMOVING"}
+{"event":"drain_progress","ts":"2026-04-29T01:23:45Z","phaseNum":2,"deployment":"function-deploy-1","state":"STOPPED"}
+{"event":"phase_completed","ts":"2026-04-29T01:23:45Z","phaseNum":2,"phase":"drain-active","durationSec":1}
+{"event":"phase_started","ts":"2026-04-29T01:23:45Z","phaseNum":3,"phase":"uninstall-compute-plane","totalPhases":7}
+{"event":"phase_completed","ts":"2026-04-29T01:23:45Z","phaseNum":3,"phase":"uninstall-compute-plane","durationSec":60}
+{"event":"phase_started","ts":"2026-04-29T01:23:45Z","phaseNum":4,"phase":"remove-cluster-row","totalPhases":7}
+{"event":"phase_completed","ts":"2026-04-29T01:23:45Z","phaseNum":4,"phase":"remove-cluster-row","durationSec":1}
+{"event":"final","ts":"2026-04-29T01:23:45Z","success":true,"clusterId":"test","durationSec":62,"droppedProgressEvents":0}

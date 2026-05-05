@@ -1,0 +1,164 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+receivers:
+  k8s_events:
+    auth_type: "serviceAccount"
+    namespaces:
+      - "${env:NVCA_OTEL_COLLECTOR_REQUESTS_NAMESPACE}"
+
+processors:
+  batch:
+    timeout: 2s
+    send_batch_size: 50
+    send_batch_max_size: 100
+
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: ${env:NVCA_OTEL_COLLECTOR_MEMORY_LIMIT_PERCENTAGE}
+    spike_limit_percentage: ${env:NVCA_OTEL_COLLECTOR_SPIKE_LIMIT_PERCENTAGE}
+
+  filter:
+    error_mode: ignore
+    logs:
+      log_record:
+        - resource.attributes["k8s.object.kind"] != "Pod"
+
+  transform/normalize:
+    error_mode: ignore
+    log_statements:
+      - set(resource.attributes["k8s.pod.uid"], resource.attributes["k8s.object.uid"]) where resource.attributes["k8s.object.kind"] == "Pod"
+      # Only run when fieldpath contains {...} so ExtractPatterns has "name" key (avoids "key not found in map" warn)
+      - set(resource.attributes["k8s.container.name"], ExtractPatterns(resource.attributes["k8s.object.fieldpath"], "{(?P<name>[^}]+)}")["name"]) where resource.attributes["k8s.object.fieldpath"] != nil and IsMatch(resource.attributes["k8s.object.fieldpath"], ".*\\{[^}]+\\}.*")
+
+  k8sattributes:
+    auth_type: serviceAccount
+    passthrough: false
+    wait_for_metadata: true
+    wait_for_metadata_timeout: 30s
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.node.name
+        - k8s.pod.start_time
+        - k8s.container.name
+        - container.image.name
+        - container.image.tag
+      annotations:
+        - key: nvcf.nvidia.io/backend
+          tag_name: cluster_name
+        - key: nvcf.nvidia.io/instance-type-name
+          tag_name: instance_type_name
+        - key: nca-id
+          tag_name: nca_id
+      labels:
+        - key: nvcf.nvidia.io/deployment-id
+          tag_name: deployment_id
+        - key: nvcf.nvidia.io/gpu-specification-id
+          tag_name: gpu_specification_id
+        - key: function-id
+          tag_name: function_id
+        - key: function-version-id
+          tag_name: function_version_id
+    pod_association:
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.uid
+
+  transform:
+    error_mode: ignore
+    log_statements:
+      - set(log.attributes["cluster_id"], resource.attributes["cluster_name"]) where resource.attributes["cluster_name"] != nil
+      - set(log.attributes["deployment_id"], resource.attributes["deployment_id"]) where resource.attributes["deployment_id"] != nil
+      - set(log.attributes["gpu_specification_id"], resource.attributes["gpu_specification_id"]) where resource.attributes["gpu_specification_id"] != nil
+      - set(log.attributes["instance_id"], resource.attributes["k8s.pod.name"]) where resource.attributes["k8s.pod.name"] != nil
+      - set(log.attributes["namespace"], resource.attributes["function_version_id"]) where resource.attributes["function_version_id"] != nil
+      - set(log.attributes["event_name"], log.attributes["k8s.event.reason"]) where log.attributes["k8s.event.reason"] != nil
+      - set(log.attributes["source"], "nvca")
+      - set(log.attributes["nca_id"], resource.attributes["nca_id"]) where resource.attributes["nca_id"] != nil
+      - set(log.attributes["function_id"], resource.attributes["function_id"]) where resource.attributes["function_id"] != nil
+      - set(log.attributes["instance_type_name"], resource.attributes["instance_type_name"]) where resource.attributes["instance_type_name"] != nil
+      - set(log.attributes["k8s.node.name"], resource.attributes["k8s.node.name"]) where resource.attributes["k8s.node.name"] != nil
+      - set(log.attributes["k8s.namespace.name"], resource.attributes["k8s.namespace.name"]) where resource.attributes["k8s.namespace.name"] != nil
+      - set(log.attributes["k8s.pod.start_time"], resource.attributes["k8s.pod.start_time"]) where resource.attributes["k8s.pod.start_time"] != nil
+      - set(log.attributes["k8s.container.name"], resource.attributes["k8s.container.name"]) where resource.attributes["k8s.container.name"] != nil
+      - set(log.attributes["container.image.name"], resource.attributes["container.image.name"]) where resource.attributes["container.image.name"] != nil
+      - set(log.attributes["container.image.tag"], resource.attributes["container.image.tag"]) where resource.attributes["container.image.tag"] != nil
+
+  # Drop records missing required ledger API fields
+  filter/required-fields:
+    error_mode: ignore
+    logs:
+      log_record:
+        - log.attributes["namespace"] == nil
+        - log.attributes["namespace"] == ""
+        - log.attributes["event_name"] == nil
+        - log.attributes["event_name"] == ""
+
+extensions:
+  bearertokenauth:
+    filename: "${env:NGC_SERVICE_API_KEY_FILE}"
+
+  oauth2client:
+    client_id: ${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_ID}
+    client_secret_file: ${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE}
+    token_url: "${env:NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL}"
+    scopes: ["write"]
+
+  health_check:
+    endpoint: ":${env:NVCA_OTEL_COLLECTOR_HEALTH_CHECK_PORT}"
+
+exporters:
+  otlphttp/fnds:
+    logs_endpoint: "${env:NVCA_OTEL_COLLECTOR_FNDS_ENDPOINT}"
+    encoding: proto
+    compression: gzip
+    headers:
+      X-Data-Source: "kubernetes-events"
+    auth:
+      authenticator: ${env:NVCA_OTEL_COLLECTOR_AUTHENTICATOR}
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    timeout: 5s
+    sending_queue:
+      enabled: true
+      num_consumers: 10
+      queue_size: 1000
+
+service:
+  telemetry:
+    metrics:
+      level: basic
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: "0.0.0.0"
+                port: ${env:NVCA_OTEL_COLLECTOR_METRICS_PORT}
+    logs:
+      level: info
+      encoding: json
+
+  extensions:
+    - health_check
+    - ${env:NVCA_OTEL_COLLECTOR_AUTHENTICATOR}
+
+  pipelines:
+    logs:
+      receivers:
+        - k8s_events
+      processors:
+        - memory_limiter
+        - filter
+        - transform/normalize
+        - k8sattributes
+        - transform
+        - filter/required-fields
+        - batch
+      exporters:
+        - otlphttp/fnds

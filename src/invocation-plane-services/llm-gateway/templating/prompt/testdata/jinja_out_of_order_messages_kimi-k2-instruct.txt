@@ -1,0 +1,2 @@
+<|im_system|>system<|im_middle|>system message 1
+system message 2<|im_end|><|im_user|>user<|im_middle|><|im_end|><|im_assistant|>assistant<|im_middle|>assistant message 1<|im_end|><|im_user|>user<|im_middle|><|im_end|><|im_assistant|>assistant<|im_middle|>assistant message 2<|im_end|><|im_user|>user<|im_middle|>user message 1<|im_end|><|im_assistant|>assistant<|im_middle|><|im_end|><|im_user|>user<|im_middle|>user message 2<|im_end|><|im_assistant|>assistant<|im_middle|>
