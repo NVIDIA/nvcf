@@ -1,12 +1,11 @@
 ---
 name: Documentation request
 about: Report incorrect or needed documentation
-title: "[DOC]"
-labels: "Needs Triage, doc"
+title: "[nvcf][doc] <Improvement summary>"
+labels: documentation
 assignees: ''
 
 ---
-
 
 <!-- Fill out either incorrect documentation, or needed documentation and delete the unused section -->
 

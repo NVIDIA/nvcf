@@ -2,7 +2,7 @@
 name: Submit question
 about: Ask a general question about NVCF
 title: "[QST]"
-labels: "Needs Triage, question"
+labels: question
 assignees: ''
 
 ---
