@@ -182,6 +182,12 @@ check_tool docker "Install from https://www.docker.com/get-started"
 check_tool k3d "Install with: brew install k3d (or see https://k3d.io)"
 check_tool kubectl "Install from https://kubernetes.io/docs/tasks/tools/"
 check_tool helm "Install with: brew install helm (or see https://helm.sh)"
+check_tool helmfile "Install with: brew install helmfile (or see https://helmfile.readthedocs.io)"
+
+if ! helm plugin list 2>/dev/null | grep -q "^diff"; then
+    log_error "helm-diff plugin is not installed. Install with: helm plugin install https://github.com/databus23/helm-diff"
+    exit 1
+fi
 
 if ! docker info &> /dev/null; then
     log_error "Docker is not running. Please start Docker and try again."
@@ -213,6 +219,7 @@ else
     log_info "Installing KWOK controller..."
     kubectl apply -f https://github.com/kubernetes-sigs/kwok/releases/download/v0.7.0/kwok.yaml 2>&1 | grep -v "FlowSchema" || true
     kubectl wait --for=condition=Available deployment/kwok-controller -n kube-system --timeout=60s
+    kubectl apply -f https://github.com/kubernetes-sigs/kwok/releases/download/v0.7.0/stage-fast.yaml
     log_info "KWOK controller is ready."
 fi
 
