@@ -5,29 +5,27 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#     https://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-## @section NVCA Operator parameters
 
+## @section NVCA Operator parameters
 ## @param image.repository NVCA Operator container registry path, without tag
 ## @param image.tag NVCA Operator container image tag. This defaults to the chart version
 ## @param image.pullPolicy K8s ImagePullPolicy
 image:
-  repository: "nvcr.io/nvidia/nvcf-byoc/nvca-operator"
-  tag: ""
+  repository: ""
+  tag: "3.0.0-rc.12"
   pullPolicy: IfNotPresent
-
 ## @param nvcaImage.repositoryOverride (Optional) Full NVCA container registry path, without tag. Only set this if the default needs to be overridden, for example "stg.nvcr.io/nvidia/nvcf-byoc/nvca". The tag is set in the cluster config
 ## @param nvcaImage.pullPolicy K8s ImagePullPolicy
 nvcaImage:
   repositoryOverride: ""
   pullPolicy: IfNotPresent
-
 ## @section OTel Collector Configuration
 ## @param otelCollector.enabled Enable OTel collector sidecar for K8s event collection
 ## @param otelCollector.imageRepository (OPTIONAL) Image repository of OpenTelemetry Collector sidecar. If not specified, it will be calculated based on image.repository (stg vs prod).
@@ -47,14 +45,12 @@ otelCollector:
     requests:
       cpu: 200m
       memory: 256Mi
-
 ## @param generateImagePullSecret Use the ngcConfig.serviceKey to generate an image pull secret for nvca and nvca-operator Pods
-generateImagePullSecret: true
+generateImagePullSecret: false
 ## @param imagePullSecretName Name of the image pull secret to use for nvca and nvca-operator Pods.
 imagePullSecretName: "nvca-operator-image-pull"
 ## @param imagePullSecrets List of pre-existing imagePullSecret objects in the nvca-operator namespace to use for nvca and nvca-operator Pods. Each object must have a 'name' field. Example: [{name: "foo-bar"}, {name: "baz"}]
 imagePullSecrets: []
-
 ## Service Account configuration
 serviceAccount:
   ## @param serviceAccount.create Specifies whether a ServiceAccount should be created
@@ -67,55 +63,43 @@ serviceAccount:
   ## If not set and create is true, a name is generated using the common.names.fullname template
   ##
   name: ""
-
 ## @param replicaCount Replica count for the operator deployment
 replicaCount: 1
-
 ## @param systemNamespace Namespace in which NVCFBackend objects are created.
 systemNamespace: nvca-operator
-
 ## @param logLevel Logging level for the module
 logLevel: info
-
 ## @param ncaID (REQUIRED) NVIDIA Cloud Account ID of the Primary Account
 ncaID: ""
-
 ## @param clusterID ID of the Cluster for this NVCA instance to manage (REQUIRED when ngcConfig.clusterSource is "self-managed")
 clusterID: ""
-
 ## @param clusterGroupID Group ID of the Cluster for this NVCA instance to manage (REQUIRED when ngcConfig.clusterSource is "self-managed"; for "helm-managed" prefer helmManaged.clusterGroupID — this top-level value is used as a fallback if helmManaged.clusterGroupID is unset)
 clusterGroupID: ""
-
 ## @param clusterName for metrics & telemetry (REQUIRED when ngcConfig.clusterSource is "helm-managed")
 clusterName: ""
-
 ## @param k8sVersionOverride Override the K8s version that NVCA registers with
 k8sVersionOverride: ""
-
 ## @param priorityClassName K8s PriorityClassName for NVCA pods preference during evictions
 priorityClassName: ""
-
 ## @param tolerations K8s tolerations for the nvca-operator pod
 tolerations: []
-
 ## @param nvcaHelmRepositoryPrefix Enables Helm repository restrictions to specific org/teams
 nvcaHelmRepositoryPrefix: ""
-
 ## @param enableGXCache Enables GXCache Support in NVCA
 enableGXCache: true
-
 ## @param ddcsIPAllowList provides comma separated CIDR ranges to allowList
 ddcsIPAllowList: ""
-
 ## @param agentConfig.mergeConfig Merge fields into the generated NVCA config. Must be a string.
 agentConfig:
-  mergeConfig: ""
+  mergeConfig: |-
+    cluster:
+      validationPolicy:
+        name: Unrestricted
   # Example:
   #
   # mergeConfig: |
   #   agent:
   #     logLevel: debug
-
 ## @section resources Resource requests and limits for the nvca-operator container
 ## @param resources.limits.cpu CPU limit for the nvca-operator container
 ## @param resources.limits.memory Memory limit for the nvca-operator container
@@ -128,7 +112,6 @@ resources:
   requests:
     cpu: 50m
     memory: 50Mi
-
 ## @section Agent Container Resource configuration
 ## @param agent.resources.limits.cpu CPU limit for the nvca agent container
 ## @param agent.resources.limits.memory Memory limit for the nvca agent container
@@ -216,7 +199,6 @@ webhook:
     requests:
       cpu: 50m
       memory: 50Mi
-
 ## @section NGC Configuration
 
 ## @param ngcConfig.username Username for the registry authentication
@@ -229,20 +211,17 @@ webhook:
 ##     - "ngc-managed": Cluster configuration managed by NGC
 ngcConfig:
   username: '$oauthtoken'
-  serviceKey: ""
+  serviceKey: "dummy-api-key"
   serviceKeySecretName: "ngc-service-key"
   serviceKeySecretKeyName: "ngcServiceKey"
   apiURL: https://api.ngc.nvidia.com
-  clusterSource: ngc-managed
-
-
+  clusterSource: self-managed
 ## @section Vault Configuration
 ## @param vaultConfig.oAuthClientMountPathTemplate Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret"
 ## @param vaultConfig.oAuthClientMountPath (Optional) Full OAuth client mount path. If set, overrides the computed path from template.
 vaultConfig:
   oAuthClientMountPathTemplate: ""
   oAuthClientMountPath: ""
-
 ## @section Helm Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "helm-managed"
 ## All values below are now under the 'helmManaged:' key, e.g. 'helmManaged.cloudProvider'
@@ -281,13 +260,12 @@ helmManaged:
     enabled: false
     imageRepository: ""
     imageTag: 0.143.2
-
 ## @section Self Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "self-managed"
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
 selfManaged:
   ## @param selfManaged.nvcaVersion (REQUIRED) Version of the NVCFBackend to use
-  nvcaVersion: ""
+  nvcaVersion: "3.0.0-rc.12"
   ## @param selfManaged.featureGateValues (Optional) List of feature gates to enable. Defaults to ["DynamicGPUDiscovery"] if not specified.
   featureGateValues: ["DynamicGPUDiscovery"]
   ## @param selfManaged.gpuManualInstanceConfigB64 (Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.
@@ -312,14 +290,14 @@ selfManaged:
   revalServiceURL: ""
   ## @param selfManaged.natsURL URL of the NATS service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".
   natsURL: ""
-
+  sharedStorage:
+    imageTag: 1.0.5
 ## @section Node Selector Configuration
 ## @param nodeSelector.key Node-selector Label key
 ## @param nodeSelector.value Node-selector Label value
 nodeSelector:
   key: node.kubernetes.io/instance-type
   value: ""
-
 ## @section OpenTelemetry configuration
 
 ## @param otel.enabled Enable OpenTelemetry.
@@ -335,7 +313,6 @@ otel:
   lightstep:
     serviceName: ""
     accessToken: ""
-
 ## @section Graceful Shutdown Configuration
 
 ## @param gracefulShutdown.terminationGracePeriodSeconds Maximum time (in seconds) for pod termination and cleanup (K8s hard limit)
@@ -344,7 +321,6 @@ otel:
 gracefulShutdown:
   terminationGracePeriodSeconds: 600
   cleanupTimeoutSeconds: 540
-
 ## @section Network Policy Configuration
 
 ## @param networkPolicy.clusterNetworkCIDRs List of IPv4 CIDRs that workload pods are NOT allowed to access (typically cluster-internal networks)
@@ -352,7 +328,6 @@ gracefulShutdown:
 networkPolicy:
   clusterNetworkCIDRs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/12"]
   customPolicies: []
-
 ## @section Cluster Validator Configuration
 
 ## @param clusterValidator.enabled Enable the cluster-validator CronJob and init container
@@ -370,7 +345,7 @@ clusterValidator:
   enabled: false
   image:
     repository: ""
-    tag: ""  # defaults to .Chart.Version (same as nvca-operator)
+    tag: "" # defaults to .Chart.Version (same as nvca-operator)
     pullPolicy: IfNotPresent
   schedule: "0 */3 * * *"
   configMapName: "cluster-validator-network-checks"
@@ -435,3 +410,5 @@ clusterValidator:
     limits:
       cpu: 200m
       memory: 128Mi
+nameOverride: nvca-operator
+fullnameOverride: nvca-operator

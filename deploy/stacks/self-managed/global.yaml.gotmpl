@@ -1,0 +1,507 @@
+
+cassandra:
+  global:
+    {{- if .Values.global.imagePullSecrets }}
+    imagePullSecrets:
+      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
+    {{- end }}
+    security:
+      allowInsecureImages: true
+    {{- if .Values.global.storageClass }}
+    defaultStorageClass: {{ .Values.global.storageClass }}
+    {{- end }}
+
+  replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
+  resourcesPreset: {{ dig "cassandra" "resourcesPreset" "small" .Values }}
+
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.cassandra.key }}: {{ .Values.global.nodeSelectors.cassandra.value }}
+  {{- end }}
+  persistence:
+    size: {{ .Values.global.storageSize | default "10Gi" }}
+
+  migrations:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nvcf-cassandra-migrations
+      {{- if dig "cassandra" "migrations" "image" "tag" "" .Values }}
+      tag: {{ dig "cassandra" "migrations" "image" "tag" "" .Values }}
+      {{- end }}
+      {{- if dig "cassandra" "migrations" "image" "pullPolicy" "" .Values }}
+      pullPolicy: {{ dig "cassandra" "migrations" "image" "pullPolicy" "" .Values }}
+      {{- end }}
+  initialization:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/alpine-k8s
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/bitnami-cassandra
+  dynamicSeedDiscovery:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/bitnami-cassandra
+
+openbao:
+  {{- if .Values.global.imagePullSecrets }}
+  global:
+    imagePullSecrets:
+      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
+  {{- end }}
+  migrations:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations
+      {{- if dig "openbao" "migrations" "image" "tag" "" .Values }}
+      tag: {{ dig "openbao" "migrations" "image" "tag" "" .Values }}
+      {{- end }}
+
+    # merge the rest of the user-supplied migrations block, but drop
+    # its image sub-block so we don't clobber the defaults above
+    {{- with .Values.openbao.migrations }}
+    {{- range $key, $value := . }}
+    {{- if ne $key "image" }}
+    {{ $key }}:
+      {{- toYaml $value | nindent 6 }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+
+  injector:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/oss-vault-k8s
+    agentImage:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nvcf-openbao
+    {{- if .Values.global.nodeSelectors.enabled }}
+    nodeSelector:
+      {{ .Values.global.nodeSelectors.vault.key }}: {{ .Values.global.nodeSelectors.vault.value }}
+    {{- end }}
+    replicas: {{ .Values.openbao.injector.replicas }}
+    podDisruptionBudget:
+      minAvailable: 1
+  server:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nvcf-openbao
+    {{- if .Values.global.nodeSelectors.enabled }}
+    nodeSelector:
+      {{ .Values.global.nodeSelectors.vault.key }}: {{ .Values.global.nodeSelectors.vault.value }}
+    {{- end }}
+
+    dataStorage:
+      {{- if .Values.global.storageClass }}
+      storageClass: {{ .Values.global.storageClass }}
+      {{- end }}
+      size: {{ .Values.global.storageSize | default "10Gi" }}
+    # the entire `extraContainers` config must be supplied because Helm doesn't merge
+    # YAML lists.
+    extraContainers:
+      - name: auto-unseal-sidecar
+        image: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-openbao:2.2.2-nv-1
+        volumeMounts:
+          - name: openbao-server-unseal
+            mountPath: /vault/userconfig/unseal
+            readOnly: true
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Starting auto-unseal monitor..."
+            echo http://$HOSTNAME:8200
+            export BAO_ADDR=http://$HOSTNAME:8200
+            while true; do
+              if [ -f /vault/userconfig/unseal/unseal_key ]; then
+                UNSEAL_KEY=$(cat /vault/userconfig/unseal/unseal_key)
+                if [ ! -z "$UNSEAL_KEY" ]; then
+                    bao operator unseal $UNSEAL_KEY
+                    sleep 60
+                    continue
+                else
+                  echo "Unseal key is empty, waiting..."
+                fi
+              else
+                echo "Unseal key file not found, waiting..."
+              fi
+              sleep 10
+            done
+nats:
+  {{- if .Values.global.imagePullSecrets }}
+  global:
+    image:
+      pullSecretNames:
+        {{- range .Values.global.imagePullSecrets }}
+        - {{ .name }}
+        {{- end }}
+  {{- end }}
+  container:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nats-server
+  reloader:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
+  natsBox:
+    container:
+      image:
+        registry: {{ .Values.global.image.registry }}
+        repository: {{ .Values.global.image.repository }}/nats-box
+  nkeyJob:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/alpine-k8s
+  {{- if .Values.global.nodeSelectors.enabled }}
+  podTemplate:
+    merge:
+      spec:
+        nodeSelector:
+          {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+
+  {{- if .Values.global.storageClass }}
+  config:
+    jetstream:
+      fileStore:
+        pvc:
+          storageClassName: {{ .Values.global.storageClass }}
+  {{- end }}
+
+apikeys:
+  fullnameOverride: api-keys
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nv-api-keys
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+
+api:
+  fullnameOverride: nvcf-api
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    {{- $apiImageName := dig "api" "image" "name" "nvcf-service-oss" .Values }}
+    {{- $apiImageRepository := printf "%s/%s" .Values.global.image.repository $apiImageName }}
+    repository: {{ dig "api" "image" "repository" $apiImageRepository .Values }}
+    tag: {{ dig "api" "image" "tag" "1.1.1" .Values | quote }}
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+  accountBootstrap:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/alpine-k8s
+      tag: 1.30.12
+      pullPolicy: IfNotPresent
+
+    registryCredentials: []
+
+    limits:
+      {{- $maxFunctions := .Values.accounts.limits.maxFunctions | default 50 }}
+      {{- if or (lt $maxFunctions 1) (gt $maxFunctions 50) }}
+      {{- fail "accounts.limits.maxFunctions must be greater than 0 and less than or equal to 50" }}
+      {{- end }}
+      maxFunctions: {{ $maxFunctions }}
+
+      {{- $maxTasks := .Values.accounts.limits.maxTasks | default 50 }}
+      {{- if or (lt $maxTasks 1) (gt $maxTasks 50) }}
+      {{- fail "accounts.limits.maxTasks must be greater than 0 and less than or equal to 50" }}
+      {{- end }}
+      maxTasks: {{ $maxTasks }}
+
+      {{- $maxTelemetries := .Values.accounts.limits.maxTelemetries | default 25 }}
+      {{- if or (lt $maxTelemetries 1) (gt $maxTelemetries 25) }}
+      {{- fail "accounts.limits.maxTelemetries must be greater than 0 and less than or equal to 25" }}
+      {{- end }}
+      maxTelemetries: {{ $maxTelemetries }}
+
+      {{- $maxRegistryCreds := .Values.accounts.limits.maxRegistryCreds | default 10 }}
+      {{- if or (lt $maxRegistryCreds 1) (gt $maxRegistryCreds 25) }}
+      {{- fail "accounts.limits.maxRegistryCreds must be greater than 0 and less than or equal to 25" }}
+      {{- end }}
+      maxRegistryCreds: {{ $maxRegistryCreds }}
+
+  env:
+    NVCF_NATS_REGION_PLACEMENT_TAG: "dc"
+    NVCF_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
+    NVCF_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
+    NVCF_ICMS_BASE_URL: "http://api.sis.svc.cluster.local:8080"
+    # Observability
+    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+
+invocation:
+  fullnameOverride: invocation-service
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-invocation-service
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+
+  env:
+    # Observability
+    {{- if .Values.global.observability.tracing.enabled }}
+    SERVER__TRACING__ENDPOINT_IP: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}"
+    SERVER__TRACING__ENDPOINT_PORT: {{ .Values.global.observability.tracing.collectorPort }}
+    {{- else }}
+    SERVER__ENVFILTER_DIRECTIVE: "otel::tracing=off,otel=off,server=trace,info"
+    {{- end }}
+  
+nvctApi:
+  fullnameOverride: nvct-api
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvct-service-oss
+
+  env:
+    NVCT_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
+    NVCT_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
+    # Observability
+    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+
+grpcproxy:
+  fullnameOverride: grpc-proxy
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-grpc-proxy
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+
+  env:
+    # Observability
+    {{- if .Values.global.observability.tracing.enabled }}
+    OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+    {{- else }}
+    TRACING: "none" # this is ineffective, but the env list must be non-empty
+    {{- end }}
+
+ess:
+  fullnameOverride: ess-api
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/ess-api
+
+  env:
+    # Observability
+    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+
+notary:
+  fullnameOverride: notary-service
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/notary-service
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+
+  env:
+    # Observability
+    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+
+sis:
+  fullnameOverride: spot-instance-service
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/spot
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+
+  # LLS/TURN HMAC rotation configuration
+  lls:
+    enabled: {{ dig "addons" "lls" "enabled" false .Values }}
+    hmacRotation:
+      image:
+        registry: {{ .Values.global.image.registry }}
+        repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations
+        {{- if dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values }}
+        tag: {{ dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values }}
+        {{- end }}
+
+  env:
+    # Observability
+    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+
+adminIssuerProxy:
+  fullnameOverride: admin-token-issuer-proxy
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/admin-token-issuer-proxy
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+  gateway:
+    enabled: true
+    namespace: {{ .Values.ingress.gatewayApi.gateways.shared.namespace }}
+    gatewayRef:
+      name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
+    hostname: "api-keys.{{ .Values.global.domain }}"
+    path: "/v1/admin/keys"
+
+stateMetrics:
+  enabled: false
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-state-metrics-service
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+  # Disable ServiceMonitor for environments without Prometheus Operator
+  serviceMonitor:
+    enabled: false
+
+reval:
+  fullnameOverride: reval
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/reval-server
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+
+llmApiGateway:
+  enabled: {{ dig "addons" "llm" "enabled" false .Values }}
+  fullnameOverride: llm-api-gateway
+  replicaCount: {{ dig "addons" "llm" "gateway" "replicaCount" 3 .Values }}
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/llm-api-gateway
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+  {{- if dig "addons" "llm" "gateway" "auth" "grpcInsecure" false .Values }}
+  config:
+    nvcfGrpcInsecure: true
+  {{- end }}
+  observability:
+    tracing:
+      enabled: {{ .Values.global.observability.tracing.enabled }}
+      {{- if .Values.global.observability.tracing.enabled }}
+      endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+      {{- end }}
+
+llmRequestRouter:
+  enabled: {{ dig "addons" "llm" "enabled" false .Values }}
+  fullnameOverride: llm-request-router
+  replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/stargate
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+  observability:
+    tracing:
+      enabled: {{ .Values.global.observability.tracing.enabled }}
+      {{- if .Values.global.observability.tracing.enabled }}
+      endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+      {{- end }}
+
+nvcfGatewayRoutes:
+  domain: "{{ .Values.global.domain }}"
+  gateways:
+    shared:
+      name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
+      namespace: {{ required "ingress.gatewayApi.gateways.shared.namespace is required" .Values.ingress.gatewayApi.gateways.shared.namespace }}
+    grpc:
+      name: {{ required "ingress.gatewayApi.gateways.grpc.name is required" .Values.ingress.gatewayApi.gateways.grpc.name }}
+      namespace: {{ required "ingress.gatewayApi.gateways.grpc.namespace is required" .Values.ingress.gatewayApi.gateways.grpc.namespace }}
+  routes:
+    nvcfApi:
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    nvctApi:
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    apiKeys:
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "apiKeys" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    invocation:
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    llmInvocation:
+      enabled: {{ dig "addons" "llm" "enabled" false .Values }}
+      backend:
+        name: llm-api-gateway
+        namespace: nvcf
+        port: 8080
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "llmInvocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    grpc:
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+  podMonitors:
+    enabled: {{ .Values.global.observability.metrics.enabled }}

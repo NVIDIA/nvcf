@@ -102,10 +102,11 @@ func runServer(cfg *config.RevalConfig, v *viper.Viper, factory AuthorizerFactor
 	managementHttpServer := serveManagementRoutes(logger, loggerAtomicLevel, cfg.HTTP)
 
 	hopts := reval.HandlerOptions{
-		SkipValidateObjects: cfg.SkipValidateObjects,
-		SkipValidateImages:  cfg.SkipValidateImages,
-		PreserveLabels:      cfg.PreserveLabels,
-		PreserveAnnotations: cfg.PreserveAnnotations,
+		SkipValidateObjects:        cfg.SkipValidateObjects,
+		SkipValidateImages:         cfg.SkipValidateImages,
+		SkipSanitizeObjectMetadata: cfg.SkipSanitizeObjectMetadata,
+		PreserveLabels:             cfg.PreserveLabels,
+		PreserveAnnotations:        cfg.PreserveAnnotations,
 	}
 	handler, err := reval.NewHandler(logger, config.ApiSvcName, hopts)
 	if err != nil {

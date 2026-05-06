@@ -33,25 +33,34 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
-    version: 1.2.1
+    version: 1.4.0
     namespace: api-keys
     inherit:
       - template: service
 
   - name: sis
-    version: 1.13.5
+    version: 1.13.6
     namespace: sis
     inherit:
       - template: service
 
   - name: api
-    version: 1.16.1
+    version: 1.17.0
     namespace: nvcf
     inherit:
       - template: service
     needs:
       # not needed to start, but needed for bootstrapping account which is done with a script in the api helm chart
       - ess/ess-api
+                      
+  - name: nvct-api
+    chart: nvcf/helm-nvct-api
+    version: 1.0.1
+    namespace: nvcf
+    values:
+      - ../global.yaml.gotmpl
+    inherit:
+      - template: service
 
   - name: invocation-service
     version: 1.5.2
@@ -124,7 +133,7 @@ releases:
 
   - name: nats-auth-callout-service
     chart: nvcf/helm-nvcf-nats-auth-callout-service
-    version: 1.0.0
+    version: 1.0.1
     namespace: nats-system
     values:
       - ../global.yaml.gotmpl
@@ -158,7 +167,7 @@ releases:
   # --- Gateway API Ingress ---
   - name: ingress
     chart: nvcf/nvcf-gateway-routes
-    version: 1.9.0
+    version: 1.10.0
     needs:
       - nvcf/notary-service
       - api-keys/api-keys

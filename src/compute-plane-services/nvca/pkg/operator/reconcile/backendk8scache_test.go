@@ -3440,8 +3440,8 @@ func TestIsGracefulShutdown(t *testing.T) {
 }
 
 // TestCleanupResources_RemovesNVCFBackendFinalizer locks in the fix for
-// nvbug 6106009. When `kubectl delete nvcfbackend ...` is invoked outside
-// a helm uninstall flow, the operator's reconcile loop sees the CR's
+// direct `kubectl delete nvcfbackend ...` calls outside a helm uninstall flow.
+// The operator's reconcile loop sees the CR's
 // deletionTimestamp and runs cleanup, but historically never removed the
 // `nvca-operator.finalizers.nvidia.io` finalizer afterward. The CR therefore
 // stayed alive (held by its own finalizer), the next reconcile saw the same

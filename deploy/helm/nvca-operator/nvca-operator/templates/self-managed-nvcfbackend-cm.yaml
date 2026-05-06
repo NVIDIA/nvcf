@@ -44,7 +44,7 @@ data:
     clusterGroupName: "nvcf-default"
     ncaID: {{ .Values.ncaID | default "nvcf-default" | quote }}
     nvcaVersion: {{ .Values.selfManaged.nvcaVersion | quote }}
-    ssaClientId: ""
+    oAuthClientId: ""
     cloudProvider: "NCP"
     region: {{ .Values.selfManaged.region | default "us-west-1" | quote }}
     attributes: {{ include "nvcaop.jsonListOrEmpty" .Values.selfManaged.clusterAttributes }}
@@ -56,7 +56,7 @@ data:
     icmsConfig:
       publicKeysetEndpoint: ""
       tokenURL: ""
-      icmsServiceURL: "http://api.sis.svc.cluster.local:8080"
+      icmsServiceURL: {{ .Values.selfManaged.icmsServiceURL | quote }}
     miniService:
       helmReValServiceURL: {{ .Values.selfManaged.revalServiceURL | quote }}
     {{- with .Values.selfManaged.imageCredHelper }}
@@ -77,8 +77,21 @@ data:
         repository: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .imageRepository "defaultRepository" $.Values.image.repository) | quote }}
         tag: {{ .imageTag | quote }}
     {{- end }}
-    {{- with .Values.agent.tolerations }}
     agent:
+      natsURL: {{ .Values.selfManaged.natsURL | quote }}
+      helmReValStageOAuthTokenURL: {{ .Values.agent.serviceOAuth.helmReVal.stage.tokenURL | quote }}
+      helmReValStageOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.helmReVal.stage.publicKeysetEndpoint | quote }}
+      helmReValProdOAuthTokenURL: {{ .Values.agent.serviceOAuth.helmReVal.prod.tokenURL | quote }}
+      helmReValProdOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.helmReVal.prod.publicKeysetEndpoint | quote }}
+      rolloverServiceStageOAuthTokenURL: {{ .Values.agent.serviceOAuth.rolloverService.stage.tokenURL | quote }}
+      rolloverServiceStageOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.rolloverService.stage.publicKeysetEndpoint | quote }}
+      rolloverServiceProdOAuthTokenURL: {{ .Values.agent.serviceOAuth.rolloverService.prod.tokenURL | quote }}
+      rolloverServiceProdOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.rolloverService.prod.publicKeysetEndpoint | quote }}
+      functionDeploymentStagesStageOAuthTokenURL: {{ .Values.agent.serviceOAuth.functionDeploymentStages.stage.tokenURL | quote }}
+      functionDeploymentStagesStageOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.functionDeploymentStages.stage.publicKeysetEndpoint | quote }}
+      functionDeploymentStagesProdOAuthTokenURL: {{ .Values.agent.serviceOAuth.functionDeploymentStages.prod.tokenURL | quote }}
+      functionDeploymentStagesProdOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.functionDeploymentStages.prod.publicKeysetEndpoint | quote }}
+    {{- with .Values.agent.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
     {{- end }}

@@ -369,7 +369,6 @@ def test_worker_http():
 ### Prerequisites
 
 - Go 1.24 or higher
-- Access to NVIDIA Vault
 
 ### Environment Setup
 
@@ -386,41 +385,3 @@ See the `Config` struct in the code for a complete list of configuration options
 GRPC Client credentials are provided by either OAuth2 Client Credentials or a bearer token loaded from the secrets.json file.
 OAuth2 Client Credentials should be provided at the json key "id" and "secret".
 Alternatively, bearer token credentials should be provided at the json key "nvcfApiToken" and "ratelimiterToken".
-
-### Vault Access
-
-Login to Vault as shown below:
-
-```shell
-# stg
-export VAULT_ADDR="https://stg.vault.nvidia.com"
-export VAULT_NAMESPACE="nvcf"
-export AWS_ACCOUNT_ID=130889915494
-vault login -method=oidc -path=oidc role=namespace-operator
-
-# prod
-export VAULT_ADDR="https://"
-export VAULT_NAMESPACE="nvcf"
-export AWS_ACCOUNT_ID=052277528122
-vault login -method=oidc -path=oidc role=namespace-operator
-```
-
-### Managing NATS Keys
-
-Put a new nkey in Vault:
-
-```shell
-vault kv put /cloud/aws/${AWS_ACCOUNT_ID}/services/nvcf-grpc-proxy/regions/all/kv/nats \
-        user='' userSeed=''
-```
-
-Render the secrets:
-
-```shell
-pushd vault
-vault agent -config=config-qat.hcl -log-level=debug
-popd
-```
-
-Note: `namespace operator` spans all NVCF services. The role `nvcf-grpc-proxy-vault-admins` is also
-suitable with more finely-scoped permissions.

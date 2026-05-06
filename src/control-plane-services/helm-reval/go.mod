@@ -3,8 +3,8 @@ module github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval
 go 1.25.1
 
 require (
-	github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper v0.0.0-20260430124028-51c498df1520
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260422170823-102dd819d7cc
+	github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper v0.0.0-20260506164239-3a9a34542759
+	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260506164239-3a9a34542759
 	github.com/felixge/httpsnoop v1.0.4
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/render v1.0.3

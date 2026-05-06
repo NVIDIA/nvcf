@@ -41,7 +41,7 @@ data:
     clusterName: {{ .Values.clusterName | quote }}
     ncaID: {{ .Values.ncaID | quote }}
     {{- with .Values.helmManaged }}
-    {{- $clientID := .oAuthClientID | default .ssaClientID | default "" }}
+    {{- $clientID := .oAuthClientID | default "" }}
     {{- $mountPath := "" }}
     {{- if $.Values.vaultConfig }}
     {{- $mountPath = $.Values.vaultConfig.oAuthClientMountPath }}
@@ -74,8 +74,20 @@ data:
         tag: {{ .imageTag | quote }}
     {{- end }}
     {{- end }}
-    {{- with .Values.agent.tolerations }}
     agent:
+      helmReValStageOAuthTokenURL: {{ .Values.agent.serviceOAuth.helmReVal.stage.tokenURL | quote }}
+      helmReValStageOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.helmReVal.stage.publicKeysetEndpoint | quote }}
+      helmReValProdOAuthTokenURL: {{ .Values.agent.serviceOAuth.helmReVal.prod.tokenURL | quote }}
+      helmReValProdOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.helmReVal.prod.publicKeysetEndpoint | quote }}
+      rolloverServiceStageOAuthTokenURL: {{ .Values.agent.serviceOAuth.rolloverService.stage.tokenURL | quote }}
+      rolloverServiceStageOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.rolloverService.stage.publicKeysetEndpoint | quote }}
+      rolloverServiceProdOAuthTokenURL: {{ .Values.agent.serviceOAuth.rolloverService.prod.tokenURL | quote }}
+      rolloverServiceProdOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.rolloverService.prod.publicKeysetEndpoint | quote }}
+      functionDeploymentStagesStageOAuthTokenURL: {{ .Values.agent.serviceOAuth.functionDeploymentStages.stage.tokenURL | quote }}
+      functionDeploymentStagesStageOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.functionDeploymentStages.stage.publicKeysetEndpoint | quote }}
+      functionDeploymentStagesProdOAuthTokenURL: {{ .Values.agent.serviceOAuth.functionDeploymentStages.prod.tokenURL | quote }}
+      functionDeploymentStagesProdOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.functionDeploymentStages.prod.publicKeysetEndpoint | quote }}
+    {{- with .Values.agent.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
     {{- end }}

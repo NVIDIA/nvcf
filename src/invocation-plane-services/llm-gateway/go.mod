@@ -153,5 +153,5 @@ replace (
 	// `cas`). The fork keeps upstream's module path so this is a drop-in
 	// replace with no import-site changes. Once CAS is upstreamed into
 	// olric-data/olric, drop the replace and bump the require. See AGENTS.md.
-	github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260422213820-d93417d6e8c8
+	github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260506001115-492943853c7b
 )

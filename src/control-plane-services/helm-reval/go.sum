@@ -1275,10 +1275,10 @@ github.com/Masterminds/sprig/v3 v3.3.0 h1:mQh0Yrg1XPo6vjYXgtf5OtijNAKJRNcTdOOGZe
 github.com/Masterminds/sprig/v3 v3.3.0/go.mod h1:Zy1iXRYNqNLUolqCpL4uhk6SHUMAOSCzdgBfDb35Lz0=
 github.com/Masterminds/squirrel v1.5.4 h1:uUcX/aBc8O7Fg9kaISIUsHXdKuqehiXAMQTYX8afzqM=
 github.com/Masterminds/squirrel v1.5.4/go.mod h1:NNaOrjSoIDfDA40n7sr2tPNZRfjzjA400rg+riTZj10=
-github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper v0.0.0-20260430124028-51c498df1520 h1:qZJOq2pKXiTUvo4ZFb/urb70lHWmYYPdVSOaOdCvv5s=
-github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper v0.0.0-20260430124028-51c498df1520/go.mod h1:AEA2FwpecCyOJFvKKHYgi1skeJwaFcSSZHj7GV90+hw=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260422170823-102dd819d7cc h1:1R4tYgJT9fGBKq2ZvgIrxJu/ggTTzYpQl69oNizXeH0=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260422170823-102dd819d7cc/go.mod h1:7xtfvCxoAg0Uj1HX+uYoMAxeBwcVMIFCDNKEjsPlaNQ=
+github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper v0.0.0-20260506164239-3a9a34542759 h1:A5EQHXwX8GlDdef7qhGhAhcugNrKCmDC4GPM+2En4KI=
+github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper v0.0.0-20260506164239-3a9a34542759/go.mod h1:d3qb/lUl2+g7RA1I7c6yc36owfXtwepoK3dHn9b0Nj8=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260506164239-3a9a34542759 h1:d8JIXfktgU4weYtpKVNnyy2j7/BYiGoj8PfLOtkQ1TI=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260506164239-3a9a34542759/go.mod h1:ws5YuneVcbUreSNoeuBiprrZSo/O9aj/8C4ekc6oHJE=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=
 github.com/ajg/form v1.5.1 h1:t9c7v8JUKu/XxOGBU0yjNpaMloxGEJhUkqFRq0ibGeU=
 github.com/ajg/form v1.5.1/go.mod h1:uL1WgH+h2mgNtvBq0339dVnzXdBETtL2LeUXaIv25UY=

@@ -49,6 +49,43 @@ install_kubeconform
 run_lint nvca-operator --set "ngcConfig.serviceKey=fakekey"
 run_lint nvca-operator --set "generateImagePullSecret=false" --set "imagePullSecretName=foo-bar-image-pull"
 
+echo -e "\nTesting self-managed endpoint validation..."
+missing_endpoint_output="$(mktemp)"
+if helm template test-release "${repo_root}/deployments/nvca-operator" \
+  --set "generateImagePullSecret=false" \
+  --set "ngcConfig.clusterSource=self-managed" \
+  --set-string "clusterID=id" \
+  --set-string "clusterGroupID=group" \
+  --set-string "clusterName=ncp-local-compute-1" \
+  --set-string "selfManaged.nvcaVersion=3.0.0-test" \
+  > "${missing_endpoint_output}" 2>&1; then
+  echo "Expected self-managed render without control plane endpoints to fail"
+  cat "${missing_endpoint_output}"
+  rm -f "${missing_endpoint_output}"
+  exit 1
+fi
+for endpoint in icmsServiceURL revalServiceURL natsURL; do
+  if ! grep -q "${endpoint}" "${missing_endpoint_output}"; then
+    echo "Expected validation output to mention ${endpoint}"
+    cat "${missing_endpoint_output}"
+    rm -f "${missing_endpoint_output}"
+    exit 1
+  fi
+done
+rm -f "${missing_endpoint_output}"
+echo -e "Test passed"
+
+run_lint nvca-operator \
+  --set "generateImagePullSecret=false" \
+  --set "ngcConfig.clusterSource=self-managed" \
+  --set-string "clusterID=id" \
+  --set-string "clusterGroupID=group" \
+  --set-string "clusterName=ncp-local-compute-1" \
+  --set-string "selfManaged.nvcaVersion=3.0.0-test" \
+  --set-string "selfManaged.icmsServiceURL=http://sis.nvcf-control-plane.test:18080" \
+  --set-string "selfManaged.revalServiceURL=http://reval.nvcf-control-plane.test:18080" \
+  --set-string "selfManaged.natsURL=nats://nats.nvcf-control-plane.test:14222"
+
 # Test secret mirroring feature
 # Test with only source namespace (should not add args)
 run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns" --set "ngcConfig.serviceKey=fakekey"

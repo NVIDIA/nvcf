@@ -46,8 +46,6 @@ You can modify these settings by updating the following values in your Helm rele
 - helmManaged.nvcaVersion (REQUIRED)
 - helmManaged.oAuthClientID (optional - OAuth2/OIDC client ID, can be blank or omitted)
 - helmManaged.oAuthClientSecretKey (optional - secret key name containing OAuth2/OIDC client secret)
-- helmManaged.ssaClientID (DEPRECATED - use oAuthClientID instead)
-- helmManaged.ssaClientSecretKey (DEPRECATED - use oAuthClientSecretKey instead)
 - helmManaged.clusterDescription (optional - defaults to clusterName)
 - helmManaged.featureGateValues (optional - list of feature gates to enable, defaults to ["LogPosting"])
 - helmManaged.clusterAttributes (optional - list of cluster attributes, defaults to empty array)

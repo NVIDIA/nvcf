@@ -83,6 +83,12 @@ reval:
     enabled: false
 
   serviceConfig:
+    skipValidateObjects: false
+    skipValidateImages: false
+    skipSanitizeObjectMetadata: false
+    preserveLabels: []
+    preserveAnnotations: []
+
     http:
       local: false
 

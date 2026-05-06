@@ -43,8 +43,8 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper/credhelper"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
@@ -501,6 +501,127 @@ func TestRun(t *testing.T) {
 		if assert.True(t, result.Valid) {
 			gotStr := out.String()
 			require.JSONEq(t, expPassExtras, gotStr)
+		}
+	})
+
+	t.Run("pass skip sanitize object metadata", func(t *testing.T) {
+		h, err := NewHandler(logger, "reval", HandlerOptions{
+			SkipSanitizeObjectMetadata: true,
+		})
+		require.NoError(t, err)
+		h.newImageChecker = func() imageChecker { return fakeImageChecker{} }
+
+		randReader = rand.New(rand.NewSource(1))
+		out := &bytes.Buffer{}
+		cfg := Config{
+			Render:   true,
+			ChartURL: fmt.Sprintf("%s/%s-%s.tgz", srv.URL, "test-chart", "1.0.0"),
+			HelmRegistryAuthConfig: common.RegistryAuthConfig{
+				K8sSecrets: []common.RegistryAuthSecret{{Auths: map[string]common.RegistryAuth{srvHost: {Auth: basicAuth}}}},
+			},
+			ImageRegistryAuthConfig: common.RegistryAuthConfig{
+				K8sSecrets: []common.RegistryAuthSecret{{Auths: map[string]common.RegistryAuth{"nvcr.io": {Auth: basicAuth}}}},
+			},
+			Namespace:   "sr-1234",
+			ReleaseName: "mini-service",
+			Values: json.RawMessage(`{
+				"podLabels": {
+					"shouldnotexist": "val"
+				},
+				"resources": {
+					"limits": {
+						"nvidia.com/gpu": 1
+					}
+				},
+				"depVolumes": [{
+					"name": "emptydirvol",
+					"emptyDir": {
+					    "sizeLimit": "500Mi"
+					}
+				}],
+				"depVolumeMounts": [{
+					"name": "emptydirvol",
+					"mountPath": "/var/foo"
+				}]
+			}`),
+		}
+
+		result, err := h.Run(context.Background(), cfg, out)
+		assert.NoError(t, err)
+		assert.Empty(t, result.ValidationErrors)
+		require.True(t, result.Valid)
+
+		var objs []map[string]any
+		require.NoError(t, json.Unmarshal(out.Bytes(), &objs))
+
+		for _, obj := range objs {
+			kind, _ := obj["kind"].(string)
+			metadata, _ := obj["metadata"].(map[string]any)
+			spec, _ := obj["spec"].(map[string]any)
+
+			switch kind {
+			case "Deployment":
+				// Metadata labels should be preserved (not stripped).
+				metaLabels, _ := metadata["labels"].(map[string]any)
+				assert.Contains(t, metaLabels, "helm.sh/chart")
+				assert.Contains(t, metaLabels, "app.kubernetes.io/name")
+
+				// Selector should retain original labels, not autogen-label-controller.
+				selector, _ := spec["selector"].(map[string]any)
+				matchLabels, _ := selector["matchLabels"].(map[string]any)
+				assert.Contains(t, matchLabels, "app.kubernetes.io/name")
+				assert.Contains(t, matchLabels, "app.kubernetes.io/instance")
+				assert.NotContains(t, matchLabels, "autogen-label-controller")
+
+				// Template labels should be preserved with original values.
+				tmpl, _ := spec["template"].(map[string]any)
+				tmplMeta, _ := tmpl["metadata"].(map[string]any)
+				tmplLabels, _ := tmplMeta["labels"].(map[string]any)
+				assert.Contains(t, tmplLabels, "app.kubernetes.io/name")
+				assert.Contains(t, tmplLabels, "shouldnotexist")
+				assert.NotContains(t, tmplLabels, "autogen-label-controller")
+
+			case "StatefulSet":
+				metaLabels, _ := metadata["labels"].(map[string]any)
+				assert.Contains(t, metaLabels, "helm.sh/chart")
+
+				selector, _ := spec["selector"].(map[string]any)
+				matchLabels, _ := selector["matchLabels"].(map[string]any)
+				assert.Contains(t, matchLabels, "app.kubernetes.io/name")
+				assert.NotContains(t, matchLabels, "autogen-label-controller")
+
+			case "Service":
+				metaLabels, _ := metadata["labels"].(map[string]any)
+				assert.Contains(t, metaLabels, "helm.sh/chart")
+
+				svcSelector, _ := spec["selector"].(map[string]any)
+				assert.Contains(t, svcSelector, "app.kubernetes.io/name")
+				assert.Contains(t, svcSelector, "app.kubernetes.io/instance")
+				assert.NotContains(t, svcSelector, "autogen-label-service")
+
+			case "CronJob":
+				metaLabels, _ := metadata["labels"].(map[string]any)
+				assert.Contains(t, metaLabels, "helm.sh/chart")
+
+				jobTemplate, _ := spec["jobTemplate"].(map[string]any)
+				jobSpec, _ := jobTemplate["spec"].(map[string]any)
+				// Selector should be preserved (not nil'd).
+				jobSelector, _ := jobSpec["selector"].(map[string]any)
+				jobMatchLabels, _ := jobSelector["matchLabels"].(map[string]any)
+				assert.Contains(t, jobMatchLabels, "app.kubernetes.io/name")
+				// Template labels should be preserved.
+				jobTmpl, _ := jobSpec["template"].(map[string]any)
+				jobTmplMeta, _ := jobTmpl["metadata"].(map[string]any)
+				jobTmplLabels, _ := jobTmplMeta["labels"].(map[string]any)
+				assert.Contains(t, jobTmplLabels, "helm.sh/chart")
+				assert.Contains(t, jobTmplLabels, "not")
+
+			case "Pod":
+				metaLabels, _ := metadata["labels"].(map[string]any)
+				assert.Contains(t, metaLabels, "helm.sh/chart")
+				assert.Contains(t, metaLabels, "pod")
+				assert.NotContains(t, metaLabels, "autogen-label-service")
+			}
 		}
 	})
 

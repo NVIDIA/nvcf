@@ -115,6 +115,8 @@ ingress:
     routes:
       nvcfApi:
         routeAnnotations: {}
+      nvctApi:
+        routeAnnotations: {}
       apiKeys:
         routeAnnotations: {}
       invocation:

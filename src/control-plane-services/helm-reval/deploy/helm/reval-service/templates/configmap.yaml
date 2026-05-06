@@ -20,6 +20,24 @@ metadata:
     {{- include "reval.labels" . | nindent 4 }}
 data:
   config.yaml: |
+    {{- if .Values.reval.serviceConfig.skipValidateObjects }}
+    skip-validate-objects: true
+    {{- end }}
+    {{- if .Values.reval.serviceConfig.skipValidateImages }}
+    skip-validate-images: true
+    {{- end }}
+    {{- if .Values.reval.serviceConfig.skipSanitizeObjectMetadata }}
+    skip-sanitize-object-metadata: true
+    {{- end }}
+    {{- if not (empty .Values.reval.serviceConfig.preserveLabels) }}
+    preserve-labels:
+    {{- .Values.reval.serviceConfig.preserveLabels | toYaml | nindent 4 }}
+    {{- end }}
+    {{- if not (empty .Values.reval.serviceConfig.preserveAnnotations) }}
+    preserve-annotations:
+    {{- .Values.reval.serviceConfig.preserveAnnotations | toYaml | nindent 4 }}
+    {{- end }}
+
     http:
       api-port: {{ .Values.reval.service.ports.http }}
       metrics-port: {{ .Values.reval.service.ports.metrics }}

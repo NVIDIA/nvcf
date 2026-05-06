@@ -10,6 +10,16 @@ LDFLAGS = -ldflags "-X github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-
                    -X github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/version.GitCommit=$(GIT_COMMIT) \
                    -X github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/version.BuildDate=$(BUILD_DATE)"
 
+# Docker build variables
+DOCKER_IMAGE_NAME ?= $(BINARY_NAME)
+DOCKERFILE_PATH ?= build/package/Dockerfile
+DOCKER_BUILD_PLATFORMS ?= linux/amd64,linux/arm64
+DOCKER_BUILDX_CONTEXT ?= ci-buildx-context
+DOCKER_BUILDX_BUILDER ?= multi-platform-builder
+DOCKER_PUSH_SKIPPED_FILE ?= /tmp/$(BINARY_NAME)-docker-push-ngc-skipped$(if $(CI_JOB_ID),-$(CI_JOB_ID))
+CONTAINER_IMAGE ?= $(CI_REGISTRY_IMAGE)/$(DOCKER_IMAGE_NAME):$(IMAGE_TAG)
+TARGET_NGC_IMAGE ?= $(NGC_IMAGE_PATH)/$(DOCKER_IMAGE_NAME):$(IMAGE_TAG)
+
 gen-api:
 	./scripts/install_proto.bash
 	@protoc -I.\
@@ -121,7 +131,7 @@ run-client-test:
 	@go run ./cmd/nvcf-nats-auth-callout-service client --config ./cmd/nvcf-nats-auth-callout-service/client-config.yaml foo
 
 # Build targets
-.PHONY: build build-dev clean version
+.PHONY: build build-dev clean version docker-buildx-setup docker-build-ci docker-push-ngc-ci docker-push-ngc-fail-if-skipped
 
 # Build the binary with version information
 build:
@@ -134,6 +144,67 @@ build-dev:
 	@echo "Building $(BINARY_NAME) for development..."
 	@go build -race $(LDFLAGS) -o $(BINARY_NAME) $(MAIN_PATH)
 	@echo "Development build completed: ./$(BINARY_NAME)"
+
+docker-buildx-setup:
+	@docker context create "$(DOCKER_BUILDX_CONTEXT)" 2>/dev/null || docker context use "$(DOCKER_BUILDX_CONTEXT)"
+	@docker buildx create --name "$(DOCKER_BUILDX_BUILDER)" --driver docker-container "$(DOCKER_BUILDX_CONTEXT)" --use 2>/dev/null || docker buildx use "$(DOCKER_BUILDX_BUILDER)"
+
+docker-build-ci: docker-buildx-setup
+	@set -eu; \
+	: "$${IMAGE_TAG:?IMAGE_TAG must be set}"; \
+	: "$${CI_REGISTRY:?CI_REGISTRY must be set}"; \
+	: "$${CI_REGISTRY_USER:?CI_REGISTRY_USER must be set}"; \
+	: "$${CI_JOB_TOKEN:?CI_JOB_TOKEN must be set}"; \
+	: "$${CI_REGISTRY_IMAGE:?CI_REGISTRY_IMAGE must be set}"; \
+	echo "$${CI_JOB_TOKEN}" | docker login -u "$${CI_REGISTRY_USER}" --password-stdin "$${CI_REGISTRY}"; \
+	docker buildx build \
+		--platform "$(DOCKER_BUILD_PLATFORMS)" \
+		--push \
+		-t "$(CONTAINER_IMAGE)" \
+		$${EXTRA_BUILD_ARGS:-} \
+		-f "$(DOCKERFILE_PATH)" \
+		.; \
+	echo "Pushed multi-arch image $(CONTAINER_IMAGE) for $(DOCKER_BUILD_PLATFORMS)"
+
+docker-push-ngc-ci:
+	@rm -f "$(DOCKER_PUSH_SKIPPED_FILE)"
+	@set -eu; \
+	if [ "$${SKIP_SEMANTIC_RELEASE:-}" = "true" ] && [ -z "$${CI_MERGE_REQUEST_IID:-}" ]; then \
+		echo "Non semantic-release detected and not an MR build, skipping docker push"; \
+		exit 0; \
+	fi; \
+	if [ -z "$${PUSH_TO_NGC:-}" ] || [ "$${PUSH_TO_NGC}" = "false" ]; then \
+		echo "PUSH_TO_NGC is false or undefined, won't push to NGC"; \
+		exit 0; \
+	fi; \
+	: "$${IMAGE_TAG:?IMAGE_TAG must be set}"; \
+	: "$${NGC_REGISTRY:?NGC_REGISTRY must be set}"; \
+	: "$${NGC_REGISTRY_TOKEN:?NGC_REGISTRY_TOKEN must be set}"; \
+	: "$${NGC_IMAGE_PATH:?NGC_IMAGE_PATH must be set}"; \
+	echo "$${NGC_REGISTRY_TOKEN}" | docker login -u '$$oauthtoken' --password-stdin "$${NGC_REGISTRY}"; \
+	if docker manifest inspect "$(TARGET_NGC_IMAGE)" >/dev/null 2>&1; then \
+		echo "$(TARGET_NGC_IMAGE) already exists on the registry."; \
+		touch "$(DOCKER_PUSH_SKIPPED_FILE)"; \
+	else \
+		$(MAKE) docker-buildx-setup; \
+		docker buildx build \
+			--platform "$(DOCKER_BUILD_PLATFORMS)" \
+			--push \
+			-t "$(TARGET_NGC_IMAGE)" \
+			$${EXTRA_BUILD_ARGS:-} \
+			-f "$(DOCKERFILE_PATH)" \
+			.; \
+	fi; \
+	echo "=========================================================================="; \
+	echo "Displaying docker image:tags"; \
+	echo "--------------------------------------------------------------------------"; \
+	echo "  - $(TARGET_NGC_IMAGE)"
+
+docker-push-ngc-fail-if-skipped:
+	@if [ -f "$(DOCKER_PUSH_SKIPPED_FILE)" ]; then \
+		echo "Some pushes were skipped. (exit code 66)"; \
+		exit 66; \
+	fi
 
 # Clean build artifacts and development files
 clean:
@@ -241,4 +312,3 @@ swagger-gen:
 
 swagger-clean:
 	@rm -rf api/
-
