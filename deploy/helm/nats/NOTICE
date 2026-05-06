@@ -1,0 +1,13 @@
+This repository is licensed under the Apache License, Version 2.0.
+
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+
+This Helm chart depends on the upstream NATS Helm chart published by the
+`nats-io/k8s` project:
+https://github.com/nats-io/k8s
+
+At the time of writing, the upstream `nats-io/k8s` project is distributed
+under the Apache License, Version 2.0.
+
+This NOTICE file is provided for attribution and informational purposes only
+and does not modify the terms of the Apache License, Version 2.0.

@@ -1,0 +1,329 @@
+#!/usr/bin/env bash
+#
+# This script creates a merge request against the ngc-publishing-configs repository
+# to add publishing configuration files for nvca releases.
+set -eu -o pipefail
+
+CI_API_V4_URL=${CI_API_V4_URL:-"https://github.com/NVIDIA/api/v4"}
+GITLAB_TOKEN=${GITLAB_TOKEN:?"Missing required env var GITLAB_TOKEN"}
+PUBLISHING_CONFIGS_PROJECT_ID=${PUBLISHING_CONFIGS_PROJECT_ID:-"123069"}  # ngc/publishing/ngc-publishing-configs
+NVCA_PROJECT_ID=${NVCA_PROJECT_ID:-"90953"}  # Assuming this is the nvca project
+
+usage() {
+    cat <<EOF
+Create a merge request to add publishing configuration for nvca.
+
+Usage:
+    $0 <version> [environment]
+
+Arguments:
+    version      The version tag (e.g., v2.46.1)
+    environment  The environment (staging/production) [default: staging]
+
+Example:
+    $0 v2.46.1 staging
+    $0 v2.46.1 production
+EOF
+}
+
+# get_project_info <project_id>
+get_project_info() {
+    curl -sSL \
+        -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+        "${CI_API_V4_URL}/projects/$1"
+}
+
+# create_branch <project_id> <branch_name> <ref>
+create_branch() {
+    local project_id="$1"
+    local branch_name="$2"
+    local ref="$3"
+    
+    # Create JSON payload with proper escaping
+    local json_payload
+    json_payload=$(jq -n \
+        --arg branch "${branch_name}" \
+        --arg ref "${ref}" \
+        '{branch: $branch, ref: $ref}')
+    
+    curl -sSL \
+        -X POST \
+        -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "${json_payload}" \
+        "${CI_API_V4_URL}/projects/${project_id}/repository/branches"
+}
+
+# create_file <project_id> <file_path> <content> <branch> <commit_message>
+create_file() {
+    local project_id="$1"
+    local file_path="$2"
+    local content="$3"
+    local branch="$4"
+    local commit_message="$5"
+    
+    # URL encode the file path
+    local encoded_path
+    encoded_path=$(printf '%s' "${file_path}" | jq -sRr @uri)
+    
+    # Create JSON payload with proper escaping
+    local json_payload
+    json_payload=$(jq -n \
+        --arg branch "${branch}" \
+        --arg content "${content}" \
+        --arg commit_message "${commit_message}" \
+        '{branch: $branch, content: $content, commit_message: $commit_message}')
+    
+    curl -sSL \
+        -X POST \
+        -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "${json_payload}" \
+        "${CI_API_V4_URL}/projects/${project_id}/repository/files/${encoded_path}"
+}
+
+# create_merge_request <project_id> <source_branch> <target_branch> <title> <description>
+create_merge_request() {
+    local project_id="$1"
+    local source_branch="$2"
+    local target_branch="$3"
+    local title="$4"
+    local description="$5"
+    
+    # Create JSON payload with proper escaping
+    local json_payload
+    json_payload=$(jq -n \
+        --arg source_branch "${source_branch}" \
+        --arg target_branch "${target_branch}" \
+        --arg title "${title}" \
+        --arg description "${description}" \
+        '{source_branch: $source_branch, target_branch: $target_branch, title: $title, description: $description}')
+    
+    curl -sSL \
+        -X POST \
+        -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "${json_payload}" \
+        "${CI_API_V4_URL}/projects/${project_id}/merge_requests"
+}
+
+# generate_stage_config_content <version>
+generate_stage_config_content() {
+    local version="$1"
+    # Remove 'v' prefix if present
+    local clean_version="${version#v}"
+    
+    cat <<EOF
+# The IDs and Urls below are not accurate, but we're just testing
+nspect_id: "NSPECT-S7AK-H2SE"
+vpr_doc_url: "https://docs.google.com/document/d/1mjdTBSCp1-0EpxH2Gjm5Bto0KS41DJHeEv9FVs9VMmM/edit#heading=h.owtpcsbhn680"
+support_doc_url: "https://docs.google.com/document/d/11P1oGrGxMqAo_mN3C9a7e3ffHOhY5AHSliUrpJ4vNNo/edit"
+qa_report_url: "http://hqswqadb02/devtestreportsv2/CustomRpt/CoverageReport.aspx?reportId=46764"
+
+source:
+  org: "nvidia"
+  team: "byoc"
+
+target:
+  org: "nvidia"
+  team: "nvcf-byoc"
+
+# List of artifacts to publish
+# "type" must be: model, container, resource, chart, collection
+artifacts:
+  - source_name: "nvca"
+    source_version: "${clean_version}"
+    type: "container"
+
+# For Public Catalog
+options:
+  public: true
+  guest_access: false
+  searchable: true
+
+environment: "staging"
+EOF
+}
+
+# generate_production_config_content <version>
+generate_production_config_content() {
+    local version="$1"
+    # Remove 'v' prefix if present
+    local clean_version="${version#v}"
+    
+    cat <<EOF
+# The IDs and Urls below are not accurate, but we're just testing
+nspect_id: "NSPECT-S7AK-H2SE"
+vpr_doc_url: "https://docs.google.com/document/d/1mjdTBSCp1-0EpxH2Gjm5Bto0KS41DJHeEv9FVs9VMmM/edit#heading=h.owtpcsbhn680"
+support_doc_url: "https://docs.google.com/document/d/11P1oGrGxMqAo_mN3C9a7e3ffHOhY5AHSliUrpJ4vNNo/edit"
+qa_report_url: "http://hqswqadb02/devtestreportsv2/CustomRpt/CoverageReport.aspx?reportId=46764"
+
+publishing_action: "update_version"
+
+source:
+  org: "nvstaging"
+  team: "nvcf-byoc"
+
+target:
+  org: "nvidia"
+  team: "nvcf-byoc"
+
+# List of artifacts to publish
+# "type" must be: model, container, resource, chart, collection
+artifacts:
+  - source_name: "nvca"
+    source_version: "${clean_version}"
+    type: "container"
+
+# For Public Catalog
+options:
+  public: true
+  guest_access: false
+  searchable: true
+EOF
+}
+
+main() {
+    if [[ $# -lt 1 ]]; then
+        echo "Error: Missing required version argument"
+        usage
+        return 1
+    fi
+
+    local version="$1"
+    local environment="${2:-staging}"
+    
+    # Validate environment
+    if [[ "${environment}" != "staging" && "${environment}" != "production" ]]; then
+        echo "Error: Environment must be 'staging' or 'production'"
+        usage
+        return 1
+    fi
+
+    # Remove 'v' prefix if present for clean version
+    local clean_version="${version#v}"
+    
+    # Check if the tag exists in the local repository
+    echo "Checking if tag ${version} exists in local repository..."
+    if ! git tag -l | grep -q "^${version}$"; then
+        echo "Error: Tag ${version} does not exist in the local repository"
+        echo "Please create and push the tag first:"
+        echo "  git tag ${version}"
+        echo "  git push origin ${version}"
+        return 1
+    fi
+    echo "Tag ${version} found in local repository"
+    
+    # Generate branch name
+    local branch_name="feat/add-nvcf-byoc-${clean_version}-${environment}"
+    
+    # Generate file name and path
+    local file_name="nvcf-byoc-${clean_version}.yaml"
+    local file_path="configs/nvcf-byoc/${file_name}"
+    
+    echo "Creating merge request for nvca ${version} (${environment})"
+    echo "Branch: ${branch_name}"
+    echo "File: ${file_path}"
+    
+    # Get project info to verify access
+    echo "Verifying access to publishing configs repository..."
+    if ! get_project_info "${PUBLISHING_CONFIGS_PROJECT_ID}" >/dev/null 2>&1; then
+        echo "Error: Unable to access publishing configs repository. Check GITLAB_TOKEN and project ID."
+        return 1
+    fi
+    
+    # Create branch
+    echo "Creating branch ${branch_name}..."
+    local branch_result
+    branch_result="$(create_branch "${PUBLISHING_CONFIGS_PROJECT_ID}" "${branch_name}" "main")"
+    
+    # Check if branch creation was successful or if it already exists
+    if echo "${branch_result}" | jq -e '.name' >/dev/null 2>&1; then
+        echo "Branch created successfully"
+    elif echo "${branch_result}" | jq -e '.message' | grep -q "already exists"; then
+        echo "Branch already exists, using existing branch"
+    else
+        echo "Error: Failed to create branch"
+        echo "Response: ${branch_result}"
+        return 1
+    fi
+    
+    # Generate content based on environment
+    local content
+    if [[ "${environment}" == "staging" ]]; then
+        content="$(generate_stage_config_content "${version}")"
+    else
+        content="$(generate_production_config_content "${version}")"
+    fi
+    
+    # Create file
+    local commit_message="feat: add nvcf-byoc ${clean_version} ${environment} config"
+    echo "Creating file ${file_path}..."
+    local file_result
+    file_result="$(create_file "${PUBLISHING_CONFIGS_PROJECT_ID}" "${file_path}" "${content}" "${branch_name}" "${commit_message}")"
+    
+    # Check if file creation was successful
+    if echo "${file_result}" | jq -e '.file_path' >/dev/null 2>&1; then
+        echo "File created successfully"
+    else
+        echo "Error: Failed to create file"
+        echo "Response: ${file_result}"
+        return 1
+    fi
+    
+    # Create merge request
+    local mr_title="feat: add nvcf-byoc ${clean_version} ${environment} publishing config"
+    local mr_description="#### Customer Summary
+
+Add publishing configuration for nvca ${clean_version} to ${environment} environment.
+
+#### TL;DR
+
+This MR adds the publishing configuration file for nvca ${clean_version} in the ${environment} environment.
+
+#### Additional Details
+
+- Added configuration file: ${file_path}
+- Version: ${clean_version}
+- Environment: ${environment}
+- Artifacts: nvca container
+
+#### For the Reviewer
+
+Please review the configuration file for accuracy and completeness.
+
+#### For QA
+
+- Configuration file created with correct structure
+- Version matches the requested nvca release
+
+#### Tickets
+
+- NO-REF"
+    
+    echo "Creating merge request..."
+    local mr_result
+    mr_result="$(create_merge_request "${PUBLISHING_CONFIGS_PROJECT_ID}" "${branch_name}" "main" "${mr_title}" "${mr_description}")"
+    
+    # Check if response is valid JSON
+    if ! echo "${mr_result}" | jq . >/dev/null 2>&1; then
+        echo "Error: Invalid JSON response from GitLab API"
+        echo "Response: ${mr_result}"
+        return 1
+    fi
+    
+    local mr_iid
+    mr_iid="$(echo "${mr_result}" | jq -r '.iid')"
+    
+    if [[ "${mr_iid}" != "null" ]]; then
+        echo "Success! Merge request created:"
+        echo "  - MR !${mr_iid}: ${mr_title}"
+        echo "  - URL: https://github.com/NVIDIA/ngc/publishing/ngc-publishing-configs/-/merge_requests/${mr_iid}"
+    else
+        echo "Error: Failed to create merge request"
+        echo "Response: ${mr_result}"
+        return 1
+    fi
+}
+
+main "$@" 

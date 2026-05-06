@@ -1,0 +1,147 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $.Release.Name }}
+  namespace: {{ $.Release.Namespace | quote }}
+  labels:
+    app: nvcf-unbound
+    {{- include "nvcf-unbound.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "nvcf-unbound.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        app: nvcf-unbound
+        {{- include "nvcf-unbound.labels" . | nindent 8 }}
+    spec:
+    {{- with $.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml $.Values.nodeSelector | nindent 8 }}
+      topologySpreadConstraints:
+        - maxSkew: 2
+          topologyKey: "kubernetes.io/hostname"
+          whenUnsatisfiable: "ScheduleAnyway"
+          labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - nvcf-unbound
+    {{- end }}
+    {{- with $.Values.images.secrets }}
+      imagePullSecrets:
+    {{- range $idx, $item := . }}
+      - name: {{ $item }}
+    {{- end }}
+    {{- end }}
+      initContainers:
+        - name: copy-config
+          image: {{ $.Values.images.server | quote }}
+          command: ["sh", "-c", "cp /config/unbound.conf /unbound/ && mkdir -p /unbound/dnstap"]
+          volumeMounts:
+            - name: "unbound-conf-ro"
+              mountPath: "/config"
+            - name: "unbound-conf"
+              mountPath: "/unbound"
+      containers:
+        - name: unbound
+          image: {{ required "Property '.images.server' is required." $.Values.images.server | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            capabilities:
+              add:
+                - SYS_RESOURCE
+          ports:
+              - name: "dns"
+                containerPort: 53
+                protocol: UDP
+              - name: "dns-tcp"
+                containerPort: 53
+                protocol: TCP
+              - name: "metrics"
+                containerPort: 9167
+                protocol: TCP
+          volumeMounts:
+            - name: "unbound-conf"
+              mountPath: "/opt/unbound/etc/unbound"
+            - name: dnstap-socket-volume 
+              mountPath: /opt/unbound/etc/unbound/dnstap
+          readinessProbe:
+            exec:
+              command:
+                - /opt/check-health.sh
+                - nvidia.com
+                - kubernetes.default.svc.cluster.local
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 20
+          livenessProbe:
+            exec:
+              command:
+                - /opt/check-health.sh
+                - nvcf-unbound.test
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+        - name: dns-logger
+          image: {{ required "Property '.images.logger' is required." $.Values.images.logger | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+          - name: CHART_VERSION
+            value: {{ $.Chart.Version | quote }}
+          - name: DNSTAP_SOCKET
+            value: "/tmp/dnstap.sock"
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /healthz
+              port: 9999
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          name: dns-logger
+          ports:
+          - containerPort: 9999
+            name: logger-metrics
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /healthz
+              port: 9999
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+          - mountPath: /tmp/
+            name: dnstap-socket-volume
+      volumes:
+        - name: dnstap-socket-volume
+          emptyDir: {}
+        - name: "unbound-conf"
+          emptyDir: {}
+        - name: "unbound-conf-ro"
+          configMap:
+            name: {{ $.Release.Name }}-config

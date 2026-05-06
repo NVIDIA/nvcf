@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-migrations
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+spec:
+  template:
+    spec:
+      {{- with .Values.openbao.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: OnFailure
+      # this is the same service account created for hook-post-01-initcluster
+      # this job can access secrets and exec to bao
+      serviceAccountName: {{ .Release.Name }}-initialize-cluster
+      containers:
+        - name: bao-migrations
+          image: "{{ include "openbao.image" (dict "image" .Values.openbao.migrations.image "name" "openbao.migrations.image") }}"
+          imagePullPolicy: {{ .Values.openbao.migrations.image.pullPolicy }}
+          volumeMounts:
+            - name: {{ .Release.Name }}-root-token
+              mountPath: /secrets/root_token
+              readOnly: true
+            - name: {{ .Release.Name }}-jwt
+              mountPath: /secrets/jwt
+              readOnly: true
+            {{- if .Values.openbao.migrations.issuerDiscovery.caBundleSecretName }}
+            - name: oidc-ca-bundle
+              mountPath: /etc/ssl/certs/oidc
+              readOnly: true
+            {{- end }}
+          env:
+            - name: OIDC_DISCOVERY_ENABLED
+              value: "{{ .Values.openbao.migrations.issuerDiscovery.enabled }}"
+            - name: OIDC_DISCOVERY_URL
+              value: "{{- .Values.openbao.migrations.issuerDiscovery.urlOverride | default "https://kubernetes.default.svc/.well-known/openid-configuration" -}}"
+            - name: OIDC_DISCOVERY_INSECURE
+              value: "{{ .Values.openbao.migrations.issuerDiscovery.insecure }}"
+            {{- if .Values.openbao.migrations.issuerDiscovery.caBundleSecretName }}
+            - name: OIDC_CA_BUNDLE
+              value: "/etc/ssl/certs/oidc/ca.crt"
+            {{- end }}
+            {{- with .Values.openbao.migrations.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: {{ .Release.Name }}-root-token
+          secret:
+            secretName: {{ .Release.Name }}-root-token
+            items:
+            - key: root_token
+              path: root_token
+        - name: {{ .Release.Name }}-jwt
+          secret:
+            secretName: cluster-jwt
+            items:
+              - key: pem
+                path: cluster_jwt.pem
+      {{- if .Values.openbao.migrations.issuerDiscovery.caBundleSecretName }}
+        - name: oidc-ca-bundle
+          secret:
+            secretName: "{{ .Values.openbao.migrations.issuerDiscovery.caBundleSecretName }}"
+            items:
+            - key: ca.crt
+              path: ca.crt
+      {{- end }}

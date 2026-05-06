@@ -1,0 +1,517 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1
+
+import (
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+)
+
+type EnvType string
+
+const (
+	EnvTypeStage EnvType = "stage"
+	EnvTypeProd  EnvType = "prod"
+)
+
+// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+
+type AgentStatus string
+
+// +k8s:openapi-gen=true
+const (
+	AgentStatusUnknown   AgentStatus = "Unknown"
+	AgentStatusHealthy   AgentStatus = "Healthy"
+	AgentStatusUnhealthy AgentStatus = "Unhealthy"
+)
+
+// +k8s:openapi-gen=true
+type ImageConfig struct {
+	Repository     string `json:"repository"`
+	Tag            string `json:"tag"`
+	PullPolicy     string `json:"pullPolicy"`
+	PullSecretName string `json:"pullSecretName"`
+}
+
+func (cfg ImageConfig) BuildImageRef() string {
+	if cfg.Repository == "" || cfg.Tag == "" {
+		return ""
+	}
+	if strings.HasPrefix(cfg.Tag, "sha256:") {
+		return fmt.Sprintf("%s@%s", cfg.Repository, cfg.Tag)
+	}
+	return fmt.Sprintf("%s:%s", cfg.Repository, cfg.Tag)
+}
+
+// +k8s:openapi-gen=true
+type AccountConfig struct {
+	NCAID string `json:"ncaID"`
+}
+
+// +k8s:openapi-gen=true
+type ClusterConfig struct {
+	// required
+	ClusterID        string             `json:"clusterID,omitempty"`
+	ClusterName      string             `json:"clusterName"`
+	ClusterGroupName string             `json:"clusterGroupName"`
+	ClusterGroupID   string             `json:"clusterGroupID,omitempty"`
+	CloudProvider    string             `json:"cloudProvider"`
+	GPUDiscovery     GPUDiscoveryConfig `json:"gpuDiscovery"`
+	MiniService      *MiniServiceConfig `json:"miniService,omitempty"`
+	FNDService       *FNDServiceConfig  `json:"fndService,omitempty"`
+	Region           string             `json:"region"`
+
+	// optional fields
+	Description            string   `json:"description,omitempty"`
+	LogLevel               string   `json:"logLevel,omitempty"`
+	RequestsNamespace      string   `json:"requestsNamespace,omitempty"`
+	UnregisterOnStartup    bool     `json:"unregisterOnStartUp,omitempty"`
+	SvcAddress             string   `json:"serviceAddr,omitempty"`
+	AdminAddr              string   `json:"adminAddr,omitempty"`
+	SystemNamespace        string   `json:"systemNamespace,omitempty"`
+	BackendType            string   `json:"backendType,omitempty"`
+	Attributes             []string `json:"attributes,omitempty"`
+	K8sClusterNetworkCIDRs []string `json:"k8sClusterNetworkCIDRs,omitempty"`
+}
+
+const (
+	RolloverServiceURLStaging = "https://stg.api.ros.nvidia.com"
+	RolloverServiceURLProd    = "https://api.ros.nvidia.com"
+)
+
+// RolloverServiceURL returns the Rollover Service URL for the given environment type.
+func (cfg *ClusterConfig) RolloverServiceURL(envType EnvType) string {
+	if envType == EnvTypeStage {
+		return RolloverServiceURLStaging
+	}
+	return RolloverServiceURLProd
+}
+
+// +k8s:openapi-gen=true
+type ICMSConfig struct {
+	ICMSServiceURL string `json:"icmsServiceURL"`
+	AWSEndpointURL string `json:"awsEndpointURL,omitempty"`
+	IsLocal        bool   `json:"isLocal,omitempty"`
+	TokenURL       string `json:"tokenURL"`
+}
+
+// +k8s:openapi-gen=true
+type OTELConfig struct {
+	Exporter    string `json:"exporter"`
+	Endpoint    string `json:"endpoint,omitempty"`
+	ServiceName string `json:"serviceName"`
+	AccessToken string `json:"accessToken"`
+}
+
+// +k8s:openapi-gen=true
+type VaultConfig struct {
+	Enabled        bool   `json:"enabled"`
+	Address        string `json:"address"`
+	VaultNamespace string `json:"vaultNamespace,omitempty"`
+	SecretFilePath string `json:"secretFilePath,omitempty"`
+	// Should have the format: auth/jwt/k8s/<cluster-name>
+	AuthMountPath string `json:"authMountPath,omitempty"`
+	// Should have the format: k8s_<cluster-name>_bart_jwt_role
+	OAuthConfigRole string `json:"oauthConfigRole,omitempty"`
+	// OAuthClientMountPath is the vault mount path for OAuth2/OIDC client secrets.
+	// Should have the format: nvidia/services/oauth/clients/<client-id>/kv/secret
+	OAuthClientMountPath string `json:"oauthClientMountPath,omitempty"`
+	// The secret should be raw data if auto-rotation is set up, not "key=value".
+	// default to .Data.data.secret
+	SecretDataPath string `json:"secretDataPath,omitempty"`
+}
+
+func legacyOAuthConfigJSONKey() string {
+	return "s" + "saConfig"
+}
+
+// +k8s:openapi-gen=true
+// OAuthConfig provides OAuth2/OIDC authentication configuration.
+// This is the preferred configuration method.
+type OAuthConfig struct {
+	TokenURL             string `json:"tokenURL"`
+	ClientID             string `json:"clientID"`
+	PublicKeysetEndpoint string `json:"publicKeysetEndpoint"` // JWKS endpoint for token validation
+	ClientSecretKey      string `json:"clientSecretKey,omitempty"`
+	ClientSecretsEnvFile string `json:"clientSecretsEnvFile"`
+	TokenScope           string `json:"tokenScope,omitempty"`
+}
+
+// +k8s:openapi-gen=true
+type WebhookConfig struct {
+	ListenPort  int32       `json:"listenPort,omitempty"`
+	ServicePort int32       `json:"servicePort,omitempty"`
+	ImageConfig ImageConfig `json:"imageConfig,omitempty"`
+}
+
+// +k8s:openapi-gen=true
+type ImageCredHelperConfig struct {
+	ImageConfig ImageConfig `json:"imageConfig,omitempty"`
+}
+
+func (cfg *ImageCredHelperConfig) Complete(_ EnvType) *ImageCredHelperConfig {
+	var tmp *ImageCredHelperConfig
+	if cfg == nil {
+		tmp = &ImageCredHelperConfig{}
+	} else {
+		tmp = cfg.DeepCopy()
+	}
+	return tmp
+}
+
+// +k8s:openapi-gen=true
+type OTelCollectorConfig struct {
+	Enabled     bool        `json:"enabled,omitempty"`
+	ImageConfig ImageConfig `json:"imageConfig,omitempty"`
+}
+
+func (cfg *OTelCollectorConfig) IsEnabled() bool {
+	return cfg != nil && cfg.Enabled
+}
+
+func (cfg *OTelCollectorConfig) Complete(_ EnvType) *OTelCollectorConfig {
+	var tmp *OTelCollectorConfig
+	if cfg == nil {
+		tmp = &OTelCollectorConfig{}
+	} else {
+		tmp = cfg.DeepCopy()
+	}
+	return tmp
+}
+
+var (
+	// 50Gi default reval cache dir size.
+	defaultReValCacheDirSize = resource.NewQuantity(50*1<<30, resource.BinarySI)
+)
+
+const (
+	helmReValServiceURLStg  = "https://reval.stg.nvcf.nvidia.com"
+	helmReValServiceURLProd = "https://reval.nvcf.nvidia.com"
+)
+
+// +k8s:openapi-gen=true
+type MiniServiceConfig struct {
+	HelmReValServiceURL string             `json:"helmReValServiceURL"`
+	CacheDirSize        *resource.Quantity `json:"cacheDirSize"`
+}
+
+func (msCfg *MiniServiceConfig) Complete(envType EnvType) *MiniServiceConfig {
+	var tmp *MiniServiceConfig
+	if msCfg == nil {
+		tmp = &MiniServiceConfig{}
+	} else {
+		tmp = msCfg.DeepCopy()
+	}
+	if tmp.HelmReValServiceURL == "" {
+		switch envType {
+		case EnvTypeStage:
+			tmp.HelmReValServiceURL = helmReValServiceURLStg
+		default:
+			tmp.HelmReValServiceURL = helmReValServiceURLProd
+		}
+	}
+	if tmp.CacheDirSize == nil {
+		tmp.CacheDirSize = defaultReValCacheDirSize
+	}
+	return tmp
+}
+
+const (
+	FunctionDeploymentStagesServiceURLStg  = "https://deployment-stages.stg.nvcf.nvidia.com"
+	FunctionDeploymentStagesServiceURLProd = "https://deployment-stages.nvcf.nvidia.com"
+)
+
+// +k8s:openapi-gen=true
+type FNDServiceConfig struct {
+	Enabled    *bool  `json:"enabled"`
+	ServiceURL string `json:"serviceURL"`
+}
+
+func (fndsCfg *FNDServiceConfig) IsEnabled(featureFlags []string) bool {
+	return (fndsCfg != nil && fndsCfg.Enabled != nil && *fndsCfg.Enabled) ||
+		slices.Contains(featureFlags, featureflag.UseFunctionDeploymentStages.Key)
+}
+
+func (fndsCfg *FNDServiceConfig) Complete(envType EnvType, featureFlags []string) *FNDServiceConfig {
+	if !fndsCfg.IsEnabled(featureFlags) {
+		return fndsCfg
+	}
+
+	serviceURL := ""
+	if fndsCfg != nil {
+		serviceURL = fndsCfg.ServiceURL
+	}
+
+	tmp := &FNDServiceConfig{
+		Enabled:    &[]bool{true}[0],
+		ServiceURL: serviceURL,
+	}
+	if tmp.ServiceURL == "" {
+		switch envType {
+		case EnvTypeStage:
+			tmp.ServiceURL = FunctionDeploymentStagesServiceURLStg
+		default:
+			tmp.ServiceURL = FunctionDeploymentStagesServiceURLProd
+		}
+	}
+	return tmp
+}
+
+// +k8s:openapi-gen=true
+type FeatureGate struct {
+	SharedStorage             *SharedStorageSpec             `json:"sharedStorage,omitempty"`
+	InternalPersistentStorage *InternalPersistentStorageSpec `json:"internalPersistentStorage,omitempty"`
+	OTELConfig                *OTELConfig                    `json:"otelConfig,omitempty"`
+	Values                    []string                       `json:"values,omitempty"`
+}
+
+// +k8s:openapi-gen=true
+type SharedStorageSpec struct {
+	Server *SharedStorageServerSpec `json:"server,omitempty"`
+}
+
+// +k8s:openapi-gen=true
+type SharedStorageServerSpec struct {
+	SMBServerContainerResources *corev1.ResourceRequirements `json:"smbServerContainerResources,omitempty"`
+}
+
+// +k8s:openapi-gen=true
+type InternalPersistentStorageSpec struct {
+	Enabled          bool                                       `json:"enabled"`
+	StorageClassName string                                     `json:"storageClassName"`
+	ResourceQuota    InternalPersistentStorageResourceQuotaSpec `json:"resourceQuota"`
+}
+
+// +k8s:openapi-gen=true
+type InternalPersistentStorageResourceQuotaSpec struct {
+	// hard is the set of desired hard limits for each named resource.
+	// More info: https://kubernetes.io/docs/concepts/policy/resource-quotas/
+	// +optional
+	Hard corev1.ResourceList `json:"hard,omitempty" protobuf:"bytes,1,rep,name=hard,casttype=ResourceList,castkey=ResourceName"`
+}
+
+// +k8s:openapi-gen=true
+type GPUDiscoveryConfig struct {
+	// Dynamic GPU discovery is enabled by default.
+	Dynamic *DynamicGPUDiscoveryConfig `json:"dynamic,omitempty"`
+	Static  *StaticGPUDiscoveryConfig  `json:"static,omitempty"`
+}
+
+type DynamicGPUDiscoveryConfig struct{}
+
+type StaticGPUDiscoveryConfig struct {
+	AllocatedGPUCapacity uint64 `json:"allocatedGPUCapacity"`
+	ConfigMapName        string `json:"configMapName"`
+	// StaticGPUConfig is used internally to store a GPU config
+	// from the cluster management API payload.
+	GPUConfig string `json:"gpuConfig"`
+}
+
+// NVCFBackendSpec defines the desired state of NVCFBackend
+// +k8s:openapi-gen=true
+type NVCFBackendSpec struct {
+	NVCFBackendSpecT
+
+	Overrides *NVCFBackendSpecT `json:"overrides,omitempty"`
+}
+
+// +k8s:openapi-gen=true
+type DeploymentConfig struct {
+	// PriorityClassName for pod preference during evictions
+	PriorityClassName string `json:"priorityClassName,omitempty"`
+	// NodeSelector key for pod scheduling
+	NodeSelectorKey string `json:"nodeSelectorKey,omitempty"`
+	// NodeSelector value for pod scheduling
+	NodeSelectorValue string `json:"nodeSelectorValue,omitempty"`
+	// SecretMirrorSourceNamespace is the namespace to source secrets from for mirroring
+	SecretMirrorSourceNamespace string `json:"secretMirrorSourceNamespace,omitempty"`
+	// SecretMirrorLabelSelector is the label selector to filter which secrets to mirror
+	SecretMirrorLabelSelector string `json:"secretMirrorLabelSelector,omitempty"`
+	// GenerateImagePullSecret is passed in from the operator to the agent, if true,
+	// the agent will generate an image pull secret for nvca Pods
+	// using the NGC service key.
+	GenerateImagePullSecret bool `json:"generateImagePullSecret,omitempty"`
+	// AdditionalImagePullSecrets is the list of additional image pull secrets currently configured
+	AdditionalImagePullSecrets []corev1.LocalObjectReference `json:"additionalImagePullSecrets,omitempty"`
+	// OverrideEnvironmentVars is a map of environment variables to override on the NVCA agent container.
+	// These take precedence over default values computed by the operator.
+	// Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"}
+	OverrideEnvironmentVars map[string]string `json:"overrideEnvironmentVars,omitempty"`
+	// Tolerations configures tolerations for the NVCA agent pod.
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+}
+
+type NVCFBackendSpecT struct {
+	Version         string        `json:"version,omitempty"`
+	NVCAImageConfig ImageConfig   `json:"nvcaImageConfig,omitempty"`
+	AccountConfig   AccountConfig `json:"accountConfig"`
+	ClusterConfig   ClusterConfig `json:"clusterConfig"`
+	FeatureGate     FeatureGate   `json:"featureGate,omitempty"`
+	// OAuthConfig provides OAuth2/OIDC authentication configuration (preferred).
+	OAuthConfig   OAuthConfig   `json:"oauthConfig,omitempty"`
+	ICMSConfig    ICMSConfig    `json:"icmsConfig"`
+	VaultConfig   VaultConfig   `json:"vaultConfig,omitempty"`
+	WebhookConfig WebhookConfig `json:"webhookConfig,omitempty"`
+	AgentConfig   AgentConfig   `json:"agentConfig,omitempty"`
+	// ImageCredHelper configures the "nvcf-image-credential-helper" image in NVCA.
+	ImageCredHelper *ImageCredHelperConfig `json:"imageCredentialHelper,omitempty"`
+	// SharedStorageImage configures the shared storage image in NVCA.
+	SharedStorageImage *ImageConfig `json:"sharedStorageImage,omitempty"`
+	// OTelCollector configures the OpenTelemetry Collector sidecar image in NVCA.
+	OTelCollector *OTelCollectorConfig `json:"otelCollector,omitempty"`
+	// ClusterSource is the source of the cluster configuration.
+	ClusterSource ClusterSource `json:"clusterSource,omitempty"`
+}
+
+func (spec *NVCFBackendSpecT) UnmarshalJSON(data []byte) error {
+	type nvcfBackendSpecTAlias NVCFBackendSpecT
+
+	var alias nvcfBackendSpecTAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if alias.OAuthConfig.ClientID == "" {
+		if value, ok := raw[legacyOAuthConfigJSONKey()]; ok {
+			if err := json.Unmarshal(value, &alias.OAuthConfig); err != nil {
+				return err
+			}
+		}
+	}
+
+	*spec = NVCFBackendSpecT(alias)
+	return nil
+}
+
+// ClusterSource defines the source of cluster configuration.
+type ClusterSource string
+
+const (
+	ClusterSourceNGCManaged  ClusterSource = "ngc-managed"
+	ClusterSourceHelmManaged ClusterSource = "helm-managed"
+	ClusterSourceSelfHosted  ClusterSource = "self-hosted"
+	ClusterSourceSelfManaged ClusterSource = ClusterSourceSelfHosted
+)
+
+func (cs ClusterSource) String() string {
+	return string(cs)
+}
+
+func (cs ClusterSource) IsValid() bool {
+	switch cs {
+	case ClusterSourceNGCManaged, ClusterSourceHelmManaged, ClusterSourceSelfHosted:
+		return true
+	default:
+		return false
+	}
+}
+
+type NVCFWorkerConfig struct {
+	CacheMountOptionsEnabled bool          `json:"cacheMountOptionsEnabled"`
+	CacheMountOptions        string        `json:"cacheMountOptions,omitempty"`
+	WorkerDegradationPeriod  time.Duration `json:"workerDegradationPeriod,omitempty"`
+}
+
+type AgentConfig struct {
+	AgentResources                                         *corev1.ResourceRequirements `json:"agentResources,omitempty"`
+	WebhookResources                                       *corev1.ResourceRequirements `json:"webhookResources,omitempty"`
+	OTelCollectorResources                                 *corev1.ResourceRequirements `json:"otelCollectorResources,omitempty"`
+	ByooResources                                          *corev1.ResourceRequirements `json:"byooResources,omitempty"`
+	OTelCollectorConfig                                    *OTelCollectorConfig         `json:"otelCollectorConfig,omitempty"`
+	NATSURL                                                *string                      `json:"natsURL,omitempty"`
+	HelmReValStageOAuthTokenURL                            string                       `json:"helmReValStageOAuthTokenURL,omitempty"`
+	HelmReValStageOAuthPublicKeysetEndpoint                string                       `json:"helmReValStageOAuthPublicKeysetEndpoint,omitempty"`
+	HelmReValProdOAuthTokenURL                             string                       `json:"helmReValProdOAuthTokenURL,omitempty"`
+	HelmReValProdOAuthPublicKeysetEndpoint                 string                       `json:"helmReValProdOAuthPublicKeysetEndpoint,omitempty"`
+	RolloverServiceStageOAuthTokenURL                      string                       `json:"rolloverServiceStageOAuthTokenURL,omitempty"`
+	RolloverServiceStageOAuthPublicKeysetEndpoint          string                       `json:"rolloverServiceStageOAuthPublicKeysetEndpoint,omitempty"`
+	RolloverServiceProdOAuthTokenURL                       string                       `json:"rolloverServiceProdOAuthTokenURL,omitempty"`
+	RolloverServiceProdOAuthPublicKeysetEndpoint           string                       `json:"rolloverServiceProdOAuthPublicKeysetEndpoint,omitempty"`
+	FunctionDeploymentStagesStageOAuthTokenURL             string                       `json:"functionDeploymentStagesStageOAuthTokenURL,omitempty"`
+	FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint string                       `json:"functionDeploymentStagesStageOAuthPublicKeysetEndpoint,omitempty"` //nolint:lll
+	FunctionDeploymentStagesProdOAuthTokenURL              string                       `json:"functionDeploymentStagesProdOAuthTokenURL,omitempty"`
+	FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint  string                       `json:"functionDeploymentStagesProdOAuthPublicKeysetEndpoint,omitempty"` //nolint:lll
+	DeploymentConfig
+	NVCFWorkerConfig
+}
+
+// NVCFBackendStatus defines the observed state of NVCFBackend
+type NVCFBackendStatus struct {
+	NVCFBackendSpecT
+
+	AgentStatus            AgentStatus             `json:"agentStatus,omitempty"`
+	GPUUsage               map[GPUName]GPUResource `json:"gpuUsage,omitempty"`
+	KubernetesVersion      string                  `json:"kubernetesVersion,omitempty"`
+	LastUpdated            *metav1.Time            `json:"lastUpdated"`
+	LastUpdatedAgentStatus *metav1.Time            `json:"lastUpdatedAgentStatus"`
+
+	// Network configuration tracking for rollout detection
+	DDCSIPAllowList        []string `json:"ddcsIPAllowList,omitempty"`
+	K8sClusterNetworkCIDRs []string `json:"k8sClusterNetworkCIDRs,omitempty"`
+
+	// Environment variable overrides for workloads (base64-encoded JSON maps)
+	FunctionEnvOverridesB64 string `json:"functionEnvOverridesB64,omitempty"`
+	TaskEnvOverridesB64     string `json:"taskEnvOverridesB64,omitempty"`
+
+	AgentConfig
+}
+
+// +genclient
+// +k8s:openapi-gen=true
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// NVCFBackend is the Schema for the nvcfbackends API
+type NVCFBackend struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   NVCFBackendSpec   `json:"spec,omitempty"`
+	Status NVCFBackendStatus `json:"status,omitempty"`
+}
+
+// +k8s:openapi-gen=true
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// no client needed for list as it's been created in above
+// NVCFBackendList contains a list of NVCFBackend
+type NVCFBackendList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []NVCFBackend `json:"items"`
+}
+
+// GPUName is the normalized name of the GPU
+type GPUName string
+
+// GPUResource lists the amount of the particular gpu
+type GPUResource struct {
+	Capacity  uint64 `json:"capacity,omitempty"`
+	Available uint64 `json:"available,omitempty"`
+	Allocated uint64 `json:"allocated,omitempty"`
+}

@@ -1,0 +1,13 @@
+{
+    "requestId": "random12345",
+    "ncaId": "randomID",
+    "availabilityZone": "TestCluster",
+    "action": "TerminateInstances",
+    "instanceIds": [
+        "0-sr-randomID1234",
+        "1-sr-randomID1234",
+        "2-sr-randomID1234",
+        "3-sr-randomID1234",
+        "4-sr-randomID1234"
+    ]
+}

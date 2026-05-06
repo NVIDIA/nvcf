@@ -1,0 +1,580 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# check-license-headers — check source files for Apache 2.0 SPDX headers and
+# optionally allow alternate SPDX identifiers under configured directories.
+# Failures are grouped by import path (from imports.yaml) or top-level directory.
+#
+# Usage:
+#   ./tools/ci/check-license-headers [--list-repos-only] [--allow-spdx-dir DIR:LICENSE_ID] [PATH ...]
+#
+# If no PATHs are given all files included by .oss-allowlist files are scanned.
+
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+IMPORTS_MANIFEST="${REPO_ROOT}/imports.yaml"
+
+HEADER_WINDOW=24
+GENERATED_WINDOW=30
+
+# All three snippets must appear in the first HEADER_WINDOW lines.
+HEADER_SNIPPETS=(
+    "SPDX-FileCopyrightText:"
+    "SPDX-License-Identifier: Apache-2.0"
+    "Licensed under the Apache License, Version 2.0"
+)
+
+SKIP_DIR_NAMES=(
+    .git .hg .svn .venv venv __pycache__ .pytest_cache
+    .mypy_cache .tox node_modules target vendor nvidia-lpu-vendor
+)
+
+SKIP_FILE_NAMES=(sonar-project.properties)
+
+# Generated Go filename patterns (ERE).
+GENERATED_GO_PATTERNS=(
+    "^zz_generated\..*\.go$"
+    "^generated\..*\.go$"
+    ".*_generated\.go$"
+    "^generated_.*\.go$"
+)
+
+# Both markers must appear for a file to be considered generated.
+GENERATED_MARKERS=("Code generated" "DO NOT EDIT")
+
+ALLOWED_SPDX_DIRS=()
+ALLOWED_SPDX_IDS=()
+LIST_REPOS_ONLY=false
+
+print_usage() {
+    cat <<EOF
+Usage:
+  ./tools/ci/check-license-headers [--list-repos-only] [--allow-spdx-dir DIR:LICENSE_ID] [PATH ...]
+
+Options:
+  --list-repos-only
+      Only list repo/path groups with license errors. Omit per-file details.
+  --allow-spdx-dir DIR:LICENSE_ID
+      Accept files under DIR when the first ${HEADER_WINDOW} lines contain
+      SPDX-License-Identifier: LICENSE_ID.
+
+Only files matched by the root .oss-allowlist or a nested .oss-allowlist are
+checked. Patterns are evaluated relative to the directory containing the
+.oss-allowlist file.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Parse imports.yaml → parallel arrays IMPORT_PATHS / IMPORT_REPOS.
+# Entries are sorted longest-path-first so the first match wins.
+# ---------------------------------------------------------------------------
+IMPORT_PATHS=()
+IMPORT_REPOS=()
+
+load_imports() {
+    local cur_path="" cur_repo=""
+    while IFS= read -r line; do
+        if [[ "${line}" =~ ^[[:space:]]*-[[:space:]]*path:[[:space:]]+(.*) ]]; then
+            if [[ -n "${cur_path}" ]]; then
+                IMPORT_PATHS+=("${cur_path}")
+                IMPORT_REPOS+=("${cur_repo}")
+            fi
+            cur_path="${BASH_REMATCH[1]}"
+            cur_path="${cur_path%"${cur_path##*[![:space:]]}"}"  # rtrim
+            cur_repo=""
+        elif [[ "${line}" =~ ^[[:space:]]*repo:[[:space:]]+(.*) ]]; then
+            cur_repo="${BASH_REMATCH[1]}"
+            cur_repo="${cur_repo%"${cur_repo##*[![:space:]]}"}"
+        fi
+    done < "${IMPORTS_MANIFEST}"
+    if [[ -n "${cur_path}" ]]; then
+        IMPORT_PATHS+=("${cur_path}")
+        IMPORT_REPOS+=("${cur_repo}")
+    fi
+
+    # Sort longest-first (simple insertion sort — <50 entries).
+    local i j tmp_p tmp_r
+    for (( i=1; i<${#IMPORT_PATHS[@]}; i++ )); do
+        tmp_p="${IMPORT_PATHS[i]}"
+        tmp_r="${IMPORT_REPOS[i]}"
+        j=$i
+        while (( j > 0 )) && (( ${#IMPORT_PATHS[j-1]} < ${#tmp_p} )); do
+            IMPORT_PATHS[j]="${IMPORT_PATHS[j-1]}"
+            IMPORT_REPOS[j]="${IMPORT_REPOS[j-1]}"
+            (( j-- ))
+        done
+        IMPORT_PATHS[j]="${tmp_p}"
+        IMPORT_REPOS[j]="${tmp_r}"
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Discover Helm chart roots (directories containing Chart.yaml).
+# ---------------------------------------------------------------------------
+CHART_ROOTS=()
+
+discover_chart_roots() {
+    local prune_args=()
+    for d in "${SKIP_DIR_NAMES[@]}"; do
+        prune_args+=(-name "${d}" -o)
+    done
+    # Remove trailing -o
+    unset 'prune_args[${#prune_args[@]}-1]'
+
+    while IFS= read -r chart_file; do
+        [[ -z "${chart_file}" ]] && continue
+        CHART_ROOTS+=("$(cd "$(dirname "${chart_file}")" && pwd)")
+    done < <(find "${REPO_ROOT}" \( "${prune_args[@]}" \) -prune -o -name "Chart.yaml" -print 2>/dev/null)
+}
+
+is_under_chart_root() {
+    local filepath="$1"
+    for root in "${CHART_ROOTS[@]}"; do
+        [[ "${filepath}" == "${root}"/* || "${filepath}" == "${root}" ]] && return 0
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Discover OSS allowlists and test whether a file is included by one.
+# ---------------------------------------------------------------------------
+OSS_ALLOWLIST_DIRS=()
+OSS_ALLOWLIST_PATTERNS=()
+
+trim_space() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    echo "${value}"
+}
+
+discover_oss_allowlists() {
+    local prune_args=()
+    local allowlist_file allowlist_dir raw_line pattern
+
+    for d in "${SKIP_DIR_NAMES[@]}"; do
+        prune_args+=(-name "${d}" -o)
+    done
+    unset 'prune_args[${#prune_args[@]}-1]'
+
+    while IFS= read -r allowlist_file; do
+        [[ -z "${allowlist_file}" ]] && continue
+        allowlist_dir="$(cd "$(dirname "${allowlist_file}")" && pwd)"
+
+        while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
+            raw_line="${raw_line%$'\r'}"
+            pattern="$(trim_space "${raw_line}")"
+
+            [[ -z "${pattern}" ]] && continue
+            [[ "${pattern}" == \#* ]] && continue
+            if [[ "${pattern}" == \!* ]]; then
+                echo "WARNING: negation patterns are not supported in .oss-allowlist (${allowlist_file}: ${pattern})" >&2
+                continue
+            fi
+
+            OSS_ALLOWLIST_DIRS+=("${allowlist_dir}")
+            OSS_ALLOWLIST_PATTERNS+=("${pattern}")
+        done < "${allowlist_file}"
+    done < <(find "${REPO_ROOT}" \( "${prune_args[@]}" \) -prune -o -name ".oss-allowlist" -type f -print 2>/dev/null | LC_ALL=C sort)
+}
+
+oss_allowlist_pattern_matches() {
+    local rel_path="$1"
+    local pattern="$2"
+
+    pattern="${pattern#/}"
+
+    if [[ "${pattern}" == */ ]]; then
+        pattern="${pattern}**"
+    fi
+
+    if [[ "${pattern}" != */* && "${rel_path}" == */* ]]; then
+        return 1
+    fi
+
+    [[ "${rel_path}" == ${pattern} ]]
+}
+
+is_oss_allowlisted() {
+    local filepath="$1"
+    local abs rel_path allow_dir pattern i
+
+    abs="$(realpath "${filepath}")"
+
+    for (( i=0; i<${#OSS_ALLOWLIST_PATTERNS[@]}; i++ )); do
+        allow_dir="${OSS_ALLOWLIST_DIRS[i]}"
+        pattern="${OSS_ALLOWLIST_PATTERNS[i]}"
+
+        if [[ "${abs}" == "${allow_dir}" ]]; then
+            rel_path="."
+        elif [[ "${abs}" == "${allow_dir}/"* ]]; then
+            rel_path="${abs#"${allow_dir}"/}"
+        else
+            continue
+        fi
+
+        if oss_allowlist_pattern_matches "${rel_path}" "${pattern}"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Classify a file's language. Returns empty string if unsupported.
+# ---------------------------------------------------------------------------
+classify_language() {
+    local filepath="$1"
+    local name="${filepath##*/}"
+    local ext="${name##*.}"
+
+    case "${ext}" in
+        go)         echo "go" ;;
+        py)         echo "python" ;;
+        java)       echo "java" ;;
+        rs)         echo "rust" ;;
+        properties) echo "java-properties" ;;
+        yaml|yml|tpl)
+            if is_under_chart_root "${filepath}"; then
+                echo "helm"
+            fi
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Detect generated files.
+# ---------------------------------------------------------------------------
+looks_generated() {
+    local filepath="$1"
+    local name="${filepath##*/}"
+    local ext="${name##*.}"
+
+    if [[ "${ext}" == "go" ]]; then
+        for pat in "${GENERATED_GO_PATTERNS[@]}"; do
+            if echo "${name}" | grep -qE "${pat}"; then
+                return 0
+            fi
+        done
+    fi
+
+    local header
+    header=$(head -n "${GENERATED_WINDOW}" "${filepath}" 2>/dev/null) || true
+    local all_found=true
+    for marker in "${GENERATED_MARKERS[@]}"; do
+        if [[ "${header}" != *"${marker}"* ]]; then
+            all_found=false
+            break
+        fi
+    done
+    [[ "${all_found}" == true ]]
+}
+
+# ---------------------------------------------------------------------------
+# Check whether the required header snippets are present.
+# ---------------------------------------------------------------------------
+has_required_header() {
+    local filepath="$1"
+    local header
+    header=$(head -n "${HEADER_WINDOW}" "${filepath}" 2>/dev/null) || true
+    for snippet in "${HEADER_SNIPPETS[@]}"; do
+        [[ "${header}" != *"${snippet}"* ]] && return 1
+    done
+    return 0
+}
+
+has_allowed_spdx_header() {
+    local filepath="$1"
+    local header i allow_dir license_id
+
+    [[ ${#ALLOWED_SPDX_DIRS[@]} -eq 0 ]] && return 1
+
+    header=$(head -n "${HEADER_WINDOW}" "${filepath}" 2>/dev/null) || true
+    for (( i=0; i<${#ALLOWED_SPDX_DIRS[@]}; i++ )); do
+        allow_dir="${ALLOWED_SPDX_DIRS[i]}"
+        license_id="${ALLOWED_SPDX_IDS[i]}"
+        if [[ "${filepath}" == "${allow_dir}" || "${filepath}" == "${allow_dir}/"* ]] && \
+           [[ "${header}" == *"SPDX-License-Identifier: ${license_id}"* ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Map a repo-relative path to its group (import path or top-level dir).
+# ---------------------------------------------------------------------------
+determine_group() {
+    local rel_path="$1"
+    for imp_path in "${IMPORT_PATHS[@]}"; do
+        if [[ "${rel_path}" == "${imp_path}" || "${rel_path}" == "${imp_path}/"* ]]; then
+            echo "${imp_path}"
+            return
+        fi
+    done
+    if [[ "${rel_path}" == */* ]]; then
+        echo "${rel_path%%/*}"
+    else
+        echo "(repo-root)"
+    fi
+}
+
+# Look up the repo URL for a group.
+repo_url_for_group() {
+    local group="$1"
+    local i
+    for (( i=0; i<${#IMPORT_PATHS[@]}; i++ )); do
+        if [[ "${IMPORT_PATHS[i]}" == "${group}" ]]; then
+            echo "${IMPORT_REPOS[i]}"
+            return
+        fi
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Build the find command's prune expression for skipped directories.
+# ---------------------------------------------------------------------------
+build_find_prune() {
+    local first=true
+    echo -n "("
+    for d in "${SKIP_DIR_NAMES[@]}"; do
+        ${first} || echo -n " -o"
+        first=false
+        echo -n " -name '${d}'"
+    done
+    echo -n " ) -prune -o"
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+if [[ ! -f "${IMPORTS_MANIFEST}" ]]; then
+    echo "missing ${IMPORTS_MANIFEST}" >&2
+    exit 1
+fi
+
+load_imports
+discover_oss_allowlists
+discover_chart_roots
+
+# Parse optional args and requested paths.
+PATH_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --list-repos-only)
+            LIST_REPOS_ONLY=true
+            shift
+            ;;
+        --allow-spdx-dir)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: --allow-spdx-dir requires DIR:LICENSE_ID" >&2
+                exit 1
+            fi
+            spec="$2"
+            if [[ "${spec}" != *:* ]]; then
+                echo "ERROR: invalid --allow-spdx-dir value: ${spec}" >&2
+                exit 1
+            fi
+            allow_dir="${spec%:*}"
+            license_id="${spec##*:}"
+            if [[ -z "${allow_dir}" || -z "${license_id}" ]]; then
+                echo "ERROR: invalid --allow-spdx-dir value: ${spec}" >&2
+                exit 1
+            fi
+            if [[ "${allow_dir}" != /* ]]; then
+                allow_dir="${REPO_ROOT}/${allow_dir}"
+            fi
+            if [[ ! -d "${allow_dir}" ]]; then
+                echo "WARN: allowlisted directory does not exist, skipping: ${spec%:*}" >&2
+                shift 2
+                continue
+            fi
+            ALLOWED_SPDX_DIRS+=("$(cd "${allow_dir}" && pwd)")
+            ALLOWED_SPDX_IDS+=("${license_id}")
+            shift 2
+            ;;
+        --help|-h)
+            print_usage
+            exit 0
+            ;;
+        --*)
+            echo "ERROR: unknown option: $1" >&2
+            print_usage >&2
+            exit 1
+            ;;
+        *)
+            PATH_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Resolve requested paths (optional positional args).
+SEARCH_PATHS=()
+for arg in "${PATH_ARGS[@]}"; do
+    local_path="${arg}"
+    # Make absolute
+    if [[ "${local_path}" != /* ]]; then
+        local_path="${REPO_ROOT}/${local_path}"
+    fi
+    if [[ ! -e "${local_path}" ]]; then
+        echo "ERROR: path does not exist: ${arg}" >&2
+        exit 1
+    fi
+    SEARCH_PATHS+=("$(cd "${local_path}" 2>/dev/null && pwd || realpath "${local_path}")")
+done
+
+# Collect failures.  Each entry: "GROUP\tREL_PATH\tLANGUAGE"
+FAILURES=()
+CHECKED=0
+
+# Build find args
+FIND_ROOTS=("${REPO_ROOT}")
+PRUNE_ARGS=()
+for d in "${SKIP_DIR_NAMES[@]}"; do
+    PRUNE_ARGS+=(-name "${d}" -o)
+done
+unset 'PRUNE_ARGS[${#PRUNE_ARGS[@]}-1]'
+
+while IFS= read -r filepath; do
+    [[ -z "${filepath}" ]] && continue
+
+    name="${filepath##*/}"
+
+    # Skip excluded file names.
+    skip=false
+    for sf in "${SKIP_FILE_NAMES[@]}"; do
+        [[ "${name}" == "${sf}" ]] && { skip=true; break; }
+    done
+    ${skip} && continue
+
+    # If restricted to specific paths, check containment.
+    if [[ ${#SEARCH_PATHS[@]} -gt 0 ]]; then
+        abs=$(realpath "${filepath}")
+        in_scope=false
+        for sp in "${SEARCH_PATHS[@]}"; do
+            [[ "${abs}" == "${sp}"/* || "${abs}" == "${sp}" ]] && { in_scope=true; break; }
+        done
+        ${in_scope} || continue
+    fi
+
+    # Only files copied to the OSS snapshot need public license headers.
+    if ! is_oss_allowlisted "${filepath}"; then
+        continue
+    fi
+
+    # Classify language.
+    lang=$(classify_language "${filepath}")
+    [[ -z "${lang}" ]] && continue
+
+    # Skip generated files.
+    if looks_generated "${filepath}"; then
+        continue
+    fi
+
+    CHECKED=$((CHECKED + 1))
+
+    if has_required_header "${filepath}" || has_allowed_spdx_header "${filepath}"; then
+        continue
+    fi
+
+    rel_path="${filepath#"${REPO_ROOT}"/}"
+    group=$(determine_group "${rel_path}")
+    FAILURES+=("${group}	${rel_path}	${lang}")
+
+done < <(find "${REPO_ROOT}" \( "${PRUNE_ARGS[@]}" \) -prune -o \
+    \( -name '*.go' -o -name '*.py' -o -name '*.java' -o -name '*.rs' \
+       -o -name '*.properties' -o -name '*.yaml' -o -name '*.yml' -o -name '*.tpl' \) \
+    -type f -print 2>/dev/null | LC_ALL=C sort)
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+
+SUCCESS_HEADER_LABEL="Apache 2.0 SPDX headers"
+ERROR_HEADER_LABEL="Apache 2.0 license headers"
+if [[ ${#ALLOWED_SPDX_DIRS[@]} -gt 0 ]]; then
+    SUCCESS_HEADER_LABEL="valid license headers"
+    ERROR_HEADER_LABEL="required license headers"
+fi
+
+if [[ ${#FAILURES[@]} -eq 0 ]]; then
+    echo "All checked files have ${SUCCESS_HEADER_LABEL} (${CHECKED} files checked)."
+    exit 0
+fi
+
+# Collect unique groups and count per group.
+declare -A GROUP_COUNT
+declare -A GROUP_LANG_COUNTS
+declare -A GROUP_FILES
+for entry in "${FAILURES[@]}"; do
+    IFS=$'\t' read -r grp rel lang <<< "${entry}"
+    GROUP_COUNT["${grp}"]=$(( ${GROUP_COUNT["${grp}"]:-0} + 1 ))
+    GROUP_FILES["${grp}"]+="${rel}"$'\n'
+    # Track language counts: "lang1=N, lang2=M"
+    local_key="${grp}|${lang}"
+    GROUP_LANG_COUNTS["${local_key}"]=$(( ${GROUP_LANG_COUNTS["${local_key}"]:-0} + 1 ))
+done
+
+# Count unique groups.
+UNIQUE_GROUPS=($(printf '%s\n' "${!GROUP_COUNT[@]}" | LC_ALL=C sort -u))
+
+echo "ERROR: missing or invalid ${ERROR_HEADER_LABEL} in ${#FAILURES[@]} files across ${#UNIQUE_GROUPS[@]} repo/path groups." >&2
+echo "Checked ${CHECKED} files." >&2
+echo "" >&2
+
+# Sort groups by count descending, then name ascending.
+SORTED_GROUPS=($(
+    for g in "${UNIQUE_GROUPS[@]}"; do
+        printf '%d\t%s\n' "${GROUP_COUNT["${g}"]}" "${g}"
+    done | LC_ALL=C sort -t$'\t' -k1,1rn -k2,2 | cut -f2
+))
+
+for idx in "${!SORTED_GROUPS[@]}"; do
+    grp="${SORTED_GROUPS[idx]}"
+    url=$(repo_url_for_group "${grp}")
+    if [[ -n "${url}" ]]; then
+        echo "[${grp}] ${url}" >&2
+    else
+        echo "[${grp}]" >&2
+    fi
+
+    if [[ "${LIST_REPOS_ONLY}" != true ]]; then
+        # Build language summary.
+        lang_summary=""
+        for key in $(printf '%s\n' "${!GROUP_LANG_COUNTS[@]}" | grep "^${grp}|" | LC_ALL=C sort); do
+            lang="${key#*|}"
+            count="${GROUP_LANG_COUNTS["${key}"]}"
+            [[ -n "${lang_summary}" ]] && lang_summary="${lang_summary}, "
+            lang_summary="${lang_summary}${lang}=${count}"
+        done
+        echo "  ${GROUP_COUNT["${grp}"]} files missing headers (${lang_summary})" >&2
+
+        # List files sorted.
+        echo "${GROUP_FILES["${grp}"]}" | grep -v '^$' | LC_ALL=C sort | while IFS= read -r f; do
+            echo "  - ${f}" >&2
+        done
+    fi
+    if (( idx < ${#SORTED_GROUPS[@]} - 1 )); then
+        echo "" >&2
+    fi
+done
+
+exit 1

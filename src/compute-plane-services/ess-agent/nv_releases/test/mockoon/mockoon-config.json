@@ -1,0 +1,207 @@
+{
+  "uuid": "cdf1afb0-e01f-4860-905b-3c40b2d11585",
+  "lastMigration": 32,
+  "name": "ESS Example",
+  "endpointPrefix": "",
+  "latency": 0,
+  "port": 3002,
+  "hostname": "",
+  "folders": [],
+  "routes": [
+    {
+      "uuid": "464c0996-ff52-4a7a-94dc-5c6893c376fe",
+      "type": "http",
+      "documentation": "",
+      "method": "get",
+      "endpoint": "v1/functions/ca713143-76d6-4afe-beba-fb23923446f6/secrets",
+      "responses": [
+        {
+          "uuid": "f57e5304-7612-4158-ba05-55ff37dd41d6",
+          "body": "{\n  \"request_id\": \"bb6296ea-be15-1206-1543-db21c82901ae\",\n  \"lease_id\": \"\",\n  \"lease_duration\": 0,\n  \"renewable\": false,\n  \"data\": {\n    \"data\": {\n      \"password\": \"sdfsdfsfsdfds\",\n      \"username\": \"my-username\"\n    },\n    \"metadata\": {\n      \"created_time\": \"2024-03-04T18:07:37.527088622Z\",\n      \"custom_metadata\": null,\n      \"deletion_time\": \"\",\n      \"destroyed\": false,\n      \"version\": 1\n    }\n  },\n  \"warnings\": null\n}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "",
+          "headers": [
+            {
+              "key": "X-Vault-Namespace",
+              "value": "nvcf"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "af1a3a95-2edb-4169-9a3b-1e72b0891581",
+      "type": "http",
+      "documentation": "Route for testing 404 errors with stop_processing_on_client_error",
+      "method": "get",
+      "endpoint": "v1/non-existent",
+      "responses": [
+        {
+          "uuid": "a2ae5699-4cd1-40d4-81f5-94a7e3d07777",
+          "body": "{\n  \"errors\": [\"path not found\"]\n}",
+          "latency": 0,
+          "statusCode": 404,
+          "label": "404 Not Found",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "495fce81-67e3-4a0e-ae95-5ac15964b8d6",
+      "type": "http",
+      "documentation": "Route for testing 401 unauthorized errors",
+      "method": "get",
+      "endpoint": "v1/unauthorized",
+      "responses": [
+        {
+          "uuid": "ac60acff-4dc8-45f0-9b6d-8139d36f9497",
+          "body": "{\n  \"errors\": [\"permission denied\"]\n}",
+          "latency": 0,
+          "statusCode": 401,
+          "label": "401 Unauthorized",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "68c37bf2-e2aa-40eb-86e8-e52f535e6114",
+      "type": "http",
+      "documentation": "Route for testing 403 forbidden errors",
+      "method": "get",
+      "endpoint": "v1/forbidden",
+      "responses": [
+        {
+          "uuid": "54ec5d62-770f-4cbf-a219-6470e2b8c54c",
+          "body": "{\n  \"errors\": [\"access denied\"]\n}",
+          "latency": 0,
+          "statusCode": 403,
+          "label": "403 Forbidden",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    }
+  ],
+  "rootChildren": [
+    {
+      "type": "route",
+      "uuid": "464c0996-ff52-4a7a-94dc-5c6893c376fe"
+    },
+    {
+      "type": "route",
+      "uuid": "af1a3a95-2edb-4169-9a3b-1e72b0891581"
+    },
+    {
+      "type": "route",
+      "uuid": "495fce81-67e3-4a0e-ae95-5ac15964b8d6"
+    },
+    {
+      "type": "route",
+      "uuid": "68c37bf2-e2aa-40eb-86e8-e52f535e6114"
+    }
+  ],
+  "proxyMode": false,
+  "proxyHost": "",
+  "proxyRemovePrefix": false,
+  "tlsOptions": {
+    "enabled": false,
+    "type": "CERT",
+    "pfxPath": "",
+    "certPath": "",
+    "keyPath": "",
+    "caPath": "",
+    "passphrase": ""
+  },
+  "cors": true,
+  "headers": [
+    {
+      "key": "Content-Type",
+      "value": "application/json"
+    }
+  ],
+  "proxyReqHeaders": [
+    {
+      "key": "",
+      "value": ""
+    }
+  ],
+  "proxyResHeaders": [
+    {
+      "key": "",
+      "value": ""
+    }
+  ],
+  "data": [
+    {
+      "uuid": "a6cff590-ad74-4734-8b39-6583e95628cc",
+      "id": "cxqu",
+      "name": "token-response",
+      "documentation": "",
+      "value": "{\n  \"auth\": {\n    \"client_token\": \"kvs.CAESIAIetSV67XQMA1bKo\",\n    \"accessor\": \"78e87a38-84ed-2692-538f-ca8b9f400ab3\",\n    \"policies\": [\"default\"],\n    \"metadata\": {\n      \"role\": \"demo\"\n    },\n    \"lease_duration\": 120,\n    \"renewable\": true\n  }\n}"
+    }
+  ],
+  "callbacks": []
+}

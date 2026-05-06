@@ -1,0 +1,1039 @@
+{
+    "result": [
+        {
+            "metric": {
+                "DCGM_FI_DRIVER_VERSION": "<SKIP_VALIDATION>",
+                "__name__": "DCGM_FI_DEV_GPU_UTIL",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "device": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "nvidia-dcgm-exporter",
+                "modelName": "<SKIP_VALIDATION>",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pci_bus_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "nvidia-dcgm-exporter",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_cpu_usage_seconds_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "cpu": "total",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_cpu_usage_seconds_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "cpu": "total",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_cpu_usage_seconds_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "cpu": "total",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_cache",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_cache",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_cache",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_rss",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_rss",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_rss",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_swap",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_swap",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_swap",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_usage_bytes",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_usage_bytes",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_usage_bytes",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_working_set_bytes",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_working_set_bytes",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_memory_working_set_bytes",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_network_receive_bytes_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "interface": "eth0",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_network_receive_errors_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "interface": "eth0",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_network_receive_packets_dropped_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "interface": "eth0",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_network_receive_packets_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "interface": "eth0",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_network_transmit_bytes_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "interface": "eth0",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_network_transmit_errors_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "interface": "eth0",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_network_transmit_packets_dropped_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "interface": "eth0",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "container_network_transmit_packets_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "interface": "eth0",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "kube_pod_container_info",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "image": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kube-state-metrics",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kube-state-metrics",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "kube_pod_container_resource_limits",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kube-state-metrics",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "resource": "nvidia_com_gpu",
+                "service_name": "kube-state-metrics",
+                "task_id": "<SKIP_VALIDATION>",
+                "unit": "integer"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "kube_pod_container_resource_requests",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kube-state-metrics",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "resource": "nvidia_com_gpu",
+                "service_name": "kube-state-metrics",
+                "task_id": "<SKIP_VALIDATION>",
+                "unit": "integer"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "kube_pod_container_status_ready",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kube-state-metrics",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kube-state-metrics",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "kube_pod_container_status_restarts_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kube-state-metrics",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kube-state-metrics",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "kube_pod_container_status_running",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kube-state-metrics",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kube-state-metrics",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "kube_pod_container_status_terminated",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kube-state-metrics",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kube-state-metrics",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "kube_pod_container_status_waiting",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "container": "task",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kube-state-metrics",
+                "nca_id": "<SKIP_VALIDATION>",
+                "pod": "0-sr-<SKIP_VALIDATION>",
+                "service_name": "kube-state-metrics",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_exporter_send_failed_log_records_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "exporter": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/exporter/exporterhelper",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_exporter_send_failed_metric_points_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "exporter": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/exporter/exporterhelper",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_exporter_sent_log_records_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "exporter": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/exporter/exporterhelper",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_exporter_sent_metric_points_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "exporter": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/exporter/exporterhelper",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_incoming_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "logs",
+                "processor": "attributes/add-metadata",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_incoming_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "logs",
+                "processor": "memory_limiter",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_incoming_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "metrics",
+                "processor": "filter/metrics",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_incoming_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "metrics",
+                "processor": "memory_limiter",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_incoming_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "metrics",
+                "processor": "metricstransform",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_incoming_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "metrics",
+                "processor": "resource",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_outgoing_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "logs",
+                "processor": "attributes/add-metadata",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_outgoing_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "logs",
+                "processor": "memory_limiter",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_outgoing_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "metrics",
+                "processor": "filter/metrics",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_outgoing_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "metrics",
+                "processor": "memory_limiter",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_outgoing_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "metrics",
+                "processor": "metricstransform",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_processor_outgoing_items_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/processor/processorhelper",
+                "otel_signal": "metrics",
+                "processor": "resource",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_receiver_accepted_log_records_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/receiver/receiverhelper",
+                "receiver": "otlp",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>",
+                "transport": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_receiver_accepted_metric_points_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/receiver/receiverhelper",
+                "receiver": "otlp",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>",
+                "transport": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_receiver_accepted_metric_points_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/receiver/receiverhelper",
+                "receiver": "prometheus",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>",
+                "transport": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_receiver_refused_log_records_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/receiver/receiverhelper",
+                "receiver": "otlp",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>",
+                "transport": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_receiver_refused_metric_points_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/receiver/receiverhelper",
+                "receiver": "otlp",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>",
+                "transport": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_receiver_refused_metric_points_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/receiver/receiverhelper",
+                "receiver": "prometheus",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>",
+                "transport": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "task_progress_gauge_percent",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "byoo-task-test",
+                "nca_id": "<SKIP_VALIDATION>",
+                "service_name": "byoo-task-test",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "task_results_count_total",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "byoo-task-test",
+                "nca_id": "<SKIP_VALIDATION>",
+                "service_name": "byoo-task-test",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "up",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kube-state-metrics",
+                "nca_id": "<SKIP_VALIDATION>",
+                "service_name": "kube-state-metrics",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "up",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "kubernetes-cadvisor",
+                "nca_id": "<SKIP_VALIDATION>",
+                "service_name": "kubernetes-cadvisor",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "up",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "nvidia-dcgm-exporter",
+                "nca_id": "<SKIP_VALIDATION>",
+                "service_name": "nvidia-dcgm-exporter",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "up",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "service_name": "opentelemetry-collector",
+                "task_id": "<SKIP_VALIDATION>"
+            },
+            "values": []
+        }
+    ],
+    "resultType": "matrix"
+}

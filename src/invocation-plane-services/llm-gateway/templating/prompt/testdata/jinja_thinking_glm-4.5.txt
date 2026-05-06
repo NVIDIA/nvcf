@@ -1,0 +1,14 @@
+[gMASK]<sop><|user|>
+user message<|assistant|>
+<think></think>
+assistant message<|user|>
+<|assistant|>
+<think>reasoning message 2</think>
+assistant message 2
+<tool_call>function_name
+<arg_key>argument</arg_key>
+<arg_value>value</arg_value>
+</tool_call><|observation|>
+<tool_response>
+tool call result
+</tool_response><|assistant|>

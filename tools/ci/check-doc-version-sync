@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+
+cd "${repo_root}/tools/docs-version-sync"
+go run . --target main --update-catalog --check "$@"

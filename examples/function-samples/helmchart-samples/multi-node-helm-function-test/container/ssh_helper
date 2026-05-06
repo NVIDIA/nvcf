@@ -1,0 +1,4 @@
+#!/bin/bash
+host=$1
+shift
+echo "$*" | ssh -T -o StrictHostKeyChecking=accept-new "$host.$HEADLESS_SERVICE_NAME"

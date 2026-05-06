@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+ngcImagePullSecretName: ""
+
+image:
+  repository: "stg.nvcr.io/tadiathdfetp/byoo-test"
+  tag: "0.11"
+  pullPolicy: "IfNotPresent"
+
+byooPort: 8000

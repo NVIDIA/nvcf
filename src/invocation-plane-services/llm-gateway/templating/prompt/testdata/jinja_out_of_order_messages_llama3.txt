@@ -1,0 +1,19 @@
+<|start_header_id|>system<|end_header_id|>
+
+system message 1
+system message 2<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+assistant message 1<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+assistant message 2<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+user message 1<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+user message 2<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+

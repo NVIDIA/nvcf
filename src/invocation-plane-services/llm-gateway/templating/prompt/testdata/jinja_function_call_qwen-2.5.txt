@@ -1,0 +1,27 @@
+<|im_start|>system
+System message
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"function": {"description": "Get the current weather in a given location", "name": "weather_info", "parameters": {"properties": {"location": {"description": "The city and state, e.g. San Francisco, CA", "type": "string"}}, "required": ["location"], "type": "object"}}, "type": "function"}
+</tools>
+
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call><|im_end|>
+<|im_start|>user
+What's the weather in boston and tokyo?<|im_end|>
+<|im_start|>assistant
+<tool_call>
+{"name": "weather_info", "arguments": {"location": "boston", "unit": "fahrenheit"}}
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+85
+</tool_response><|im_end|>
+<|im_start|>assistant

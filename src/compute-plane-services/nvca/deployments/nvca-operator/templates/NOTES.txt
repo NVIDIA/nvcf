@@ -1,0 +1,141 @@
+{{ $.Chart.Name }} has been installed.
+
+Version information:
+------------------
+Chart: {{ $.Chart.Name }} v{{ $.Chart.Version }}
+App Version: {{ $.Chart.AppVersion }}
+
+Release information:
+-------------------
+Name: {{ $.Release.Name }}
+Namespace: {{ $.Release.Namespace }}
+{{- if and .Values.imagePullSecrets (gt (len .Values.imagePullSecrets) 0) }}
+
+Image Pull Secrets:
+-------------------
+The following pre-existing secrets in the {{ $.Release.Namespace }} namespace will be used for pulling images:
+{{- range .Values.imagePullSecrets }}
+- name: {{ .name | quote }}
+{{- end }}
+Note: These secrets must exist in the {{ $.Release.Namespace }} namespace.
+{{- end }}
+
+{{- if eq .Values.ngcConfig.clusterSource "helm-managed" }}
+You've installed the NVCA Operator with "helm-managed" as the clusterSource.
+
+NVCA Configuration:
+-------------------
+
+{{- $clusterGroupID := .Values.helmManaged.clusterGroupID | default .Values.clusterGroupID }}
+{{- if and .Values.helmManaged.cloudProvider $clusterGroupID .Values.helmManaged.clusterGroupName .Values.clusterID .Values.clusterName .Values.helmManaged.nvcaVersion .Values.helmManaged.clusterRegion .Values.ncaID }}
+A default NVCFBackend resource has been created with the following details:
+- Cluster Name: {{ .Values.clusterName }}
+- Cloud Provider: {{ .Values.helmManaged.cloudProvider }}
+- Region: {{ .Values.helmManaged.clusterRegion }}
+
+The ResourceQuota limiting to a single NVCFBackend has been disabled.
+
+You can modify these settings by updating the following values in your Helm release:
+- clusterName (REQUIRED)
+- clusterID (REQUIRED)
+- ncaID (REQUIRED)
+- helmManaged.cloudProvider (REQUIRED)
+- helmManaged.clusterRegion (REQUIRED)
+- helmManaged.clusterGroupID (REQUIRED — falls back to top-level clusterGroupID if unset)
+- helmManaged.clusterGroupName (REQUIRED)
+- helmManaged.nvcaVersion (REQUIRED)
+- helmManaged.oAuthClientID (optional - OAuth2/OIDC client ID, can be blank or omitted)
+- helmManaged.oAuthClientSecretKey (optional - secret key name containing OAuth2/OIDC client secret)
+- helmManaged.clusterDescription (optional - defaults to clusterName)
+- helmManaged.featureGateValues (optional - list of feature gates to enable, defaults to ["LogPosting"])
+- helmManaged.clusterAttributes (optional - list of cluster attributes, defaults to empty array)
+- helmManaged.gpuManualInstanceConfigB64 (optional - base64 encoded GPU manual instance configuration)
+
+To view the created NVCFBackend resource:
+  kubectl get nvcfbackend -n {{ $.Release.Namespace }}
+{{- else }}
+WARNING: NVCFBackend resource could not be created!
+
+The following required parameters were not provided:
+{{- if not .Values.helmManaged.cloudProvider }}
+- helmManaged.cloudProvider
+{{- end }}
+{{- if not $clusterGroupID }}
+- helmManaged.clusterGroupID (or top-level clusterGroupID)
+{{- end }}
+{{- if not .Values.helmManaged.clusterGroupName }}
+- helmManaged.clusterGroupName
+{{- end }}
+{{- if not .Values.clusterID }}
+- clusterID
+{{- end }}
+{{- if not .Values.clusterName }}
+- clusterName
+{{- end }}
+{{- if not .Values.helmManaged.nvcaVersion }}
+- helmManaged.nvcaVersion
+{{- end }}
+{{- if not .Values.helmManaged.clusterRegion }}
+- helmManaged.clusterRegion
+{{- end }}
+{{- if not .Values.ncaID }}
+- ncaID
+{{- end }}
+
+Please set these parameters and upgrade the helm release.
+{{- end }}
+{{- end }}
+
+{{- if eq .Values.ngcConfig.clusterSource "ngc-managed" }}
+NVCA Configuration (NGC-Managed):
+--------------------------------
+
+You've installed the NVCA Operator with "ngc-managed" as the clusterSource.
+This means your cluster configuration will be managed by NGC.
+
+The operator will automatically fetch the cluster configuration from NGC.
+You should verify that the NGC API URL, username, and service key are correctly set:
+
+- NGC API URL: {{ .Values.ngcConfig.apiURL }}
+- NGC Username: {{ .Values.ngcConfig.username }}
+- NGC Service Key: {{ if .Values.ngcConfig.serviceKey }}[Set]{{ else }}[Not Set]{{ end }}
+
+For upgrades or configuration changes, you can modify these settings through the NGC UI/API.
+{{- end }}
+
+{{- if eq .Values.ngcConfig.clusterSource "self-managed" }}
+NVCA Configuration (Self-Managed):
+----------------------------------
+
+You've installed the NVCA Operator with "self-managed" as the clusterSource.
+This means your cluster configuration will be managed locally through Helm values.
+
+{{- if .Values.selfManaged.nvcaVersion }}
+A default NVCFBackend resource has been created with the following details:
+- Cluster Name: {{ .Values.clusterName | default "nvcf-default" }}
+- NVCA Version: {{ .Values.selfManaged.nvcaVersion }}
+
+You can modify these settings by updating the following values in your Helm release:
+- selfManaged.nvcaVersion (REQUIRED)
+- clusterID (REQUIRED)
+- clusterGroupID (REQUIRED)
+- ncaID (Optional - defaults to empty)
+- clusterName (Optional - defaults to "nvcf-default")
+
+To view the created NVCFBackend resource:
+  kubectl get nvcfbackend -n {{ $.Release.Namespace }}
+{{- else }}
+WARNING: NVCFBackend resource could not be created!
+
+The following required parameters were not provided:
+- selfManaged.nvcaVersion
+
+Please set these parameters and upgrade the helm release.
+{{- end }}
+{{- end }}
+
+Useful commands:
+---------------
+  kubectl get all -n {{ $.Release.Namespace }} -l "app.kubernetes.io/instance={{ $.Release.Name }}"
+  helm status {{ $.Release.Name }} -n {{ $.Release.Namespace }}
+  helm get values {{ $.Release.Name }} -n {{ $.Release.Namespace }}

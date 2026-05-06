@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: ncp-local
+
+image: rancher/k3s:v1.30.2-k3s2
+servers: 1
+agents: 5
+
+ports:
+  - port: 8080:80
+    nodeFilters:
+      - loadbalancer
+  - port: 8443:443
+    nodeFilters:
+      - loadbalancer
+
+options:
+  k3d:
+    wait: true
+  k3s:
+    extraArgs:
+      - arg: "--disable=traefik"
+        nodeFilters:
+          - server:*
+    nodeLabels:
+      - label: run.ai/simulated-gpu-node-pool=default
+        nodeFilters:
+          - agent:3
+          - agent:4
+      - label: nvidia.com/gpu.family=hopper
+        nodeFilters:
+          - agent:3
+          - agent:4
+      - label: nvidia.com/gpu.machine=NVIDIA-DGX-H100
+        nodeFilters:
+          - agent:3
+          - agent:4
+      - label: nvidia.com/cuda.driver.major=535
+        nodeFilters:
+          - agent:3
+          - agent:4
+      - label: nvidia.com/cuda.driver.minor=42
+        nodeFilters:
+          - agent:3
+          - agent:4
+      - label: nvidia.com/cuda.driver.rev=06
+        nodeFilters:
+          - agent:3
+          - agent:4

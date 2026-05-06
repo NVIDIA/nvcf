@@ -1,0 +1,162 @@
+NVCF Rate Limiter
+Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+========================================================================
+Third-Party Dependencies and Licenses
+========================================================================
+
+This project includes the following third-party direct dependencies:
+
+------------------------------------------------------------------------
+github.com/NVIDIA/nvcf-go v1.0.11
+License: Apache License 2.0
+https://github.com/NVIDIA/nvcf-go
+
+------------------------------------------------------------------------
+github.com/auth0/go-jwt-middleware/v2 v2.3.0
+License: MIT License
+https://github.com/auth0/go-jwt-middleware
+
+------------------------------------------------------------------------
+github.com/carlmjohnson/versioninfo v0.22.5
+License: MIT License
+https://github.com/carlmjohnson/versioninfo
+
+------------------------------------------------------------------------
+github.com/fsnotify/fsnotify v1.9.0
+License: BSD 3-Clause
+https://github.com/fsnotify/fsnotify
+
+------------------------------------------------------------------------
+github.com/golang-jwt/jwt/v4 v4.5.2
+License: MIT License
+https://github.com/golang-jwt/jwt
+
+------------------------------------------------------------------------
+github.com/google/uuid v1.6.0
+License: BSD 3-Clause
+https://github.com/google/uuid
+
+------------------------------------------------------------------------
+github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0
+License: Apache License 2.0
+https://github.com/grpc-ecosystem/go-grpc-middleware
+
+------------------------------------------------------------------------
+github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2
+License: Apache License 2.0
+https://github.com/grpc-ecosystem/go-grpc-middleware
+
+------------------------------------------------------------------------
+github.com/jellydator/ttlcache/v3 v3.4.0
+License: MIT License
+https://github.com/jellydator/ttlcache
+
+------------------------------------------------------------------------
+github.com/lestrrat-go/jwx v1.2.31
+License: MIT License
+https://github.com/lestrrat-go/jwx
+
+------------------------------------------------------------------------
+github.com/olric-data/olric v0.7.1
+License: Apache License 2.0
+https://github.com/olric-data/olric
+
+------------------------------------------------------------------------
+github.com/prometheus/client_golang v1.23.2
+License: Apache License 2.0
+https://github.com/prometheus/client_golang
+
+------------------------------------------------------------------------
+github.com/spf13/cobra v1.10.2
+License: Apache License 2.0
+https://github.com/spf13/cobra
+
+------------------------------------------------------------------------
+github.com/spf13/pflag v1.0.10
+License: BSD 3-Clause
+https://github.com/spf13/pflag
+
+------------------------------------------------------------------------
+github.com/stretchr/testify v1.11.1
+License: MIT License
+https://github.com/stretchr/testify
+
+------------------------------------------------------------------------
+github.com/ulule/limiter/v3 v3.11.2
+License: MIT License
+https://github.com/ulule/limiter
+
+------------------------------------------------------------------------
+go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.62.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go-contrib
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel v1.40.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.opentelemetry.io/otel/trace v1.40.0
+License: Apache License 2.0
+https://github.com/open-telemetry/opentelemetry-go
+
+------------------------------------------------------------------------
+go.uber.org/zap v1.27.0
+License: MIT License
+https://github.com/uber-go/zap
+
+------------------------------------------------------------------------
+golang.org/x/exp v0.0.0-20250718183923-645b1fa84792
+License: BSD 3-Clause
+https://golang.org/x/exp
+
+------------------------------------------------------------------------
+golang.org/x/sync v0.16.0
+License: BSD 3-Clause
+https://golang.org/x/sync
+
+------------------------------------------------------------------------
+google.golang.org/grpc v1.73.0
+License: Apache License 2.0
+https://github.com/grpc/grpc-go
+
+------------------------------------------------------------------------
+google.golang.org/protobuf v1.36.11
+License: BSD 3-Clause
+https://github.com/protocolbuffers/protobuf-go
+
+------------------------------------------------------------------------
+k8s.io/api v0.34.2
+License: Apache License 2.0
+https://github.com/kubernetes/api
+
+------------------------------------------------------------------------
+k8s.io/apimachinery v0.34.2
+License: Apache License 2.0
+https://github.com/kubernetes/apimachinery
+
+------------------------------------------------------------------------
+k8s.io/client-go v0.34.2 (via replace from v11.0.0+incompatible)
+License: Apache License 2.0
+https://github.com/kubernetes/client-go
+
+========================================================================
+Transitive Dependencies (indirect)
+========================================================================
+
+All transitive dependencies use permissive open-source licenses
+(Apache 2.0, MIT, BSD, or ISC). See go.sum for the complete module graph.

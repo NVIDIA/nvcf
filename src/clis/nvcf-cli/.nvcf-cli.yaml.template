@@ -1,0 +1,212 @@
+# NVCF CLI Configuration Template
+# 
+# Copy this file to .nvcf-cli.yaml in your project directory or $HOME/
+# The CLI looks for config in this order:
+#   1. Current working directory (./.nvcf-cli.yaml)
+#   2. Home directory ($HOME/.nvcf-cli.yaml)
+#   3. Explicit path via --config flag
+#
+# Environment variables override config file values.
+# Config keys automatically map to environment variables:
+#   - Config: base_http_url → Env: NVCF_BASE_HTTP_URL
+#   - Config: client_id → Env: NVCF_CLIENT_ID
+#   - etc.
+
+# ==============================================================================
+# API Endpoints (Direct Mode - External Endpoints)
+# ==============================================================================
+
+# Main API endpoint for function management, deployments, etc.
+# Config key: base_http_url
+# Environment variable: NVCF_BASE_HTTP_URL
+# Default: https://api.nvcf.nvidia.com
+# Staging: https://api.shqa.stg.nvcf.nvidia.com
+base_http_url: https://api.nvcf.nvidia.com
+
+# Invocation endpoint for function calls
+# Config key: invoke_url (or base_invoke_url)
+# Environment variable: NVCF_INVOKE (or NVCF_BASE_INVOKE_URL)
+# Default: Uses same as base_http_url
+# Staging: https://invocation.shqa.stg.nvcf.nvidia.com
+# invoke_url: https://api.nvcf.nvidia.com
+
+# gRPC endpoint for gRPC function invocations
+# Config key: base_grpc_url
+# Environment variable: NVCF_BASE_GRPC_URL
+# Default: grpc.nvcf.nvidia.com:443
+# Staging: grpc.shqa.stg.nvcf.nvidia.com:443
+base_grpc_url: grpc.nvcf.nvidia.com:443
+
+# API Keys service endpoint
+# Config key: api_keys_service_url
+# Environment variable: API_KEYS_SERVICE_URL (no NVCF_ prefix)
+# Default: https://api-keys.nvcf.nvidia.com
+# Staging: https://api-keys.shqa.stg.nvcf.nvidia.com
+api_keys_service_url: https://api-keys.nvcf.nvidia.com
+
+# ==============================================================================
+# Authentication
+# ==============================================================================
+
+# NVCF API Key (for user-level operations: invoke, list, queue details)
+# Config key: api_key
+# Environment variable: NVCF_API_KEY
+# Scope: invoke_function, list_functions, queue_details, list_functions_details
+# Note: Stored in ~/.nvcf-cli-state.json after running 'nvcf-cli api-key generate'
+# api_key: nvapi-xxxxx
+
+# NVCF Admin Token / JWT (for admin operations: create, deploy, delete, update)
+# Config key: token
+# Environment variable: NVCF_TOKEN
+# Scope: admin:* (all admin operations)
+# Note: Stored in ~/.nvcf-cli-state.json after running 'nvcf-cli init'
+# token: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# NVIDIA Cloud Account Client ID (your account/username)
+# Config key: client_id
+# Environment variable: NVCF_CLIENT_ID
+# Default: nvcf-default
+client_id: nvcf-default
+
+# ==============================================================================
+# OAuth2 Configuration (Alternative Authentication)
+# ==============================================================================
+
+# Use OAuth2 client-credentials (service-account) authentication instead of tokens.
+# Config keys: oauth2_client_id, oauth2_client_secret, oauth2_token_endpoint
+# Environment variables: NVCF_OAUTH2_CLIENT_ID, NVCF_OAUTH2_CLIENT_SECRET, NVCF_OAUTH2_TOKEN_ENDPOINT
+# oauth2_client_id: your-oauth2-client-id
+# oauth2_client_secret: your-oauth2-client-secret
+# oauth2_token_endpoint: https://authn.nvidia.com/token
+
+# ==============================================================================
+# API Keys Service Configuration
+# ==============================================================================
+
+# The CLI automatically calls the API Keys service to generate JWT tokens
+# No kubeconfig or cluster access needed - everything works via external APIs!
+
+# Service ID for API key operations
+# Config key: api_keys_service_id
+# Environment variable: API_KEYS_SERVICE_ID (no NVCF_ prefix)
+# Default: nvcf-api
+api_keys_service_id: nvidia-cloud-functions-ncp-service-id-aketm
+
+# Issuer service for API key operations
+# Config key: api_keys_issuer_service
+# Environment variable: API_KEYS_ISSUER_SERVICE (no NVCF_ prefix)
+# Default: nvcf-api
+api_keys_issuer_service: nvcf-api
+
+# Owner ID for API key operations
+# Config key: api_keys_owner_id
+# Environment variable: API_KEYS_OWNER_ID (no NVCF_ prefix)
+# Default: svc@nvcf-api.local
+api_keys_owner_id: svc@nvcf-api.local
+
+# ==============================================================================
+# Host Header Overrides (Self-Hosted Deployments)
+# ==============================================================================
+
+# For self-hosted deployments using hostname-based routing (e.g., Envoy Gateway),
+# set these Host headers to route requests correctly without requiring DNS setup.
+#
+# The gateway routes requests based on the Host header:
+#   - api-keys.{domain} → API Keys service
+#   - api.{domain} → NVCF API service
+#   - *.invocation.{domain} → Invocation service
+#
+# Example: If your gateway domain is "nvcf.example.com":
+#   api_keys_host: api-keys.nvcf.example.com
+#   api_host: api.nvcf.example.com
+#   invoke_host: invocation.nvcf.example.com
+
+# Host header for API Keys service requests
+# Config key: api_keys_host
+# Environment variable: API_KEYS_HOST (no NVCF_ prefix)
+# api_keys_host: api-keys.nvcf.example.com
+
+# Host header for NVCF API requests
+# Config key: api_host
+# Environment variable: API_HOST (no NVCF_ prefix)
+# api_host: api.nvcf.example.com
+
+# Host header for Invocation service requests
+# Config key: invoke_host
+# Environment variable: INVOKE_HOST (no NVCF_ prefix)
+# invoke_host: invocation.nvcf.example.com
+
+# ==============================================================================
+# General Settings
+# ==============================================================================
+
+# Default timeout for API requests (in seconds)
+# Config key: default_timeout
+# Environment variable: NVCF_DEFAULT_TIMEOUT
+# default_timeout: 300
+
+# Enable debug logging (verbose output)
+# Config key: debug
+# Environment variable: NVCF_DEBUG
+# Command-line flag: --debug (overrides all)
+# debug: false
+
+# Demo mode (additional output formatting)
+# Config key: demo
+# Environment variable: NVCF_DEMO
+# demo: false
+
+# ==============================================================================
+# Environment-Specific Presets
+# ==============================================================================
+
+# Uncomment one of the following sections for quick environment setup:
+
+# --- PRODUCTION (default) ---
+# Already set above as defaults
+
+# --- STAGING ---
+# Uncomment these lines to use staging environment:
+# base_http_url: https://api.shqa.stg.nvcf.nvidia.com
+# base_grpc_url: grpc.shqa.stg.nvcf.nvidia.com:443
+# api_keys_service_url: https://api-keys.shqa.stg.nvcf.nvidia.com
+# invoke_url: https://invocation.shqa.stg.nvcf.nvidia.com
+
+# ==============================================================================
+# Notes
+# ==============================================================================
+#
+# 1. Configuration Priority (highest to lowest):
+#    a. Command-line flags (e.g., --debug)
+#    b. Environment variables (e.g., NVCF_BASE_HTTP_URL)
+#    c. Config file in current directory (./.nvcf-cli.yaml)
+#    d. Config file in home directory ($HOME/.nvcf-cli.yaml)
+#    e. Built-in defaults
+#
+# 2. Environment Variable Mapping:
+#    - Config keys automatically map to NVCF_* environment variables
+#    - Example: base_http_url → NVCF_BASE_HTTP_URL
+#    - Exception: API Keys service uses unprefixed vars (API_KEYS_*)
+#
+# 3. Token Generation (Simplified!):
+#    - No kubeconfig or kubectl needed!
+#    - Run: nvcf-cli init
+#    - Calls API Keys service directly: /v1/admin/keys
+#    - Tokens stored in: ~/.nvcf-cli-state.json
+#
+# 4. Token Usage:
+#    - NVCF_API_KEY: User operations (invoke, list, queue details)
+#    - NVCF_TOKEN: Admin operations (create, deploy, delete, update)
+#
+# 5. All Operations Use Direct HTTP/HTTPS:
+#    - No cluster mode or kubectl required
+#    - Everything works via external HTTPS endpoints
+#    - Simple, fast, and secure
+#
+# 6. Quick Start:
+#    a. Copy this template: cp .nvcf-cli.yaml.tmpl ~/.nvcf-cli.yaml
+#    b. Edit your account: client_id: your-username
+#    c. Generate tokens: nvcf-cli init
+#    d. Start using: nvcf-cli function list
+#
+

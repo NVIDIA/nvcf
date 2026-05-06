@@ -1,0 +1,570 @@
+#!/usr/bin/env bash
+# ci_check_licenses — checks that all vendored dependencies use acceptable licenses.
+#
+# The list of allowed SPDX license identifiers lives in .allowed-licenses.txt at the repo root.
+# Known failures are tracked in .license-baseline.txt (ratchet). The script fails only if
+# NEW violations are introduced beyond the baseline.
+#
+# Usage:
+#   ./scripts/ci_check_licenses                  Run check (ratcheted against baseline)
+#   ./scripts/ci_check_licenses --update-baseline Regenerate .license-baseline.txt from current state
+#
+# Exit codes:
+#   0  no new violations (known baseline issues produce warnings only)
+#   1  new violations found that are not in the baseline
+
+set -euo pipefail
+
+UPDATE_BASELINE=false
+[[ "${1:-}" == "--update-baseline" ]] && UPDATE_BASELINE=true
+
+GO_LICENSES_VERSION="v2.0.1"
+effective_gowork="${GOWORK:-off}"
+
+declare -Ag GO_DOWNLOAD_JSON_CACHE=()
+declare -Ag GITHUB_LICENSE_CACHE=()
+declare -Ag RESOLVED_GO_LICENSE_CACHE=()
+
+_GO_MOD_DOWNLOAD_FIELD_RESULT=""
+_GITHUB_REPO_LICENSE_SPDX_RESULT=""
+_RESOLVE_GO_IMPORT_LICENSE_RESULT=""
+_RENDER_MISSING_LICENSE_VIOLATION_RESULT=""
+
+# Weak copyleft licenses: not in the allowlist, but surface as warnings for human review.
+WEAK_COPYLEFT="MPL-2.0|LGPL-2.0-only|LGPL-2.0-or-later|LGPL-2.1-only|LGPL-2.1-or-later|LGPL-3.0-only|LGPL-3.0-or-later|CDDL-1.0|EPL-1.0|EPL-2.0"
+
+# ---------------------------------------------------------------------------
+# Install go-licenses if not already present
+# ---------------------------------------------------------------------------
+export PATH="$(GOWORK="${effective_gowork}" go env GOPATH)/bin:${PATH}"
+
+if ! command -v go-licenses &>/dev/null; then
+    echo "Installing go-licenses ${GO_LICENSES_VERSION}..."
+    GOWORK="${effective_gowork}" GOFLAGS="" go install "github.com/google/go-licenses/v2@${GO_LICENSES_VERSION}"
+fi
+
+# ---------------------------------------------------------------------------
+MODULE=$(GOWORK="${effective_gowork}" go list -m)
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ALLOWED=$(paste -sd, "${REPO_ROOT}/.allowed-licenses.txt")
+BASELINE_FILE="${REPO_ROOT}/.license-baseline.txt"
+
+is_allowed_license() {
+    local allowed="$1"
+    local license="$2"
+
+    [[ -n "${license}" ]] || return 1
+    [[ ",${allowed}," == *",${license},"* ]]
+}
+
+sniff_license_text() {
+    local text="$1"
+    local chunk="${text:0:16000}"
+    local lower
+
+    if [[ "${chunk}" =~ SPDX-License-Identifier:[[:space:]]*([^[:space:]/\*]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return
+    fi
+
+    lower="$(printf '%s' "${chunk}" | tr '[:upper:]' '[:lower:]')"
+
+    if [[ "${lower}" == *"apache license"* && "${lower}" == *"version 2"* ]]; then
+        echo "Apache-2.0"
+        return
+    fi
+    if [[ "${lower}" == *"permission is hereby granted, free of charge"* ]] && \
+        ([[ "${lower}" == *"substantial portions of the software"* ]] || [[ "${lower}" == *"all copies or substantial portions"* ]]); then
+        echo "MIT"
+        return
+    fi
+    if [[ "${lower}" == *"bsd 4-clause"* || "${lower}" == *"bsd-4-clause"* || "${lower}" == *"all advertising materials mentioning features or use of this software"* ]]; then
+        echo "BSD-4-Clause"
+        return
+    fi
+    if [[ "${lower}" == *"bsd 3-clause"* || "${lower}" == *"bsd-3-clause"* || "${lower}" == *"3-clause bsd"* ]]; then
+        echo "BSD-3-Clause"
+        return
+    fi
+    if [[ "${lower}" == *"bsd 2-clause"* || "${lower}" == *"bsd-2-clause"* || "${lower}" == *"2-clause bsd"* ]]; then
+        echo "BSD-2-Clause"
+        return
+    fi
+    if [[ "${lower}" == *"redistribution and use in source and binary forms"* ]]; then
+        if [[ "${lower}" == *"all advertising materials mentioning features or use of this software"* ]]; then
+            echo "BSD-4-Clause"
+            return
+        fi
+        if [[ "${lower}" == *"neither the name"* || "${lower}" == *"3-clause"* ]]; then
+            echo "BSD-3-Clause"
+            return
+        fi
+        if [[ "${lower}" == *"2-clause"* || "${lower}" == *"two clause"* ]]; then
+            echo "BSD-2-Clause"
+            return
+        fi
+        echo "BSD-3-Clause"
+        return
+    fi
+    if [[ "${lower}" == *"mozilla public license"* || "${lower}" == *"mpl 2.0"* ]]; then
+        echo "MPL-2.0"
+        return
+    fi
+    if [[ "${lower}" == *"isc license"* ]]; then
+        echo "ISC"
+        return
+    fi
+    if [[ "${lower}" == *"the unlicense"* || "${lower:0:800}" == *"unlicense"* ]]; then
+        echo "Unlicense"
+        return
+    fi
+    if [[ "${lower}" == *"creative commons zero"* || "${lower}" == *"cc0 1.0"* ]]; then
+        echo "CC0-1.0"
+        return
+    fi
+    if [[ "${lower}" == *"zlib license"* || "${lower}" == *"this software is provided 'as-is'"* ]]; then
+        echo "Zlib"
+        return
+    fi
+    if [[ "${lower}" == *"python software foundation license"* || "${lower}" == *"psf license agreement"* ]]; then
+        echo "PSF-2.0"
+        return
+    fi
+    if [[ "${lower}" == *"blue oak model license"* || "${lower}" == *"blueoak-1.0.0"* ]]; then
+        echo "BlueOak-1.0.0"
+        return
+    fi
+}
+
+license_from_plain_dir() {
+    local base="$1"
+    local file text lic
+
+    [[ -d "${base}" ]] || return
+
+    while IFS= read -r file; do
+        text="$(LC_ALL=C sed -n '1,240p' "${file}" 2>/dev/null || true)"
+        [[ -n "${text}" ]] || continue
+        lic="$(sniff_license_text "${text}")"
+        if [[ -n "${lic}" ]]; then
+            echo "${lic}"
+            return
+        fi
+    done < <(find "${base}" -maxdepth 1 -type f \( -iname 'licen[sc]e*' -o -iname 'copying*' \) | sort)
+}
+
+path_is_within_module() {
+    local path="$1"
+    local module="$2"
+
+    [[ -n "${module}" ]] || return 1
+    [[ "${path}" == "${module}" || "${path}" == "${module}/"* ]]
+}
+
+parse_vendor_module_comment() {
+    local line="$1"
+    local body="${line#\# }"
+    local mod="${body%% *}"
+    local rest="${body#${mod}}"
+    local ver=""
+
+    rest="${rest# }"
+    if [[ -n "${rest}" && "${rest}" != "=>"* ]]; then
+        ver="${rest%% *}"
+        [[ "${ver}" == "=>" ]] && ver=""
+    fi
+
+    printf '%s\t%s\n' "${mod}" "${ver}"
+}
+
+module_root_and_version_for_import_path() {
+    local modules_txt="$1"
+    local import_path="$2"
+    local line current_mod current_ver best_mod="" best_ver=""
+
+    [[ -f "${modules_txt}" ]] || return
+
+    while IFS= read -r line; do
+        [[ "${line}" == \#* ]] || continue
+        IFS=$'\t' read -r current_mod current_ver < <(parse_vendor_module_comment "${line}")
+        if path_is_within_module "${import_path}" "${current_mod}" && [[ ${#current_mod} -gt ${#best_mod} ]]; then
+            best_mod="${current_mod}"
+            best_ver="${current_ver}"
+        fi
+    done < "${modules_txt}"
+
+    printf '%s\t%s\n' "${best_mod}" "${best_ver}"
+}
+
+go_mod_download_json() {
+    local spec="$1"
+
+    (GOWORK="${effective_gowork}" GOFLAGS="-mod=vendor" go mod download -json "${spec}" 2>/dev/null) || true
+}
+
+go_mod_download_field() {
+    local spec="$1"
+    local field="$2"
+    local json pattern
+
+    _GO_MOD_DOWNLOAD_FIELD_RESULT=""
+
+    if [[ ! -v GO_DOWNLOAD_JSON_CACHE["${spec}"] ]]; then
+        GO_DOWNLOAD_JSON_CACHE["${spec}"]="$(go_mod_download_json "${spec}")"
+    fi
+    json="${GO_DOWNLOAD_JSON_CACHE["${spec}"]}"
+    [[ -n "${json}" ]] || return 0
+
+    pattern="^[[:space:]]*\"${field}\":[[:space:]]*\"\\(.*\\)\"[,]\\{0,1\\}[[:space:]]*$"
+    _GO_MOD_DOWNLOAD_FIELD_RESULT="$(printf '%s\n' "${json}" | sed -n "s/${pattern}/\\1/p" | sed -n '1p')"
+}
+
+github_owner_repo_from_module() {
+    local module_path="$1"
+    local remainder owner repo
+
+    [[ "${module_path}" == github.com/* ]] || return
+    remainder="${module_path#github.com/}"
+    owner="${remainder%%/*}"
+    remainder="${remainder#*/}"
+    repo="${remainder%%/*}"
+    [[ -n "${owner}" && -n "${repo}" ]] || return
+
+    printf '%s\t%s\n' "${owner}" "${repo}"
+}
+
+github_owner_repo_from_url() {
+    local raw="$1"
+    local trimmed path owner repo
+
+    trimmed="${raw#git+}"
+    if [[ "${trimmed}" == git@github.com:* ]]; then
+        path="${trimmed#git@github.com:}"
+    elif [[ "${trimmed}" == https://github.com/* ]]; then
+        path="${trimmed#https://github.com/}"
+    elif [[ "${trimmed}" == http://github.com/* ]]; then
+        path="${trimmed#http://github.com/}"
+    else
+        return
+    fi
+
+    path="${path%.git}"
+    owner="${path%%/*}"
+    path="${path#*/}"
+    repo="${path%%/*}"
+    [[ -n "${owner}" && -n "${repo}" ]] || return
+
+    printf '%s\t%s\n' "${owner}" "${repo}"
+}
+
+github_repo_license_spdx() {
+    local owner="$1"
+    local repo="$2"
+    local key="${owner}/${repo}"
+    local body spdx download_url lic ref name raw_url
+
+    _GITHUB_REPO_LICENSE_SPDX_RESULT=""
+
+    if [[ -v GITHUB_LICENSE_CACHE["${key}"] ]]; then
+        [[ "${GITHUB_LICENSE_CACHE["${key}"]}" == "__MISS__" ]] || _GITHUB_REPO_LICENSE_SPDX_RESULT="${GITHUB_LICENSE_CACHE["${key}"]}"
+        return
+    fi
+    if ! command -v curl &>/dev/null; then
+        GITHUB_LICENSE_CACHE["${key}"]="__MISS__"
+        return
+    fi
+
+    body="$(curl -fsSL --max-time 20 \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'X-GitHub-Api-Version: 2022-11-28' \
+        "https://api.github.com/repos/${owner}/${repo}/license" 2>/dev/null || true)"
+    if [[ -n "${body}" ]]; then
+        spdx="$(printf '%s' "${body}" | sed -n 's/.*"spdx_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
+        if [[ -n "${spdx}" && "${spdx}" != "NOASSERTION" && "${spdx}" != "null" ]]; then
+            GITHUB_LICENSE_CACHE["${key}"]="${spdx}"
+            _GITHUB_REPO_LICENSE_SPDX_RESULT="${spdx}"
+            return
+        fi
+
+        download_url="$(printf '%s' "${body}" | sed -n 's/.*"download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
+        if [[ -n "${download_url}" && "${download_url}" != "null" ]]; then
+            lic="$(curl -fsSL --max-time 20 "${download_url}" 2>/dev/null | sed -n '1,240p' || true)"
+            lic="$(sniff_license_text "${lic}")"
+            if [[ -n "${lic}" ]]; then
+                GITHUB_LICENSE_CACHE["${key}"]="${lic}"
+                _GITHUB_REPO_LICENSE_SPDX_RESULT="${lic}"
+                return
+            fi
+        fi
+    fi
+
+    for ref in main master; do
+        for name in LICENSE LICENSE.txt LICENSE.md COPYING COPYING.txt; do
+            raw_url="https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${name}"
+            lic="$(curl -fsSL --max-time 20 "${raw_url}" 2>/dev/null | sed -n '1,240p' || true)"
+            lic="$(sniff_license_text "${lic}")"
+            if [[ -n "${lic}" ]]; then
+                GITHUB_LICENSE_CACHE["${key}"]="${lic}"
+                _GITHUB_REPO_LICENSE_SPDX_RESULT="${lic}"
+                return
+            fi
+        done
+    done
+
+    GITHUB_LICENSE_CACHE["${key}"]="__MISS__"
+}
+
+resolve_go_import_license() {
+    local import_path="$1"
+    local modules_txt="${REPO_ROOT}/vendor/modules.txt"
+    local vendordir check_dir lic module_root module_ver spec cache_dir origin_url owner repo
+
+    _RESOLVE_GO_IMPORT_LICENSE_RESULT=""
+
+    if [[ -v RESOLVED_GO_LICENSE_CACHE["${import_path}"] ]]; then
+        [[ "${RESOLVED_GO_LICENSE_CACHE["${import_path}"]}" == "__MISS__" ]] || _RESOLVE_GO_IMPORT_LICENSE_RESULT="${RESOLVED_GO_LICENSE_CACHE["${import_path}"]}"
+        return
+    fi
+
+    vendordir="${REPO_ROOT}/vendor/${import_path}"
+    if [[ -d "${vendordir}" ]]; then
+        check_dir="${vendordir}"
+        while [[ "${check_dir}" == "${REPO_ROOT}/vendor"* && "${check_dir}" != "${REPO_ROOT}/vendor" && "${check_dir}" != "." ]]; do
+            lic="$(license_from_plain_dir "${check_dir}")"
+            if [[ -n "${lic}" ]]; then
+                RESOLVED_GO_LICENSE_CACHE["${import_path}"]="${lic}"
+                _RESOLVE_GO_IMPORT_LICENSE_RESULT="${lic}"
+                return
+            fi
+            check_dir="$(dirname "${check_dir}")"
+        done
+    fi
+
+    IFS=$'\t' read -r module_root module_ver < <(module_root_and_version_for_import_path "${modules_txt}" "${import_path}") || true
+    if [[ -z "${module_root}" ]]; then
+        module_root="${import_path}"
+    fi
+    if [[ -n "${module_ver}" ]]; then
+        spec="${module_root}@${module_ver}"
+        go_mod_download_field "${spec}" "Dir"
+        cache_dir="${_GO_MOD_DOWNLOAD_FIELD_RESULT}"
+        if [[ -n "${cache_dir}" ]]; then
+            lic="$(license_from_plain_dir "${cache_dir}")"
+            if [[ -n "${lic}" ]]; then
+                RESOLVED_GO_LICENSE_CACHE["${import_path}"]="${lic}"
+                _RESOLVE_GO_IMPORT_LICENSE_RESULT="${lic}"
+                return
+            fi
+        fi
+        go_mod_download_field "${spec}" "URL"
+        origin_url="${_GO_MOD_DOWNLOAD_FIELD_RESULT}"
+    fi
+
+    IFS=$'\t' read -r owner repo < <(github_owner_repo_from_url "${origin_url}") || true
+    if [[ -z "${owner}" || -z "${repo}" ]]; then
+        IFS=$'\t' read -r owner repo < <(github_owner_repo_from_module "${module_root}") || true
+    fi
+    if [[ -n "${owner}" && -n "${repo}" ]]; then
+        github_repo_license_spdx "${owner}" "${repo}"
+        lic="${_GITHUB_REPO_LICENSE_SPDX_RESULT}"
+        if [[ -n "${lic}" ]]; then
+            RESOLVED_GO_LICENSE_CACHE["${import_path}"]="${lic}"
+            _RESOLVE_GO_IMPORT_LICENSE_RESULT="${lic}"
+            return
+        fi
+    fi
+
+    RESOLVED_GO_LICENSE_CACHE["${import_path}"]="__MISS__"
+}
+
+render_missing_license_violation() {
+    local import_path="$1"
+    local lic
+
+    _RENDER_MISSING_LICENSE_VIOLATION_RESULT=""
+
+    resolve_go_import_license "${import_path}"
+    lic="${_RESOLVE_GO_IMPORT_LICENSE_RESULT}"
+    if [[ -z "${lic}" ]]; then
+        _RENDER_MISSING_LICENSE_VIOLATION_RESULT="[NO LICENSE] ${import_path}"
+        return
+    fi
+    if is_allowed_license "${ALLOWED}" "${lic}"; then
+        return
+    fi
+    _RENDER_MISSING_LICENSE_VIOLATION_RESULT="[${lic}] ${import_path}"
+}
+
+# ---------------------------------------------------------------------------
+# Run go-licenses check
+# ---------------------------------------------------------------------------
+echo "Checking licenses against allowlist..."
+set +e
+CHECK_OUTPUT=$(GOWORK="${effective_gowork}" GOFLAGS="-mod=vendor" go-licenses check ./... \
+    --allowed_licenses="${ALLOWED}" \
+    --ignore "${MODULE}" 2>&1)
+set -e
+
+# ---------------------------------------------------------------------------
+# Parse failures into a normalized list: "[LICENSE] module/path"
+# ---------------------------------------------------------------------------
+VIOLATIONS=""
+
+# Normalize: strip quotes, trailing dots/punctuation from library names
+strip_lib() { echo "$1" | sed "s/['\"]//g" | sed 's/[. ]*$//'; }
+
+# Not-allowed licenses
+while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    lib=$(strip_lib "$(echo "${line}" | sed 's/.*found for library //')")
+    lic=$(echo "${line}" | sed 's/Not allowed license \(.*\) found for library.*/\1/' | sed "s/['\"]//g" | xargs)
+    if [[ -z "${lic}" ]]; then
+        render_missing_license_violation "${lib}"
+        [[ -n "${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}" ]] && VIOLATIONS="${VIOLATIONS}${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}\n"
+    else
+        VIOLATIONS="${VIOLATIONS}[${lic}] ${lib}\n"
+    fi
+done < <(echo "${CHECK_OUTPUT}" | grep -i "not allowed license" || true)
+
+# Missing license files
+while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    lib=$(strip_lib "$(echo "${line}" | sed 's/.*Failed to find license for \([^:]*\).*/\1/')" || true)
+    if [[ -n "${lib}" ]]; then
+        render_missing_license_violation "${lib}"
+        [[ -n "${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}" ]] && VIOLATIONS="${VIOLATIONS}${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}\n"
+    fi
+done < <(echo "${CHECK_OUTPUT}" | grep "Failed to find license" || true)
+
+# ---------------------------------------------------------------------------
+# Independent vendor scan: flag vendored modules with no LICENSE file
+# ---------------------------------------------------------------------------
+has_license_file() {
+    local dir="$1"
+    find "${dir}" -maxdepth 1 \( -iname "licen[sc]e*" -o -iname "copying*" \) 2>/dev/null | grep -q .
+}
+
+if [[ -d vendor ]]; then
+    while IFS= read -r modpath; do
+        moddir="vendor/${modpath}"
+        [[ ! -d "${moddir}" ]] && continue
+        # Walk up from module dir to vendor/ looking for a license file
+        check_dir="${moddir}"
+        found_license=false
+        while [[ "${check_dir}" != "vendor" && "${check_dir}" != "." ]]; do
+            if has_license_file "${check_dir}"; then
+                found_license=true
+                break
+            fi
+            check_dir=$(dirname "${check_dir}")
+        done
+        if [[ "${found_license}" == false ]]; then
+            render_missing_license_violation "${modpath}"
+            [[ -n "${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}" ]] && VIOLATIONS="${VIOLATIONS}${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}\n"
+        fi
+    done < <(grep -E '^\#' vendor/modules.txt | sed 's/^# //' | awk '{print $1}' | sort -u)
+fi
+
+# Deduplicate and sort
+CURRENT=$(echo -e "${VIOLATIONS}" | grep -v '^$' | sort -u || true)
+
+# ---------------------------------------------------------------------------
+# Update baseline if requested
+# ---------------------------------------------------------------------------
+if [[ "${UPDATE_BASELINE}" == true ]]; then
+    {
+        echo "# Known license check failures — ratchet baseline."
+        echo "# Auto-generated by: ./scripts/ci_check_licenses --update-baseline"
+        echo "# New dependencies must NOT add entries to this file."
+        echo "# Remove entries as they are fixed (LICENSE files added or deps replaced)."
+        echo "${CURRENT}"
+    } > "${BASELINE_FILE}"
+    CURRENT_COUNT=$(if [[ -z "${CURRENT}" ]]; then echo 0; else echo "${CURRENT}" | wc -l | tr -d ' '; fi)
+    echo "Baseline updated: ${BASELINE_FILE} (${CURRENT_COUNT} entries)"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Load baseline
+# ---------------------------------------------------------------------------
+BASELINE=""
+if [[ -f "${BASELINE_FILE}" ]]; then
+    BASELINE=$(grep -v '^#' "${BASELINE_FILE}" | grep -v '^$' | sort -u || true)
+fi
+
+# ---------------------------------------------------------------------------
+# Ratchet: find new violations not in baseline
+# ---------------------------------------------------------------------------
+NEW_VIOLATIONS=""
+if [[ -n "${CURRENT}" ]]; then
+    NEW_VIOLATIONS=$(comm -23 <(echo "${CURRENT}") <(echo "${BASELINE}"))
+fi
+
+# Find resolved issues (in baseline but no longer failing)
+RESOLVED=""
+if [[ -n "${BASELINE}" ]]; then
+    RESOLVED=$(comm -13 <(echo "${CURRENT}") <(echo "${BASELINE}"))
+fi
+
+# ---------------------------------------------------------------------------
+# Weak copyleft warning
+# ---------------------------------------------------------------------------
+set +e
+WEAK=$(GOWORK="${effective_gowork}" GOFLAGS="-mod=vendor" go-licenses csv ./... --ignore "${MODULE}" 2>/dev/null \
+    | awk -F, -v pat="${WEAK_COPYLEFT}" '$3 ~ pat {print "  " $3 "\t" $1}' \
+    | sort)
+set -e
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+echo ""
+
+count_lines() { if [[ -z "$1" ]]; then echo 0; else echo "$1" | wc -l | tr -d ' '; fi; }
+CURRENT_COUNT=$(count_lines "${CURRENT}")
+BASELINE_COUNT=$(count_lines "${BASELINE}")
+NEW_COUNT=$(count_lines "${NEW_VIOLATIONS}")
+RESOLVED_COUNT=$(count_lines "${RESOLVED}")
+
+if [[ -n "${CURRENT}" ]]; then
+    echo "Known baseline issues (${BASELINE_COUNT} tracked):"
+    echo "${CURRENT}" | while IFS= read -r v; do
+        if echo "${BASELINE}" | grep -qxF "${v}"; then
+            echo "  ${v}  (baseline)"
+        else
+            echo "  ${v}  ** NEW **"
+        fi
+    done
+    echo ""
+fi
+
+if [[ -n "${RESOLVED}" ]]; then
+    echo "Resolved (can be removed from .license-baseline.txt):"
+    echo "${RESOLVED}" | sed 's/^/  /'
+    echo ""
+fi
+
+if [[ -n "${WEAK}" ]]; then
+    echo "Weak copyleft licenses (review before shipping):"
+    echo "${WEAK}"
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+echo "--- License Check Summary ---"
+echo "  Total violations:    ${CURRENT_COUNT}"
+echo "  Baseline (known):    ${BASELINE_COUNT}"
+echo "  New violations:      ${NEW_COUNT}"
+echo "  Resolved:            ${RESOLVED_COUNT}"
+echo ""
+
+if [[ ${NEW_COUNT} -gt 0 ]]; then
+    echo "FAIL: ${NEW_COUNT} new license violation(s) not in baseline."
+    echo "Fix the issue or add to .license-baseline.txt with justification."
+    exit 1
+fi
+
+echo "PASS: no new license violations."
+exit 0

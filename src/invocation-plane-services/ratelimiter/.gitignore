@@ -1,0 +1,4 @@
+.idea
+.env
+vault/secrets.json
+coverage.out

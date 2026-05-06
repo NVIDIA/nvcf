@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+global:
+
+  # Domain for external access (used by Gateway API HTTPRoutes)
+  domain: "localhost"
+
+  # =============================================================================
+  # Helm Chart Sources Configuration
+  # =============================================================================
+  # Configure the OCI registry where NVCF Helm charts are stored.
+  # This must point to a registry containing the NVCF chart packages.
+  # =============================================================================
+  helm:
+    sources:
+      registry: "nvcr.io"
+      repository: "YOUR_ORG/YOUR_TEAM"
+
+  # =============================================================================
+  # Container Image Registry Configuration
+  # =============================================================================
+  # Configure the container registry where NVCF service images are stored.
+  # These images are pulled by Kubernetes when deploying the NVCF stack.
+  # =============================================================================
+  # =============================================================================
+  # Image Pull Secrets Configuration
+  # =============================================================================
+  # Kubernetes imagePullSecrets applied to all NVCF workloads.
+  # These must reference pre-existing Kubernetes secrets in each namespace
+  # where NVCF components are deployed.
+  #
+  # Example: [{name: "my-registry-secret"}]
+  # =============================================================================
+  imagePullSecrets: []
+
+  image:
+    registry: nvcr.io
+    repository: YOUR_ORG/YOUR_TEAM
+
+  nodeSelectors:
+    enabled: false
+    vault:
+      key: nvcf.nvidia.com/workload
+      value: vault
+    cassandra:
+      key: nvcf.nvidia.com/workload
+      value: cassandra
+    controlplane:
+      key: nvcf.nvidia.com/workload
+      value: control-plane
+
+  storageClass: ""
+  storageSize: "10Gi"
+
+  observability:
+    tracing:
+      enabled: false
+      collectorEndpoint: ""
+      collectorPort: 4317
+      collectorProtocol: http
+    metrics:
+      # global.observability.metrics.enabled
+      enabled: false
+
+accounts:
+  limits:
+    maxFunctions: 10
+    maxTasks: 10
+    maxTelemetries: 10
+    maxRegistryCreds: 10
+
+# These static global values are processed in the values template
+nats:
+  enabled: true
+
+cassandra:
+  enabled: true
+  # Bitnami resource preset. "small" may cause OOMKilled and CrashLoopBackoff in some environments.
+  # Consider "large" or higher if necessary.
+  # Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge
+  resourcesPreset: "small"
+
+openbao:
+  enabled: true
+  migrations:
+    issuerDiscovery:
+      enabled: false
+  injector:
+    # Production default: 2 replicas with hard anti-affinity for HA.
+    # Override to 1 in single-node / minimal test pools to avoid Pending pods.
+    replicas: 2
+
+addons:
+  # LLS/TURN Low-Latency Streaming addon
+  # When enabled, configures OpenBao secrets for TURN service and deploys HMAC rotation CronJob
+  lls:
+    enabled: false
+
+  # LLM addon: gateway + request router (stargate) for LLM function invocation
+  llm:
+    enabled: false
+
+stateMetrics:
+  enabled: false
+  # Disable ServiceMonitor for environments without Prometheus Operator
+  serviceMonitor:
+    enabled: false
+
+# Ingress Gateway Configuration
+ingress:
+  gatewayApi:
+    enabled: true
+    controllerNamespace: "" # must be set by the environment
+    routes:
+      nvcfApi:
+        routeAnnotations: {}
+      apiKeys:
+        routeAnnotations: {}
+      invocation:
+        routeAnnotations: {}
+      llmInvocation:
+        routeAnnotations: {}
+      grpc:
+        routeAnnotations: {}
+    gateways:
+      shared:
+        name: "" # must be set by the environment
+        namespace: "" # must be set by the environment
+      grpc:
+        name: "" # must be set by the environment
+        namespace: "" # must be set by the environment

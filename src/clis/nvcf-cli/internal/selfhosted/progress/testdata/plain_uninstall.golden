@@ -1,0 +1,7 @@
+2026-04-29T01:23:45Z [01/3] preflight: starting
+2026-04-29T01:23:45Z [01/3] preflight: complete (0s)
+2026-04-29T01:23:45Z [02/3] render-uninstall: starting
+2026-04-29T01:23:45Z [02/3] render-uninstall: complete (0s)
+2026-04-29T01:23:45Z [03/3] helmfile-destroy: starting
+2026-04-29T01:23:45Z [03/3] helmfile-destroy: complete (45s)
+2026-04-29T01:23:45Z final: success=true cluster=test backend= duration=45s dropped=0

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#
+# This script exits non-zero if .env image tags are out of sync with the
+# vendored operator chart defaults in deployments/nvca-operator/.
+set -eu -o pipefail
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${repo_root}"
+make dotenv-dependencies-update
+git status
+git diff --ignore-space-at-eol --exit-code

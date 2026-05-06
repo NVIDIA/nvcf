@@ -1,0 +1,54 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package autoscaler;
+
+import "google/protobuf/duration.proto";
+
+// Request to fetch autoscaler configuration for a specific function version
+message AutoscalerConfigRequest {
+    string functionId = 1;
+    string functionVersionId = 2;
+}
+
+// Response containing GPU-specific autoscaler configurations
+message AutoscalerConfigResponse {
+    // Map of GPU spec ID to its autoscaler configuration
+    map<string, GpuAutoscaleConfig> configs = 1;
+}
+
+// Autoscaler configuration for a specific GPU type
+message GpuAutoscaleConfig {
+    // Scale-up threshold (0-100 representing percentage)
+    int32 scaleUpThreshold = 1;
+    
+    // Scale-down threshold (0-100 representing percentage)
+    int32 scaleDownThreshold = 2;
+    
+    // Scale-up factor (should be > 1, e.g., 1.2 = 20% increase)
+    float scaleUpFactor = 3;
+    
+    // Scale-down factor (should be < 1, e.g., 0.8 = 20% decrease)
+    float scaleDownFactor = 4;
+    
+    // Scaling metric identifier
+    string scalingMetric = 5;
+    
+    // Stickiness window numerator in minutes
+    int32 stickinessWindowNumerator = 6;
+    
+    // Stickiness window denominator in minutes
+    int32 stickinessWindowDenominator = 7;
+    
+    // Timeout for terminating the last worker when there's no traffic
+    google.protobuf.Duration lastWorkerTerminationTimeout = 8;
+}
+
+// Service for fetching autoscaler configurations
+service AutoscalerConfigService {
+    // Get autoscaler configuration for a function version
+    rpc GetAutoscalerConfig(AutoscalerConfigRequest) returns (AutoscalerConfigResponse);
+}
+

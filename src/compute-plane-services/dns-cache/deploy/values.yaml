@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ============================================================================
+# Unbound DNS Configuration
+# ============================================================================
+
+nodeSelector:
+  nodeGroup: monitoring
+
+replicaCount: 3
+
+images:
+  server: nvcr.io/nv-ngc-devops/unbound:1.22.0-nv1.3.1
+  logger: nvcr.io/nv-ngc-devops/dns-logger:v2.2.1
+  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.5
+  secrets:
+    - nvcr-regcred
+
+unbound:
+  pattern:
+    - 'local-zone: "amazonaws.com" redirect'
+    - 'local-data: "amazonaws.com. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local"'
+    - 'local-zone: "huggingface.co" redirect'
+    - 'local-data: "huggingface.co. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local"'
+    - 'local-zone: "cas-bridge.xethub.hf.co" redirect'
+    - 'local-data: "cas-bridge.xethub.hf.co. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local"'
+    - 'local-zone: "transfer.xethub.hf.co" redirect'
+    - 'local-data: "transfer.xethub.hf.co. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local"'
+    - 'local-zone: "c3d-farm-renders-ap-northeast-1.s3.ap-northeast-1.amazonaws.com." transparent'
+    - 'local-zone: "xfiles.stg.ngc.nvidia.com" redirect'
+    - 'local-data: "xfiles.stg.ngc.nvidia.com. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local"'
+    - 'local-zone: "xfiles.ngc.nvidia.com" redirect'
+    - 'local-data: "xfiles.ngc.nvidia.com. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local"'
+    - 'local-zone: "xlfiles.ngc.nvidia.com" redirect'
+    - 'local-data: "xlfiles.ngc.nvidia.com. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local"'
+
+  # CoreDNS server IP
+  stub_nameserver: 10.96.5.5
+  # ClusterIP of unbound service
+  cluster_ip: 10.96.5.100
+
+# ============================================================================
+# Kyverno Configuration
+# ============================================================================
+# Kyverno ClusterPolicies for DNS and certificate mutations.
+# NOTE: Automatically disabled when webhook.enabled=true.
+
+kyverno:
+  enabled: false
+
+# ============================================================================
+# Webhook Configuration
+# ============================================================================
+# The webhook replaces Kyverno policies for DNS and certificate mutations.
+# When enabled, Kyverno ClusterPolicies are automatically disabled.
+
+webhook:
+  enabled: true
+  image: nvcr.io/nv-ngc-devops/nvcf-pod-mutator:v0.2.1
+  imagePullPolicy: IfNotPresent
+  certificatesImage: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.5
+  replicas: 2
+  failurePolicy: Fail
+  timeoutSeconds: 10
+
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+
+  nodeSelector: {}
+  tolerations: []
+
+  # Optional: use cert-manager instead of built-in self-signed certs.
+  # Only enable if cert-manager + a ClusterIssuer are available.
+  certManager:
+    enabled: false
+    issuerName: selfsigned-issuer
+    issuerKind: ClusterIssuer
+
+  metrics:
+    enabled: true

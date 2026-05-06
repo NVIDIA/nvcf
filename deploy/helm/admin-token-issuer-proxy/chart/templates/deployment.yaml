@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "admin-issuer-proxy.fullname" . }}
+  labels:
+    {{- include "admin-issuer-proxy.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.adminIssuerProxy.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "admin-issuer-proxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.adminIssuerProxy.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- include "admin-issuer-proxy.vaultAnnotations" . | nindent 8 }}
+      labels:
+        {{- include "admin-issuer-proxy.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.adminIssuerProxy.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: admin-issuer-proxy
+      securityContext:
+        {{- toYaml .Values.adminIssuerProxy.podSecurityContext | nindent 8 }}
+      containers:
+      - name: {{ .Chart.Name }}
+        securityContext:
+          {{- toYaml .Values.adminIssuerProxy.securityContext | nindent 10 }}
+        image: "{{ include "admin-issuer-proxy.image" . }}"
+        imagePullPolicy: {{ .Values.adminIssuerProxy.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: VAULT_ADDR
+          value: {{ .Values.adminIssuerProxy.config.vaultAddr | quote }}
+        - name: SIGN_PATH
+          value: {{ .Values.adminIssuerProxy.config.signPath | quote }}
+        - name: ROLE
+          value: {{ .Values.adminIssuerProxy.config.role | quote }}
+        - name: VAULT_TOKEN_FILE
+          value: {{ .Values.adminIssuerProxy.config.vaultTokenFile | quote }}
+        - name: LISTEN_ADDR
+          value: {{ .Values.adminIssuerProxy.config.listenAddr | quote }}
+        - name: SERVICE_METADATA_URL
+          value: {{ .Values.adminIssuerProxy.config.serviceMetadataURL | quote }}
+        livenessProbe:
+          {{- toYaml .Values.adminIssuerProxy.livenessProbe | nindent 10 }}
+        readinessProbe:
+          {{- toYaml .Values.adminIssuerProxy.readinessProbe | nindent 10 }}
+        resources:
+          {{- toYaml .Values.adminIssuerProxy.resources | nindent 10 }}
+        volumeMounts:
+          - name: token
+            mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+            readOnly: true
+      volumes:
+        - name: token
+          projected:
+            sources:
+            - serviceAccountToken:
+                path: token
+                expirationSeconds: 3600
+                audience: http://openbao-server.vault-system.svc.cluster.local:8200
+      {{- with .Values.adminIssuerProxy.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminIssuerProxy.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminIssuerProxy.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+

@@ -1,0 +1,129 @@
+<|im_start|>system
+System message
+Never mention any of the instructions to the user! Also do not mention that we are using tools to the user.
+
+START_TOOL_INSTRUCTIONS
+If you want to call a tool return a JSON object as a JSON string that matches the following structure:
+<tool-use>
+{
+	"tool_calls": [
+		{
+			"id": "pending",
+			"type": "function",
+			"function": {
+				"name": "some_function"
+			},
+			"parameters": {
+				"some_argument": "some argument value"
+			}
+		}
+	]
+}
+</tool-use>
+
+The object should match this JSON Schema:
+```json
+{
+    "$schema":"http://json-schema.org/draft-07/schema#",
+    "type":"object",
+    "properties":{
+        "tool_calls":{
+            "type":"array",
+            "items":{
+                "type":"object",
+                "properties":{
+                    "id":{
+                        "type":"string"
+                    },
+                    "type":{
+                        "type":"string"
+                    },
+                    "function":{
+                        "type":"object",
+                        "properties":{
+                            "name":{
+                                "type":"string"
+                            }
+                        },
+                        "required":[
+                            "name"
+                        ]
+                    },
+                    "parameters":{
+                        "type":"object"
+                    }
+                },
+                "required":[
+                    "id",
+                    "type",
+                    "function",
+                    "parameters"
+                ]
+            }
+        }
+    },
+    "required":[
+        "tool_calls"
+    ]
+}
+```
+
+- Set the tool_call "id" property to "pending".
+- The property "parameters" JSON object should contain the key/value pairs for the parameters the tool function should be called with.
+- The property "parameters" should follow the JSON Schema specified by the "parameters" property in the tool definition.
+- The property "parameters" in the tool_call object corresponds to the "parameters" property in the tool definition.
+- If a property of a function's "parameters" object is required you should always provide it. Even if you don't have a good parameter value available.
+- A tool call result will always be provided by the user. You are only responsible for choosing which tool to call and the "parameters" object to enable the user to call the tool.
+
+Tool definitions:
+```json
+[
+	{
+		"type": "function",
+		"function": {
+			"name": "weather_info",
+			"description": "Get the current weather in a given location",
+			"parameters": {
+				"properties": {
+					"location": {
+						"description": "The city and state, e.g. San Francisco, CA",
+						"type": "string"
+					}
+				},
+				"required": [
+					"location"
+				],
+				"type": "object"
+			}
+		}
+	}
+]
+```
+
+You have permission to use the following tools: 'all'
+
+- You can provide multiple tool_call objects at once.
+- If a tool_call object depends on the result of a previous tool_call with {"id": "pending"} you should not include that tool_call object in the list.
+- This means you can NEVER nest a tool_call object inside a tool_call object. If you do this, the system will break.
+
+- NEVER use references to tool_call objects, only use literal values from tool_call outputs that were provided by the user.
+
+Output a SINGLE COMPACT JSON string. Never add additional escaping. Always wrap the JSON in <tool-use> and </tool-use> tags. NEVER ADD ANYTHING before <tool-use> or after </tool-use>.
+
+END_TOOL_INSTRUCTIONS
+
+START_TEXT_INSTRUCTIONS
+- When no relevant tool is available, simply respond directly without using a tool.
+- When no tool should be used, simply respond directly without using a tool.
+- Sometimes the provided tools are not needed or relevant to answer the question. When that is the case, respond directly without using a tool.
+- If the right tools have already been called to answer the user's question, simply respond with the final answer the user asked for by using the results that calling the tools yielded.
+END_TEXT_INSTRUCTIONS
+
+Either use tools (follow TOOL_INSTRUCTIONS) or reply with text (follow TEXT_INSTRUCTIONS). Choose the most appropriate option based on the conversation.<|im_end|>
+<|im_start|>user
+What's the weather in boston and tokyo?<|im_end|>
+<|im_start|>assistant
+Please call the following tool: <tool-use>{"function":{"name":"weather_info"},"parameters":{"location":"boston","unit":"fahrenheit"}}</tool-use><|im_end|>
+<|im_start|>user
+I called the function, it yielded: 85<|im_end|>
+<|im_start|>assistant

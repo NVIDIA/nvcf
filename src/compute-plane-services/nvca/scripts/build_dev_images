@@ -1,0 +1,17 @@
+#! /usr/bin/env bash
+
+set -eu -o pipefail
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+for img in nvca nvca-webhook-server; do
+    img_tag="stg.nvcr.io/nvidia/nvcf-byoc/${img}:$(git describe --tags | tr -d 'v')-dev"
+    echo "Building image $img_tag"
+    docker build -t $img_tag -f ${REPO_ROOT}/docker/Dockerfile.${img} ${REPO_ROOT}
+    if kubectl config current-context | grep 'kind-'; then
+        echo "Loading image to kind cluster with context: $(kubectl config current-context)"
+        kind load docker-image $img_tag
+    else
+        echo "Pushing image"
+        docker push $img_tag
+    fi
+done

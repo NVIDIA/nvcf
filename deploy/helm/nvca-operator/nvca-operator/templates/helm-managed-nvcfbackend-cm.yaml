@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if eq .Values.ngcConfig.clusterSource "helm-managed" }}
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvcfbackend-helm-managed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcaop.labels" . | nindent 4 }}
+data:
+  cluster-dto.yaml: |
+    clusterId: {{ .Values.clusterID | quote }}
+    clusterName: {{ .Values.clusterName | quote }}
+    ncaID: {{ .Values.ncaID | quote }}
+    {{- with .Values.helmManaged }}
+    {{- $clientID := .oAuthClientID | default .ssaClientID | default "" }}
+    {{- $mountPath := "" }}
+    {{- if $.Values.vaultConfig }}
+    {{- $mountPath = $.Values.vaultConfig.oAuthClientMountPath }}
+    {{- if and (not $mountPath) $clientID $.Values.vaultConfig.oAuthClientMountPathTemplate }}
+    {{- $mountPath = printf $.Values.vaultConfig.oAuthClientMountPathTemplate $clientID }}
+    {{- end }}
+    {{- end }}
+    clusterDescription: {{ .clusterDescription | default $.Values.clusterName | quote }}
+    clusterGroupName: {{ .clusterGroupName | quote }}
+    clusterGroupId: {{ .clusterGroupID | default $.Values.clusterGroupID | quote }}
+    nvcaVersion: {{ .nvcaVersion | quote }}
+    oAuthClientId: {{ $clientID | quote }}
+    oAuthClientMountPath: {{ $mountPath | quote }}
+    cloudProvider: {{ .cloudProvider | quote }}
+    region: {{ .clusterRegion | quote }}
+    attributes: {{ include "nvcaop.jsonListOrEmpty" .clusterAttributes }}
+    capabilities: {{ include "nvcaop.jsonListOrEmpty" .featureGateValues }}
+    gpusB64: {{ .gpuManualInstanceConfigB64 | quote }}
+    {{- with .imageCredHelper }}
+    imageCredentialHelper:
+      imageConfig:
+        repository: {{ include "nvcaop.imageCredHelperRepository" (dict "imageRepository" .imageRepository "defaultRepository" $.Values.image.repository) | quote }}
+        tag: {{ .imageTag | quote }}
+    {{- end }}
+    {{- with .otelCollector }}
+    otelCollector:
+      enabled: {{ .enabled }}
+      imageConfig:
+        repository: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .imageRepository "defaultRepository" $.Values.image.repository) | quote }}
+        tag: {{ .imageTag | quote }}
+    {{- end }}
+    {{- end }}
+    {{- with .Values.agent.tolerations }}
+    agent:
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+{{- else }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvcfbackend-helm-managed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcaop.labels" . | nindent 4 }}
+data: {}
+{{- end }}

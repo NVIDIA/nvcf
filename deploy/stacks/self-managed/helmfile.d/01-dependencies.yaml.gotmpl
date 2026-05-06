@@ -1,0 +1,55 @@
+environments:
+  default:
+    values:
+      - ../environments/base.yaml
+      - ../environments/{{ requiredEnv "HELMFILE_ENV" }}.yaml
+
+---
+
+repositories:
+  - name: nvcf
+    url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
+    oci: true
+
+helmDefaults:
+  createNamespace: true
+  devel: true
+  timeout: 900
+  wait: true
+  waitForJobs: true
+  diffArgs:
+    - "--dry-run=server"
+
+templates:
+  dependency: &dependency
+    chart: nvcf/helm-nvcf-{{`{{ .Release.Name }}`}}
+    values:
+      - ../global.yaml.gotmpl
+      - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
+    wait: true
+    waitForJobs: true
+    labels:
+      release-group: dependencies
+
+releases:
+
+  # --- NVCF NCP Dependencies ---
+  - name: nats
+    version: 0.6.0
+    condition: nats.enabled # From defaults.yaml or env overrides
+    namespace: nats-system
+    <<: *dependency # Inherits base values from the dependency template
+
+  - name: openbao-server # this name MUST not change
+    version: 0.30.3
+    condition: openbao.enabled # From defaults.yaml or env overrides
+    namespace: vault-system
+    <<: *dependency # Inherits base values from the dependency template
+    needs:
+      - nats-system/nats
+
+  - name: cassandra
+    version: 0.14.0
+    condition: cassandra.enabled # From defaults.yaml or env overrides
+    namespace: cassandra-system
+    <<: *dependency # Inherits base values from the dependency template

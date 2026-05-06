@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "reval.fullname" . }}-config
+  labels:
+    {{- include "reval.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    http:
+      api-port: {{ .Values.reval.service.ports.http }}
+      metrics-port: {{ .Values.reval.service.ports.metrics }}
+      management-port: {{ .Values.reval.service.ports.management }}
+      local: {{ .Values.reval.serviceConfig.http.local }}
+
+    logging:
+      level: {{ .Values.reval.serviceConfig.logging.level | quote }}
+      zap-configuration: {{ .Values.reval.serviceConfig.logging.zapConfiguration | quote }}
+
+    telemetry:
+      service-name: {{ .Values.reval.serviceConfig.telemetry.serviceName | quote }}
+      deployment-environment-name: {{ .Values.reval.serviceConfig.telemetry.deploymentEnvironmentName | quote }}
+
+    auth:
+      enabled: {{ .Values.reval.serviceConfig.auth.enabled }}
+    {{- if .Values.reval.serviceConfig.auth.enabled }}
+      jwk-set-url: {{ .Values.reval.serviceConfig.auth.jwkSetUrl | quote }}
+      validate-required-scopes: {{ .Values.reval.serviceConfig.auth.validateRequiredScopes | quote }}
+      render-required-scopes: {{ .Values.reval.serviceConfig.auth.renderRequiredScopes | quote }}
+    {{- end }}
+    {{- if .Values.reval.serviceConfig.auth.oidc.enabled }}
+      oidc:
+        enabled: true
+        introspect-url: {{ .Values.reval.serviceConfig.auth.oidc.introspectUrl | quote }}
+        cache-ttl: {{ .Values.reval.serviceConfig.auth.oidc.cacheTtl | quote }}
+    {{- end }}
+
+    {{- if .Values.reval.serviceConfig.tracing.enabled }}
+    tracing:
+      enabled: true
+      endpoint: {{ .Values.reval.serviceConfig.tracing.endpoint | quote }}
+      insecure: {{ .Values.reval.serviceConfig.tracing.insecure }}
+    {{- end }}

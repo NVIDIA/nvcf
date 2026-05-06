@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# ci_check_licenses — checks that all dependencies use acceptable licenses.
+#
+# The list of allowed SPDX license identifiers lives in .allowed-licenses.txt at the repo root.
+# Known failures are tracked in .license-baseline.txt (ratchet). The script fails only if
+# NEW violations are introduced beyond the baseline.
+#
+# Usage:
+#   ./scripts/ci_check_licenses                   Run check (ratcheted against baseline)
+#   ./scripts/ci_check_licenses --update-baseline  Regenerate .license-baseline.txt from current state
+#
+# Exit codes:
+#   0  no new violations (known baseline issues produce warnings only)
+#   1  new violations found that are not in the baseline
+
+set -euo pipefail
+
+UPDATE_BASELINE=false
+[[ "${1:-}" == "--update-baseline" ]] && UPDATE_BASELINE=true
+
+GO_LICENSES_VERSION="v2.0.1"
+
+WEAK_COPYLEFT="MPL-2.0|LGPL-2.0-only|LGPL-2.0-or-later|LGPL-2.1-only|LGPL-2.1-or-later|LGPL-3.0-only|LGPL-3.0-or-later|CDDL-1.0|EPL-1.0|EPL-2.0"
+
+# ---------------------------------------------------------------------------
+# Install go-licenses if not already present
+# ---------------------------------------------------------------------------
+export PATH="$(go env GOPATH)/bin:${PATH}"
+
+if ! command -v go-licenses &>/dev/null; then
+    echo "Installing go-licenses ${GO_LICENSES_VERSION}..."
+    GOFLAGS="" go install "github.com/google/go-licenses/v2@${GO_LICENSES_VERSION}"
+fi
+
+# ---------------------------------------------------------------------------
+MODULE=$(go list -m)
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ALLOWED=$(paste -sd, "${REPO_ROOT}/.allowed-licenses.txt")
+BASELINE_FILE="${REPO_ROOT}/.license-baseline.txt"
+
+# ---------------------------------------------------------------------------
+# Run go-licenses check (disable errexit — non-zero exit is expected for violations)
+# ---------------------------------------------------------------------------
+echo "Checking licenses against allowlist..."
+set +e
+CHECK_OUTPUT=$(GOPROXY=https://proxy.golang.org go-licenses check ./... \
+    --allowed_licenses="${ALLOWED}" \
+    --ignore "${MODULE}" 2>&1)
+set -e
+
+# ---------------------------------------------------------------------------
+# Show raw go-licenses output for debugging (always visible in CI logs)
+# ---------------------------------------------------------------------------
+if [[ -n "${CHECK_OUTPUT}" ]]; then
+    echo "go-licenses raw output:"
+    echo "${CHECK_OUTPUT}"
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# Parse failures into a normalized list: "[LICENSE] module/path"
+# Handles both go-licenses v1 ("Not allowed license X found for library Y")
+# and go-licenses v2 ("Y has a X license which is not allowed").
+# ---------------------------------------------------------------------------
+VIOLATIONS=""
+
+strip_lib() { echo "$1" | sed "s/['\"]//g" | sed 's/[. ]*$//'; }
+
+# v1 pattern: "Not allowed license X found for library Y"
+# v2 pattern: "Y has a "X" license which is not allowed"
+while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    if echo "${line}" | grep -qi "found for library"; then
+        lib=$(strip_lib "$(echo "${line}" | sed 's/.*found for library //')")
+        lic=$(echo "${line}" | sed 's/[Nn]ot allowed license \(.*\) found for library.*/\1/' | sed "s/['\"]//g" | xargs)
+    else
+        lib=$(strip_lib "$(echo "${line}" | sed 's/.*"\([^"]*\)" has a.*/\1/')")
+        lic=$(echo "${line}" | sed 's/.*has a ["\x27]*\([^"'\'']*\)["\x27]* license.*/\1/' | sed "s/['\"]//g" | xargs)
+    fi
+    if [[ -z "${lic}" || "${lic}" == "${line}" ]]; then
+        VIOLATIONS="${VIOLATIONS}[NO LICENSE] ${lib}\n"
+    else
+        VIOLATIONS="${VIOLATIONS}[${lic}] ${lib}\n"
+    fi
+done < <(echo "${CHECK_OUTPUT}" | grep -iE "not allowed license|has a .* license which is not allowed" || true)
+
+# Missing license files
+while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    lib=$(strip_lib "$(echo "${line}" | sed 's/.*Failed to find license for \([^:]*\).*/\1/')" || true)
+    [[ -n "${lib}" ]] && VIOLATIONS="${VIOLATIONS}[NO LICENSE] ${lib}\n"
+done < <(echo "${CHECK_OUTPUT}" | grep -i "failed to find license" || true)
+
+# Deduplicate and sort (|| true: grep -v '^$' exits 1 when input is empty)
+CURRENT=$(echo -e "${VIOLATIONS}" | grep -v '^$' | sort -u || true)
+
+# ---------------------------------------------------------------------------
+# Update baseline if requested
+# ---------------------------------------------------------------------------
+if [[ "${UPDATE_BASELINE}" == true ]]; then
+    {
+        echo "# Known license check failures — ratchet baseline."
+        echo "# Auto-generated by: ./scripts/ci_check_licenses --update-baseline"
+        echo "# New dependencies must NOT add entries to this file."
+        echo "# Remove entries as they are fixed (LICENSE files added or deps replaced)."
+        if [[ -n "${CURRENT}" ]]; then echo "${CURRENT}"; fi
+    } > "${BASELINE_FILE}"
+    CURRENT_COUNT=$(if [[ -z "${CURRENT}" ]]; then echo 0; else echo "${CURRENT}" | wc -l | tr -d ' '; fi)
+    echo "Baseline updated: ${BASELINE_FILE} (${CURRENT_COUNT} entries)"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Load baseline (|| true: grep exits 1 when file has only comments/blanks)
+# ---------------------------------------------------------------------------
+BASELINE=""
+if [[ -f "${BASELINE_FILE}" ]]; then
+    BASELINE=$(grep -v '^#' "${BASELINE_FILE}" | grep -v '^$' | sort -u || true)
+fi
+
+# ---------------------------------------------------------------------------
+# Ratchet: find new violations not in baseline
+# ---------------------------------------------------------------------------
+NEW_VIOLATIONS=""
+if [[ -n "${CURRENT}" && -n "${BASELINE}" ]]; then
+    NEW_VIOLATIONS=$(comm -23 <(echo "${CURRENT}") <(echo "${BASELINE}") || true)
+elif [[ -n "${CURRENT}" ]]; then
+    NEW_VIOLATIONS="${CURRENT}"
+fi
+
+# Find resolved issues (in baseline but no longer failing)
+RESOLVED=""
+if [[ -n "${BASELINE}" && -n "${CURRENT}" ]]; then
+    RESOLVED=$(comm -13 <(echo "${CURRENT}") <(echo "${BASELINE}") || true)
+elif [[ -n "${BASELINE}" ]]; then
+    RESOLVED="${BASELINE}"
+fi
+
+# ---------------------------------------------------------------------------
+# Weak copyleft warning
+# ---------------------------------------------------------------------------
+set +e
+WEAK=$(GOPROXY=https://proxy.golang.org go-licenses csv ./... \
+    --ignore "${MODULE}" 2>/dev/null \
+    | awk -F, -v pat="${WEAK_COPYLEFT}" '$3 ~ pat {print "  " $3 "\t" $1}' \
+    | sort)
+set -e
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+echo ""
+
+count_lines() { if [[ -z "$1" ]]; then echo 0; else echo "$1" | wc -l | tr -d ' '; fi; }
+CURRENT_COUNT=$(count_lines "${CURRENT}")
+BASELINE_COUNT=$(count_lines "${BASELINE}")
+NEW_COUNT=$(count_lines "${NEW_VIOLATIONS}")
+RESOLVED_COUNT=$(count_lines "${RESOLVED}")
+
+if [[ -n "${CURRENT}" ]]; then
+    echo "Known baseline issues (${BASELINE_COUNT} tracked):"
+    echo "${CURRENT}" | while IFS= read -r v; do
+        if echo "${BASELINE}" | grep -qxF "${v}"; then
+            echo "  ${v}  (baseline)"
+        else
+            echo "  ${v}  ** NEW **"
+        fi
+    done
+    echo ""
+fi
+
+if [[ -n "${RESOLVED}" ]]; then
+    echo "Resolved (can be removed from .license-baseline.txt):"
+    echo "${RESOLVED}" | sed 's/^/  /'
+    echo ""
+fi
+
+if [[ -n "${WEAK}" ]]; then
+    echo "Weak copyleft licenses (review before shipping):"
+    echo "${WEAK}"
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+echo "--- License Check Summary ---"
+echo "  Total violations:    ${CURRENT_COUNT}"
+echo "  Baseline (known):    ${BASELINE_COUNT}"
+echo "  New violations:      ${NEW_COUNT}"
+echo "  Resolved:            ${RESOLVED_COUNT}"
+echo ""
+
+if [[ ${NEW_COUNT} -gt 0 ]]; then
+    echo "FAIL: ${NEW_COUNT} new license violation(s) not in baseline."
+    echo "Fix the issue or add to .license-baseline.txt with justification."
+    exit 1
+fi
+
+echo "PASS: no new license violations."
+exit 0

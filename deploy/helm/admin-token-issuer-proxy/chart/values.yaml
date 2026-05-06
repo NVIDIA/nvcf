@@ -1,0 +1,219 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default values for admin-issuer-proxy.
+# This is a YAML-formatted file that declares variables to be passed into the Helm templates.
+
+adminIssuerProxy:
+  # Number of pod replicas to run. For high availability, consider increasing this value
+  # and configuring appropriate affinity rules.
+  replicaCount: 1
+
+  image:
+    # Container image repository path. This field is required and must be set during installation.
+    # Example: "nvcf/admin-issuer-proxy"
+    repository: ""
+
+    # Container image registry URL. This field is required and must be set during installation.
+    # Example: "registry.example.com"
+    registry: ""
+
+    # Image pull policy for the container. Valid values: Always, IfNotPresent, Never
+    pullPolicy: IfNotPresent
+
+    # Image tag to use. Defaults to the appVersion from Chart.yaml if not specified.
+    tag: "1.0.1"
+
+  # List of image pull secrets for accessing private container registries.
+  # Example:
+  # imagePullSecrets:
+  #   - name: registry-credentials
+  imagePullSecrets: []
+
+  # Override the chart name used in resource names. Leave empty to use the chart name.
+  nameOverride: ""
+
+  # Override the full generated name used in resource names. Leave empty to use the default naming convention.
+  fullnameOverride: ""
+
+  # Annotations to add to the pod. Commonly used for Vault Agent injector configuration.
+  # Example for Vault integration:
+  # podAnnotations:
+  #   vault.hashicorp.com/agent-inject: "true"
+  #   vault.hashicorp.com/role: "admin-issuer-proxy"
+  #   vault.hashicorp.com/agent-inject-secret-token: "auth/token/lookup-self"
+  podAnnotations: {}
+
+  # Security context for the entire pod. These settings enforce security best practices
+  # and should align with Kubernetes Pod Security Standards.
+  podSecurityContext:
+    # Ensures the container cannot run as root user
+    runAsNonRoot: true
+
+    # UID that the container process runs as
+    runAsUser: 1000
+
+    # GID for filesystem ownership
+    fsGroup: 1000
+
+    # Seccomp profile to restrict system calls
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Security context for the container. These settings provide defense-in-depth security controls.
+  securityContext:
+    # Prevents the container from gaining additional privileges
+    allowPrivilegeEscalation: false
+
+    # Drops all Linux capabilities for minimal privilege
+    capabilities:
+      drop:
+      - ALL
+
+    # Makes the root filesystem read-only to prevent tampering
+    readOnlyRootFilesystem: true
+
+    # Ensures the container cannot run as root
+    runAsNonRoot: true
+
+    # UID that the container process runs as
+    runAsUser: 1000
+
+  # Kubernetes Service configuration for exposing the application
+  service:
+    # Service type. For internal-only access, use ClusterIP. For external access, consider LoadBalancer or NodePort.
+    type: ClusterIP
+
+    # Port that the service will expose
+    port: 8080
+
+  # ServiceAccount configuration. The ServiceAccount is used for pod identity and RBAC.
+  serviceAccount:
+    # Annotations to add to the ServiceAccount. Commonly used for cloud provider IAM bindings.
+    # Example for AWS:
+    # annotations:
+    #   eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/admin-issuer-proxy
+    annotations: {}
+
+  # Application-specific configuration. These values are passed to the proxy service as environment
+  # variables or configuration file entries.
+  config:
+    # URL of the Vault or OpenBao server. Should be accessible from the Kubernetes cluster.
+    # This is the primary endpoint for JWT signing operations.
+    vaultAddr: "http://openbao-server.vault-system.svc.cluster.local:8200"
+
+    # Path in Vault/OpenBao where the JWT signing endpoint is located.
+    # This path should be configured in your Vault/OpenBao instance with appropriate policies.
+    signPath: "services/nvcf-api/jwt/sign"
+
+    # Vault/OpenBao role used for authentication. This role must exist in your Vault/OpenBao
+    # configuration and have appropriate permissions for the signing path.
+    role: "admin-issuer-proxy"
+
+    # Path to the file containing the Vault/OpenBao authentication token.
+    # When using Vault Agent injector, this is typically the path where the injected token is mounted.
+    vaultTokenFile: "/vault/secrets/token"
+
+    # Address and port that the proxy service listens on. The port must match the service.port value.
+    listenAddr: ":8080"
+
+    # URL of the service metadata endpoint. Used to retrieve information about registered services
+    # for token scope validation.
+    serviceMetadataURL: "http://api-keys.api-keys.svc.cluster.local:8080/v1/services"
+
+  # Gateway API configuration for exposing the service through an ingress gateway.
+  # When enabled, an HTTPRoute resource will be created for routing external traffic to the service.
+  gateway:
+    # Enable or disable gateway integration. Set to false if using alternative ingress methods.
+    enabled: true
+
+    # Namespace where the Gateway resource is located
+    namespace: envoy-gateway-system
+
+    # Reference to the Gateway resource to attach this HTTPRoute to
+    gatewayRef:
+      name: shared-gw
+
+    # Hostname for routing requests. Clients must use this hostname to reach the service.
+    hostname: "api-keys.nvcf.localhost"
+
+    # Path prefix for routing requests to this service. Only requests matching this path will be routed.
+    path: "/v1/admin/keys"
+
+  # Resource requests and limits for the container. Adjust these values based on observed
+  # usage patterns and cluster capacity. Requests are used for scheduling, limits enforce caps.
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+  # Liveness probe configuration. Kubernetes uses this to determine if the container should be restarted.
+  # The probe checks the /healthz endpoint to verify the service is functioning.
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 8080
+    # Wait time before the first probe is executed after container start
+    initialDelaySeconds: 10
+    # Interval between probe attempts
+    periodSeconds: 30
+
+  # Readiness probe configuration. Kubernetes uses this to determine if the pod should receive traffic.
+  # The probe checks the /healthz endpoint to verify the service is ready to handle requests.
+  readinessProbe:
+    httpGet:
+      path: /healthz
+      port: 8080
+    # Wait time before the first probe is executed after container start
+    initialDelaySeconds: 5
+    # Interval between probe attempts
+    periodSeconds: 10
+
+  # Node selector for pod scheduling. Use this to constrain pods to nodes with specific labels.
+  # Example:
+  # nodeSelector:
+  #   kubernetes.io/os: linux
+  #   node.kubernetes.io/instance-type: m5.large
+  nodeSelector: {}
+
+  # Tolerations for pod scheduling. Use this to allow pods to schedule on nodes with matching taints.
+  # Example:
+  # tolerations:
+  #   - key: "dedicated"
+  #     operator: "Equal"
+  #     value: "admin-services"
+  #     effect: "NoSchedule"
+  tolerations: []
+
+  # Affinity rules for pod scheduling. Use this to control pod placement based on node properties
+  # or proximity to other pods.
+  # Example for pod anti-affinity:
+  # affinity:
+  #   podAntiAffinity:
+  #     preferredDuringSchedulingIgnoredDuringExecution:
+  #       - weight: 100
+  #         podAffinityTerm:
+  #           labelSelector:
+  #             matchExpressions:
+  #               - key: app.kubernetes.io/name
+  #                 operator: In
+  #                 values:
+  #                   - admin-issuer-proxy
+  #           topologyKey: kubernetes.io/hostname
+  affinity: {}
+

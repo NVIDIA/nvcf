@@ -1,0 +1,4 @@
+<s>[INST][/INST]assistant message 1</s>[INST][/INST]assistant message 2</s>[INST]user message 1[/INST]</s>[INST]system message 1
+system message 2
+
+user message 2[/INST]

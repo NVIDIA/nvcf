@@ -1,0 +1,18 @@
+{
+  "functionId": "func1-05dd9ee9-9d60-4285-bc9b-3bf3f5880f20",
+  "versionId": "version1-588f2a65-a815-496e-8958-f65826d63d38",
+  "deploymentSpecifications": [
+    {
+      "gpu": "H100",
+      "instanceType": "NCP.GPU.H100_1x",
+      "minInstances": 1,
+      "maxInstances": 1,
+      "maxRequestConcurrency": 10,
+      "configuration": {
+        "image": {
+          "repository": "nvcr.io/0651155215864979/ncp-dev/nvcf-test-func"
+        }
+      }
+    }
+  ]
+}

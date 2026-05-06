@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# otel collector base configuration
+otel-collector:
+  mode: deployment
+  replicaCount: 1
+  image:
+    repository: "otel/opentelemetry-collector-contrib"
+  resources:
+    limits:
+      cpu: 2
+      memory: 4Gi
+    requests:
+      cpu: 1
+      memory: 1Gi
+  livenessProbe:
+    initialDelaySeconds: 10
+    httpGet:
+      port: 13133
+      path: /health
+  readinessProbe:
+    initialDelaySeconds: 10
+    httpGet:
+      port: 13133
+      path: /health
+  ports:
+    otlp:
+      enabled: true
+      containerPort: 14357
+      servicePort: 14357
+      protocol: TCP
+    otlp-http:
+      enabled: true
+      containerPort: 14358
+      servicePort: 14358
+      protocol: TCP
+    metrics:
+      enabled: true
+      containerPort: 18888
+      servicePort: 18888
+      protocol: TCP
+  extraEnvs:
+    - name: NVCF_FUNCTION_ID
+      value: "CI_JOB_ID" # injected by gitlab ci pipeline

@@ -1,0 +1,38 @@
+####
+### Dockerfile for NVCF OpenTelemetry Collector
+###
+### Use case: NVCA agent OTel sidecar, etc.
+####
+
+####
+### Stage 1: Build OpenTelemetry Collector binary
+####
+FROM --platform=$BUILDPLATFORM golang:1.26.2-bookworm AS builder-otelcol
+
+ARG TARGETOS=linux
+ARG TARGETARCH
+ARG OTEL_BUILDER_VERSION=v0.147.0
+
+ENV CGO_ENABLED=0
+
+WORKDIR /app
+
+COPY ./otel-collector-build.yaml ./otel-collector-build.yaml
+
+RUN go install go.opentelemetry.io/collector/cmd/builder@${OTEL_BUILDER_VERSION}
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} builder --config=./otel-collector-build.yaml
+
+####
+### Stage 2: Create distroless image for nvcf-otel-collector
+####
+FROM nvcr.io/nvidia/distroless/go:v4.0.4 AS nvcf-otel-collector
+
+LABEL description="NVCF OpenTelemetry Collector - Custom build with curated components for NVCF services"
+LABEL version="0.147.2"
+
+COPY --from=builder-otelcol /app/output/otelcol-contrib /otelcol-contrib
+
+EXPOSE 13133/tcp 8888/tcp
+
+ENTRYPOINT ["/otelcol-contrib"]
+CMD ["--config=/etc/otelcol/config.yaml"]

@@ -1,0 +1,8 @@
+2026-04-29T03:45:01Z [pre] check_started        local-host-tools/kubectl-on-path
+2026-04-29T03:45:01Z [pre] check_completed      local-host-tools/kubectl-on-path           passed=true detail="1.30.2"
+2026-04-29T03:45:01Z [pre] check_started        local-host-tools/helmfile-on-path
+2026-04-29T03:45:01Z [pre] check_completed      local-host-tools/helmfile-on-path          passed=true detail="0.162.0"
+2026-04-29T03:45:08Z [pre] check_started        pre-kubernetes-setup/gateway-api
+2026-04-29T03:45:08Z [pre] check_completed      pre-kubernetes-setup/gateway-api           passed=false severity=error message="Gateway API CRDs not installed" hintURL="https://docs.nvidia.com/nvcf/self-hosted/gateway-api"
+2026-04-29T03:45:08Z [pre] category_completed   pre-kubernetes-setup     passed=13 failed=1 duration=2.4s
+2026-04-29T03:45:09Z final  verdict=failed totalChecks=14 passed=13 failed=1

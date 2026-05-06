@@ -1,0 +1,83 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: 1
+default_tags:
+  - eks
+  - nvcf-cds
+  - prod
+go_work:
+  go: "1.26"
+  use:
+    - tools/byoo
+    - tools/collect-dependencies
+    - tools/docs-version-sync
+    - tools/generate-subproject-ci
+    - tools/sync-synthetic-imports
+shared_change_paths:
+  - .gitlab-ci.yml
+  - tools/ci/**/*
+  - tools/generate-subproject-ci/**/*
+  - tools/scripts/update-go-work
+profiles:
+  go-library:
+    stage: validate
+    image: golang:1.26-bookworm
+    variables:
+      GOTOOLCHAIN: local
+      GOWORK: $CI_PROJECT_DIR/go.work
+    checks:
+      - id: vendor
+        type: go-vendor
+      - id: codegen
+        type: go-codegen
+        install:
+          - k8s.io/code-generator/cmd/deepcopy-gen@v0.34.2
+        command: ./scripts/codegen_update
+      - id: license
+        type: shell
+        command: ./scripts/ci_check_license
+      - id: lint
+        type: shell
+        command: make lint
+      - id: unit-tests
+        type: go-unit-tests
+        results_dir: public/{{ .ID }}
+        coverage: '/total:[ \ta-z()]*\d+\.\d+/'
+        artifacts:
+          - public/{{ .ID }}/report.json
+          - public/{{ .ID }}/cover.txt
+          - public/{{ .ID }}/cover.html
+        expire_in: 30 days
+  docs:
+    stage: validate
+    image: dockerhub.nvidia.com/node:24-alpine
+    variables:
+      FERN_NO_VERSION_REDIRECTION: "true"
+    checks:
+      - id: lint
+        type: shell
+        command: apk add --no-cache go && ./tools/ci/check-docs
+subprojects:
+  - id: nvcf-go
+    path: src/libraries/go/lib
+    profile: go-library
+    go_work: true
+    change_paths:
+      - src/libraries/go/lib/go.mod
+      - src/libraries/go/lib/go.sum
+      - src/libraries/go/lib/Makefile
+      - src/libraries/go/lib/pkg/**/*
+      - src/libraries/go/lib/scripts/**/*
+      - src/libraries/go/lib/testdata/**/*
+      - src/libraries/go/lib/validator/**/*
+      - src/libraries/go/lib/vendor/**/*
+  - id: docs
+    path: .
+    profile: docs
+    change_paths:
+      - docs/**/*
+      - docs/version-catalog/**/*
+      - fern/**/*
+      - tools/docs-version-sync/**/*
+      - .rumdl.toml

@@ -1,0 +1,1033 @@
+{
+    "title": "Chart Values",
+    "type": "object",
+    "properties": {
+        "image": {
+            "type": "object",
+            "properties": {
+                "repository": {
+                    "type": "string",
+                    "description": "NVCA Operator container registry path, without tag",
+                    "default": "nvcr.io/nvidia/nvcf-byoc/nvca-operator"
+                },
+                "tag": {
+                    "type": "string",
+                    "description": "NVCA Operator container image tag. This defaults to the chart version",
+                    "default": ""
+                },
+                "pullPolicy": {
+                    "type": "string",
+                    "description": "K8s ImagePullPolicy",
+                    "default": "IfNotPresent"
+                }
+            }
+        },
+        "nvcaImage": {
+            "type": "object",
+            "properties": {
+                "repositoryOverride": {
+                    "type": "string",
+                    "description": "(Optional) Full NVCA container registry path, without tag. Only set this if the default needs to be overridden, for example \"stg.nvcr.io/nvidia/nvcf-byoc/nvca\". The tag is set in the cluster config",
+                    "default": ""
+                },
+                "pullPolicy": {
+                    "type": "string",
+                    "description": "K8s ImagePullPolicy",
+                    "default": "IfNotPresent"
+                }
+            }
+        },
+        "otelCollector": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable OTel collector sidecar for K8s event collection",
+                    "default": false
+                },
+                "imageRepository": {
+                    "type": "string",
+                    "description": "(OPTIONAL) Image repository of OpenTelemetry Collector sidecar. If not specified, it will be calculated based on image.repository (stg vs prod).",
+                    "default": ""
+                },
+                "imageTag": {
+                    "type": "string",
+                    "description": "Image tag of OpenTelemetry Collector sidecar.",
+                    "default": "0.143.2"
+                },
+                "resources": {
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string",
+                                    "description": "CPU limit for the OTel collector container",
+                                    "default": "1000m"
+                                },
+                                "memory": {
+                                    "type": "string",
+                                    "description": "Memory limit for the OTel collector container",
+                                    "default": "1Gi"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string",
+                                    "description": "CPU request for the OTel collector container",
+                                    "default": "200m"
+                                },
+                                "memory": {
+                                    "type": "string",
+                                    "description": "Memory request for the OTel collector container",
+                                    "default": "256Mi"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "generateImagePullSecret": {
+            "type": "boolean",
+            "description": "Use the ngcConfig.serviceKey to generate an image pull secret for nvca and nvca-operator Pods",
+            "default": true
+        },
+        "imagePullSecretName": {
+            "type": "string",
+            "description": "Name of the image pull secret to use for nvca and nvca-operator Pods.",
+            "default": "nvca-operator-image-pull"
+        },
+        "imagePullSecrets": {
+            "type": "array",
+            "description": "List of pre-existing imagePullSecret objects in the nvca-operator namespace to use for nvca and nvca-operator Pods. Each object must have a 'name' field. Example: [{name: \"foo-bar\"}, {name: \"baz\"}]",
+            "default": [],
+            "items": {}
+        },
+        "serviceAccount": {
+            "type": "object",
+            "properties": {
+                "create": {
+                    "type": "boolean",
+                    "description": "Specifies whether a ServiceAccount should be created",
+                    "default": true
+                },
+                "annotations": {
+                    "type": "object",
+                    "description": "Additional custom annotations for the ServiceAccount",
+                    "default": {}
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The name of the ServiceAccount to use.",
+                    "default": ""
+                }
+            }
+        },
+        "replicaCount": {
+            "type": "number",
+            "description": "Replica count for the operator deployment",
+            "default": 1
+        },
+        "systemNamespace": {
+            "type": "string",
+            "description": "Namespace in which NVCFBackend objects are created.",
+            "default": "nvca-operator"
+        },
+        "logLevel": {
+            "type": "string",
+            "description": "Logging level for the module",
+            "default": "info"
+        },
+        "ncaID": {
+            "type": "string",
+            "description": "(REQUIRED) NVIDIA Cloud Account ID of the Primary Account",
+            "default": ""
+        },
+        "clusterID": {
+            "type": "string",
+            "description": "ID of the Cluster for this NVCA instance to manage (REQUIRED when ngcConfig.clusterSource is \"self-managed\")",
+            "default": ""
+        },
+        "clusterGroupID": {
+            "type": "string",
+            "description": "Group ID of the Cluster for this NVCA instance to manage (REQUIRED when ngcConfig.clusterSource is \"self-managed\"; for \"helm-managed\" prefer helmManaged.clusterGroupID — this top-level value is used as a fallback if helmManaged.clusterGroupID is unset)",
+            "default": ""
+        },
+        "clusterName": {
+            "type": "string",
+            "description": "for metrics & telemetry (REQUIRED when ngcConfig.clusterSource is \"helm-managed\")",
+            "default": ""
+        },
+        "k8sVersionOverride": {
+            "type": "string",
+            "description": "Override the K8s version that NVCA registers with",
+            "default": ""
+        },
+        "priorityClassName": {
+            "type": "string",
+            "description": "K8s PriorityClassName for NVCA pods preference during evictions",
+            "default": ""
+        },
+        "tolerations": {
+            "type": "array",
+            "description": "K8s tolerations for the nvca-operator pod",
+            "default": [],
+            "items": {
+                "type": "object"
+            }
+        },
+        "nvcaHelmRepositoryPrefix": {
+            "type": "string",
+            "description": "Enables Helm repository restrictions to specific org/teams",
+            "default": ""
+        },
+        "enableGXCache": {
+            "type": "boolean",
+            "description": "Enables GXCache Support in NVCA",
+            "default": true
+        },
+        "ddcsIPAllowList": {
+            "type": "string",
+            "description": "provides comma separated CIDR ranges to allowList",
+            "default": ""
+        },
+        "agentConfig": {
+            "type": "object",
+            "properties": {
+                "mergeConfig": {
+                    "type": "string",
+                    "description": "Merge fields into the generated NVCA config. Must be a string.",
+                    "default": ""
+                }
+            }
+        },
+        "resources": {
+            "type": "object",
+            "properties": {
+                "limits": {
+                    "type": "object",
+                    "properties": {
+                        "cpu": {
+                            "type": "string",
+                            "description": "CPU limit for the nvca-operator container",
+                            "default": "500m"
+                        },
+                        "memory": {
+                            "type": "string",
+                            "description": "Memory limit for the nvca-operator container",
+                            "default": "500Mi"
+                        }
+                    }
+                },
+                "requests": {
+                    "type": "object",
+                    "properties": {
+                        "cpu": {
+                            "type": "string",
+                            "description": "CPU request for the nvca-operator container",
+                            "default": "50m"
+                        },
+                        "memory": {
+                            "type": "string",
+                            "description": "Memory request for the nvca-operator container",
+                            "default": "50Mi"
+                        }
+                    }
+                }
+            }
+        },
+        "agent": {
+            "type": "object",
+            "properties": {
+                "resources": {
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string",
+                                    "description": "CPU limit for the nvca agent container",
+                                    "default": "1000m"
+                                },
+                                "memory": {
+                                    "type": "string",
+                                    "description": "Memory limit for the nvca agent container",
+                                    "default": "4Gi"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string",
+                                    "description": "CPU request for the nvca agent container",
+                                    "default": "100m"
+                                },
+                                "memory": {
+                                    "type": "string",
+                                    "description": "Memory request for the nvca agent container",
+                                    "default": "200Mi"
+                                }
+                            }
+                        }
+                    }
+                },
+                "cacheMountOptionsEnabled": {
+                    "type": "boolean",
+                    "description": "Enable or disable CSI volume mount options for NVCA caches",
+                    "default": true
+                },
+                "cacheMountOptions": {
+                    "type": "string",
+                    "description": "Comma-separated string of CSI volume mount options (e.g., \"ro,noatime,nouuid\") used when cacheMountOptionsEnabled is true",
+                    "default": "ro,norecovery,nouuid"
+                },
+                "workerDegradationPeriod": {
+                    "type": "string",
+                    "description": "Duration for determining if a worker is degraded (e.g., \"90m\", \"1h30m\")",
+                    "default": ""
+                },
+                "secretMirrorNamespace": {
+                    "type": "string",
+                    "description": "Default namespace to mirror custom secrets for nvcf workloads",
+                    "default": "nvca-operator"
+                },
+                "secretMirrorLabelSelector": {
+                    "type": "string",
+                    "description": "Label selector on the secrets in the sourceNamespace",
+                    "default": ""
+                },
+                "customAnnotations": {
+                    "type": "object",
+                    "description": "Map of custom annotations to add to the agent pod",
+                    "default": {}
+                },
+                "functionEnvOverrides": {
+                    "type": "object",
+                    "description": "Map of environment variable overrides for function workloads (e.g., {\"INIT_CONTAINER\": \"nvcr.io/custom/init:v1.0\", \"UTILS_CONTAINER\": \"nvcr.io/custom/utils:v1.0\"})",
+                    "default": {}
+                },
+                "taskEnvOverrides": {
+                    "type": "object",
+                    "description": "Map of environment variable overrides for task workloads (e.g., {\"INIT_CONTAINER\": \"nvcr.io/custom/init:v1.0\", \"ESS_AGENT_CONTAINER\": \"nvcr.io/custom/ess:v1.0\"})",
+                    "default": {}
+                },
+                "tolerations": {
+                    "type": "array",
+                    "description": "K8s tolerations for the NVCA agent pod",
+                    "default": [],
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "overrideEnvironmentVariables": {
+                    "type": "object",
+                    "description": "Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {\"LOG_LEVEL\": \"debug\", \"CUSTOM_FLAG\": \"enabled\"}",
+                    "default": {}
+                },
+                "serviceOAuth": {
+                    "type": "object",
+                    "description": "OAuth token and JWKS endpoints used by dependent services",
+                    "properties": {
+                        "helmReVal": {
+                            "type": "object",
+                            "properties": {
+                                "stage": {
+                                    "type": "object",
+                                    "properties": {
+                                        "tokenURL": {
+                                            "type": "string",
+                                            "default": ""
+                                        },
+                                        "publicKeysetEndpoint": {
+                                            "type": "string",
+                                            "default": ""
+                                        }
+                                    }
+                                },
+                                "prod": {
+                                    "type": "object",
+                                    "properties": {
+                                        "tokenURL": {
+                                            "type": "string",
+                                            "default": ""
+                                        },
+                                        "publicKeysetEndpoint": {
+                                            "type": "string",
+                                            "default": ""
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "functionDeploymentStages": {
+                            "type": "object",
+                            "properties": {
+                                "stage": {
+                                    "type": "object",
+                                    "properties": {
+                                        "tokenURL": {
+                                            "type": "string",
+                                            "default": ""
+                                        },
+                                        "publicKeysetEndpoint": {
+                                            "type": "string",
+                                            "default": ""
+                                        }
+                                    }
+                                },
+                                "prod": {
+                                    "type": "object",
+                                    "properties": {
+                                        "tokenURL": {
+                                            "type": "string",
+                                            "default": ""
+                                        },
+                                        "publicKeysetEndpoint": {
+                                            "type": "string",
+                                            "default": ""
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "rolloverService": {
+                            "type": "object",
+                            "properties": {
+                                "stage": {
+                                    "type": "object",
+                                    "properties": {
+                                        "tokenURL": {
+                                            "type": "string",
+                                            "default": ""
+                                        },
+                                        "publicKeysetEndpoint": {
+                                            "type": "string",
+                                            "default": ""
+                                        }
+                                    }
+                                },
+                                "prod": {
+                                    "type": "object",
+                                    "properties": {
+                                        "tokenURL": {
+                                            "type": "string",
+                                            "default": ""
+                                        },
+                                        "publicKeysetEndpoint": {
+                                            "type": "string",
+                                            "default": ""
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "workload": {
+            "type": "object",
+            "properties": {
+                "tolerations": {
+                    "type": "array",
+                    "description": "K8s tolerations for NVCA-created workload pods",
+                    "default": [],
+                    "items": {
+                        "type": "object"
+                    }
+                }
+            }
+        },
+        "webhook": {
+            "type": "object",
+            "properties": {
+                "resources": {
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string",
+                                    "description": "CPU limit for the nvca webhook container",
+                                    "default": "200m"
+                                },
+                                "memory": {
+                                    "type": "string",
+                                    "description": "Memory limit for the nvca webhook container",
+                                    "default": "200Mi"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string",
+                                    "description": "CPU request for the nvca webhook container",
+                                    "default": "50m"
+                                },
+                                "memory": {
+                                    "type": "string",
+                                    "description": "Memory request for the nvca webhook container",
+                                    "default": "50Mi"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "ngcConfig": {
+            "type": "object",
+            "properties": {
+                "username": {
+                    "type": "string",
+                    "description": "Username for the registry authentication",
+                    "default": "$oauthtoken"
+                },
+                "serviceKey": {
+                    "type": "string",
+                    "description": "ServiceKey (password) for authentication. If unset, a Secret with name set to ngcConfig.serviceKeySecretName is expected to exist in the cluster in the release namespace.",
+                    "default": ""
+                },
+                "serviceKeySecretName": {
+                    "type": "string",
+                    "description": "Secret containing NGC ServiceKey (password) for authentication (default: ngc-service-key). If the ngcConfig.serviceKey is not set, the secret with this name must be created manually in the release namespace.",
+                    "default": "ngc-service-key"
+                },
+                "serviceKeySecretKeyName": {
+                    "type": "string",
+                    "description": "Key in the secret ngcConfig.serviceKeySecretName containing the NGC ServiceKey (password).",
+                    "default": "ngcServiceKey"
+                },
+                "apiURL": {
+                    "type": "string",
+                    "description": "NGC API URL for requesting auth tokens",
+                    "default": "https://api.ngc.nvidia.com"
+                },
+                "clusterSource": {
+                    "type": "string",
+                    "description": "Source of the cluster configuration:",
+                    "default": "ngc-managed"
+                }
+            }
+        },
+        "vaultConfig": {
+            "type": "object",
+            "properties": {
+                "oAuthClientMountPathTemplate": {
+                    "type": "string",
+                    "description": "Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: \"nvidia/services/oauth/clients/%s/kv/secret\"",
+                    "default": ""
+                },
+                "oAuthClientMountPath": {
+                    "type": "string",
+                    "description": "(Optional) Full OAuth client mount path. If set, overrides the computed path from template.",
+                    "default": ""
+                }
+            }
+        },
+        "helmManaged": {
+            "type": "object",
+            "properties": {
+                "cloudProvider": {
+                    "type": "string",
+                    "description": "(REQUIRED) Cloud provider for the cluster (e.g., aws, gcp, azure)",
+                    "default": ""
+                },
+                "clusterRegion": {
+                    "type": "string",
+                    "description": "(REQUIRED) Region where the cluster is deployed",
+                    "default": ""
+                },
+                "clusterGroupID": {
+                    "type": "string",
+                    "description": "(REQUIRED) Group ID for the cluster",
+                    "default": ""
+                },
+                "clusterGroupName": {
+                    "type": "string",
+                    "description": "(REQUIRED) Name of the cluster group",
+                    "default": ""
+                },
+                "nvcaVersion": {
+                    "type": "string",
+                    "description": "(REQUIRED) Version of the NVCFBackend to use",
+                    "default": ""
+                },
+                "oAuthClientID": {
+                    "type": "string",
+                    "description": "(Optional) Client ID for OAuth2/OIDC authentication. Can be blank or omitted.",
+                    "default": ""
+                },
+                "oAuthClientSecretKey": {
+                    "type": "string",
+                    "description": "(Optional) Secret key to retrieve the client secret for OAuth2/OIDC client. Leave blank if not needed.",
+                    "default": ""
+                },
+                "clusterDescription": {
+                    "type": "string",
+                    "description": "(Optional) Description of the cluster. Defaults to clusterName if not provided.",
+                    "default": ""
+                },
+                "featureGateValues": {
+                    "type": "array",
+                    "description": "(Optional) List of feature gates to enable. Defaults to [] if not specified.",
+                    "default": [],
+                    "items": {}
+                },
+                "gpuManualInstanceConfigB64": {
+                    "type": "string",
+                    "description": "(Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.",
+                    "default": ""
+                },
+                "clusterAttributes": {
+                    "type": "array",
+                    "description": "(Optional) List of attributes for the cluster. Defaults to an empty array.",
+                    "default": [],
+                    "items": {}
+                },
+                "imageCredHelper": {
+                    "type": "object",
+                    "properties": {
+                        "imageRepository": {
+                            "type": "string",
+                            "description": "(OPTIONAL) Image repository of \"nvcf-image-credential-helper\". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.",
+                            "default": ""
+                        },
+                        "imageTag": {
+                            "type": "string",
+                            "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
+                            "default": "0.5.1"
+                        }
+                    }
+                },
+                "otelCollector": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Enable OTel collector sidecar for helm-managed clusters",
+                            "default": false
+                        },
+                        "imageRepository": {
+                            "type": "string",
+                            "description": "(OPTIONAL) Image repository of \"otel-collector\". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.",
+                            "default": ""
+                        },
+                        "imageTag": {
+                            "type": "string",
+                            "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
+                            "default": "0.143.2"
+                        }
+                    }
+                }
+            }
+        },
+        "selfManaged": {
+            "type": "object",
+            "properties": {
+                "nvcaVersion": {
+                    "type": "string",
+                    "description": "(REQUIRED) Version of the NVCFBackend to use",
+                    "default": ""
+                },
+                "featureGateValues": {
+                    "type": "array",
+                    "description": "(Optional) List of feature gates to enable. Defaults to [\"DynamicGPUDiscovery\"] if not specified.",
+                    "default": [
+                        "DynamicGPUDiscovery"
+                    ],
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "gpuManualInstanceConfigB64": {
+                    "type": "string",
+                    "description": "(Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.",
+                    "default": ""
+                },
+                "clusterAttributes": {
+                    "type": "array",
+                    "description": "(Optional) List of attributes for the cluster. Defaults to an empty array.",
+                    "default": [],
+                    "items": {}
+                },
+                "imageCredHelper": {
+                    "type": "object",
+                    "properties": {
+                        "imageRepository": {
+                            "type": "string",
+                            "description": "(OPTIONAL) Image repository of \"nvcf-image-credential-helper\". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.",
+                            "default": ""
+                        },
+                        "imageTag": {
+                            "type": "string",
+                            "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
+                            "default": "0.5.1"
+                        }
+                    }
+                },
+                "otelCollector": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "description": "Enable OTel collector sidecar for self-managed clusters",
+                            "default": false
+                        },
+                        "imageRepository": {
+                            "type": "string",
+                            "description": "(OPTIONAL) Image repository of \"otel-collector\". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.",
+                            "default": ""
+                        },
+                        "imageTag": {
+                            "type": "string",
+                            "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
+                            "default": "0.143.2"
+                        }
+                    }
+                },
+                "icmsServiceURL": {
+                    "type": "string",
+                    "description": "(Optional) URL of the ICMS service for self-managed clusters.",
+                    "default": "http://api.icms.svc.cluster.local:8080"
+                },
+                "revalServiceURL": {
+                    "type": "string",
+                    "description": "(Optional) URL of the ReVal service for self-managed clusters.",
+                    "default": "http://reval.nvcf.svc.cluster.local:8080"
+                },
+                "natsURL": {
+                    "type": "string",
+                    "description": "(Optional) URL of the NATS service for self-managed clusters.",
+                    "default": "nats://nats.nats-system.svc.cluster.local:4222"
+                }
+            }
+        },
+        "nodeSelector": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Node-selector Label key",
+                    "default": "node.kubernetes.io/instance-type"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Node-selector Label value",
+                    "default": ""
+                }
+            }
+        },
+        "otel": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable OpenTelemetry.",
+                    "default": false
+                },
+                "lightstep": {
+                    "type": "object",
+                    "properties": {
+                        "serviceName": {
+                            "type": "string",
+                            "description": "the name of the lightstep service to push telemetry data to",
+                            "default": ""
+                        },
+                        "accessToken": {
+                            "type": "string",
+                            "description": "the access token for accessing the lightstep API",
+                            "default": ""
+                        }
+                    }
+                }
+            }
+        },
+        "gracefulShutdown": {
+            "type": "object",
+            "properties": {
+                "terminationGracePeriodSeconds": {
+                    "type": "number",
+                    "description": "Maximum time (in seconds) for pod termination and cleanup (K8s hard limit)",
+                    "default": 600
+                },
+                "cleanupTimeoutSeconds": {
+                    "type": "number",
+                    "description": "HTTP handler timeout (in seconds). Must be less than terminationGracePeriodSeconds to ensure response is sent before K8s kills pod.",
+                    "default": 540
+                }
+            }
+        },
+        "networkPolicy": {
+            "type": "object",
+            "properties": {
+                "clusterNetworkCIDRs": {
+                    "type": "array",
+                    "description": "List of IPv4 CIDRs that workload pods are NOT allowed to access (typically cluster-internal networks)",
+                    "default": [
+                        "10.0.0.0/8",
+                        "172.16.0.0/12",
+                        "192.168.0.0/16",
+                        "100.64.0.0/12"
+                    ],
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "customPolicies": {
+                    "type": "array",
+                    "description": "Array of custom network policy definitions to apply to nvca function namespaces",
+                    "default": [],
+                    "items": {}
+                }
+            }
+        },
+        "clusterValidator": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable the cluster-validator CronJob and init container",
+                    "default": false
+                },
+                "image": {
+                    "type": "object",
+                    "properties": {
+                        "repository": {
+                            "type": "string",
+                            "description": "Cluster Validator container registry path, without tag",
+                            "default": ""
+                        },
+                        "tag": {
+                            "type": "string",
+                            "description": "Cluster Validator container image tag",
+                            "default": "v2.0.0"
+                        },
+                        "pullPolicy": {
+                            "type": "string",
+                            "description": "K8s ImagePullPolicy for cluster-validator",
+                            "default": "IfNotPresent"
+                        }
+                    }
+                },
+                "schedule": {
+                    "type": "string",
+                    "description": "CronJob schedule (cron expression)",
+                    "default": "0 */3 * * *"
+                },
+                "configMapName": {
+                    "type": "string",
+                    "description": "ConfigMap name for user-defined network checks (reachability + network policy validation)",
+                    "default": "cluster-validator-network-checks"
+                },
+                "networkChecks": {
+                    "type": [
+                        "object",
+                        "null"
+                    ],
+                    "description": "Network check configuration (creates the ConfigMap automatically when set). Set to null or omit to skip configurable checks.",
+                    "properties": {
+                        "reachability": {
+                            "type": "object",
+                            "description": "Reachability check configuration. When set, endpoints replace the built-in egress/NVCF/monitoring checks.",
+                            "properties": {
+                                "endpoints": {
+                                    "type": "array",
+                                    "description": "List of endpoints to check for reachability",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {
+                                                "type": "string",
+                                                "description": "Human-readable name of the endpoint"
+                                            },
+                                            "host": {
+                                                "type": "string",
+                                                "description": "Hostname for TCP/TLS checks"
+                                            },
+                                            "port": {
+                                                "type": "integer",
+                                                "description": "Port number for TCP/TLS checks"
+                                            },
+                                            "url": {
+                                                "type": "string",
+                                                "description": "Full URL for HTTP/HTTPS checks"
+                                            },
+                                            "protocol": {
+                                                "type": "string",
+                                                "description": "Protocol to use: https, tcp, tcp+tls",
+                                                "enum": [
+                                                    "https",
+                                                    "tcp",
+                                                    "tcp+tls"
+                                                ]
+                                            },
+                                            "critical": {
+                                                "type": "boolean",
+                                                "description": "If true, failure makes the cluster not-ready. If false, failure is a warning only.",
+                                                "default": false
+                                            }
+                                        },
+                                        "required": [
+                                            "name",
+                                            "protocol"
+                                        ]
+                                    }
+                                }
+                            }
+                        },
+                        "networkPolicies": {
+                            "type": "object",
+                            "description": "Network policy validation configuration",
+                            "properties": {
+                                "pairs": {
+                                    "type": "array",
+                                    "description": "List of namespace pairs to validate network policy coverage",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {
+                                                "type": "string",
+                                                "description": "Human-readable name for this pair"
+                                            },
+                                            "a": {
+                                                "type": "object",
+                                                "description": "Source side of the pair",
+                                                "properties": {
+                                                    "namespace": {
+                                                        "type": "string",
+                                                        "description": "Namespace name"
+                                                    },
+                                                    "podSelector": {
+                                                        "type": "object",
+                                                        "description": "Optional pod label selector to narrow scope"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "namespace"
+                                                ]
+                                            },
+                                            "b": {
+                                                "type": "object",
+                                                "description": "Destination side of the pair",
+                                                "properties": {
+                                                    "namespace": {
+                                                        "type": "string",
+                                                        "description": "Namespace name"
+                                                    },
+                                                    "podSelector": {
+                                                        "type": "object",
+                                                        "description": "Optional pod label selector to narrow scope"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "namespace"
+                                                ]
+                                            },
+                                            "port": {
+                                                "type": "integer",
+                                                "description": "Port number to check"
+                                            },
+                                            "protocol": {
+                                                "type": "string",
+                                                "description": "Protocol (TCP or UDP)",
+                                                "enum": [
+                                                    "TCP",
+                                                    "UDP"
+                                                ]
+                                            },
+                                            "critical": {
+                                                "type": "boolean",
+                                                "description": "If true, failure for this pair marks the cluster as not-ready instead of just a warning",
+                                                "default": false
+                                            }
+                                        },
+                                        "required": [
+                                            "name",
+                                            "a",
+                                            "b",
+                                            "port",
+                                            "protocol"
+                                        ]
+                                    }
+                                }
+                            }
+                        },
+                        "enforcement": {
+                            "type": "object",
+                            "description": "Network policy enforcement testing configuration",
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "description": "Enable live enforcement testing by deploying test pods",
+                                    "default": false
+                                },
+                                "testImage": {
+                                    "type": "string",
+                                    "description": "Container image for test pods",
+                                    "default": "busybox:1.36"
+                                },
+                                "timeoutSeconds": {
+                                    "type": "integer",
+                                    "description": "Timeout in seconds for enforcement test operations",
+                                    "default": 90
+                                },
+                                "critical": {
+                                    "type": "boolean",
+                                    "description": "If true, enforcement failure marks the cluster as not-ready instead of just a warning",
+                                    "default": false
+                                }
+                            }
+                        }
+                    }
+                },
+                "resources": {
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string",
+                                    "description": "CPU limit for the cluster-validator container",
+                                    "default": "200m"
+                                },
+                                "memory": {
+                                    "type": "string",
+                                    "description": "Memory limit for the cluster-validator container",
+                                    "default": "128Mi"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string",
+                                    "description": "CPU request for the cluster-validator container",
+                                    "default": "100m"
+                                },
+                                "memory": {
+                                    "type": "string",
+                                    "description": "Memory request for the cluster-validator container",
+                                    "default": "64Mi"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

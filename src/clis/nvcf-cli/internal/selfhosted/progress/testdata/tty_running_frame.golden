@@ -1,0 +1,30 @@
+NVCF self-hosted install: my-cluster
+Elapsed:                  07m42s
+Target:                   yotta-prod-us-east-1
+Stack:                    v1.2.0@sha256:0180e2
+
+Progress
+
+    [✓]  1. Preflight checks                    08s
+    [✓]  2. Resolve stack bundle                03s
+    [✓]  3. Render control plane                11s
+    [▶]  4. Apply control plane                 07m20s running
+    [ ]  5. Check control plane health          -
+    [ ]  6. Register compute cluster            -
+    [ ]  7. Apply compute plane                 -
+    [ ]  8. Final health check                  -
+
+Current phase: Apply control plane · 
+
+        Namespaces      ██████████████████   8/8   ready
+        CRDs            ██████████████████  12/12  applied
+        Deployments     ████████████░░░░░░   9/14  available
+        StatefulSets    ███████░░░░░░░░░░░   2/5   ready
+        Jobs            ██████████████░░░░   4/5   complete
+
+        waiting: cassandra-system/cassandra-0 PodInitializing
+        → last progress: 17s ago, nvcf-api deployment became available
+
+Next: Check control plane health
+
+press q to quit

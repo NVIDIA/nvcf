@@ -1,0 +1,10 @@
+_output/
+*.secrets
+*.code-workspace
+.vscode/
+.scannerwork/
+.worktrees/
+
+# Test items
+nvca-operator-dev-local.tgz
+clusterdump-*

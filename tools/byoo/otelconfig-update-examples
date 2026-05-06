@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+tool_root="${repo_root}/tools/byoo"
+examples_root="${repo_root}/src/libraries/go/lib/examples/otelconfig/byoo-otel-collector"
+create_cmd="./testdata/otelconfig/create/main.go"
+
+local_secrets_path="${examples_root}/secrets"
+real_secrets_path="/etc/byoo-otel-collector/secrets"
+export ESS_SECRETS_PATH="${local_secrets_path}"
+
+cd "${tool_root}"
+mkdir -p _output
+
+for input_file in testdata/otelconfig/*.json; do
+    echo "=== Test ${input_file} ==="
+    basename="$(basename "${input_file}" .json)"
+    for backend_type in vm k8s; do
+        for compute_type in task function; do
+            for req_type in container helm; do
+                echo "Generating configs backend_type=${backend_type} request_type=${req_type} compute_type=${compute_type}..."
+                go run "${create_cmd}" "${input_file}" _output "${backend_type}" "${req_type}" "${compute_type}"
+                generated_file="_output/byoo-otel-collector/config.${compute_type}_${backend_type}_${req_type}.yaml"
+                target_file="${examples_root}/${backend_type}/config_${compute_type}_${req_type}_${basename}.yaml"
+                cp "${generated_file}" "${target_file}"
+                sed -i "s|${local_secrets_path}|${real_secrets_path}|g" "${target_file}"
+                rm "${generated_file}"
+            done
+        done
+    done
+done

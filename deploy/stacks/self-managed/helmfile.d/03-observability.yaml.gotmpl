@@ -1,0 +1,42 @@
+environments:
+  default:
+    values:
+      - ../environments/base.yaml
+      - ../environments/{{ requiredEnv "HELMFILE_ENV" }}.yaml
+
+---
+
+repositories:
+  - name: nvcf
+    url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
+    oci: true
+
+helmDefaults:
+  createNamespace: true
+  devel: true
+  timeout: 900
+  wait: true
+  waitForJobs: true
+  diffArgs:
+    - "--dry-run=server"
+
+templates:
+  service: &service
+    chart: nvcf/helm-nvcf-{{`{{ .Release.Name }}`}}
+    values:
+      - ../global.yaml.gotmpl
+      - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
+    labels:
+      release-group: observability
+
+releases:
+
+  # --- Observability Services ---
+  - name: state-metrics
+    version: 1.0.1
+    namespace: nvcf
+    condition: stateMetrics.enabled # From global.yaml.gotmpl or env overrides
+    inherit:
+      - template: service
+    # When enabled, this service will export realtime function information that can be
+    # scraped by a Prometheus ServiceMonitor

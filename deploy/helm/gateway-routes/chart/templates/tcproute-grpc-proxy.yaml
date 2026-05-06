@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.grpc.enabled }}
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: {{ .Values.nvcfGatewayRoutes.routes.grpc.name }}
+  namespace: {{ .Values.nvcfGatewayRoutes.gateways.grpc.namespace }}
+  labels:
+    {{- include "nvcf-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grpc-route
+  annotations:
+    {{- toYaml .Values.nvcfGatewayRoutes.routes.grpc.routeAnnotations | nindent 4 }}
+spec:
+  # Attach to the shared Gateway
+  parentRefs:
+    - name: {{ .Values.nvcfGatewayRoutes.gateways.grpc.name }}
+      namespace: {{ .Values.nvcfGatewayRoutes.gateways.grpc.namespace }}
+      sectionName: {{ .Values.nvcfGatewayRoutes.gateways.grpc.listenerName }}
+
+  # Hostname matching for gRPC Proxy
+  # With TLS termination at the NLB, no SNI matching, and no hostname matching
+  # So this will be ignored, but it is useful as self-documentation.
+  hostnames:
+    {{- range .Values.nvcfGatewayRoutes.routes.grpc.hostnames }}
+    - {{ tpl . $ | quote }}
+    {{- end }}
+
+  # Routing rules for gRPC
+  rules:
+    - backendRefs:
+        - name: {{ .Values.nvcfGatewayRoutes.routes.grpc.backend.name }}
+          namespace: {{ .Values.nvcfGatewayRoutes.routes.grpc.backend.namespace }}
+          port: {{ .Values.nvcfGatewayRoutes.routes.grpc.backend.port }}
+{{- end }}

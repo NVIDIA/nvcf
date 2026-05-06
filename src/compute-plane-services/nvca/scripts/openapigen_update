@@ -1,0 +1,23 @@
+#! /usr/bin/env bash
+set -eu -o pipefail
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+
+main() {
+  cd "${repo_root}"
+  openapi-gen \
+    --v 1 --logtostderr \
+    --go-header-file ./scripts/boilerplate.go.txt \
+    --output-pkg github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1 \
+    --output-dir ./pkg/apis/nvcf/v1 \
+    github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1 \
+    k8s.io/apimachinery/pkg/apis/meta/v1
+  openapi-gen \
+    --v 1 --logtostderr \
+    --go-header-file ./scripts/boilerplate.go.txt \
+    --output-pkg github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1 \
+    --output-dir ./pkg/apis/nvca/v1alpha1 \
+    github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1 \
+    k8s.io/apimachinery/pkg/apis/meta/v1
+}
+
+main "$@"

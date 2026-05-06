@@ -1,0 +1,23 @@
+]~!b[]~b]system
+You are a helpful assistant.[e~[
+]~b]user
+user message[e~[
+]~b]ai
+assistant message[e~[
+]~b]user
+[e~[
+]~b]ai
+<think>
+reasoning message 2
+</think>
+
+assistant message 2
+<minimax:tool_call>
+<invoke name="function_name">
+<parameter name="argument">value</parameter>
+</invoke>
+</minimax:tool_call>[e~[
+]~b]tool
+<response>tool call result</response>[e~[
+]~b]ai
+<think>

@@ -1,0 +1,85 @@
+{
+  "cloud": {
+    "projectID": 3695020,
+    "distribution": {
+      "zone_1": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 25
+      },
+      "zone_2": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 25
+      },
+      "zone_3": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 25
+      },
+      "zone_4": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 25
+      }
+    }
+  },
+  "scenarios": {
+    "rps_500_scenario": {
+      "executor": "constant-vus",
+      "startTime": "0m",
+      "gracefulStop": "30s",
+      "env": {
+        "SENT_MESSAGE_SIZE": "128",
+        "RESPONSE_COUNT": "100",
+        "RESPONSE_DELAY": "0.002"
+      },
+      "duration": "2m",
+      "vus": 4
+    },
+    "rps_1000_scenario": {
+      "executor": "constant-vus",
+      "startTime": "3m",
+      "gracefulStop": "30s",
+      "env": {
+        "SENT_MESSAGE_SIZE": "128",
+        "RESPONSE_COUNT": "100",
+        "RESPONSE_DELAY": "0.001"
+      },
+      "duration": "2m",
+      "vus": 4
+    },
+    "rps_1500_scenario": {
+      "executor": "constant-vus",
+      "startTime": "6m",
+      "gracefulStop": "30s",
+      "env": {
+        "SENT_MESSAGE_SIZE": "128",
+        "RESPONSE_COUNT": "100",
+        "RESPONSE_DELAY": "0.000666666"
+      },
+      "duration": "2m",
+      "vus": 4
+    },
+    "rps_2000_scenario": {
+      "executor": "constant-vus",
+      "startTime": "9m",
+      "gracefulStop": "30s",
+      "env": {
+        "SENT_MESSAGE_SIZE": "128",
+        "RESPONSE_COUNT": "100",
+        "RESPONSE_DELAY": "0.0005"
+      },
+      "duration": "2m",
+      "vus": 4
+    },
+    "rps_2500_scenario": {
+      "executor": "constant-vus",
+      "startTime": "12m",
+      "gracefulStop": "30s",
+      "env": {
+        "SENT_MESSAGE_SIZE": "128",
+        "RESPONSE_COUNT": "100",
+        "RESPONSE_DELAY": "0.0004"
+      },
+      "duration": "2m",
+      "vus": 4
+    }
+  }
+}

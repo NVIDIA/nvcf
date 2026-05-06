@@ -1,0 +1,24 @@
+# Binaries
+/reval-service
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# Dependency directories
+vendor/
+
+# Editor / OS
+.idea/
+.vscode/
+.worktrees/
+*.swp
+.DS_Store

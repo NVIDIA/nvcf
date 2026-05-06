@@ -1,0 +1,26 @@
+.idea
+.cache
+.vscode
+.DS_Store
+
+# generated files
+_*/
+
+/target
+
+tools/target
+
+settings.yaml
+settings.toml
+
+crates/server/src/handlers/grpc/entry_point.rs
+crates/server/src/handlers/grpc/metrics/mod.rs
+
+# documentation
+doc-generated/
+doc-src/doc
+doc-src/proto
+
+kubeconfig.json
+
+vault/secrets.json

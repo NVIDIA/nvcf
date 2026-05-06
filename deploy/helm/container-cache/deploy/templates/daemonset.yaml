@@ -1,0 +1,210 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $.Release.Name }}-cc
+  namespace: {{ $.Release.Namespace | quote }}
+  labels:
+    app: {{ $.Release.Name }}
+    {{ include "nvcf-container-cache.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      name: configure-containerd
+  template:
+    metadata:
+      labels:
+        name: configure-containerd
+    spec:
+      hostPID: true
+      hostIPC: true
+      hostNetwork: true
+      serviceAccountName: container-cache
+    {{- with $.Values.images.secrets }}
+      imagePullSecrets:
+    {{- range $idx, $item := . }}
+        - name: {{ $item }}
+    {{- end }}
+    {{- end }}
+      containers:
+      - name: configure
+        image: {{ $.Values.images.certificates }}
+        env:
+        - name: TARGET_HOST
+          value: {{ $.Values.targetHost | default "nvcr.io" | quote }}
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: VAULT_ENABLED
+          value: {{ $.Values.vault.enabled | default false | quote }}
+        - name: CERT_LOCATION
+          value: {{ $.Values.vault.certLocation | quote }}
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: etc-containerd
+          mountPath: /host/etc/containerd
+        - name: etc-containers
+          mountPath: /host/etc/containers
+        - name: etc-crio
+          mountPath: /host/etc/crio
+        - name: ssl-certs
+          mountPath: /host/etc/ssl/
+        # CRI-O / containers-image config-search precedence prefers
+        # $HOME/.config/containers/registries.conf over /etc/containers/...
+        # when it exists. On Oracle Linux nodes (and other distros that ship a
+        # user-level registries.conf for root), our /etc/ drop-in is silently
+        # ignored. Mirror the drop-in into the user path too.
+        - name: root-config-containers
+          mountPath: /host/root/.config/containers
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          set -euo pipefail
+          hosts=(${TARGET_HOST//,/ })
+          declare -A CRIO_PORTS
+{{- $crioPorts := include "nvcf-container-cache.crioRegistryPorts" . | fromYaml -}}
+{{- if $crioPorts }}
+{{- range $name, $val := $crioPorts }}
+          CRIO_PORTS["{{ $val.registry }}"]="{{ $val.port }}"
+{{- end }}
+{{- end }}
+
+          # Resolve the cache CA bundle once.
+          if [ "${VAULT_ENABLED}" = "true" ]; then
+            if [ -z "${CERT_LOCATION}" ]; then
+              echo "CERT_LOCATION must be set when VAULT_ENABLED=true" >&2
+              exit 1
+            fi
+            curl -fsSL "${CERT_LOCATION}" -o /host/etc/ssl/nginx_container_cache.crt
+          else
+            cp /etc/ssl/certs/root.crt.pem /host/etc/ssl/nginx_container_cache.crt
+          fi
+
+          # containerd: write per-registry hosts.toml when this node runs containerd.
+          # We key off /etc/containerd/config.toml rather than the directory because
+          # CRI-O-only nodes may still have an empty /etc/containerd present.
+          # Each registry uses the matching CRI-O port if set, else service.port,
+          # so containerd and CRI-O traffic share the same listener per registry.
+          if [ -f /host/etc/containerd/config.toml ]; then
+            rm -rf /host/etc/containerd/certs.d/*
+            for host in "${hosts[@]}"; do
+              echo "$host"
+              port="{{ $.Values.service.port }}"
+              if [ -n "${CRIO_PORTS[$host]:-}" ]; then
+                port="${CRIO_PORTS[$host]}"
+              fi
+              mkdir -p /host/etc/containerd/certs.d/$host
+              cat <<EOF >/host/etc/containerd/certs.d/$host/hosts.toml
+              server = "https://$host"
+              [host."https://${NODE_IP}:${port}"]
+              capabilities = ["pull", "resolve"]
+              ca = "/etc/ssl/nginx_container_cache.crt"
+              skip_verify = true
+              [host."https://$host"]
+              capabilities = ["pull", "resolve"]
+          EOF
+            done
+            python3 update_config.py /host/etc/containerd/config.toml
+          fi
+
+          # CRI-O: write a single drop-in. Do NOT touch /etc/containers/registries.conf;
+          # CRI-O reads registries.conf.d/*.conf natively, and the main file is
+          # owned by the OS / nvidia-container-toolkit. The mirror points at
+          # ${NODE_IP}:${port} (kube-proxy NodePort) because the CRI-O daemon runs
+          # in the host network namespace and typically cannot resolve cluster
+          # service DNS. `insecure = true` accepts the cache's dynamically-minted
+          # leaf cert without per-host CA distribution.
+          if [ -d /host/etc/containers ]; then
+            # One-time migration: prior chart revisions appended NVCF mirror
+            # blocks directly into registries.conf with cluster service-DNS
+            # endpoints (which CRI-O cannot resolve from host netns). The
+            # script is idempotent and a no-op on already-clean files. It is
+            # `[ -x ]`-gated so older certs images that don't ship it stay
+            # backwards-compatible.
+            if [ -x /app/cleanup_registries_conf.py ]; then
+              python3 /app/cleanup_registries_conf.py \
+                --target-host "${TARGET_HOST}" \
+                /host/etc/containers/registries.conf || true
+              if [ -f /host/root/.config/containers/registries.conf ]; then
+                python3 /app/cleanup_registries_conf.py \
+                  --target-host "${TARGET_HOST}" \
+                  /host/root/.config/containers/registries.conf || true
+              fi
+            fi
+
+            mkdir -p /host/etc/containers/registries.conf.d
+            crio_conf="/host/etc/containers/registries.conf.d/nvcf-container-cache.conf"
+            : > "${crio_conf}"
+            for host in "${hosts[@]}"; do
+              port="{{ $.Values.service.port }}"
+              if [ -n "${CRIO_PORTS[$host]:-}" ]; then
+                port="${CRIO_PORTS[$host]}"
+              fi
+              {
+                printf '[[registry]]\n'
+                printf 'location = "%s"\n' "${host}"
+                printf 'prefix = "%s"\n' "${host}"
+                printf '\n'
+                printf '[[registry.mirror]]\n'
+                printf 'location = "%s:%s"\n' "${NODE_IP}" "${port}"
+                printf 'insecure = true\n'
+                printf 'pull-from-mirror = "all"\n'
+                printf '\n'
+              } >> "${crio_conf}"
+            done
+            mkdir -p /host/etc/crio/crio.conf.d
+            printf '%s\n' \
+              "[crio.image]" \
+              "auto_reload_registries = true" \
+              > /host/etc/crio/crio.conf.d/99-nvcf-registry.conf
+            # If a user-level registries.conf exists at $HOME/.config/... for
+            # root (e.g. on Oracle Linux), containers-image uses it INSTEAD of
+            # /etc/containers/... and ignores our drop-in. Mirror the drop-in
+            # to the user path so CRI-O sees the mirror config either way.
+            user_drop_in_dir=/host/root/.config/containers/registries.conf.d
+            if [ -f /host/root/.config/containers/registries.conf ]; then
+              mkdir -p "${user_drop_in_dir}"
+              cp "${crio_conf}" "${user_drop_in_dir}/nvcf-container-cache.conf"
+            fi
+          fi
+
+          # CRI-O picks up registries.conf.d changes via auto_reload_registries=true,
+          # and containerd reads hosts.toml on every pull. Stay alive without
+          # rewriting host config in a loop -- that races with the OS / toolkit.
+          # The certs image's busybox sleep does not understand `infinity`, so loop.
+          while true; do sleep 86400; done
+      volumes:
+      - name: etc-containerd
+        hostPath:
+          path: /etc/containerd
+      - name: etc-containers
+        hostPath:
+          path: /etc/containers
+          type: DirectoryOrCreate
+      - name: etc-crio
+        hostPath:
+          path: /etc/crio
+          type: DirectoryOrCreate
+      - name: ssl-certs
+        hostPath:
+          path: /etc/ssl
+      - name: root-config-containers
+        hostPath:
+          path: /root/.config/containers
+          type: DirectoryOrCreate

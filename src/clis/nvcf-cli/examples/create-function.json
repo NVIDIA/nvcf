@@ -1,0 +1,37 @@
+{
+  "name": "example-function",
+  "containerImage": "nvcr.io/0651155215864979/ncp-dev/load_tester_supreme:0.0.8",
+  "inferenceUrl": "/echo",
+  "inferencePort": 8000,
+  "description": "Example function created from JSON configuration",
+  "tags": ["example", "demo", "json-config"],
+  "functionType": "DEFAULT",
+  "apiBodyFormat": "CUSTOM",
+  "containerArgs": "--model-path=/models --batch-size=32",
+  "containerEnvironment": [
+    {
+      "key": "MODEL_PATH",
+      "value": "/models"
+    },
+    {
+      "key": "BATCH_SIZE", 
+      "value": "32"
+    },
+    {
+      "key": "LOG_LEVEL",
+      "value": "INFO"
+    }
+  ],
+  "health": {
+    "protocol": "HTTP",
+    "uri": "/health",
+    "port": 8000,
+    "timeout": "PT30S",
+    "expectedStatusCode": 200
+  },
+  "authorizedParties": [
+    {
+      "ncaId": "nvcf-default"
+    }
+  ]
+}

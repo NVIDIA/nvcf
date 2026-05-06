@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+: ${PACKAGE_API_URL}
+: ${PACKAGE_REGISTRY_URL}
+: ${CI_JOB_TOKEN}
+: ${TOOLS_IMAGE}
+
+rm -rf ./_output/docker/tools-dist/
+mkdir -p ./_output/docker/
+
+nv_docker_extract ${TOOLS_IMAGE} /usr/dist/ ./_output/docker/tools-dist
+
+cd ./_output/docker/tools-dist/
+
+TOOLS_VERSION=$(echo $TOOLS_IMAGE | awk -F: '{print $2}')
+
+# echo "Finding package ID at version '${TOOLS_VERSION}'"
+# PACKAGE_ID=$(curl -s -H "JOB-TOKEN: ${CI_JOB_TOKEN}" "$PACKAGE_API_URL" | jq -r ".[] | select(.version==\"$TOOLS_VERSION\").id")
+
+# if [ -n "$PACKAGE_ID" ]; then
+#   echo "Deleting potentially existing package for ID '${PACKAGE_ID}'"
+#   curl -sSL -X DELETE \
+#     -H "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+#     "${PACKAGE_API_URL}/${PACKAGE_ID}"
+# fi
+
+for f in `find . -type f -printf '%P\n' | xargs grep -IL . | sort`; do
+  b=$(dirname "$f")
+  b=${b%%"_v1"}
+  echo -e "\nUploading $f to package registry as $b"
+  curl -sSL \
+    -H "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+    --upload-file "$f" \
+    "${PACKAGE_REGISTRY_URL}/${TOOLS_VERSION}/${b}"
+done

@@ -1,0 +1,37 @@
+{
+   "telemetries": {
+    "logsTelemetry": {
+      "telemetryId": "fd28fc13-b44c-4e21-9132-1e1883f9dec5",
+      "protocol": "HTTP",
+       "provider": "AZURE_MONITOR",
+       "endpoint": "endpoint",
+       "name": "azure-monitor-prd",
+       "types": [
+        "LOGS"
+      ],
+      "createdAt": "2025-02-04T17:41:34.013Z"
+    },
+    "metricsTelemetry": {
+       "telemetryId": "fd28fc13-b44c-4e21-9132-1e1883f9dec5",
+       "protocol": "HTTP",
+       "provider": "AZURE_MONITOR",
+       "endpoint": "endpoint",
+       "name": "azure-monitor-prd",
+       "types": [
+        "METRICS"
+      ],
+      "createdAt": "2025-02-04T17:41:34.013Z"
+    },
+    "tracesTelemetry": {
+      "telemetryId": "fd28fc13-b44c-4e21-9132-1e1883f9dec5",
+       "protocol": "HTTP",
+       "provider": "AZURE_MONITOR",
+       "endpoint": "endpoint",
+       "name": "azure-monitor-prd",
+       "types": [
+        "TRACES"
+      ],
+      "createdAt": "2025-02-04T17:41:34.013Z"
+    }
+   }
+}

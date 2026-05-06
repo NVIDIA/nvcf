@@ -1,0 +1,115 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nvcf-invocation-service"
+version = "0.0.0-dev"
+authors = ["root"]
+edition = "2021"
+description = "invocation service for NVCF"
+license = "Apache-2.0"
+
+[features]
+default = ["jemalloc", "profiling"]
+# Memory allocator features (mutually exclusive - jemalloc takes precedence)
+mimalloc = ["dep:mimalloc"]              # High-performance allocator
+jemalloc = ["dep:tikv-jemallocator"]     # jemalloc allocator
+# Profiling feature (enabled by default, requires jemalloc)
+profiling = ["jemalloc", "dep:jemalloc_pprof"]  # Enable pprof HTTP server when using jemalloc
+
+# Library Configuration
+[lib]
+path = "src/lib.rs"
+
+[[bin]] # Bin to run the NVCF Invocation Service
+name = "server"
+path = "src/server.rs"
+
+[dependencies]
+ahash = "0.8"
+anyhow = "1"
+async-nats = "0.47"
+async-trait = "0.1"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
+aws-smithy-async = "1"
+aws-smithy-runtime = "1"
+aws-smithy-runtime-api = "1"
+aws-smithy-types = "1"
+axum = { version = "0.8", features = ["http2", "macros"] }
+axum-extra = { version = "0.12", features = ["typed-header"] }
+axum-prometheus = "0.9"
+base64 = "0.22"
+bytes = { version = "1", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+dashmap = "6"
+futures = "0.3"
+headers = "0.4"
+hostname = "0.4"
+http = "1"
+http-body-util = "0.1"
+httparse = "1"
+hyper = { version = "1", features = ["full"] }
+jemalloc_pprof = { version = "0.8", features = ["symbolize"], optional = true }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false, features = ["http-listener"] }
+metrics-process = "=2.3.1"
+metrics-util = "0.20"
+mimalloc = { version = "*", optional = true }
+mime = "0.3"
+moka = { version = "0.12", features = ["future", "sync"] }
+nkeys = "0.4"
+notify = "8"
+oauth2 = { version = "5.0.0-rc.1", features = ["rustls-tls"] }
+opentelemetry = { version = "0.31.0", features = ["trace"] }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-semantic-conventions = { version = "0.31.0", features = ["semconv_experimental"] }
+pin-project-lite = "0.2"
+problem_details = { version = "0.9", features = ["axum"] }
+prost = "0.14"
+prost-types = "0.14"
+rand = { version = "0.9", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", features = ["hickory-dns", "gzip", "zstd", "rustls-tls", "stream"], default-features = false }
+rustls = { version = "0.23.18", default-features = false, features = ["ring"] }
+reqwest-middleware = { version = "0.4", features = ["http2"] }
+# Note: reqwest-tracing 0.5 only supports OTel up to 0.30; we're on OTel 0.31.
+# Without an OTel feature, it emits plain tracing spans (no distributed context propagation).
+# This is acceptable since it's only used for OAuth2 token fetching (oauth2_client.rs),
+# not the main request flow (which uses gRPC with proper OTel tracing).
+# Enable opentelemetry_0_31 feature when available.
+reqwest-tracing = "0.5"
+retry = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3"
+sync_wrapper = { version = "1", features = ["futures"] }
+thiserror = "2"
+tikv-jemallocator = { version = "0.6", features = ["profiling", "unprefixed_malloc_on_supported_platforms"], optional = true }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tonic = { version = "0.14", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
+tonic-health = "0.14"
+tonic-prost = "0.14"
+tonic-tracing-opentelemetry = "0.32"
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["trace", "timeout", "cors", "catch-panic"] }
+config = { version = "0.15", features = ["yaml"] }
+tracing = "0.1.40"
+tracing-opentelemetry = "0.32"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-opentelemetry-instrumentation-sdk = { version = "0.32", features = ["http"] }
+uom = { version = "0.36", features = ["usize"] }
+uuid = { version = "1", features = ["serde", "v4", "fast-rng", "macro-diagnostics"] }
+
+[build-dependencies]
+protoc-bin-vendored = "3"
+tonic-prost-build = "0.14"
+
+[dev-dependencies]
+async-stream = "0.3"
+rstest = "0.25"
+scopeguard = "1"
+tempfile = "3"
+testcontainers-modules = { version = "0.15", features = ["watchdog", "nats", "localstack"] }
+tokio-stream = { version = "0.1", features = ["net"] }

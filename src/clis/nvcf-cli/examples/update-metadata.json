@@ -1,0 +1,5 @@
+{
+  "functionId": "func-12345678-1234-1234-1234-123456789abc",
+  "versionId": "ver-87654321-4321-4321-4321-123456789abc",
+  "tags": ["production", "ml-model", "v2-0", "optimized", "high-performance"]
+}

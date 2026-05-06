@@ -1,0 +1,276 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-internet-no-internal-no-api
+  labels:
+    app.kubernetes.io/name: nvca
+    app.kubernetes.io/instance: nvca
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: nvca-operator
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 1.2.3.4/27
+  - to:
+    - ipBlock:
+        cidr: 5.6.7.8/27
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/12
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: nvcf-grpc-proxy
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: grpc-proxy
+    ports:
+      - port: 10081
+        protocol: TCP
+      - port: 10086
+        protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-monitoring
+  labels:
+    app.kubernetes.io/name: nvca
+    app.kubernetes.io/instance: nvca
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: nvca-operator
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+    ports:
+    - port: 8002
+      protocol: TCP
+    - port: 8010
+      protocol: TCP
+    - port: 8018
+      protocol: TCP
+    - port: 10103
+      protocol: TCP
+    - port: 18888
+      protocol: TCP
+    - port: 19090
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-gxcache
+  labels:
+    app.kubernetes.io/name: nvca
+    app.kubernetes.io/instance: nvca
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: nvca-operator
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: gxcache-ns
+      ports:
+      - port: 8888
+        protocol: TCP
+      - port: 8889
+        protocol: TCP
+      - port: 8890
+        protocol: TCP
+      - port: 9900
+        protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-monitoring-gxcache
+  labels:
+    app.kubernetes.io/name: nvca
+    app.kubernetes.io/instance: nvca
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: nvca-operator
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+    ports:
+    - port: 10990
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-monitoring-dcgm
+  labels:
+    app.kubernetes.io/name: nvca
+    app.kubernetes.io/instance: nvca
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: nvca-operator
+spec:
+  podSelector:
+    matchLabels:
+      nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+    ports:
+    - port: 9400
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-nvcf-cache
+  labels:
+    app.kubernetes.io/name: nvca
+    app.kubernetes.io/instance: nvca
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: nvca-operator
+spec:
+  podSelector: {}
+  egress:
+  - ports:
+    - port: 443
+      protocol: TCP
+    - port: 14128
+      protocol: TCP
+    - port: 14129
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: container-caching
+      podSelector:
+        matchLabels:
+          app: nvcf-proxy-cache
+  - ports:
+    - port: 53
+      protocol: TCP
+    - port: 53
+      protocol: UDP
+    - port: 14153
+      protocol: TCP
+    - port: 14153
+      protocol: UDP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: dns-proxy
+      podSelector:
+        matchLabels:
+          app: nvcf-unbound
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-prometheus-nvcf-byoo
+  labels:
+    app.kubernetes.io/name: nvca
+    app.kubernetes.io/instance: nvca
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: nvca-operator
+spec:
+  policyTypes:
+  - Egress
+  egress:
+  - ports:
+    - port: 9090
+      protocol: UDP
+    - port: 9090
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+          app.kubernetes.io/instance: nvcf-byoo-prometheus-kube-prometheus
+  podSelector:
+    matchLabels:
+      nvca.nvcf.nvidia.io/byoo-metrics-egress-target: byoo-otel-collector
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-crowdstrike
+  labels:
+    app.kubernetes.io/name: nvca
+    app.kubernetes.io/instance: nvca
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: nvca-operator
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: crowdstrike-injector
+      ports:
+      - port: 443
+        protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-crowdstrike
+  labels:
+    app.kubernetes.io/name: nvca
+    app.kubernetes.io/instance: nvca
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: nvca-operator
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: crowdstrike-injector

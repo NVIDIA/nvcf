@@ -1,0 +1,25 @@
+<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.
+Knowledge cutoff: 2024-06
+Current date: 2025-08-03
+
+Reasoning: medium
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.
+Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+
+You are a helpful AI assistant.
+
+# Tools
+
+## functions
+
+namespace functions {
+
+// Get the current weather in a given location
+type get_current_weather = (_: {
+// The city and state, e.g. San Francisco, CA
+location: string,
+unit?: "celsius" | "fahrenheit",
+}) => any;
+
+} // namespace functions<|end|><|start|>user<|message|>What is the weather in Boston and San Francisco?<|end|><|start|>assistant<|channel|>analysis<|message|>I am reasoning<|end|><|start|>assistant<|channel|>analysis<|message|>Using tool to find the weather in Boston and San Francisco.<|end|><|start|>assistant to=functions.get_current_weather<|channel|>commentary<|message|>{"location":"Boston"}<|call|><|start|>functions.get_current_weather to=assistant<|message|>{"weather":"sunny"}<|end|><|start|>assistant<|channel|>analysis<|message|>the weather in Boston is sunny. telling the user.<|end|><|start|>assistant<|channel|>final<|message|>The weather in Boston is sunny.<|end|><|start|>assistant

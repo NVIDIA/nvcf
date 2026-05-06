@@ -1,0 +1,53 @@
+// SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package llm_gateway;
+
+option java_multiple_files = true;
+option java_package = "com.nvidia.nvcf.proto.llm_gateway";
+
+service LlmGateway {
+    rpc AuthLlmInvocation (AuthLlmInvokeRequest) returns (AuthLlmInvokeResponse);
+    rpc AuthLlmWorker (AuthLlmWorkerRequest) returns (AuthLlmWorkerResponse);
+}
+
+message AuthLlmInvokeRequest {
+    string clientAuthorizationToken = 1;
+    string routingKey = 2; // This is just functionId
+}
+
+message AuthLlmInvokeResponse {
+    string routingKey = 1;
+    string clientAuthSubject = 2;
+    map<string, string> authContext = 3;
+    map<string, ModelSpec> modelSpecs = 4;
+
+    message ModelSpec {
+        repeated string uris = 1;
+        optional string tokenRateLimit = 2;
+        optional string tokenizer = 3;
+        optional string routingMethod = 4;
+    }
+}
+
+message AuthLlmWorkerRequest {
+    string workerToken = 1;
+}
+
+message AuthLlmWorkerResponse {
+    string routingKey = 1;
+}

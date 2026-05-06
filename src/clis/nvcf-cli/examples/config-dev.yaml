@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# NVCF CLI Configuration - Development Environment
+# Save as dev.yaml and use with: nvcf-cli --config dev.yaml <command>
+
+# ================================
+# Environment: Development
+# ================================
+
+# Enable debug logging for development
+debug: true
+
+# ================================
+# Cluster Mode Configuration (Development)
+# ================================
+
+# Enable cluster mode for development cluster
+NVCF_CLUSTER_MODE: true
+
+# Development kubeconfig (if different from default)
+# NVCF_KUBECONFIG_PATH: "/path/to/dev-kubeconfig"
+
+# Development cluster settings
+NVCF_CLUSTER_NAMESPACE: "nvcf-dev"
+NVCF_CLUSTER_API_SERVICE: "api.nvcf-dev.svc.cluster.local:8080"
+NVCF_CLUSTER_INVOCATION_SERVICE: "invocation.nvcf-dev.svc.cluster.local:8080"
+NVCF_CLUSTER_GRPC_SERVICE: "grpc.nvcf-dev.svc.cluster.local:10081"
+
+# Development utility image
+NVCF_CLUSTER_UTILITY_IMAGE: "nvcr.io/0651155215864979/ncp-dev/alpine-k8s:1.30.12"
+
+# Development OpenBao configuration
+NVCF_OPENBAO_NAMESPACE: "vault-system-dev"
+NVCF_OPENBAO_STATEFULSET: "openbao-server"
+NVCF_OPENBAO_CONTAINER: "openbao"
+NVCF_OPENBAO_SECRET_NAME: "openbao-server-root-token"
+
+# Development NVCF account
+NVCF_CLUSTER_ACCOUNT: "nvcf-dev"
+
+# ================================
+# API Keys Service Configuration (Development)
+# ================================
+
+API_KEYS_SERVICE_ID: "nvidia-cloud-functions-ncp-service-id-aketm"
+API_KEYS_SERVICE_URL: "http://api-keys.api-keys.svc.cluster.local:8080"
+# Optional dedicated endpoint for admin token generation (falls back to API_KEYS_SERVICE_URL)
+# API_KEYS_ADMIN_SERVICE_URL: "http://api-keys-admin.api-keys.svc.cluster.local:8080"
+API_KEYS_ISSUER_SERVICE: "nvcf-api"
+API_KEYS_OWNER_ID: "svc@nvcf-api.local"
+
+# ================================
+# Direct Mode Configuration (Fallback)
+# ================================
+
+# Development API endpoints (if direct mode is used)
+NVCF_BASE_HTTP_URL: "https://api-dev.nvcf.nvidia.com"
+NVCF_BASE_GRPC_URL: "grpc-dev.nvcf.nvidia.com:443"
+NVCF_INVOKE: "https://invoke-dev.nvcf.nvidia.com"
+
+# Note: Tokens are managed automatically by the CLI
+# Run 'nvcf-cli --config dev.yaml init' to generate admin token
+# Run 'nvcf-cli --config dev.yaml api-key generate' to generate API key

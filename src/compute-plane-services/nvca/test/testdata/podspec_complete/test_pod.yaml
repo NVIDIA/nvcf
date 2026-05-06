@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sample-workload-complete
+spec:
+  nodeSelector:
+    nvca.nvcf.nvidia.io/instance-type: EXAMPLE.GPU.A100
+  hostNetwork: true
+  imagePullSecrets:
+  - name: sample-workload-core-complete
+  containers:
+  - name: inference
+    image: docker.io/alpine:3.18.0
+    imagePullPolicy: Never
+    command:
+    - sleep
+    - "1"
+    volumeMounts:
+    - name: model-data
+      mountPath: /config/models
+    - name: inference-data
+      mountPath: /var/inf
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+  volumes:
+  - name: inference-data
+    emptyDir: {}
+  - name: model-data
+    emptyDir: {}

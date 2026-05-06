@@ -1,0 +1,17 @@
+{
+  "namespace": "sr-887518b9-0ae0-4481-a273-56c86638bd71",
+  "objectNameBase": "sr-887518b9-0ae0-4481-a273-56c86638bd71",
+  "serviceAccountName": "my-sa",
+  "instanceTypeLabelSelectorKey": "nvca.nvcf.nvidia.io/instance-type",
+  "workloadResources": {
+    "limits": {
+      "cpu": "500m",
+      "memory": "256Mi",
+      "nvidia.com/gpu": 2
+    }
+  },
+  "clusterRegion": "us-west",
+  "clusterName": "my-cluster",
+  "defaultStargateAddress": "llm-request-router.nvcf.svc.cluster.local:50071",
+  "stargateQUICInsecure": true
+}

@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Local dev: auth against a local mock JWKS, with scope checks disabled.
+# Auth is always required — the server refuses to start if auth.enabled=false.
+#
+# Quick mock JWKS:
+#   python3 -m http.server 9999 --directory /path/to/dir/with/jwks.json
+#
+# Run: go run ./cmd/reval-service --config examples/reval-config-disabled.yaml
+
+telemetry:
+  service-name: "nvcf-reval"
+  deployment-environment-name: "development"
+
+logging:
+  level: "debug"
+  zap-configuration: "development"
+
+http:
+  api-port: 8080
+  metrics-port: 8081
+  management-port: 8082
+  local: true                     # bind to 127.0.0.1 only
+
+tracing:
+  enabled: false
+
+# Empty scopes disable per-endpoint scope enforcement.
+auth:
+  jwt:
+    enabled: true
+    jwk-set-url: "http://localhost:9999/jwks.json"
+    validate-required-scopes: ""   # no scope enforcement for local dev
+    render-required-scopes: ""

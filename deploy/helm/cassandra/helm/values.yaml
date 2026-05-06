@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+cassandra:
+  global:
+    imagePullSecrets: []
+
+  migrations:
+    image:
+      # registry: must be supplied in additional values
+      # repository: must be supplied in additional values
+      tag: 0.6.1
+      pullPolicy: Always
+
+  image:
+    # registry: must be supplied in additional values
+    # repository: must be supplied in additional values
+    tag: 5.0.6-nv-1
+    pullPolicy: IfNotPresent
+    debug: true
+
+  dynamicSeedDiscovery:
+    enabled: true
+    image:
+      # registry: must be supplied in additional values
+      # repository: must be supplied in additional values
+      tag: 5.0.6-nv-1
+      pullPolicy: IfNotPresent
+
+  cluster:
+    name: cassandra
+    seed: 2
+    numTokens: 8
+    datacenter: ncp
+    endpointSnitch: GossipingPropertyFileSnitch
+    concurrent_compactors: 2
+
+  replicaCount: 3
+
+  dbUser:
+    user: cassandra
+    forcePassword: true
+    password: "cassandra"
+
+  # Password for service-specific Cassandra roles (e.g., nvcf_api_app_v0)
+  # This should match the value configured in OpenBao migrations
+  # (openbao.migrations.secrets.cassandraPassword)
+  serviceRolePassword: "ch@ng3m3"
+
+  # https://github.com/bitnami/charts/blob/main/bitnami/cassandra/templates/statefulset.yaml#L531
+  #
+  # The init cql must run after all replicas are up. So it is
+  # mounted to the container, and a post-install job
+  # will exec in and run the cql from the mounted location.
+  #
+  # This replaces the usage of `values.initDBConfigMap`
+  #
+  # The configmap name and mount details are statically defined
+  # and should not be changed.
+  #
+  extraVolumes:
+    - name: cassandra-init-cql
+      configMap:
+        name: cassandra-init-cql
+        defaultMode: 0500
+  extraVolumeMounts:
+    - name: cassandra-init-cql
+      mountPath: /opt/nvcf/cassandra/cql
+      readOnly: true
+  livenessProbe:
+    initialDelaySeconds: 0
+  readinessProbe:
+    initialDelaySeconds: 0
+  startupProbe:
+    enabled: true
+
+  jvm:
+    # superuser_setup_delay_ms only be set for local development with only 1 replica is used.
+    # use of this with more than 1 replica will cause node startups to unexpectedly fail.
+    # cassandra-exporter-agent.jar is required to support prometheus metrics exposure
+    extraOpts: |
+      -javaagent:/opt/bitnami/cassandra/lib/cassandra-exporter-agent.jar 
+      -Dcassandra.superuser_setup_delay_ms=100

@@ -1,0 +1,298 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLECT_NOTICES="${SCRIPT_DIR}/../collect-notices"
+TEMP_DIRS=()
+
+cleanup() {
+    local tmpdir
+
+    for tmpdir in "${TEMP_DIRS[@]}"; do
+        rm -rf "${tmpdir}"
+    done
+}
+
+make_tempdir() {
+    local tmpdir
+
+    tmpdir="$(mktemp -d)"
+    TEMP_DIRS+=("${tmpdir}")
+    echo "${tmpdir}"
+}
+
+trap cleanup EXIT
+
+assert_equals() {
+    local expected="$1"
+    local actual="$2"
+    local message="$3"
+
+    if [[ "${actual}" != "${expected}" ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "expected: ${expected}" >&2
+        echo "actual:   ${actual}" >&2
+        exit 1
+    fi
+}
+
+assert_contains() {
+    local needle="$1"
+    local haystack="$2"
+    local message="$3"
+
+    if [[ "${haystack}" != *"${needle}"* ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "missing: ${needle}" >&2
+        exit 1
+    fi
+}
+
+assert_not_contains() {
+    local needle="$1"
+    local haystack="$2"
+    local message="$3"
+
+    if [[ "${haystack}" == *"${needle}"* ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "unexpected: ${needle}" >&2
+        exit 1
+    fi
+}
+
+assert_order() {
+    local first="$1"
+    local second="$2"
+    local haystack="$3"
+    local message="$4"
+    local after_first
+
+    after_first="${haystack#*"${first}"}"
+    if [[ "${after_first}" == "${haystack}" || "${after_first}" != *"${second}"* ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "expected order: ${first} before ${second}" >&2
+        exit 1
+    fi
+}
+
+run_collect_notices() {
+    local repo_root="$1"
+    local output_path="$2"
+
+    REPO_ROOT="${repo_root}" "${COLLECT_NOTICES}" --output "${output_path}" 2>&1 >/dev/null
+}
+
+test_root_notice_and_vendor_license_are_both_listed() {
+    local tmpdir
+    tmpdir="$(make_tempdir)"
+
+    local repo_root="${tmpdir}"
+    local app_dir="${repo_root}/app"
+    mkdir -p "${app_dir}"
+    printf 'repo notice\n' > "${app_dir}/NOTICE"
+
+    local vendored_dir="${app_dir}/vendor/example.com/lib"
+    mkdir -p "${vendored_dir}"
+    printf 'vendored license\n' > "${vendored_dir}/LICENSE"
+
+    local output_path="${repo_root}/NOTICE"
+    local summary
+    summary="$(run_collect_notices "${repo_root}" "${output_path}")"
+    local rendered
+    rendered="$(<"${output_path}")"
+
+    assert_equals \
+        "wrote NOTICE (2 paths; 1 repo NOTICE files; 1 vendored notice/license files)" \
+        "${summary}" \
+        "summary should report one repo NOTICE and one vendored notice"
+    assert_contains "    app/NOTICE" "${rendered}" "rendered NOTICE should include repo notice path"
+    assert_contains "    app/vendor/example.com/lib/LICENSE" "${rendered}" "rendered NOTICE should include vendored license path"
+}
+
+test_vendored_paths_are_not_deduped_by_content() {
+    local tmpdir
+    tmpdir="$(make_tempdir)"
+
+    local repo_root="${tmpdir}"
+    local app_one="${repo_root}/app-one"
+    local app_two="${repo_root}/app-two"
+    mkdir -p "${app_one}" "${app_two}"
+
+    local vendor_one="${app_one}/vendor/example.com/alpha"
+    local vendor_two="${app_two}/vendor/example.org/beta"
+    mkdir -p "${vendor_one}" "${vendor_two}"
+    printf 'shared notice\r\n' > "${vendor_one}/NOTICE.txt"
+    printf 'shared notice\n' > "${vendor_two}/NOTICE"
+
+    local output_path="${repo_root}/NOTICE"
+    local summary
+    summary="$(run_collect_notices "${repo_root}" "${output_path}")"
+    local rendered
+    rendered="$(<"${output_path}")"
+
+    assert_equals \
+        "wrote NOTICE (2 paths; 0 repo NOTICE files; 2 vendored notice/license files)" \
+        "${summary}" \
+        "summary should count both vendored notice files"
+    assert_contains "    app-one/vendor/example.com/alpha/NOTICE.txt" "${rendered}" "first vendored notice path should be present"
+    assert_contains "    app-two/vendor/example.org/beta/NOTICE" "${rendered}" "second vendored notice path should be present"
+}
+
+test_root_license_file_is_not_treated_as_repo_notice() {
+    local tmpdir
+    tmpdir="$(make_tempdir)"
+
+    local repo_root="${tmpdir}"
+    local app_dir="${repo_root}/app"
+    mkdir -p "${app_dir}"
+    printf 'project license\n' > "${app_dir}/LICENSE"
+
+    local output_path="${repo_root}/NOTICE"
+    local summary
+    summary="$(run_collect_notices "${repo_root}" "${output_path}")"
+    local rendered
+    rendered="$(<"${output_path}")"
+
+    assert_equals \
+        "wrote NOTICE (0 paths; 0 repo NOTICE files; 0 vendored notice/license files)" \
+        "${summary}" \
+        "root LICENSE should not be counted as a repo notice"
+    assert_contains "THIRD-PARTY LICENSES" "${rendered}" "rendered NOTICE should keep the standard header"
+    assert_not_contains "project license" "${rendered}" "rendered NOTICE should not inline file contents"
+    assert_not_contains "app/LICENSE" "${rendered}" "rendered NOTICE should not list a top-level LICENSE file"
+}
+
+test_non_import_roots_are_still_scanned() {
+    local tmpdir
+    tmpdir="$(make_tempdir)"
+
+    local repo_root="${tmpdir}"
+    local library_dir="${repo_root}/native-lib"
+    mkdir -p "${library_dir}"
+    printf 'native notice\n' > "${library_dir}/NOTICE"
+
+    local output_path="${repo_root}/NOTICE"
+    local summary
+    summary="$(run_collect_notices "${repo_root}" "${output_path}")"
+    local rendered
+    rendered="$(<"${output_path}")"
+
+    assert_equals \
+        "wrote NOTICE (1 paths; 1 repo NOTICE files; 0 vendored notice/license files)" \
+        "${summary}" \
+        "non-imported repo roots should still contribute notice files"
+    assert_contains "    native-lib/NOTICE" "${rendered}" "rendered NOTICE should include repo notice files outside imports.yaml"
+}
+
+test_generated_root_notice_is_not_reingested() {
+    local tmpdir
+    tmpdir="$(make_tempdir)"
+
+    local repo_root="${tmpdir}"
+    local app_dir="${repo_root}/app"
+    mkdir -p "${app_dir}"
+    printf 'generated root notice\n' > "${repo_root}/NOTICE"
+    printf 'app notice\n' > "${app_dir}/NOTICE"
+
+    local output_path="${repo_root}/NOTICE"
+    local summary
+    summary="$(run_collect_notices "${repo_root}" "${output_path}")"
+    local rendered
+    rendered="$(<"${output_path}")"
+
+    assert_equals \
+        "wrote NOTICE (1 paths; 1 repo NOTICE files; 0 vendored notice/license files)" \
+        "${summary}" \
+        "existing generated root NOTICE should not be re-ingested as an input"
+    assert_contains "    app/NOTICE" "${rendered}" "rendered NOTICE should include other repo notices"
+    assert_not_contains "    NOTICE" "${rendered}" "rendered NOTICE should not include the generated root NOTICE path"
+}
+
+test_git_ignored_vendor_paths_are_skipped() {
+    local tmpdir
+    tmpdir="$(make_tempdir)"
+
+    local repo_root="${tmpdir}"
+    local app_dir="${repo_root}/app"
+    local vendored_dir="${app_dir}/vendor/example.com/lib"
+    mkdir -p "${vendored_dir}"
+
+    printf 'app notice\n' > "${app_dir}/NOTICE"
+    printf 'app/vendor/\n' > "${repo_root}/.gitignore"
+    printf 'ignored vendored license\n' > "${vendored_dir}/LICENSE"
+
+    git -C "${repo_root}" init -q
+    git -C "${repo_root}" add .gitignore app/NOTICE
+
+    local output_path="${repo_root}/NOTICE"
+    local summary
+    summary="$(run_collect_notices "${repo_root}" "${output_path}")"
+    local rendered
+    rendered="$(<"${output_path}")"
+
+    assert_equals \
+        "wrote NOTICE (1 paths; 1 repo NOTICE files; 0 vendored notice/license files)" \
+        "${summary}" \
+        "ignored vendored files should not be counted when scanning a git repo"
+    assert_contains "    app/NOTICE" "${rendered}" "tracked repo notice should still be present"
+    assert_not_contains "    app/vendor/example.com/lib/LICENSE" "${rendered}" "ignored vendored license should be skipped"
+}
+
+test_paths_are_sorted_case_insensitively() {
+    local tmpdir
+    tmpdir="$(make_tempdir)"
+
+    local repo_root="${tmpdir}"
+    local app_dir="${repo_root}/app"
+    mkdir -p "${app_dir}/vendor/example.com/alpha"
+    mkdir -p "${app_dir}/vendor/example.com/Bravo"
+    mkdir -p "${app_dir}/vendor/example.com/zulu"
+
+    printf 'alpha\n' > "${app_dir}/vendor/example.com/alpha/LICENSE"
+    printf 'bravo\n' > "${app_dir}/vendor/example.com/Bravo/LICENSE"
+    printf 'zulu\n' > "${app_dir}/vendor/example.com/zulu/LICENSE"
+
+    local output_path="${repo_root}/NOTICE"
+    run_collect_notices "${repo_root}" "${output_path}" >/dev/null
+    local rendered
+    rendered="$(<"${output_path}")"
+
+    assert_order \
+        "    app/vendor/example.com/alpha/LICENSE" \
+        "    app/vendor/example.com/Bravo/LICENSE" \
+        "${rendered}" \
+        "paths should be sorted alphabetically regardless of case"
+    assert_order \
+        "    app/vendor/example.com/Bravo/LICENSE" \
+        "    app/vendor/example.com/zulu/LICENSE" \
+        "${rendered}" \
+        "case-insensitive sorting should keep Bravo before zulu"
+}
+
+main() {
+    test_root_notice_and_vendor_license_are_both_listed
+    test_vendored_paths_are_not_deduped_by_content
+    test_root_license_file_is_not_treated_as_repo_notice
+    test_non_import_roots_are_still_scanned
+    test_generated_root_notice_is_not_reingested
+    test_git_ignored_vendor_paths_are_skipped
+    test_paths_are_sorted_case_insensitively
+    echo "PASS: test-collect-notices"
+}
+
+main "$@"

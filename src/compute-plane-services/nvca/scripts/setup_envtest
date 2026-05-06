@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+K8S_MAJ_MIN_VERSION=1.34
+
+>&2 echo "Setting up envtest for k8s version $K8S_MAJ_MIN_VERSION"
+
+>&2 GOBIN="$(pwd)/_output" go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+"$(pwd)/_output/setup-envtest" use -p env ${K8S_MAJ_MIN_VERSION}.x!
+
+ENVTEST_ASSETS_PATH=$("$(pwd)/_output/setup-envtest" use -p path ${K8S_MAJ_MIN_VERSION}.x!)
+ENVTEST_ASSETS_PATH_CURRENT=$(dirname ${ENVTEST_ASSETS_PATH})/current
+
+>&2 echo "Symlinking envtest assets to: $ENVTEST_ASSETS_PATH_CURRENT"
+
+mkdir -p ${ENVTEST_ASSETS_PATH_CURRENT}
+ln -sf ${ENVTEST_ASSETS_PATH}/* ${ENVTEST_ASSETS_PATH_CURRENT}

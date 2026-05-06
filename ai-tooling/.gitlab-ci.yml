@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+include:
+  - project: 'astra/skill-eval-ci'
+    file: '/templates/skill-eval.yml'
+    ref: 'main'
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+variables:
+  SKILL_EVAL_GATING: "true"
+
+default:
+  tags: [eks, nvcf-cds, prod]
+
+# Placeholder job so .post stage (used by NV-ACES) can run.
+nv_aces_placeholder:
+  stage: test
+  image: alpine:3.20
+  script:
+    - echo "NV-ACES skill evaluation enabled"
+
+# Override the template's manual trigger so Tier 2 runs automatically.
+# Requires NVIDIA_API_KEY as a masked CI/CD variable.
+"skill_eval_llm_judge (manual)":
+  rules:
+    - when: always
+  allow_failure: true
+
+# Override the template's manual trigger so Layer 2 live agent eval runs automatically.
+# Requires NVIDIA_INFERENCE_KEY as a masked CI/CD variable.
+"skill_live_agent_eval (manual)":
+  rules:
+    - when: always
+  allow_failure: true

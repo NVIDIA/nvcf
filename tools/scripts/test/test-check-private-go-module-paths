@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../../.." && pwd)"
+script_path="$repo_root/tools/ci/check-private-go-module-paths"
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+
+repo="$workdir/repo"
+mkdir -p "$repo/native-lib" "$repo/upstream-service"
+
+cat > "$repo/imports.yaml" <<'EOF'
+imports:
+  - path: native-lib
+    authoritative_source: native
+  - path: upstream-service
+    repo: https://github.com/NVIDIA/example/upstream-service.git
+    commit: deadbeef
+    authoritative_source: upstream
+EOF
+
+cat > "$repo/native-lib/go.mod" <<'EOF'
+module github.com/NVIDIA/native-lib
+
+go 1.25
+EOF
+
+cat > "$repo/native-lib/lib.go" <<'EOF'
+package nativelib
+
+func Name() string {
+	return "native"
+}
+EOF
+
+cat > "$repo/upstream-service/main.go" <<'EOF'
+package main
+
+import _ "github.com/NVIDIA/example/private-dep"
+EOF
+
+output="$workdir/output.txt"
+
+if ! REPO_ROOT="$repo" "$script_path" >"$output" 2>&1; then
+    echo "expected checker to ignore upstream roots"
+    cat "$output"
+    exit 1
+fi
+
+cat > "$repo/native-lib/lib.go" <<'EOF'
+package nativelib
+
+import _ "github.com/NVIDIA/example/private-dep"
+
+func Name() string {
+	return "native"
+}
+EOF
+
+if REPO_ROOT="$repo" "$script_path" >"$output" 2>&1; then
+    echo "expected checker to fail for native roots with private imports"
+    cat "$output"
+    exit 1
+fi
+
+if ! grep -q "native-lib/lib.go" "$output"; then
+    echo "expected failure output to mention the native file"
+    cat "$output"
+    exit 1
+fi
+
+if grep -q "upstream-service/main.go" "$output"; then
+    echo "expected upstream root to be ignored by the checker"
+    cat "$output"
+    exit 1
+fi
+
+echo "test-check-private-go-module-paths: PASS"

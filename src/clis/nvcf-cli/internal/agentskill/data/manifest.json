@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-04-29T15:22:07Z",
+  "totalFiles": 13,
+  "totalBytes": 58910,
+  "files": [
+    {
+      "path": "examples/ci-pipelines.md",
+      "sha256": "91c52a403048333684e97f03f74772920cd81c3a1cec4272b6bb72989c4a028a",
+      "size": 2797
+    },
+    {
+      "path": "examples/multi-cluster.md",
+      "sha256": "7b8ff4082b7ba720c7a4187748d86725c2d6f9257c46dc9548fe9333245296ec",
+      "size": 3039
+    },
+    {
+      "path": "prompts/add-compute-plane.md",
+      "sha256": "5282d40160b0e8ddc96e213be90684ec8f3c2c310b4d5e4e2968873c1ad8331b",
+      "size": 3262
+    },
+    {
+      "path": "prompts/deploy-and-invoke.md",
+      "sha256": "81405aa851f65650311358844f5839986fa5e3c5a133701790cac2bf1a57cce2",
+      "size": 3130
+    },
+    {
+      "path": "prompts/diagnose-failed-install.md",
+      "sha256": "e8ea2e2e31ed597cb67738d6e873e0adc221e5be29be776b3c1fad68454ec59e",
+      "size": 3770
+    },
+    {
+      "path": "prompts/install-from-scratch.md",
+      "sha256": "746b40746e69f7c5f0e63f98537031237993e1e2bc75b7a196da8efef4428890",
+      "size": 3104
+    },
+    {
+      "path": "prompts/rotate-cluster-jwks.md",
+      "sha256": "33e1e0c303dd32bdd29740e7b96d5253cd4a1089b77ed5a322b3e7a9f7b8db86",
+      "size": 1969
+    },
+    {
+      "path": "prompts/teardown.md",
+      "sha256": "a0bff36055ea196a6ec88929737e2e4e7e3aa3b358ca309dea19283c57e2518b",
+      "size": 8530
+    },
+    {
+      "path": "reference/commands.md",
+      "sha256": "fe719cc6876349808dd994058031fa526f0df0b7f98c53484150ed0d1210403e",
+      "size": 5831
+    },
+    {
+      "path": "reference/exit-codes.md",
+      "sha256": "12a0131083d27879c9a699ae7ef3dd631196364b9b7929b50eb051bfb7ca7915",
+      "size": 2117
+    },
+    {
+      "path": "reference/flags.md",
+      "sha256": "f3ef3bd091a1ca4b1e3ff2c699dc029e469856381e03bcf76cf7d968c664d5cf",
+      "size": 3106
+    },
+    {
+      "path": "reference/troubleshooting.md",
+      "sha256": "80196e4ea86e8909ef656d0bf877343faf488de1a6c6917333df97a9d6e0541a",
+      "size": 3862
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "b65241ec96495b98af4f5e17e3646068fd7a827204c960003ac766880566366f",
+      "size": 14393
+    }
+  ]
+}

@@ -1,0 +1,209 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: ${env:OTEL_POD_IP:-0.0.0.0}:14357
+      http:
+        endpoint: ${env:OTEL_POD_IP:-0.0.0.0}:14358
+  prometheus:
+    config:
+      scrape_configs:
+        - honor_labels: true
+          honor_timestamps: false
+          job_name: kubernetes-cadvisor
+          metric_relabel_configs:
+            - action: keep
+              regex: (^$|/dev/root|/dev/shm|/run)
+              source_labels:
+                - device
+            - regex: kubelet
+              replacement: kubernetes-cadvisor
+              source_labels:
+                - job
+              target_label: job
+            - action: labelkeep
+              regex: (__name__|container|cpu|device|image|job|interface|pod)
+          metrics_path: /federate
+          params:
+            match[]:
+              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*fake-instance-id.*", container=~"inference|task|", __name__=~"(container_cpu_cfs_throttled_periods_total|container_cpu_cfs_throttled_seconds_total|container_cpu_usage_seconds_total|container_memory_cache|container_memory_rss|container_memory_swap|container_memory_usage_bytes|container_memory_working_set_bytes|container_fs_limit_bytes|container_fs_usage_bytes|container_fs_reads_bytes_total|container_fs_reads_total|container_fs_writes_bytes_total|container_fs_writes_total|container_network_receive_bytes_total|container_network_receive_errors_total|container_network_receive_packets_dropped_total|container_network_receive_packets_total|container_network_transmit_bytes_total|container_network_transmit_errors_total|container_network_transmit_packets_dropped_total|container_network_transmit_packets_total)"}'
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          static_configs:
+            - targets:
+                - nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090
+        - honor_labels: true
+          job_name: kube-state-metrics
+          metric_relabel_configs:
+            - action: labelkeep
+              regex: (__name__|container|image|job|pod|reason|resource|unit)
+          metrics_path: /federate
+          params:
+            match[]:
+              - '{job=~"kube-state-metrics", namespace="nvcf-backend", pod=~".*fake-instance-id.*", container=~"inference|task", __name__=~"(kube_pod_container_info|kube_pod_container_resource_limits|kube_pod_container_resource_requests|kube_pod_container_status_last_terminated_exitcode|kube_pod_container_status_last_terminated_reason|kube_pod_container_status_ready|kube_pod_container_status_restarts_total|kube_pod_container_status_running|kube_pod_container_status_terminated|kube_pod_container_status_terminated_reason|kube_pod_container_status_waiting|kube_pod_container_status_waiting_reason)"}'
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          static_configs:
+            - targets:
+                - nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090
+        - honor_labels: true
+          job_name: nvidia-dcgm-exporter
+          metric_relabel_configs:
+            - action: labelmap
+              regex: exported_(.+)
+              replacement: $1
+            - action: labelkeep
+              regex: (__name__|container|DCGM_FI_DRIVER_VERSION|device|job|modelName|pci_bus_id|pod)
+          metrics_path: /federate
+          params:
+            match[]:
+              - '{job=~"nvidia-dcgm-exporter", exported_namespace="nvcf-backend", exported_pod=~".*fake-instance-id.*", exported_container=~"inference|task", __name__="DCGM_FI_DEV_GPU_UTIL"}'
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          static_configs:
+            - targets:
+                - nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090
+        - job_name: opentelemetry-collector
+          metric_relabel_configs:
+            - action: keep
+              regex: (otelcol_receiver_refused_metric_points_total|otelcol_receiver_refused_spans_total|otelcol_receiver_refused_log_records_total|otelcol_receiver_accepted_metric_points_total|otelcol_receiver_accepted_spans_total|otelcol_receiver_accepted_log_records_total|otelcol_exporter_sent_metric_points_total|otelcol_exporter_sent_spans_total|otelcol_exporter_sent_log_records_total|otelcol_exporter_send_failed_metric_points_total|otelcol_exporter_send_failed_spans_total|otelcol_exporter_send_failed_log_records_total|otelcol_processor_incoming_items_total|otelcol_processor_outgoing_items_total)
+              source_labels:
+                - __name__
+          scrape_interval: 30s
+          scrape_timeout: 25s
+          static_configs:
+            - targets:
+                - ${env:OTEL_POD_IP:-0.0.0.0}:18888
+exporters:
+  otlphttp/KRATOS-kratos-logs-stage-logs:
+    headers:
+      collector-id: ${file:/etc/byoo-otel-collector/secrets/kratos-logs-stage-collectorId}
+    logs_endpoint: https://ingest.example.com:8443/v1/mtls/logs
+    tls:
+      cert_file: /etc/byoo-otel-collector/secrets/kratos-logs-stage-clientCert
+      key_file: /etc/byoo-otel-collector/secrets/kratos-logs-stage-clientKey
+processors:
+  attributes/add-metadata:
+    actions:
+      - action: insert
+        key: nca_id
+        value: ${env:NCA_ID:-unknown}
+      - action: insert
+        key: cloud_provider
+        value: ${env:NVCF_CLOUD_PROVIDER:-unknown}
+      - action: insert
+        key: instance_id
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
+      - action: insert
+        key: host.id
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
+      - action: insert
+        key: cloud_region
+        value: fake-zone-name
+      - action: insert
+        key: task_id
+        value: ${env:NVCT_TASK_ID:-unknown}
+  batch:
+    send_batch_max_size: 8192
+    send_batch_size: 4096
+    timeout: 400ms
+  filter/metrics:
+    metrics:
+      exclude:
+        match_type: strict
+        metric_names:
+          - scrape_duration_seconds
+          - scrape_samples_post_metric_relabeling
+          - scrape_samples_scraped
+          - scrape_series_added
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 10
+  metricstransform:
+    transforms:
+      - action: update
+        include: ^.*$
+        match_type: regexp
+        operations:
+          - action: add_label
+            new_label: nca_id
+            new_value: ${env:NCA_ID:-unknown}
+          - action: add_label
+            new_label: cloud_provider
+            new_value: ${env:NVCF_CLOUD_PROVIDER:-unknown}
+          - action: add_label
+            new_label: instance_id
+            new_value: ${env:NVCF_INSTANCE_ID:-unknown}
+          - action: add_label
+            new_label: host.id
+            new_value: ${env:NVCF_INSTANCE_ID:-unknown}
+          - action: add_label
+            new_label: cloud_region
+            new_value: fake-zone-name
+          - action: add_label
+            new_label: task_id
+            new_value: ${env:NVCT_TASK_ID:-unknown}
+  resource:
+    attributes:
+      - action: delete
+        key: service.instance.id
+extensions:
+  cgroupruntime:
+    gomaxprocs:
+      enabled: true
+    gomemlimit:
+      enabled: true
+      ratio: 0.8
+  healthcheckv2:
+    component_health:
+      include_permanent_errors: true
+      include_recoverable_errors: true
+      recovery_duration: 1m
+    http:
+      config:
+        enabled: false
+      endpoint: ${env:OTEL_POD_IP:-0.0.0.0}:13133
+      status:
+        enabled: true
+        path: /health
+    use_v2: true
+service:
+  telemetry:
+    logs:
+      initial_fields:
+        public: "true"
+      level: warn
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: ${env:OTEL_POD_IP:-0.0.0.0}
+                port: 18888
+    traces:
+      processors:
+        - batch:
+            exporter:
+              otlp:
+                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
+                headers:
+                  lightstep-access-token: ${env:OTEL_TRACING_ACCESS_TOKEN}
+                protocol: grpc
+  pipelines:
+    logs:
+      receivers:
+        - otlp
+      exporters:
+        - otlphttp/KRATOS-kratos-logs-stage-logs
+      processors:
+        - memory_limiter
+        - attributes/add-metadata
+        - batch
+  extensions:
+    - healthcheckv2
+    - cgroupruntime

@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nvcaop.fullname" . }}-pre-delete-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcaop.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cleanup
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ add (((.Values.gracefulShutdown).cleanupTimeoutSeconds) | default 540) 60 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nvcaop.baseSelectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cleanup
+    spec:
+      serviceAccountName: {{ include "nvcaop.serviceAccountName" . }}
+      automountServiceAccountToken: true
+      {{- if or .Values.generateImagePullSecret (gt (len .Values.imagePullSecrets) 0) }}
+      imagePullSecrets:
+      {{- if .Values.generateImagePullSecret }}
+      - name: {{ (.Values.imagePullSecretName) | default "nvca-operator-image-pull" | quote }}
+      {{- end }}
+      {{- range .Values.imagePullSecrets }}
+      - name: {{ .name | quote }}
+      {{- end }}
+      {{- end }}
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1010
+        fsGroup: 1010
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      {{- if .Values.nodeSelector.value }}
+      nodeSelector:
+        {{ .Values.nodeSelector.key }}: {{ .Values.nodeSelector.value }}
+      {{- end }}
+      containers:
+      - name: cleanup
+        image: {{ .Values.image.repository }}:{{ default .Chart.Version .Values.image.tag }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1010
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+        args:
+          - /tini
+          - --
+          - /usr/bin/nvca-operator-cleanup
+          - --namespace
+          - "{{ .Release.Namespace }}"
+          - --cluster-role-name
+          - "{{ include "nvcaop.fullname" . }}"
+          - --cluster-role-binding-name
+          - "{{ include "nvcaop.fullname" . }}"
+          - --service-account-name
+          - "{{ include "nvcaop.serviceAccountName" . }}"
+          - --log-level
+          - "{{ .Values.logLevel }}"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"

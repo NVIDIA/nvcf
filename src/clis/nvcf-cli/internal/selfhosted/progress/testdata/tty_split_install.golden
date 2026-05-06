@@ -1,0 +1,19 @@
+NVCF self-hosted install: ncp-local
+Elapsed:                  12s
+Control: admin@cp                       Stack:  v1.2.0@sha256:0180e2
+Compute: admin@gpu1
+
+Progress
+
+    [✓]  1. Preflight checks                  → admin@cp    08s
+    [✓]  2. Resolve stack bundle              → admin@cp    03s
+    [▶]  3. Render control plane              → admin@cp    01s running
+    [ ]  4. Apply control plane                 -
+    [ ]  5. Check control plane health          -
+    [ ]  6. Register compute cluster            -
+    [ ]  7. Apply compute plane                 -
+    [ ]  8. Final health check                  -
+
+Next: Apply control plane
+
+press q to quit

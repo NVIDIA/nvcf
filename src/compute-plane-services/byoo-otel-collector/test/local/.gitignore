@@ -1,0 +1,4 @@
+!secrets/.gitkeep
+accounts-secrets.json
+otelconfig.yaml
+secrets/*
