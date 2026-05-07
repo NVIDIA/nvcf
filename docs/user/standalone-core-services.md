@@ -172,7 +172,7 @@ install to initialize the NVCF account with registry credentials.
 
 | **Chart** | `helm-nvcf-api` |
 | --- | --- |
-| **Version** | `1.17.0` |
+| **Version** | `1.18.1` |
 | **Namespace** | `nvcf` |
 | **Depends on** | ESS API (must be running) |
 
@@ -253,7 +253,7 @@ Replace the following placeholders:
 ```bash
 helm upgrade --install api \
   oci://${REGISTRY}/${REPOSITORY}/helm-nvcf-api \
-  --version 1.17.0 \
+  --version 1.18.1 \
   --namespace nvcf \
   --wait --wait-for-jobs --timeout 15m \
   -f nvcf-api-values.yaml

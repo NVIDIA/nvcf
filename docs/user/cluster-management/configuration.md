@@ -42,10 +42,12 @@ Removing the Dynamic GPU Discovery will require manual instance configuration. S
 
 Enabling caching for models, resources and containers is recommended for optimal performance. You must create `StorageClass` configurations for caching within your cluster to fully enable "Caching Support" with the Cluster Agent. See examples below.
 
-<Note>
-Caching is currently not supported for AWS EKS.
+<Warning>
+Caching is not supported for Multi-Node Helm functions. If you attempt to deploy a Multi-Node Helm function with Caching Support enabled, the deployment will fail.
 
-</Note>
+Caching is also currently not supported for AWS EKS.
+
+</Warning>
 
 **StorageClass Configurations in GCP**
 
@@ -457,6 +459,108 @@ kubectl label node <node-name> nvca.nvcf.nvidia.io/gpu.product=<product-name>
 
 <Note>
 The GPU Product Name Override via node labeling only takes effect when there are no pre-existing active instances in the cluster. If active instances already exist with the original GPU instance types, the override will not be applied.
+</Note>
+
+## Single MIG Mode Support
+
+The NVIDIA Cluster Agent supports GPUs configured in single
+[Multi-Instance GPU (MIG)](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/)
+mode. When the NVIDIA GPU Operator is configured with the `single` MIG strategy,
+each GPU is partitioned into multiple MIG instances of the same profile. NVCA
+automatically detects MIG profiles from the `nvidia.com/gpu.product` node label and
+generates a unique instance type for each profile.
+
+### How It Works
+
+In single MIG mode, the GPU Operator appends the MIG profile to the GPU product name
+in the node label. For example:
+
+```text
+nvidia.com/gpu.product=NVIDIA-H200-MIG-7g.141gb
+nvidia.com/gpu.product=NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition-MIG-2g.48gb
+nvidia.com/gpu.product=NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition-MIG-1g.24gb
+```
+
+NVCA parses the MIG suffix from the product name and produces a unique instance type
+for each profile. The MIG profile in the instance type name uses hyphens and lowercase
+(for example, `MIG-2g-48gb`).
+
+| GPU Product Label | Instance Type Name |
+| --- | --- |
+| `NVIDIA-H200-MIG-7g.141gb` | `NCP.GPU.H200-MIG-7g-141gb` |
+| `NVIDIA-RTX-PRO-6000-...-MIG-2g.48gb` | `ON-PREM.GPU.RTXPRO6000-MIG-2g-48gb` |
+| `NVIDIA-RTX-PRO-6000-...-MIG-1g.24gb` | `ON-PREM.GPU.RTXPRO6000-MIG-1g-24gb` |
+
+The cluster provider prefix, for example `NCP`, `ON-PREM`, or `AWS`, is determined
+by the cluster registration configuration.
+
+### Prerequisites
+
+- **GPU Operator** configured with MIG strategy `single`. See the
+  [GPU Operator MIG documentation](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-operator-mig.html)
+  for setup instructions.
+- **Dynamic GPU Discovery** enabled, the default for customer-managed clusters.
+- NVCA **v2.53.0** or later.
+
+<Warning>
+Changing MIG mode or MIG profiles on a node is a disruptive operation. Nodes may
+reboot or terminate GPU clients while applying the new MIG geometry. Before
+reconfiguring MIG:
+
+1. **Cordon** the target nodes to prevent new workload scheduling.
+2. **Drain** all active GPU workloads from the nodes.
+3. Apply the MIG configuration change.
+4. Wait for the GPU Operator MIG Manager to finish, see verification below.
+5. **Uncordon** the nodes once verification passes.
+
+See the [GPU Operator MIG reconfiguration guide](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-operator-mig.html#configuring-mig-profiles)
+for details on the reconfiguration process.
+
+</Warning>
+
+### Verification
+
+After configuring MIG on your cluster, first confirm the GPU Operator has finished
+applying the MIG profile before checking NVCA labels.
+
+**Step 1: Verify MIG Manager has converged**
+
+Check that MIG-configured nodes report `nvidia.com/mig.config.state=success`:
+
+```bash
+# Check MIG configuration state on MIG nodes
+kubectl get nodes -l nvidia.com/mig.strategy=single \
+    -o custom-columns='NODE:.metadata.name,MIG_CONFIG:.metadata.labels.nvidia\.com/mig\.config,STATE:.metadata.labels.nvidia\.com/mig\.config\.state'
+```
+
+All target nodes should show `success` in the STATE column. If any node shows
+`pending`, `rebooting`, or a failure state, wait for the GPU Operator to finish
+or investigate the MIG Manager logs before proceeding.
+
+**Step 2: Verify NVCA instance type labels**
+
+Once MIG Manager has converged, verify that NVCA has detected the MIG profiles and
+applied the correct instance type labels:
+
+```bash
+# Check the GPU product label on MIG nodes
+kubectl get nodes -l nvidia.com/mig.strategy=single \
+    -o custom-columns='NODE:.metadata.name,GPU_PRODUCT:.metadata.labels.nvidia\.com/gpu\.product'
+
+# Verify the instance type label assigned by NVCA
+kubectl get nodes -l nvidia.com/mig.strategy=single \
+    -o custom-columns='NODE:.metadata.name,INSTANCE_TYPE:.metadata.labels.nvca\.nvcf\.nvidia\.io/instance-type'
+```
+
+Each MIG profile should have a distinct instance type label. For example, a node with
+`MIG-2g.48gb` should show `ON-PREM.GPU.RTXPRO6000-MIG-2g-48gb` while a node with
+`MIG-1g.24gb` should show `ON-PREM.GPU.RTXPRO6000-MIG-1g-24gb`.
+
+<Note>
+Only the `single` MIG strategy is supported. In single mode, all GPUs on a node
+are partitioned with the same MIG profile. The `mixed` MIG strategy, with different
+profiles on the same node, is not currently supported by NVCA.
+
 </Note>
 
 ## Managing Feature Flags
