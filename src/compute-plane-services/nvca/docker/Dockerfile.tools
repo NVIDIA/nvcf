@@ -1,4 +1,4 @@
-# Gitlab runners will use dockerhub.nvidia.com as a pull-through cache
+# CI runners will use dockerhub.nvidia.com as a pull-through cache
 FROM goreleaser/goreleaser:v2.15.4 AS builder
 
 WORKDIR /go/egx
@@ -23,7 +23,7 @@ RUN goreleaser release --snapshot --clean --parallelism "${NVCF_GOMAXPROCS}" --f
 
 RUN rm -rf ./vendor/github.com/NVIDIA
 
-# Latest version available from https://github.com/NVIDIA/gfn/security/container-hardening/distroless-sample-projects#machine-queryable-status
+# Latest version is tracked in the internal hardened distroless sample project documentation.
 FROM nvcr.io/nvidia/distroless/go:v4.0.4
 LABEL io.k8s.display-name="NV Cluster Agent tools"
 

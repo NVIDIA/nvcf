@@ -292,7 +292,9 @@ func (c *client) resolveStreamAndSubject(ctx context.Context, info queue.Message
 	log := core.GetLogger(ctx).WithField("component", "queue/nats")
 	switch info.QueueURL {
 	case CreateStreamName:
-		return CreateStreamName, fmt.Sprintf("Create.NVCA.Function.%s.*.*", c.clusterID), nil
+		// Stream catches Create.NVCA.> (both Function and Task subjects); wildcard
+		// the third token so both kinds of creation messages are consumed.
+		return CreateStreamName, fmt.Sprintf("Create.NVCA.*.%s.*.*", c.clusterID), nil
 	case TermStreamName:
 		return TermStreamName, fmt.Sprintf("Terminate.NVCA.%s", c.clusterID), nil
 	default:

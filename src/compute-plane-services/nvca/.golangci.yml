@@ -47,7 +47,6 @@ linters:
       - deployment
       - docker
       - docs
-      - gitlab-runners
       - ha
       - iso
       - ota
@@ -68,7 +67,6 @@ formatters:
       - deployment
       - docker
       - docs
-      - gitlab-runners
       - ha
       - iso
       - ota

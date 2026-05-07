@@ -1,8 +1,3 @@
-[![license](https://img.shields.io/github/license/NVIDIA/nvca?style=flat-square)](https://raw.githubusercontent.com/NVIDIA/nvca/main/LICENSE) ![GitHub Release](https://img.shields.io/github/v/release/nvidia/nvca)
-
-#### [Getting Started](#getting-started) | [Local Development](#local-development) | [NVCA Operator](#nvca-operator) | [Monitoring & Metrics](#monitoring-and-metrics) | [Releases & Roadmap](#releases--roadmap) | [Contribution Guidelines](#contribution-guidelines) | [Governance & Maintainers](#governance--maintainers)
-
-
 # NVIDIA Cloud Functions Agent (NVCA)
 
 NVCA is a Kubernetes agent that manages NVCF Bring-Your-Own-Compute (BYOC) Kubernetes clusters. This repository also contains the **NVCA Operator**, which automates the deployment and lifecycle management of NVCA.
@@ -15,118 +10,48 @@ Key features include queue-based workload management via SQS/NATS, MiniService c
 
 The NVCA Operator automates deployment, upgrades, and health monitoring of NVCA, significantly reducing operational overhead. It provides seamless integration with NVIDIA Cloud services via the NGC platform, customizable Helm-based deployment, support for custom network policies, and secure credential management.
 
-## Getting Started
+## Configuration
 
-In order to set up NVCA, you must have a Kubernetes cluster with GPU support. Follow the [official docs](https://docs.nvidia.com/cloud-functions/user-guide/latest/cloud-function/cluster-management.html#cluster-setup-management) for complete setup instructions.
-
-### Attributes and Feature Flags
+### NVCA Attributes and Feature Flags
 
 For information on available cluster-wide attributes and feature flags,
 and how to enable/disable them, see [Feature Flags Documentation](./docs/users/byoc/featureflags.md).
 
-## Local Dev Env Setup
+### Operator Cluster Configuration Keys
 
-`int_shell` provides a shell enviroment to replay each individual CI stages
-within a local containerized environment. Private gitlab repo and container
-registry access are required to use `./scripts/int_shell`. To configure:
+The operator supports cluster-level configuration options set via the NGC API during cluster registration. For the complete list, see [`pkg/operator/reconcile/clustermgmt/types.go`](pkg/operator/reconcile/clustermgmt/types.go).
 
-### 1. GitLab Access
+| Configuration Key | Description |
+|------------------|-------------|
+| `AgentNodeSelectorLabelKey` | Label key for node selector to schedule NVCA agents |
+| `AgentNodeSelectorLabelValue` | Label value for node selector to schedule NVCA agents |
+| `AgentPriorityClassName` | Priority class name for NVCA agent pods |
+| `ModelCacheVolumeMountOptionEnabled` | Enables custom mount options for model cache volumes |
+| `ModelCacheVolumeMountOptions` | Mount options (e.g., `vers=3.0,dir_mode=0777`) for model cache volumes |
+| `ClusterNetworkCIDRAllowedRange` | Allowed CIDR ranges for cluster network access |
+| `NVCFWorkerDegradationPeriodMinutes` | Time before a worker is considered degraded |
+| `NVCASecretMirrorSourceNamespace` | Source namespace for secret mirroring to function namespaces |
+| `NVCASecretMirrorLabelSelector` | Label selector for secrets to mirror to function namespaces |
 
-- Create and obtain your gitlab access token at
-  https://github.com/NVIDIA/-/profile/personal_access_tokens, make sure it
-  at least have `read_repository` permission.
+## Deploying
 
-- Either create a `.secrets` file under project root, add following into `.secrets`:
-
-```
-GITLAB_USER=<NVIDIA user name>
-GITLAB_TOKEN=<Gitlab access token from github.com/NVIDIA>
-```
-
-- Or add the GitLab entry to your `~/.netrc` file:
-
-```
-machine github.com/NVIDIA
-login <NVIDIA user name>
-password <Gitlab access token from github.com/NVIDIA>
-```
-
-### 2. GitHub Access (required for private NVIDIA dependencies)
-
-This repository depends on private modules hosted under `github.com/NVIDIA/` (e.g., `nvcf-go`, `nvcf-icms-translate`).
-You must configure a GitHub Personal Access Token (classic) so `go mod` can fetch these dependencies.
-
-1. Create a **classic** token at https://github.com/settings/tokens with the `repo` scope (full control of private repositories).
-2. After creating the token, click **Configure SSO** next to it and **authorize** it for the **NVIDIA** organization.
-3. Add the following entries to your `~/.netrc` file:
-
-```
-machine github.com
-login <GitHub username>
-password <GitHub classic PAT>
-
-machine api.github.com
-login <GitHub username>
-password <GitHub classic PAT>
-```
-
-4. Set `GOPRIVATE` so Go knows to use authenticated access for NVIDIA modules:
-
-```bash
-export GOPRIVATE="github.com/NVIDIA/*,github.com/NVIDIA/*"
-```
-
-> **Tip:** Add the `GOPRIVATE` export to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) so it persists across sessions.
-
-- Login gitlab registry with LDAP username and password:
-
-```
-docker login github.com/NVIDIA:5005
-```
-
-- Confirm access:
-
-```
-docker pull :latest
-```
-
-### Envtest
-
-Some tests in the NVCA repository require [envtest]() to run.
-The [`setup_envtest`](./scripts/setup_envtest) script will do this automatically, in both CI and on `make test`.
-
-To configure VSCode or clones like Cursor so you can run these tests directly in your editor,
-ensure the `KUBEBUILDER_ASSETS` environment variable is set to the output of the `setup_envtest` script.
-
-For example, in VSCode `settings.json` add:
-
-```json
-	"go.testEnvVars": {
-		"KUBEBUILDER_ASSETS": "/home/myuser/.local/share/kubebuilder-envtest/k8s/current"
-	}
-```
-
-## NVCA Operator
-
-The NVCA Operator installs and manages the lifecycle of NVCA in DGX Cloud or any Kubernetes environment.
-
-### Deploying the Operator
-
-#### NVIDIA Managed NVCF (BYOC)
+### NVIDIA Managed NVCF (BYOC)
 
 Follow the [official docs](https://docs.nvidia.com/cloud-functions/user-guide/latest/cloud-function/cluster-management.html) to register your cluster and deploy the operator.
 
-#### Self-Hosted Control Plane
+### Self-Hosted Control Plane
+
+Enable self-hosted on an already running cluster:
 
 ```bash
 helm upgrade nvca-operator -n nvca-operator --create-namespace -i --reset-values \
   ./deployments/nvca-operator \
-  --set ngcConfig.serviceKey=<key> \
+  --set ngcConfig.serviceKey=${NGC_KEY} \
   --set ngcConfig.clusterSource=self-managed \
-  --set selfManaged.nvcaVersion=<version>
+  --set selfManaged.nvcaVersion=${NVCA_VERSION}
 ```
 
-### Local Development (Kind Cluster)
+### Local Kind Cluster
 
 The typical cluster layout is 2 GPU worker nodes, 1 control-plane node, and a monitoring node. See [test/kind-env](./test/kind-env/) for pre-baked environments.
 
@@ -197,33 +122,35 @@ Then include it during installation:
 
 ```sh
 helm upgrade nvca-operator -n nvca-operator --create-namespace -i --reset-values --wait \
-  "https://helm.ngc.nvidia.com/qtfpt1h0bieu/byoc/charts/nvca-operator-<operator-version>.tgz" \
+  "https://helm.ngc.nvidia.com/qtfpt1h0bieu/byoc/charts/nvca-operator-${OPERATOR_VERSION}.tgz" \
   -f values.yaml \
   --username="\$oauthtoken" \
-  --password="$CLUSTER_KEY" \
-  --set ngcConfig.serviceKey="$CLUSTER_KEY" \
-  --set ncaID="<nca-id>" \
-  --set clusterID="<cluster-id>" \
+  --password="${CLUSTER_KEY}" \
+  --set ngcConfig.serviceKey="${CLUSTER_KEY}" \
+  --set ncaID="${NCA_ID}" \
+  --set clusterID="${CLUSTER_ID}" \
   --set-file 'networkPolicy.customPolicies={allow-all-ingress.yaml}'
 ```
 
-### Cluster Configuration Keys
+## Testing and Debugging
 
-The operator supports cluster-level configuration options set via the NGC API during cluster registration. For the complete list, see [`pkg/operator/reconcile/clustermgmt/types.go`](pkg/operator/reconcile/clustermgmt/types.go).
+### Envtest
 
-| Configuration Key | Description |
-|------------------|-------------|
-| `AgentNodeSelectorLabelKey` | Label key for node selector to schedule NVCA agents |
-| `AgentNodeSelectorLabelValue` | Label value for node selector to schedule NVCA agents |
-| `AgentPriorityClassName` | Priority class name for NVCA agent pods |
-| `ModelCacheVolumeMountOptionEnabled` | Enables custom mount options for model cache volumes |
-| `ModelCacheVolumeMountOptions` | Mount options (e.g., `vers=3.0,dir_mode=0777`) for model cache volumes |
-| `ClusterNetworkCIDRAllowedRange` | Allowed CIDR ranges for cluster network access |
-| `NVCFWorkerDegradationPeriodMinutes` | Time before a worker is considered degraded |
-| `NVCASecretMirrorSourceNamespace` | Source namespace for secret mirroring to function namespaces |
-| `NVCASecretMirrorLabelSelector` | Label selector for secrets to mirror to function namespaces |
+Some tests in the NVCA repository require [envtest]() to run.
+The [`setup_envtest`](./scripts/setup_envtest) script will do this automatically, in both CI and on `make test`.
 
-## Monitoring and Metrics
+To configure VSCode or clones like Cursor so you can run these tests directly in your editor,
+ensure the `KUBEBUILDER_ASSETS` environment variable is set to the output of the `setup_envtest` script.
+
+For example, in VSCode `settings.json` add:
+
+```json
+	"go.testEnvVars": {
+		"KUBEBUILDER_ASSETS": "/home/myuser/.local/share/kubebuilder-envtest/k8s/current"
+	}
+```
+
+### Monitoring and Metrics
 
 NVCA exposes Prometheus metrics for monitoring queue operations, instance capacity, container health, and more.
 
@@ -241,27 +168,3 @@ For example, to profile NVCA's heap:
 ```sh
 ./scripts/users/nvca-pprof.sh heap
 ```
-
-## Enable Starship Terminal Prompt
-
-To enable the [Starship] prompt perform the following:
-
-- Set the env var `EGX_STARSHIP_ENABLED` to a non-empty value (e.g. `true`, `false`, `jensenIsAwesome`)
-- Install a [nerd font](https://techviewleo.com/install-nerd-fonts-on-linux-macos/)
-  from the [nerd fonts repo](https://github.com/ryanoasis/nerd-fonts)
-  to ensure all terminal icons function properly. If you cannot decide which font
-  go with `Meslo` as a reasonable default.
-
-## Releases & Roadmap
-
-- [Release Process](./RELEASE.md)
-- Roadmap coming soon
-
-## Contribution Guidelines
-
-- [Contributing](./CONTRIBUTING.md)
-- [Code of Conduct](./CODE_OF_CONDUCT.md)
-
-## Governance & Maintainers
-
-- Maintainers: nvidia/nvca-dev

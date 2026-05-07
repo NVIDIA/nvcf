@@ -484,6 +484,44 @@ type NVCFBackendStatus struct {
 	AgentConfig
 }
 
+func (status *NVCFBackendStatus) UnmarshalJSON(data []byte) error {
+	var spec NVCFBackendSpecT
+	if err := json.Unmarshal(data, &spec); err != nil {
+		return err
+	}
+
+	var statusOnly struct {
+		AgentStatus             AgentStatus             `json:"agentStatus,omitempty"`
+		GPUUsage                map[GPUName]GPUResource `json:"gpuUsage,omitempty"`
+		KubernetesVersion       string                  `json:"kubernetesVersion,omitempty"`
+		LastUpdated             *metav1.Time            `json:"lastUpdated"`
+		LastUpdatedAgentStatus  *metav1.Time            `json:"lastUpdatedAgentStatus"`
+		DDCSIPAllowList         []string                `json:"ddcsIPAllowList,omitempty"`
+		K8sClusterNetworkCIDRs  []string                `json:"k8sClusterNetworkCIDRs,omitempty"`
+		FunctionEnvOverridesB64 string                  `json:"functionEnvOverridesB64,omitempty"`
+		TaskEnvOverridesB64     string                  `json:"taskEnvOverridesB64,omitempty"`
+		AgentConfig
+	}
+	if err := json.Unmarshal(data, &statusOnly); err != nil {
+		return err
+	}
+
+	*status = NVCFBackendStatus{
+		NVCFBackendSpecT:        spec,
+		AgentStatus:             statusOnly.AgentStatus,
+		GPUUsage:                statusOnly.GPUUsage,
+		KubernetesVersion:       statusOnly.KubernetesVersion,
+		LastUpdated:             statusOnly.LastUpdated,
+		LastUpdatedAgentStatus:  statusOnly.LastUpdatedAgentStatus,
+		DDCSIPAllowList:         statusOnly.DDCSIPAllowList,
+		K8sClusterNetworkCIDRs:  statusOnly.K8sClusterNetworkCIDRs,
+		FunctionEnvOverridesB64: statusOnly.FunctionEnvOverridesB64,
+		TaskEnvOverridesB64:     statusOnly.TaskEnvOverridesB64,
+		AgentConfig:             statusOnly.AgentConfig,
+	}
+	return nil
+}
+
 // +genclient
 // +k8s:openapi-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

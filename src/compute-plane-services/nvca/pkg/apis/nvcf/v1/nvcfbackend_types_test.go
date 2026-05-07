@@ -435,3 +435,32 @@ func TestNVCFBackendSpecT_UnmarshalOAuthConfigFallback(t *testing.T) {
 	assert.Equal(t, "legacy-client", spec.OAuthConfig.ClientID)
 	assert.Equal(t, "https://example.test/token", spec.OAuthConfig.TokenURL)
 }
+
+func TestNVCFBackend_UnmarshalStatusFields(t *testing.T) {
+	raw := []byte(`{
+		"apiVersion": "nvcf.nvidia.io/v1",
+		"kind": "NVCFBackend",
+		"metadata": {
+			"name": "test-backend"
+		},
+		"status": {
+			"agentStatus": "Healthy",
+			"lastUpdated": "2026-05-06T12:34:56Z",
+			"lastUpdatedAgentStatus": "2026-05-06T12:34:57Z",
+			"ddcsIPAllowList": ["203.0.113.10/32"],
+			"k8sClusterNetworkCIDRs": ["10.0.0.0/8", "172.16.0.0/12"],
+			"functionEnvOverridesB64": "e30=",
+			"taskEnvOverridesB64": "e30="
+		}
+	}`)
+
+	var backend NVCFBackend
+	assert.NoError(t, json.Unmarshal(raw, &backend))
+	assert.Equal(t, AgentStatusHealthy, backend.Status.AgentStatus)
+	assert.NotNil(t, backend.Status.LastUpdated)
+	assert.NotNil(t, backend.Status.LastUpdatedAgentStatus)
+	assert.Equal(t, []string{"203.0.113.10/32"}, backend.Status.DDCSIPAllowList)
+	assert.Equal(t, []string{"10.0.0.0/8", "172.16.0.0/12"}, backend.Status.K8sClusterNetworkCIDRs)
+	assert.Equal(t, "e30=", backend.Status.FunctionEnvOverridesB64)
+	assert.Equal(t, "e30=", backend.Status.TaskEnvOverridesB64)
+}

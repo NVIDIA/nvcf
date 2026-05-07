@@ -45,7 +45,7 @@ releases:
       - template: service
 
   - name: api
-    version: 1.17.0
+    version: 1.18.1
     namespace: nvcf
     inherit:
       - template: service
@@ -55,7 +55,7 @@ releases:
                       
   - name: nvct-api
     chart: nvcf/helm-nvct-api
-    version: 1.0.1
+    version: 1.0.2
     namespace: nvcf
     values:
       - ../global.yaml.gotmpl
@@ -137,6 +137,10 @@ releases:
     namespace: nats-system
     values:
       - ../global.yaml.gotmpl
+      {{- if .Values.global.imagePullSecrets }}
+      - imagePullSecrets:
+          {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
+      {{- end }}
     labels:
       release-group: services
 

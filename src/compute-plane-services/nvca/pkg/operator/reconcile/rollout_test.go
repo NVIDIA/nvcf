@@ -1201,6 +1201,67 @@ func TestHasAgentDeploymentConfigChanged_DynamicConfigNoRepeatedRollout(t *testi
 	}
 }
 
+func TestNewAgentConfigChangedCheck_IncludesNATSURL(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:              clients,
+		envType:              nvidiaiov1.EnvTypeStage,
+		ngcServiceKeyFetcher: &mockTokenFetcher{token: "randomkey"},
+		operatorNamespace:    NVCAOperatorNamespace,
+	}
+
+	natsURL := "nats://nats.nats-system.svc.cluster.local:4222"
+	nb := &nvidiaiov1.NVCFBackend{
+		Spec: nvidiaiov1.NVCFBackendSpec{
+			NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+				AccountConfig: nvidiaiov1.AccountConfig{
+					NCAID: "ncaid1",
+				},
+				ClusterConfig: nvidiaiov1.ClusterConfig{
+					ClusterID:        "some-cluster-id",
+					CloudProvider:    "ON-PREM",
+					ClusterGroupName: "FC-NVCF-Backend",
+					ClusterName:      "byoc-test",
+				},
+				FeatureGate: nvidiaiov1.FeatureGate{
+					OTELConfig: &nvidiaiov1.OTELConfig{},
+					Values: []string{
+						"LogPosting",
+						"CachingSupport",
+						"PeriodicInstanceStatusUpdate",
+						"SharedCluster",
+					},
+				},
+				ICMSConfig: nvidiaiov1.ICMSConfig{
+					ICMSServiceURL: "https://stg.icms.nvcf.nvidia.com",
+					TokenURL:       "https://stg.icms.nvcf.nvidia.com/token",
+				},
+				OAuthConfig: nvidiaiov1.OAuthConfig{
+					ClientID:             "oauth-stg-abc123",
+					PublicKeysetEndpoint: "https://stage-oauth.example.test/.well-known/jwks.json",
+				},
+				WebhookConfig: nvidiaiov1.WebhookConfig{
+					ListenPort:  8001,
+					ServicePort: 8002,
+				},
+				AgentConfig: nvidiaiov1.AgentConfig{
+					NATSURL: &natsURL,
+				},
+			},
+		},
+	}
+
+	agentConfig, err := bc.newAgentConfig(ctx, nb)
+	require.NoError(t, err)
+	err = bc.setupAgentConfigConfigMap(ctx, nb, agentConfig)
+	require.NoError(t, err)
+
+	checker, err := bc.newAgentConfigChangedCheck(ctx, nb)
+	require.NoError(t, err)
+	assert.False(t, checker())
+}
+
 // TestHasAgentWorkerConfigChanged_DynamicConfigNoRepeatedRollout tests that when
 // dynamic worker config values are used, no repeated rollouts occur.
 func TestHasAgentWorkerConfigChanged_DynamicConfigNoRepeatedRollout(t *testing.T) {

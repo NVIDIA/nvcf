@@ -102,8 +102,6 @@ type ControllerOptions struct {
 	ClusterRegion           string
 	// ImageCredentialHelperImage is the image tag for "nvcf-image-credential-helper",
 	// for third party registry cred updates.
-	//
-	// See https://github.com/NVIDIA/nvcf/nvcf-backend-cluster/image-credential-helper
 	ImageCredentialHelperImage string
 	// For adding overhead to instance types. Optional.
 	OverheadGetter enforce.InfraOverheadGetter

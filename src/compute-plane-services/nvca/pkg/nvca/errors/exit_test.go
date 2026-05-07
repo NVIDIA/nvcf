@@ -17,8 +17,8 @@ limitations under the License.
 
 package nvcaerrors
 
-// Grabbed from https://github.com/NVIDIA/nvcf/users-sandbox/mmou/go-nvcf-worker-2/-/blob/f8aa4fb58f5289d84637ad0a1daa9cb8ca645ea7/nvcf-worker-lib/utils/exit.go
-// need to port to nvcf-go repository
+// Derived from legacy nvcf-worker-lib exit handling.
+// Need to port to nvcf-go repository.
 
 import (
 	"context"

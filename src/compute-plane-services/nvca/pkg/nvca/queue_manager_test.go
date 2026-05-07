@@ -717,7 +717,7 @@ func TestSyncQueuesWithBk8sFailedCaching(t *testing.T) {
 	assert.NoError(t, err)
 
 	verifyPodsCreated := func(ct *assert.CollectT) {
-		err = bc.SyncAllICMSRequests(ctx)
+		err = syncAllICMSRequestsForTest(ctx, bc)
 		assert.NoError(ct, err)
 		err = updateInitJobToCompletion(ctx, bc)
 		assert.NoError(ct, err)
@@ -729,7 +729,7 @@ func TestSyncQueuesWithBk8sFailedCaching(t *testing.T) {
 	require.EventuallyWithT(t, verifyPodsCreated, 120*time.Second, 100*time.Millisecond)
 
 	bc.ForceSync(ctx)
-	err = bc.SyncAllICMSRequests(ctx)
+	err = syncAllICMSRequestsForTest(ctx, bc)
 	assert.NoError(t, err)
 
 	srList, err := clients.BART.NvcaV2beta1().ICMSRequests(bc.requestsNamespace).List(ctx, metav1.ListOptions{})
@@ -752,7 +752,7 @@ func TestSyncQueuesWithBk8sFailedCaching(t *testing.T) {
 
 	verifyPodsDeleted := func(ct *assert.CollectT) {
 		bc.ForceSync(ctx)
-		err = bc.SyncAllICMSRequests(ctx)
+		err = syncAllICMSRequestsForTest(ctx, bc)
 		assert.NoError(ct, err)
 		ps, err := bc.GetAllPodsForRequest(ctx, "randomID1234")
 		assert.NoError(ct, err)
@@ -763,7 +763,7 @@ func TestSyncQueuesWithBk8sFailedCaching(t *testing.T) {
 	err = cleanupAllICMSRequests(ctx, bc)
 	assert.NoError(t, err)
 	bc.ForceSync(ctx)
-	bc.SyncAllICMSRequests(ctx)
+	assert.NoError(t, syncAllICMSRequestsForTest(ctx, bc))
 
 	_, err = sqm.doCreationMessage(ctx, testGPUNameDefault, 0, createQueue, createMsg1)
 	assert.NoError(t, err)
@@ -775,7 +775,7 @@ func TestSyncQueuesWithBk8sFailedCaching(t *testing.T) {
 	bc.ForceSync(ctx)
 
 	verifyPodsCreated = func(ct *assert.CollectT) {
-		err = bc.SyncAllICMSRequests(ctx)
+		err = syncAllICMSRequestsForTest(ctx, bc)
 		assert.NoError(ct, err)
 		bc.ForceSync(ctx)
 		ps, err := bc.GetAllPodsForRequest(ctx, "randomID345")
@@ -792,7 +792,7 @@ func TestSyncQueuesWithBk8sFailedCaching(t *testing.T) {
 	require.EventuallyWithT(t, verifyPodsCreated, 20*time.Second, 100*time.Millisecond)
 
 	bc.ForceSync(ctx)
-	err = bc.SyncAllICMSRequests(ctx)
+	err = syncAllICMSRequestsForTest(ctx, bc)
 	assert.NoError(t, err)
 
 	qc.AddMessage(queueCreds.TerminationQueue.QueueURL, termMsg1)
@@ -803,7 +803,8 @@ func TestSyncQueuesWithBk8sFailedCaching(t *testing.T) {
 	assert.NoError(t, err)
 
 	bc.ForceSync(ctx)
-	err = bc.SyncAllICMSRequests(ctx)
+	err = syncAllICMSRequestsForTest(ctx, bc)
+	assert.NoError(t, err)
 
 	verifyPodsDeleted = func(ct *assert.CollectT) {
 		ps, err := bc.GetAllPodsForRequest(ctx, "randomID1234")
@@ -816,7 +817,7 @@ func TestSyncQueuesWithBk8sFailedCaching(t *testing.T) {
 	err = cleanupAllICMSRequests(ctx, bc)
 	assert.NoError(t, err)
 	bc.ForceSync(ctx)
-	bc.SyncAllICMSRequests(ctx)
+	assert.NoError(t, syncAllICMSRequestsForTest(ctx, bc))
 }
 
 func newCreationMessageRandomized(t *testing.T, msgBytes []byte) queue.ReceiveMessageOutput {
@@ -884,6 +885,23 @@ func updateInitJobToCompletion(ctx context.Context, bc *BackendK8sCache) error {
 		return err
 	}
 	return nil
+}
+
+func syncAllICMSRequestsForTest(ctx context.Context, bc *BackendK8sCache) error {
+	reqList, err := bc.clients.BART.NvcaV2beta1().ICMSRequests(bc.requestsNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed listing all ICMSRequests, err: %v", err)
+	}
+
+	var syncErr error
+	for i := range reqList.Items {
+		req := reqList.Items[i].DeepCopy()
+		if err := bc.syncICMSRequest(ctx, req); err != nil && syncErr == nil {
+			syncErr = err
+		}
+	}
+	bc.ForceSync(ctx)
+	return syncErr
 }
 
 func decodeCM(t *testing.T, s string) (m function.CreationQueueMessage) {

@@ -193,7 +193,9 @@ api:
     {{- $apiImageName := dig "api" "image" "name" "nvcf-service-oss" .Values }}
     {{- $apiImageRepository := printf "%s/%s" .Values.global.image.repository $apiImageName }}
     repository: {{ dig "api" "image" "repository" $apiImageRepository .Values }}
-    tag: {{ dig "api" "image" "tag" "1.1.1" .Values | quote }}
+    {{- with dig "api" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- if .Values.global.nodeSelectors.enabled }}
   nodeSelector:
     {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
@@ -236,7 +238,6 @@ api:
     NVCF_NATS_REGION_PLACEMENT_TAG: "dc"
     NVCF_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
     NVCF_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
-    NVCF_ICMS_BASE_URL: "http://api.sis.svc.cluster.local:8080"
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
 

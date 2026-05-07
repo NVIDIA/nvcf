@@ -1,4 +1,4 @@
-# Gitlab runners will use dockerhub.nvidia.com as a pull-through cache
+# CI runners will use dockerhub.nvidia.com as a pull-through cache
 # ----------------------------------------------------------------------------
 # Stage 1: download arch-specific utilities (runs once per TARGETPLATFORM)
 # ----------------------------------------------------------------------------
@@ -98,7 +98,7 @@ RUN rm -rf ./vendor/github.com/NVIDIA
 # ----------------------------------------------------------------------------
 # Stage 4: minimal runtime – built once per TARGETPLATFORM
 # ----------------------------------------------------------------------------
-# Latest version list: https://github.com/NVIDIA/gfn/security/container-hardening/distroless-sample-projects#machine-queryable-status
+# Latest version list is tracked in the internal hardened distroless sample project documentation.
 FROM nvcr.io/nvidia/distroless/go:v4.0.4
 
 ARG TARGETARCH

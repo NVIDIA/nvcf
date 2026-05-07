@@ -208,8 +208,6 @@ type AgentOptions struct {
 	K8sVersion             string
 	// ImageCredentialHelperImage is the image tag for "nvcf-image-credential-helper",
 	// for third party registry cred updates.
-	//
-	// See https://github.com/NVIDIA/nvcf/nvcf-backend-cluster/image-credential-helper
 	ImageCredentialHelperImage string
 
 	// K8sTimeConfig configures intervals, timeouts, thresholds for various K8s occurances.

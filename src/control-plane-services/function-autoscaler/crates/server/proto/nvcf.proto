@@ -1,0 +1,466 @@
+// SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package nvcf;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+option java_multiple_files = true;
+
+service Worker {
+    rpc ConnectOnce (WorkerConnect) returns (WorkerConnectOnceResponse);
+    rpc RefreshLargeUploadCredentials (RefreshLargeUploadCredentialsRequest) returns (RefreshLargeUploadCredentialsResponse);
+    rpc RefreshAssetDownloadCredentials (stream RefreshAssetDownloadCredentialsRequest) returns (stream RefreshAssetDownloadCredentialsResponse);
+    rpc MultipartLargeUploadCredentials (MultipartLargeUploadCredentialsRequest) returns (MultipartLargeUploadCredentialsResponse);
+    // Deprecated: Use StreamArtifacts instead for streaming behavior
+    rpc RequestArtifacts (ArtifactsRequest) returns (ArtifactsResponse);
+    rpc StreamArtifacts (ArtifactsRequest) returns (stream StreamedArtifactFile);
+    rpc RequestInstanceCredentials (InstanceCredentialsRequest) returns (InstanceCredentialsResponse);
+    rpc RequestSecretCredentials (SecretCredentialsRequest) returns (SecretCredentialsResponse);
+    rpc RequestFunctionMetadataCredentials (FunctionMetadataCredentialsRequest) returns (FunctionMetadataCredentialsResponse);
+    rpc ProvisionRegionalWorker (ProvisionWorkerRequest) returns (ProvisionWorkerResponse);
+    // the worker is now responsible for creating the full 302 redirect response for large responses, so it needs a way to retrieve the presigned download url
+    rpc RequestLargeResponseDownloadCredentials (LargeResponseDownloadCredentialsRequest) returns (LargeResponseDownloadCredentialsResponse);
+}
+
+service Proxy {
+    rpc AuthStatefulWork (ProxyAuthRequest) returns (ProxyAuthResponse);
+}
+
+service Invocation {
+    rpc AuthClientInvocation (ClientInvokeRequest) returns (ClientInvokeResponse);
+}
+
+service Skyway {
+    rpc AuthGetLogs (SkywayAuthRequest) returns (SkywayAuthResponse);
+    rpc AuthExecuteCommand (SkywayAuthRequest) returns (SkywayAuthResponse);
+    rpc AuthListInstances (SkywayAuthRequest) returns (SkywayAuthResponse);
+}
+
+service RateLimit {
+    rpc RateLimitPolicy (RateLimitPolicyRequest) returns (RateLimitPolicyResponse);
+}
+
+service Autoscaler {
+    rpc RequestDeploymentConfiguration (DeploymentConfigurationRequest) returns (DeploymentConfigurationResponse);
+}
+
+message WorkerConnect {
+    string instanceId = 1;
+    string functionId = 2;
+    string functionVersionId = 3;
+}
+
+message WorkerConnected {
+    string connectedRegion = 1;
+    repeated string otherRegions = 2;
+}
+
+message WorkerDisconnect {
+    string nvcfWorkerToken = 1;
+    google.protobuf.Timestamp expiration = 2;
+}
+
+message WorkerConnectOnceResponse {
+    string connectedRegion = 1;
+    repeated string otherRegions = 2;
+    string nvcfWorkerToken = 3;
+    google.protobuf.Timestamp expiration = 4;
+}
+
+message InputAssetReference {
+    string assetId = 1;
+    string reference = 2;
+    string contentType = 3;
+}
+
+message WorkerInvokeFunctionRequest {
+    message StatefulConfig {
+        message ConnectionConfig {
+            message HTTP1ConnectionConfig {
+                string proxyURI = 1;
+                string proxyAuthorizationToken = 2;
+            }
+            message HTTP3ConnectionConfig {
+                string proxyURI = 1;
+                string proxyAuthorizationToken = 2;
+            }
+            oneof config {
+                HTTP1ConnectionConfig http1Config = 1;
+                HTTP3ConnectionConfig http3Config = 2;
+            }
+        }
+        reserved 1;
+        reserved "proxyURI";
+        reserved 2;
+        reserved "proxyAuthorizationToken";
+        string nvcfRegionOfInvoker = 3;
+        repeated ConnectionConfig connectionConfigs = 4;
+    }
+    message StatelessConfig {
+        message ConnectionConfig {
+            // maps to the GET and POST /v2/nvcf/worker/request-attach endpoints
+            // with content type application/octet-stream+worker-response-h1
+            message HTTP1ProtocolConfig {
+                optional string proxyURI = 1;
+                string targetURI = 2;
+                // for POSTing the h1 encoded response stream
+                string responseAuthorizationToken = 3;
+                // for GETing the additional request body stream,
+                // missing if there is no additional request data
+                optional string requestAuthorizationToken = 4;
+            }
+            oneof config {
+                HTTP1ProtocolConfig http1Config = 1;
+            }
+        }
+        repeated ConnectionConfig connectionConfigs = 1;
+    }
+    string requestId = 1;
+    // nca id of the invoking client.
+    string ncaId = 2;
+    // subject of the invoking client. may be oauth2 client id, nca id, some user id.
+    string subject = 3;
+    // may expire, only valid for pexec and exec, not TLB
+    string largeResponseUrl = 4;
+    // only valid for pexec and exec, not TLB
+    uint32 maxDirectResponseSizeBytes = 5;
+    // only valid for pexec and exec, not TLB
+    repeated InputAssetReference inputAssetReference = 6;
+    reserved 7;
+    reserved "meteringData";
+    google.protobuf.Timestamp requestTime = 8;
+    // either statefulConfig or statelessConfig must be present.
+    optional StatefulConfig statefulConfig = 9;
+    // may be a partial body. check statelessConfig for optional remaining body connection info.
+    optional bytes requestBody = 10;
+    reserved 11;
+    reserved "requestContext";
+    // used for determining request region for data local to this request in the api
+    string directResponseUrl = 12;
+    repeated StringKV requestHeaders = 13;
+    // ex. GET, POST, PUT
+    string requestMethod = 14;
+    // may contain query parameters
+    string requestPath = 15;
+    reserved 16;
+    reserved "requestBodyReplySubject";
+    reserved 17;
+    reserved "responseBodyReplySubject";
+    // describes where the worker should connect to for sending and receiving
+    // data for a stateless invocation request. use of this field supersedes
+    // use of requestBodyReplySubject and responseBodyReplySubject.
+    // either statefulConfig or statelessConfig must be present.
+    optional StatelessConfig statelessConfig = 18;
+}
+
+enum InvokeStatus {
+    ERRORED = 0;
+    IN_PROGRESS = 1;
+    FULFILLED = 2;
+    PENDING_EVALUATION = 3;
+    REJECTED = 4;
+}
+
+message InlineResponse {
+    bytes body = 1;
+    repeated StringKV headers = 2;
+    optional uint32 httpStatusCode = 3;
+    uint64 chunkNumber = 4;
+    bool endOfResponse = 5;
+}
+
+message ErrorDetails {
+    string type = 1;
+    string title = 2;
+    uint32 status = 3;
+    string detail = 4;
+}
+
+message WorkerResultTracking {
+    string functionId = 1;
+    string functionVersionId = 2;
+    google.protobuf.Timestamp requestTime = 3;
+}
+
+message ProxyAuthRequest {
+    string clientAuthorizationToken = 1;
+    string functionId = 2;
+    optional string functionVersionId = 3;
+}
+
+message ProxyAuthResponse {
+    message FunctionVersion {
+        enum FunctionType {
+            DEFAULT = 0;
+            STREAMING = 1;
+            LLM = 2;
+        }
+        enum BackendType {
+            UNKNOWN = 0;
+            GFN = 1;
+        }
+        string functionVersionId = 1;
+        FunctionType type = 2;
+        // only set if type is STREAMING
+        optional BackendType backendType = 3;
+        bool hasRateLimit = 4;
+        bool syncCheck = 5; // specifies whether to call Ratelimiter Service synchronously to have stricter ratelimit
+    }
+    string functionId = 1;
+    repeated FunctionVersion functionVersions = 2;
+    string clientAuthSubject = 3;
+    string clientNcaId = 4;
+}
+
+message StringKV {
+    string key = 1;
+    string value = 2;
+}
+
+message RefreshLargeUploadCredentialsRequest {
+    string requestId = 1;
+    // UUID
+    string functionId = 2;
+    // UUID
+    string functionVersionId = 3;
+}
+
+message RefreshLargeUploadCredentialsResponse {
+    // may expire
+    string largeResponseUrl = 1;
+}
+
+message RefreshAssetDownloadCredentialsRequest {
+    string requestId = 1;
+    // UUID
+    string functionId = 2;
+    // UUID
+    string functionVersionId = 3;
+    string assetId = 4;
+}
+
+message RefreshAssetDownloadCredentialsResponse {
+    InputAssetReference inputAssetReference = 1;
+}
+
+message MultipartLargeUploadCredentialsRequest {
+    string requestId = 1;
+    // UUID
+    string functionId = 2;
+    // UUID
+    string functionVersionId = 3;
+}
+
+message MultipartLargeUploadCredentialsResponse {
+    message AWSCredentials {
+        string accessKeyId = 1;
+        string secretAccessKey = 2;
+        string sessionToken = 3;
+    }
+    string region = 1;
+    string bucket = 2;
+    string key = 3;
+    AWSCredentials credentials = 4;
+}
+
+message ArtifactsRequest {}
+
+message ArtifactsResponse {
+    repeated ArtifactResponse artifacts = 1;
+    message ArtifactResponse {
+        string name = 1;
+        string version = 2;
+        ArtifactKindEnum kind = 3;
+        repeated ArtifactFile files = 4;
+        enum ArtifactKindEnum {
+            MODEL = 0;
+            RESOURCE = 1;
+        }
+        message ArtifactFile {
+            string path = 1;
+            string url = 2;
+        }
+    }
+}
+
+message StreamedArtifactFile {
+    string artifactName = 1;
+    string artifactVersion = 2;
+    ArtifactKindEnum artifactKind = 3;
+    string path = 4;
+    string url = 5;
+    enum ArtifactKindEnum {
+        MODEL = 0;
+        RESOURCE = 1;
+    }
+}
+
+message InstanceCredentialsRequest {
+    string instanceId = 1;
+    string functionId = 2;
+    string functionVersionId = 3;
+    repeated string ips = 4;
+}
+
+message InstanceCredentialsResponse {
+    string instanceCredentialsToken = 1;
+    google.protobuf.Timestamp expiration = 2;
+}
+
+message SecretCredentialsRequest {
+    string functionId = 1;
+    string functionVersionId = 2;
+}
+
+message SecretCredentialsResponse {
+    string secretCredentialsToken = 1;
+    google.protobuf.Timestamp expiration = 2;
+}
+
+message FunctionMetadataCredentialsRequest {
+    string ncaId = 1;
+    string functionId = 2;
+    string functionVersionId = 3;
+}
+
+message FunctionMetadataCredentialsResponse {
+    string functionMetadataCredentialsToken = 1;
+    google.protobuf.Timestamp expiration = 2;
+}
+
+message ProvisionWorkerRequest {
+    string instanceId = 1;
+    string functionId = 2;
+    string functionVersionId = 3;
+    string regionToProvision = 4;
+}
+
+message ProvisionWorkerResponse {
+
+}
+
+message ClientInvokeRequest {
+    string clientAuthorizationToken = 1;
+    string functionId = 2;
+    optional string functionVersionId = 3;
+    // used for super admins (KAS) to invoke on behalf of a given nca id
+    optional string targetNcaId = 4;
+}
+
+message ClientInvokeResponse {
+    message FunctionVersion {
+        string functionVersionId = 1;
+        // used for pexec backwards compatibility
+        optional string defaultInvocationPath = 2;
+        bool hasRateLimit = 3;
+        bool syncCheck = 4; // specifies whether to call Ratelimiter Service synchronously to have stricter ratelimit
+    }
+    string functionId = 1;
+    repeated FunctionVersion functionVersions = 2;
+    string clientAuthSubject = 3;
+    string clientNcaId = 4;
+}
+
+message StatefulSessionTracking {
+    string functionId = 1;
+    string functionVersionId = 2;
+    string invokerNcaId = 3;
+}
+
+message LargeResponseDownloadCredentialsRequest {
+    string functionId = 1;
+    string functionVersionId = 2;
+    string requestId = 3;
+    string ncaId = 4;
+}
+
+message LargeResponseDownloadCredentialsResponse {
+    string largeResponseDownloadUrl = 1;
+}
+
+message SkywayAuthRequest {
+    string clientAuthorizationToken = 1;
+    string functionId = 2;
+    string functionVersionId = 3;
+    // used for super admins (KAS) to invoke on behalf of a given nca id
+    optional string targetNcaId = 4;
+}
+
+message SkywayAuthResponse {
+    message Instance {
+        string instanceId = 1;
+        string location = 2;
+        bool active = 3;
+    }
+    string functionId = 1;
+    string functionVersionId = 2;
+    string clientAuthSubject = 3;
+    string clientNcaId = 4;
+    optional string backend = 5;
+    repeated Instance instances = 6;
+}
+
+message RateLimitPolicyRequest {
+    string functionId = 1;
+    string functionVersionId = 2;
+}
+
+message RateLimitPolicyResponse {
+    message RateLimitConfig {
+        message PerNcaIdConfigs {
+            string ncaId = 1;
+            string rate = 2;
+        }
+        // global rate
+        optional string rate = 1;
+        repeated string excludedNcaIds = 2;
+
+        // per nca id rates
+        // If exists, PerNcaIdConfig is preferred over the "global" rate limit config above
+        repeated PerNcaIdConfigs perNcaIdConfigs = 3;
+    }
+    RateLimitConfig config = 1;
+}
+
+message DeploymentConfigurationRequest {
+    string functionId = 1;
+    string functionVersionId = 2;
+}
+
+message DeploymentConfigurationResponse {
+    map<string, AutoscalingConfiguration> configs = 1; //key is gpuSpecId
+}
+
+message AutoscalingConfiguration {
+    ScalingDetails scaleUpDetails = 1;   // Contains all the information for scaling up
+    ScalingDetails scaleDownDetails = 2; // Contains all the information for scaling down
+}
+
+message ScalingDetails {
+    string metric = 1;  // Optional separate metric for scaling up vs down
+    float factor = 2;
+    int32 threshold = 3;
+    StickinessWindow stickiness = 4;
+}
+
+message StickinessWindow {
+    google.protobuf.Duration size = 1;        // Must be less than PT1H
+    google.protobuf.Duration threshold = 2;   // Must be less than size
+}
+

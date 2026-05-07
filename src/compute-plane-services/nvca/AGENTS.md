@@ -4,9 +4,10 @@ Quick reference for working with **NVCA** (NVIDIA Cloud Functions Agent), a Kube
 
 ## Quick Start
 
-**Always work inside the dev shell:**
+**Use standard Go tooling by default:**
 ```bash
-make dev-shell
+go test ./internal/miniservice/... \
+    -ldflags '-X github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version=v25.8.0'
 ```
 
 **Repository structure:**
@@ -32,9 +33,7 @@ make dev-shell
 
 ## Dev Environment Tips
 
-- Run all commands inside `make dev-shell` - it has all tools pre-configured
-- Set up `.secrets` or `~/.netrc` for GitLab and GitHub access (see README.md for full setup including GitHub PAT with SSO)
-- Use `nv_gotest ./pkg/nvca -run TestSpecificFunction` to run a single test
+- Use the direct `go test` pattern below, including `-ldflags`, to run a single test
 - Run `make test-e2e` for full end-to-end validation
 - Set `KUBEBUILDER_ASSETS` for VSCode/Cursor to run envtest tests in-editor (see README.md)
 
@@ -44,38 +43,33 @@ make dev-shell
 ```bash
 make test           # Unit tests (excludes generated code)
 make lint           # golangci-lint + helm lint
-make shellcheck     # Shell script linting
 ```
 
 **Run specific tests:**
 ```bash
-nv_gotest ./pkg/nvca                     # All tests in package
-nv_gotest ./pkg/nvca -run TestBackend    # Single test function
-nv_gotest -v ./pkg/storage               # Verbose output
+go test ./pkg/nvca -run TestBackend \
+    -ldflags '-X github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version=v25.8.0'
+go test -v ./pkg/storage \
+    -ldflags '-X github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version=v25.8.0'
 ```
 
-**Running tests outside dev-shell (AI agents / IDE):**
+**Running tests in AI agents / IDEs:**
 
-When running `go test` directly (not via `make test` or `nv_gotest`), you must pass ldflags to set the DRA driver version, otherwise tests will panic with `could not parse "unknown" as version`:
+When running `go test` directly (not via `make test`), you must pass ldflags to set the DRA driver version, otherwise tests will panic with `could not parse "unknown" as version`:
 
 ```bash
 go test ./internal/miniservice/... -v \
     -ldflags '-X github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version=v25.8.0'
 ```
 
-This is automatically handled by `make test` and `nv_gotest`, but required when using `go test` directly.
+This is automatically handled by `make test`, but required when using `go test` directly.
 
 **Build artifacts:**
 ```bash
-# Inside dev-shell, use nv_components commands
-nv_components build nvca                 # Build NVCA binary
-nv_components image nvca                 # Build NVCA container image
-nv_components build nvca-operator        # Build operator binary
-nv_components image nvca-operator        # Build operator container image
-
-# Local dev builds (outside nv_components)
-make image-dev-local                     # Build operator image locally
-make chart-dev-local                     # Build operator Helm chart locally
+mkdir -p _output/bin
+go build -o _output/bin/nvca ./cmd/nvca
+go build -o _output/bin/nvca-operator ./cmd/nvca-operator
+go build -o _output/bin/webhook-server ./cmd/webhook-server
 ```
 
 **Code generation (MUST run after CRD changes):**
@@ -84,12 +78,10 @@ make codegen-update      # Generate clientsets, informers, listers, DeepCopy
 make openapigen-update   # Update OpenAPI schema
 make testdata-update     # Regenerate test data
 make docs-update         # Regenerate docs
-make gen                 # Run ALL code generation + vendor update
 ```
 
 **Local E2E tests:**
 ```bash
-make dev-shell
 make test-e2e
 ```
 
@@ -103,7 +95,6 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*')
 # Run all CI checks locally
 make test        # Must pass (>73% coverage target)
 make lint        # Must pass (golangci-lint)
-make shellcheck  # Must pass (shell scripts)
 
 # Verify vendor check will pass (no uncommitted changes)
 git diff --exit-code
@@ -210,11 +201,11 @@ internal/               - Private packages
 deployments/nvca-operator/ - Operator Helm chart
 ```
 
-## Commit & MR Instructions
+## Commit & PR Instructions
 
-**General MR authoring guidance (applies to AI agents too):**
-- Use the local MR template shape with `Customer Summary`, `TL;DR`, `Additional Details`, `For the Reviewer`, `For QA`, and `Tickets`
-- For `feat`, `fix`, and `perf` MRs, make `Customer Summary` customer-facing because it is used in release notes
+**General PR authoring guidance (applies to AI agents too):**
+- Use the local PR template shape with `Customer Summary`, `TL;DR`, `Additional Details`, `For the Reviewer`, `For QA`, and `Tickets`
+- For `feat`, `fix`, and `perf` PRs, make `Customer Summary` customer-facing because it is used in release notes
 - In `For QA`, list the exact checks or commands you ran and state whether QA is needed
 - Reference the relevant ticket when one exists; use `NO-REF` only when that is acceptable for the change
 
@@ -252,7 +243,7 @@ Closes NVCFCLUST-1234
 # 1. Format YOUR Go code only (NOT vendor/)
 gofmt -w $(find . -name '*.go' -not -path './vendor/*')
 
-# 2. Run all tests
+# 2. Run tests
 make test           # All unit tests must pass
 
 # 3. Run linters
@@ -270,10 +261,10 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lin
 
 **IMPORTANT: Never modify vendor files**
 - All fixes and changes must be made in non-vendor files only
-- Vendor files are managed by `make vendor-update` and should not be edited directly
-- If you encounter issues in vendor code, update dependencies in `go.mod` and run `make vendor-update`
+- Vendor files are managed by `go mod vendor` and should not be edited directly
+- If you encounter issues in vendor code, update dependencies in `go.mod` and run `go mod vendor`
 
-**MR checklist:**
+**PR checklist:**
 1. Fork repo, create feature branch
 2. Add tests for your changes (aim for >73% coverage)
 3. **Format YOUR code only**: `gofmt -w $(find . -name '*.go' -not -path './vendor/*')`
@@ -281,8 +272,8 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lin
 5. Run `make codegen-update` if you touched `pkg/apis/`
 6. **Verify clean working directory**: `git diff --exit-code`
 7. Commit with conventional format
-8. Create MR to `main` branch
-9. Fill in MR template (Customer Summary for feat/fix/perf, TL;DR, ticket number)
+8. Create PR to `main` branch
+9. Fill in PR template (Customer Summary for feat/fix/perf, TL;DR, ticket number)
 10. Wait for CI to pass
 11. Address review feedback
 
@@ -298,18 +289,18 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lin
 - Check `go.mod` replace directives for security patches
 - Run containers as non-root when possible
 
-**Reporting vulnerabilities - DO NOT use GitLab/GitHub issues:**
+**Reporting vulnerabilities - DO NOT use public issue trackers:**
 - Web: https://www.nvidia.com/object/submit-security-vulnerability.html
 - Email: psirt@nvidia.com
 - Include: product/version, vulnerability type, repro steps, PoC code, impact
 
 ## Common Gotchas
 
-1. **Always work in dev-shell** - external environment lacks required tools
+1. **Use standard Go tooling for GitHub-facing work** - only use internal dev shells when explicitly available
 2. **CRD changes = run codegen** - after touching `pkg/apis/`, MUST run `make codegen-update` and `make openapigen-update`
-3. **Dependency changes = update vendor + LICENSE** - run `make vendor-update` after changing go.mod, then update the THIRD-PARTY LICENSES section in `LICENSE` file
+3. **Dependency changes = update vendor + LICENSE** - run `go mod tidy` and `go mod vendor` after changing `go.mod`, then update the THIRD-PARTY LICENSES section in `LICENSE` file
 4. **Envtest required** - some tests need `KUBEBUILDER_ASSETS` set (handled by `make test`)
-5. **Local vs CI** - local tests may pass but CI has additional checks (shellcheck, etc.)
+5. **Local vs CI** - local tests may pass but CI may have additional checks
 6. **Queue message idempotency** - handlers may receive duplicate messages
 7. **Storage controller timing** - PVC operations are async, handle races carefully
 8. **MiniService chartcache key must include namespace** - The `chartcache.ChartCacheInput` struct (in `internal/miniservice/chartcache/`) is used to generate cache keys for rendered Helm charts. Any field that affects the Helm template output (e.g., `.Release.Namespace`) MUST be included in this struct. If namespace is missing from the cache key, cached output from namespace A can be incorrectly returned for namespace B. When adding new fields to `HelmReValRenderInput` that affect rendering, also add them to `ChartCacheInput` and update `getCacheKey()` in `reconcile.go`.
@@ -329,21 +320,20 @@ make testdata-update
 
 **Changed dependencies (go.mod)?** Run:
 ```bash
-make vendor-update
+go mod tidy
+go mod vendor
 
 # Then update LICENSE file with new third-party licenses:
 find vendor -name "LICENSE*" -type f | sort
 # Copy the output to the THIRD-PARTY LICENSES section in LICENSE
 ```
 
-**Modified pipeline?** Run:
-```bash
-make gitlab-ci-update   # Regenerates pipelines/components.yml
-```
-
 **Update all generated code:**
 ```bash
-make gen   # Runs all code generation
+make codegen-update
+make openapigen-update
+make testdata-update
+make docs-update
 ```
 
 ## LICENSE File Maintenance
@@ -351,7 +341,7 @@ make gen   # Runs all code generation
 The `LICENSE` file contains the NVIDIA Apache 2.0 license and a complete list of third-party licenses from vendored dependencies.
 
 **When to update:**
-- After running `make vendor-update`
+- After running `go mod vendor`
 - After adding/removing/updating dependencies in `go.mod`
 
 **How to update:**
@@ -408,14 +398,9 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 
 ## Key Environment Variables
 
-Set automatically in dev-shell:
-- `GITLAB_USER`, `GITLAB_TOKEN` - private Go module access
+Useful local test variables:
 - `NVCF_GOMAXPROCS` - max parallel test execution (default: 4)
 - `KUBEBUILDER_ASSETS` - envtest binaries location
-
-Configured in `.env`:
-- `EGX_TOOLBOX_IMAGE_REPO` - dev container image
-- `EGX_GO_TEST_COVERAGE_THRESHOLD` - minimum coverage (73%)
 
 ## Versioning & Tag Formats
 
@@ -442,16 +427,8 @@ git tag v1.20.0-dev.0
 ```
 
 **CI behavior:**
-- Tags trigger the `.rule-tagged` jobs in GitLab CI
-- Version is derived via `nv_ci_versioning` and stored in `EGX_VERSION`
-
-## CI/CD Pipeline
-
-- Definition: `pipelines/components.yml` (generated by `make gitlab-ci-update`)
-- Runs: linting, unit tests, E2E tests, security scans, image builds
-- Builds two container images: `nvca` (agent) and `nvca-operator` (operator)
-- Builds and publishes the `nvca-operator` Helm chart
-- Mirrors images to staging/production NGC registries on tagged releases
+- Tags should trigger release validation in the hosting environment.
+- Keep GitHub-facing documentation free of internal CI pipeline commands and generated pipeline artifacts.
 
 ## Observability
 
@@ -499,7 +476,7 @@ For cluster-wide attributes and feature flags documentation, see:
   1. local sibling checkout `../nvcf-agentic-dev`
   2. workspace checkout named `nvcf-agentic-dev`
   3. the current `origin` URL of a local `nvcf-agentic-dev` clone
-- Do not assume a specific forge host such as internal GitLab or GitHub.
+- Do not assume a specific forge host.
 - Start with `workspaces/self-hosted-nvcf/repos.yaml` to confirm repo ownership and nearby repos.
 - When topology or rollout ordering matters, also read `workspaces/self-hosted-nvcf/docs/deployment-sequence.md` and `workspaces/self-hosted-nvcf/docs/deployment-dependencies-with-links.yaml`.
 - Treat `nvcf-agentic-dev` as the routing layer: use it to identify the owning repo and dependencies, then do the implementation in the correct repo.

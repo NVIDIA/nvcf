@@ -1,4 +1,4 @@
-# Gitlab runners will use dockerhub.nvidia.com as a pull-through cache
+# CI runners will use dockerhub.nvidia.com as a pull-through cache
 # ------------------------------------------------------------------------------
 # Common builder stage (executes ONLY on the build platform)
 # ------------------------------------------------------------------------------
@@ -89,7 +89,7 @@ RUN set -eux; \
 # binary that matches the platform's architecture.
 # ------------------------------------------------------------------------------
 
-# Latest version available from https://github.com/NVIDIA/gfn/security/container-hardening/distroless-sample-projects#machine-queryable-status
+# Latest version is tracked in the internal hardened distroless sample project documentation.
 FROM nvcr.io/nvidia/distroless/go:v4.0.4
 LABEL io.k8s.display-name="NV Cluster Agent"
 

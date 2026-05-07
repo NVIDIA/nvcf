@@ -25,7 +25,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	cmnsecret "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret"
-	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	corev1 "k8s.io/api/core/v1"
@@ -332,7 +331,7 @@ func (bc *BackendK8sCache) newAgentConfigChangedCheck(ctx context.Context, nb *n
 		return nil, err
 	}
 
-	genCfgData, err := nvcaconfig.EncodeConfig(genCfg, mergeCfg)
+	genCfgData, err := encodeAgentConfig(genCfg, mergeCfg, nb.Spec.AgentConfig.NATSURL)
 	if err != nil {
 		return nil, fmt.Errorf("encode and merge generated config: %w", err)
 	}

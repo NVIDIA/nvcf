@@ -699,18 +699,18 @@
                 },
                 "icmsServiceURL": {
                     "type": "string",
-                    "description": "URL of the SIS/ICMS service for self-managed clusters. Required when ngcConfig.clusterSource is \"self-managed\".",
-                    "default": ""
+                    "description": "URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.",
+                    "default": "http://icms.example.invalid:8080"
                 },
                 "revalServiceURL": {
                     "type": "string",
-                    "description": "URL of the ReVal service for self-managed clusters. Required when ngcConfig.clusterSource is \"self-managed\".",
-                    "default": ""
+                    "description": "URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.",
+                    "default": "http://reval.example.invalid:8080"
                 },
                 "natsURL": {
                     "type": "string",
-                    "description": "URL of the NATS service for self-managed clusters. Required when ngcConfig.clusterSource is \"self-managed\".",
-                    "default": ""
+                    "description": "URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.",
+                    "default": "nats://nats.example.invalid:4222"
                 }
             }
         },
