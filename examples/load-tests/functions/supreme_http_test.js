@@ -62,6 +62,10 @@ const params = {
     },
 };
 
+if (__ENV.INVOKE_HOST) {
+    params.headers['Host'] = __ENV.INVOKE_HOST;
+}
+
 export default function() {
     let response
 
