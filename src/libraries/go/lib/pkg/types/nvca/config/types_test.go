@@ -96,7 +96,6 @@ func TestAgentTimeConfig_Complete(t *testing.T) {
 		assert.Equal(t, defaultSyncRequestStatusInterval, completed.SyncRequestStatusInterval)
 		assert.Equal(t, defaultSyncAcknowledgeRequestInterval, completed.SyncAcknowledgeRequestInterval)
 		assert.Equal(t, defaultPeriodicInstanceStatusInterval, completed.PeriodicInstanceStatusInterval)
-		assert.Equal(t, defaultRolloverServiceUpdateInterval, completed.RolloverServiceUpdateInterval)
 		assert.Equal(t, defaultICMSRequestAckInterval, completed.ICMSRequestAckInterval)
 		assert.Equal(t, defaultICMSRequestAckRetryTimeout, completed.ICMSRequestAckRetryTimeout)
 	})

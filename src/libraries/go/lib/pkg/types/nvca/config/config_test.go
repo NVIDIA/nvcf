@@ -170,11 +170,6 @@ func TestConfig_EncodeDecode_ServiceOAuthEndpoints(t *testing.T) {
 			FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://stage-fnds-oauth.example.test/.well-known/jwks.json",
 			FunctionDeploymentStagesProdOAuthTokenURL:              "https://prod-fnds-oauth.example.test/token",
 			FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint:  "https://prod-fnds-oauth.example.test/.well-known/jwks.json",
-			RolloverServiceURL:                                     "https://stg.api.ros.nvidia.com",
-			RolloverServiceStageOAuthTokenURL:                      "https://stage-ros-oauth.example.test/token",
-			RolloverServiceStageOAuthPublicKeysetEndpoint:          "https://stage-ros-oauth.example.test/.well-known/jwks.json",
-			RolloverServiceProdOAuthTokenURL:                       "https://prod-ros-oauth.example.test/token",
-			RolloverServiceProdOAuthPublicKeysetEndpoint:           "https://prod-ros-oauth.example.test/.well-known/jwks.json",
 		},
 	}
 
@@ -190,11 +185,6 @@ agent:
   helmReValServiceURL: http://reval.localhost:8080
   helmReValStageOAuthPublicKeysetEndpoint: https://stage-reval-oauth.example.test/.well-known/jwks.json
   helmReValStageOAuthTokenURL: https://stage-reval-oauth.example.test/token
-  rolloverServiceProdOAuthPublicKeysetEndpoint: https://prod-ros-oauth.example.test/.well-known/jwks.json
-  rolloverServiceProdOAuthTokenURL: https://prod-ros-oauth.example.test/token
-  rolloverServiceStageOAuthPublicKeysetEndpoint: https://stage-ros-oauth.example.test/.well-known/jwks.json
-  rolloverServiceStageOAuthTokenURL: https://stage-ros-oauth.example.test/token
-  rolloverServiceURL: https://stg.api.ros.nvidia.com
 `
 
 	gotConfigBytes, err := EncodeConfig(cfg)

@@ -217,14 +217,6 @@ type AgentConfig struct {
 	// NATS service config
 	NATSURL string `yaml:"NATSURL,omitempty"`
 
-	// ROS URL
-	RolloverServiceURL string `yaml:",omitempty"`
-	// Rollover service OAuth endpoints are selected from RolloverServiceURL.
-	RolloverServiceStageOAuthTokenURL             string `yaml:",omitempty"`
-	RolloverServiceStageOAuthPublicKeysetEndpoint string `yaml:",omitempty"`
-	RolloverServiceProdOAuthTokenURL              string `yaml:",omitempty"`
-	RolloverServiceProdOAuthPublicKeysetEndpoint  string `yaml:",omitempty"`
-
 	// CSIVolumeMountOptions for PVC provisioning
 	CSIVolumeMountOptions []string `yaml:",omitempty"`
 
@@ -299,7 +291,6 @@ const (
 	defaultSyncQueueInterval              = 3 * time.Second
 	defaultSyncRequestStatusInterval      = 15 * time.Second
 	defaultPeriodicInstanceStatusInterval = 5 * time.Minute
-	defaultRolloverServiceUpdateInterval  = 30 * time.Minute
 	defaultICMSRequestAckInterval         = 15 * time.Minute
 	defaultSyncAcknowledgeRequestInterval = 5 * time.Second
 	defaultICMSRequestAckRetryTimeout     = 5 * time.Minute
@@ -312,7 +303,6 @@ type AgentTimeConfig struct {
 	SyncRequestStatusInterval      time.Duration `yaml:",omitempty"`
 	SyncAcknowledgeRequestInterval time.Duration `yaml:",omitempty"`
 	PeriodicInstanceStatusInterval time.Duration `yaml:",omitempty"`
-	RolloverServiceUpdateInterval  time.Duration `yaml:",omitempty"`
 	ICMSRequestAckInterval         time.Duration `yaml:",omitempty"`
 	ICMSRequestAckRetryTimeout     time.Duration `yaml:",omitempty"`
 }
@@ -335,9 +325,6 @@ func (t AgentTimeConfig) Complete() AgentTimeConfig {
 	}
 	if t.PeriodicInstanceStatusInterval == 0 {
 		t.PeriodicInstanceStatusInterval = defaultPeriodicInstanceStatusInterval
-	}
-	if t.RolloverServiceUpdateInterval == 0 {
-		t.RolloverServiceUpdateInterval = defaultRolloverServiceUpdateInterval
 	}
 
 	if t.ICMSRequestAckInterval == 0 {

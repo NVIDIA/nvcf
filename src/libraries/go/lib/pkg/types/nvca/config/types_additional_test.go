@@ -366,14 +366,12 @@ func TestAgentConfig_Complete_AdditionalFields(t *testing.T) {
 			HelmRepositoryPrefix:               "https://helm.example.com",
 			HelmReValServiceURL:                "https://reval.example.com",
 			NATSURL:                            "nats://nats.example.com:4222",
-			RolloverServiceURL:                 "https://ros.example.com",
 			FunctionDeploymentStagesServiceURL: "https://fnds.example.com",
 		}
 		completed := cfg.Complete(EnvironmentProduction)
 		assert.Equal(t, "https://helm.example.com", completed.HelmRepositoryPrefix)
 		assert.Equal(t, "https://reval.example.com", completed.HelmReValServiceURL)
 		assert.Equal(t, "nats://nats.example.com:4222", completed.NATSURL)
-		assert.Equal(t, "https://ros.example.com", completed.RolloverServiceURL)
 		assert.Equal(t, "https://fnds.example.com", completed.FunctionDeploymentStagesServiceURL)
 	})
 
