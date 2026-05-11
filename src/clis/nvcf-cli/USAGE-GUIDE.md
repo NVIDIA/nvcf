@@ -373,7 +373,7 @@ Authorization: Bearer nvapi-nvcf-stg-121e78JIqKdjzxiJvGHtYhYuNAj8EshCuzxSQLYX-AU
 1. Call `/v1/admin/keys` to get a JWT token
 2. Call `/v1/keys` with the JWT token to generate an API key
 3. Use the API key for:
-   - Invoking functions (`POST /v2/nvcf/pexec/functions/{id}`)
+   - Invoking functions (`POST http://<function-id>.invocation.<gateway-addr>/<inference-path>`)
    - Listing functions (`GET /v2/nvcf/functions`)
 
 ### Environment-Specific URLs

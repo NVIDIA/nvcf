@@ -137,9 +137,14 @@ set -e
 
 export GATEWAY_ADDR=<your-gateway-address>
 export TOKEN=<your-nvapi-key>
+export FUNCTION_ID=<your-function-id>
 
-export HTTP_SUPREME_NVCF_URL="http://${GATEWAY_ADDR}/v2/nvcf/pexec/functions/<your-function-id>"
-export INVOKE_HOST="invocation.${GATEWAY_ADDR}"
+# This local/self-managed example uses `http://` because it does not assume TLS
+# termination. Use `https://` if your gateway terminates TLS.
+# `/echo` matches the inference path configured for the load_tester_supreme
+# example. If your function uses a different inference path, replace `/echo`
+# with that path in `HTTP_SUPREME_NVCF_URL` and the curl example below.
+export HTTP_SUPREME_NVCF_URL="http://${FUNCTION_ID}.invocation.${GATEWAY_ADDR}/echo"
 export SENT_MESSAGE_SIZE=32
 export RESPONSE_COUNT=1
 
@@ -147,7 +152,6 @@ k6 run functions/supreme_http_test.js \
   --vus 10 --duration 60s \
   -e TOKEN=${TOKEN} \
   -e HTTP_SUPREME_NVCF_URL=${HTTP_SUPREME_NVCF_URL} \
-  -e INVOKE_HOST=${INVOKE_HOST} \
   -e SENT_MESSAGE_SIZE=${SENT_MESSAGE_SIZE} \
   -e RESPONSE_COUNT=${RESPONSE_COUNT}
 ```
@@ -222,7 +226,6 @@ k6 run functions/supreme_http_test.js \
   --config k6_rampup_config.json \
   -e TOKEN=${TOKEN} \
   -e HTTP_SUPREME_NVCF_URL=${HTTP_SUPREME_NVCF_URL} \
-  -e INVOKE_HOST=${INVOKE_HOST} \
   -e SENT_MESSAGE_SIZE=${SENT_MESSAGE_SIZE} \
   -e RESPONSE_COUNT=${RESPONSE_COUNT}
 ```
@@ -232,8 +235,8 @@ k6 run functions/supreme_http_test.js \
 | Variable | Purpose |
 | --- | --- |
 | `TOKEN` | Your `nvapi-*` bearer token from `./nvcf-cli api-key generate` |
-| `HTTP_SUPREME_NVCF_URL` | HTTP URL: `http://<gateway-addr>/v2/nvcf/pexec/functions/<function-id>` |
-| `INVOKE_HOST` | INVOKE_HOST : `invocation.<gateway-addr>` |
+| `FUNCTION_ID` | Function ID for invocation routing |
+| `HTTP_SUPREME_NVCF_URL` | Invocation URL for the function inference path: `http://<function-id>.invocation.<gateway-addr>/echo` |
 | `SENT_MESSAGE_SIZE` | Size of the test payload in bytes |
 | `RESPONSE_COUNT` | Number of responses the server should return |
 
@@ -243,10 +246,9 @@ Then verify the endpoint works with `curl`:
 
 ```bash
 curl -v -X POST \
-  http://$GATEWAY_ADDR/v2/nvcf/pexec/functions/<your-function-id> \
+  "${HTTP_SUPREME_NVCF_URL}" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -H "Host: invocation.$GATEWAY_ADDR" \
   -H "Nvcf-Poll-Seconds: 5" \
   -d '{"message": "hello", "repeats": 1}'
 ```
