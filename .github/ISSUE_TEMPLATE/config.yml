@@ -6,12 +6,10 @@
 # Set to 'false' if you only want the templates to be used.
 blank_issues_enabled: false
 
-# When using discussions instead of Question issue templates,
-# link that below to have it show up in the 'Submit Issue' page
 contact_links:
-  - name: Ask a Question
+  - name: Ask in Discussions
     url: https://github.com/NVIDIA/nvcf/discussions
-    about: Please ask any questions here.
+    about: Use GitHub Discussions for support and usage help.
   - name: Report a Security Vulnerability
     url: https://www.nvidia.com/object/submit-security-vulnerability.html
     about: Do not file security issues on GitHub. Use the NVIDIA PSIRT.

@@ -7,12 +7,7 @@
 set -euo pipefail
 
 BAZELISK_VERSION="1.25.0"
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  DEFAULT_INSTALL_DIR="/usr/local/bin"
-else
-  DEFAULT_INSTALL_DIR="$HOME/.local/bin"
-fi
-INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 info()  { echo "[setup] $*"; }
 error() { echo "[setup] ERROR: $*" >&2; }
@@ -56,14 +51,46 @@ install_bazelisk() {
   info "Installed bazelisk as ${INSTALL_DIR}/bazel"
 }
 
+rc_file_for_shell() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+  case "$shell_name" in
+    zsh)  echo "$HOME/.zshrc" ;;
+    bash)
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "$HOME/.bash_profile"
+      else
+        echo "$HOME/.bashrc"
+      fi
+      ;;
+    *) echo "" ;;
+  esac
+}
+
 verify_path() {
-  if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
+  export PATH="${INSTALL_DIR}:$PATH"
+
+  local marker="# added by nvcf setup.sh (Bazelisk PATH)"
+  local line="export PATH=\"${INSTALL_DIR}:\$PATH\"  ${marker}"
+  local rc_file
+  rc_file="$(rc_file_for_shell)"
+
+  if [[ -z "$rc_file" ]]; then
     info ""
-    info "Add this to your shell profile (~/.bashrc or ~/.zshrc):"
+    info "Could not detect your shell. Add this line to your shell profile:"
     info "  export PATH=\"${INSTALL_DIR}:\$PATH\""
     info ""
-    export PATH="${INSTALL_DIR}:$PATH"
+    return 0
   fi
+
+  if [[ -f "$rc_file" ]] && grep -qF "$marker" "$rc_file"; then
+    info "PATH entry already present in $rc_file"
+    return 0
+  fi
+
+  printf '\n%s\n' "$line" >> "$rc_file"
+  info "Appended PATH entry to $rc_file"
+  info "Open a new terminal or run: source $rc_file"
 }
 
 verify_install() {

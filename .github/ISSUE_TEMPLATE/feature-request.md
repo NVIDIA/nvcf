@@ -2,12 +2,12 @@
 name: Feature request
 about: Suggest an idea for NVCF
 title: "[FEA]"
-labels: "Needs Triage, feature request"
+labels: "needs-triage, enhancement"
 assignees: ''
 
 ---
 
-## Is your feature request related to a problem? Please describe.
+## Is this related to a problem? Please describe.
 
 A clear and concise description of what the problem is. For example, I wish I could use NVCF to do [...]
 
@@ -21,7 +21,7 @@ A clear and concise description of any alternative solutions or features you've 
 
 ## Additional context
 
-Add any other context, code examples, or references to existing implementations about the feature request here.
+Add any other context, code examples, or references to existing implementations about the idea here.
 
 -----
 By submitting this issue, you agree to follow our [code of conduct](../../CODE_OF_CONDUCT.md) and our [contributing guidelines](../../CONTRIBUTING.md).

@@ -12,7 +12,7 @@
 ## For the Reviewer
 <!--mention reviewers you wish to review this MR-->
 <!--call out specific files that should be looked at closely-->
-<!--any questions you need answered pertaining to this review-->
+<!--anything you need answered pertaining to this review-->
 
 ## For QA (optional for docs, build, test, refactor, ci, chore, style, and revert PRs)
 <!--list steps you took to verify this change-->

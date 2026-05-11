@@ -105,13 +105,22 @@ bazel test  //src/clis/nvcf-cli/...
 bazel build //src/clis/nvcf-cli:dist
 ```
 
+Builds read from the team Buildbarn cache at `nvcfbarn.nvidia.com` by default
+and do not upload local results. To seed the cache from a dev box (corp
+network or VPN required), add `--config=remote-write`:
+
+```bash
+bazel build --config=remote-write //src/clis/nvcf-cli/...
+```
+
 Full setup, day-to-day commands, OCI image build/push, stamping, caches, and
 CI map live in [`BAZEL.md`](BAZEL.md). For CLI-specific developer flow see
 [`src/clis/nvcf-cli/README.md`](src/clis/nvcf-cli/README.md).
 
 ## Support
 
-- If you have found a bug or want to request a feature, please open a [GitHub issue](https://github.com/nvidia/nvcf/issues/new/choose) in this repository. Use the appropriate template and include the component name in the title (e.g., [nvcf-nvca] Pod fails to start on arm64).
+- File bugs, feature ideas, and documentation requests as [GitHub issues](https://github.com/nvidia/nvcf/issues/new/choose). Use the appropriate template and include the component name in the title (for example, [nvcf-nvca] Pod fails to start on arm64).
+- Use [GitHub Discussions](https://github.com/NVIDIA/nvcf/discussions) for support and usage help.
 - To report a security vulnerability see [`SECURITY.md`](SECURITY.md). Do not open a public issue.
 
 ## Contributing
