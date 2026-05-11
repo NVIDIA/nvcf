@@ -1,6 +1,6 @@
 ![NVCF banner](docs/user/images/nvcf-banner.svg)
 
-[Documentation](docs/user/index.md) | [Installation](docs/user/installation.md) | [API Reference](docs/user/api.md) | [Contributing](CONTRIBUTING.md) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
+[Preview docs](https://nvidia-nvcf.docs.buildwithfern.com/nvcf/overview) | [Public docs](https://docs.nvidia.com/nvcf/overview) | [Installation](docs/user/installation.md) | [API Reference](docs/user/api.md) | [Contributing](CONTRIBUTING.md) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
 
 # NVIDIA Cloud Functions
 
