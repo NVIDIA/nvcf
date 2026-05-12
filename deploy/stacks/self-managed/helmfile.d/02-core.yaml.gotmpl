@@ -141,6 +141,8 @@ releases:
       - imagePullSecrets:
           {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
       {{- end }}
+      - image:
+          repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
     labels:
       release-group: services
 
