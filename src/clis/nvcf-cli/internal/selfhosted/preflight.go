@@ -21,7 +21,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -213,6 +215,31 @@ func DefaultTools() []BinarySpec {
 			HintURL:  "https://helm.sh/docs/intro/install/",
 			LookPath: exec.LookPath, Version: probeHelmVersion,
 		},
+	}
+}
+
+// DefaultToolsWithPreferredDir returns the default tool specs, but prefers
+// binaries from preferredDir when they exist. This lets local stack workflows
+// use the stack-pinned bin/ tools before falling back to the host PATH.
+func DefaultToolsWithPreferredDir(preferredDir string) []BinarySpec {
+	tools := DefaultTools()
+	if preferredDir == "" {
+		return tools
+	}
+	for i := range tools {
+		fallback := tools[i].LookPath
+		tools[i].LookPath = preferredDirLookPath(preferredDir, fallback)
+	}
+	return tools
+}
+
+func preferredDirLookPath(preferredDir string, fallback func(string) (string, error)) func(string) (string, error) {
+	return func(name string) (string, error) {
+		candidate := filepath.Join(preferredDir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate, nil
+		}
+		return fallback(name)
 	}
 }
 

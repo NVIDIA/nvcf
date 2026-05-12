@@ -616,11 +616,11 @@ If your `image` registry is private and your cluster nodes do not have built-in 
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system nvca-operator nvca-system nvcf-backend; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system nvca-operator nvca-system nvcf-backend; do
   kubectl create secret docker-registry nvcr-pull-secret \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
@@ -635,8 +635,9 @@ For registries other than NGC, replace `--docker-server`, `--docker-username`, a
 **2. Reference the secret in your helmfile environment.** The helmfile propagates `imagePullSecrets` to all NVCF charts automatically. Add the secret name to your environment YAML (e.g. `environments/<your-env>.yaml`):
 
 ```yaml
-imagePullSecrets:
-  - name: nvcr-pull-secret
+global:
+  imagePullSecrets:
+    - name: nvcr-pull-secret
 ```
 
 This replaces any need for a separate admission controller or policy engine to inject pull secrets.

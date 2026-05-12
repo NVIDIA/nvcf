@@ -48,7 +48,7 @@ enable_secrets_mount "${VAULT_SECRET_BASE_PATH}/kv" "kv-v2"
 # Create default service paths and secrets
 #-------------------------------------------
 write_secrets_kv "${VAULT_SECRET_BASE_PATH}/kv" "cassandra/creds" "username=nvct_api_app_v0 password=${DEFAULT_CASSANDRA_PASSWORD}"
-write_secrets_kv "${VAULT_SECRET_BASE_PATH}/kv" "sidecars/image-pull-secret" "secret=${NVCF_SERVICE_SIDECARS_IMAGE_PULL_SECRET:-replace}"
+write_secrets_kv "${VAULT_SECRET_BASE_PATH}/kv" "sidecars/image-pull-secret" "secret=${NVCT_API_SIDECARS_IMAGE_PULL_SECRET:-replace}"
 
 #-------------------------------------------
 # Create policy for KV access

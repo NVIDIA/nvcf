@@ -42,7 +42,7 @@ Failed to pull image "nvcr.io/.../image:tag": 401 Unauthorized
 kubectl describe pod -n <namespace> <pod-name> | grep -A5 "Events:"
 
 # Check if pull secret exists in the namespace
-kubectl get secret nvcr-creds -n <namespace>
+kubectl get secret nvcr-pull-secret -n <namespace>
 
 # Check if the pod spec has imagePullSecrets
 kubectl get pod -n <namespace> <pod-name> -o jsonpath='{.spec.imagePullSecrets}'
@@ -55,7 +55,7 @@ kubectl get sa <sa-name> -n <namespace> -o jsonpath='{.imagePullSecrets}'
 
 1. **Secret missing in namespace**: Create it
    ```bash
-   kubectl create secret docker-registry nvcr-creds \
+   kubectl create secret docker-registry nvcr-pull-secret \
      --docker-server=nvcr.io \
      --docker-username='$oauthtoken' \
      --docker-password="$NGC_API_KEY" \
@@ -63,13 +63,13 @@ kubectl get sa <sa-name> -n <namespace> -o jsonpath='{.imagePullSecrets}'
      --dry-run=client -o yaml | kubectl apply -f -
    ```
 
-2. **Secret exists but pod doesn't reference it**: The chart needs `imagePullSecrets` configured via helmfile values. See [pull-secrets.md](pull-secrets.md).
+2. **Secret exists but pod doesn't reference it**: Set `global.imagePullSecrets` in the helmfile environment. See [pull-secrets.md](pull-secrets.md).
 
-3. **Chart doesn't support imagePullSecrets** (openbao, invocation-service, ess-api, notary-service): Patch ServiceAccounts and restart pods. See [pull-secrets.md](pull-secrets.md).
+3. **Pods were created before the value was applied**: Delete stuck pods so the controllers recreate them with the configured pull secret.
 
 4. **Wrong credentials in secret**: Delete and recreate
    ```bash
-   kubectl delete secret nvcr-creds -n <namespace>
+   kubectl delete secret nvcr-pull-secret -n <namespace>
    # Recreate with correct credentials
    ```
 

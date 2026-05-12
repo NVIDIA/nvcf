@@ -64,6 +64,15 @@ type registerEndpointValues struct {
 	NATSURL         string
 }
 
+type localEndpointDefaults struct {
+	BaseHTTPURL string
+	InvokeURL   string
+	APIKeysURL  string
+	APIHost     string
+	InvokeHost  string
+	APIKeysHost string
+}
+
 const (
 	localControlPlaneDomainDefault = "nvcf-control-plane.test"
 	localControlPlaneHTTPPort      = "8080"
@@ -89,6 +98,8 @@ func init() {
 		"Block on check until pass or duration elapses (e.g. 5m)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedICMSURL, "icms-url", "",
 		"ICMS endpoint for cluster register (default: derived from base_http_url; env: NVCF_ICMS_URL)")
+	selfHostedCmd.PersistentFlags().StringVar(&selfHostedICMSURL, "sis-url", "",
+		"Deprecated alias for --icms-url (env: NVCF_SIS_URL)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedNATSURL, "nats-url", "",
 		"NATS endpoint for the compute plane agent (default: derived from ICMS/API URL; env: NVCF_NATS_URL)")
 	selfHostedCmd.PersistentFlags().BoolVar(&selfHostedJSON, "json", false,
@@ -112,17 +123,21 @@ func init() {
 // resolveICMSURL picks the ICMS endpoint for cluster register, in priority order:
 //  1. --icms-url flag (explicit user override).
 //  2. NVCF_ICMS_URL env var.
-//  3. Derive from config.BaseHTTPURL by replacing the leading "api." host
+//  3. NVCF_SIS_URL env var (legacy local quickstart name).
+//  4. Derive from config.BaseHTTPURL by replacing the leading "api." host
 //     prefix with "sis." — e.g. http://api.localhost:8080 → http://sis.localhost:8080.
 //     This matches the multi-cluster gateway-routes layout where api/sis/invocation
 //     are sibling HTTPRoutes on the shared envoy gateway.
-//  4. Fallback to BaseHTTPURL unchanged (single-host deployments where the
+//  5. Fallback to BaseHTTPURL unchanged (single-host deployments where the
 //     gateway is fronted by one DNS name).
 func resolveICMSURL(flagValue string) string {
 	if flagValue != "" {
 		return flagValue
 	}
 	if v := os.Getenv("NVCF_ICMS_URL"); v != "" {
+		return v
+	}
+	if v := os.Getenv("NVCF_SIS_URL"); v != "" {
 		return v
 	}
 	cfg, err := client.LoadConfigWithoutAuth()
@@ -174,6 +189,57 @@ func deriveNATSURL(rawURL string) string {
 		Scheme: "nats",
 		Host:   net.JoinHostPort(host, "4222"),
 	}).String()
+}
+
+func localEndpointDefaultsFromICMSURL(rawURL string) (localEndpointDefaults, bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return localEndpointDefaults{}, false
+	}
+	domain, ok := controlPlaneSiblingDomain(u.Hostname())
+	if !ok || !isLocalhostDomain(domain) {
+		return localEndpointDefaults{}, false
+	}
+	urlFor := func(service string) string {
+		next := *u
+		next.Host = hostWithOptionalPort(service+"."+domain, u.Port())
+		return next.String()
+	}
+	return localEndpointDefaults{
+		BaseHTTPURL: urlFor("api"),
+		InvokeURL:   urlFor("invocation"),
+		APIKeysURL:  urlFor("api-keys"),
+		APIHost:     "api." + domain,
+		InvokeHost:  "invocation." + domain,
+		APIKeysHost: "api-keys." + domain,
+	}, true
+}
+
+func applyLocalEndpointDefaults(icmsURL string) {
+	if !strings.EqualFold(selfHostedEnv, "local") {
+		return
+	}
+	defaults, ok := localEndpointDefaultsFromICMSURL(icmsURL)
+	if !ok {
+		return
+	}
+	setEnvDefault("NVCF_BASE_HTTP_URL", defaults.BaseHTTPURL)
+	setEnvDefault("NVCF_INVOKE_URL", defaults.InvokeURL)
+	setEnvDefault("API_KEYS_SERVICE_URL", defaults.APIKeysURL)
+	setEnvDefault("API_KEYS_ADMIN_SERVICE_URL", defaults.APIKeysURL)
+	setEnvDefault("API_HOST", defaults.APIHost)
+	setEnvDefault("INVOKE_HOST", defaults.InvokeHost)
+	setEnvDefault("API_KEYS_HOST", defaults.APIKeysHost)
+}
+
+func setEnvDefault(name, value string) {
+	if value == "" {
+		return
+	}
+	if _, ok := os.LookupEnv(name); ok {
+		return
+	}
+	_ = os.Setenv(name, value)
 }
 
 func resolveNATSURL(flagValue, baseServiceURL string) string {

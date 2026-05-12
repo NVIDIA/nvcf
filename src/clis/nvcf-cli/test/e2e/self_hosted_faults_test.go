@@ -56,7 +56,7 @@ func TestT11_SISFiveOhThreeMidInstall(t *testing.T) {
 	//   2. Start toxiproxy: tp, _ := faults.Start(ctx, 8474); t.Cleanup(func() { tp.Stop() })
 	//   3. AddProxy: tp.AddProxy("sis", "127.0.0.1:8888", "<real-SIS-host>:<port>")
 	//   4. Inject TCP-level fault: tp.AddToxic("sis", "drop", "limit_data", map[string]any{"bytes": 0})
-	//   5. Run `up --sis-url=http://127.0.0.1:8888 ...` (or equivalent SIS override flag).
+	//   5. Run `up --icms-url=http://127.0.0.1:8888 ...`.
 	//   6. Parse JSONL stderr; assert phase_failed event with errCategory="network" and retryClass="backoff".
 	//   7. tp.RemoveToxic("sis", "drop"); re-run `up`; assert convergence.
 }

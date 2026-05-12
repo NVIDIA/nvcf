@@ -121,6 +121,22 @@ func TestDeriveNATSURL(t *testing.T) {
 	}
 }
 
+func TestLocalEndpointDefaultsFromLocalSISURL(t *testing.T) {
+	got, ok := localEndpointDefaultsFromICMSURL("http://sis.localhost:8080")
+	require.True(t, ok)
+	assert.Equal(t, "http://api.localhost:8080", got.BaseHTTPURL)
+	assert.Equal(t, "http://invocation.localhost:8080", got.InvokeURL)
+	assert.Equal(t, "http://api-keys.localhost:8080", got.APIKeysURL)
+	assert.Equal(t, "api.localhost", got.APIHost)
+	assert.Equal(t, "invocation.localhost", got.InvokeHost)
+	assert.Equal(t, "api-keys.localhost", got.APIKeysHost)
+}
+
+func TestLocalEndpointDefaultsIgnoreNonLocalURL(t *testing.T) {
+	_, ok := localEndpointDefaultsFromICMSURL("https://sis.example.com")
+	assert.False(t, ok)
+}
+
 func TestResolveICMSURL_FlagWins(t *testing.T) {
 	t.Setenv("NVCF_ICMS_URL", "http://env.example:8080")
 	got := resolveICMSURL("http://flag.example:8080")
@@ -131,6 +147,13 @@ func TestResolveICMSURL_EnvBeforeConfig(t *testing.T) {
 	t.Setenv("NVCF_ICMS_URL", "http://env.example:8080")
 	got := resolveICMSURL("")
 	assert.Equal(t, "http://env.example:8080", got)
+}
+
+func TestResolveICMSURL_LegacySISEnv(t *testing.T) {
+	t.Setenv("NVCF_ICMS_URL", "")
+	t.Setenv("NVCF_SIS_URL", "http://sis.localhost:8080")
+	got := resolveICMSURL("")
+	assert.Equal(t, "http://sis.localhost:8080", got)
 }
 
 func TestResolveRegisterEndpointValues_LocalSplitUsesControlPlaneExternalEndpoints(t *testing.T) {

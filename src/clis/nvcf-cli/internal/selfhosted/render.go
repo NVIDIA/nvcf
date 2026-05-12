@@ -23,7 +23,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 )
 
 // RenderOptions controls a single invocation of 'helmfile template' or
@@ -80,9 +79,6 @@ func Render(opts RenderOptions) error {
 		target = "helmfile.d/"
 	}
 	args := []string{"-f", opts.StackPath + "/" + target}
-	if strings.HasSuffix(target, "/") {
-		args = append(args, "--sequential-helmfiles")
-	}
 	if opts.Selector != "" {
 		args = append(args, "-l", opts.Selector)
 	}

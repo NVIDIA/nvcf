@@ -2,30 +2,22 @@
 
 ## Overview
 
-When pulling NVCF images from a private registry (e.g., NGC `nvcr.io`), Kubernetes needs `imagePullSecrets` on every pod. The recommended approach uses Kyverno to automatically inject the secret into all pods in NVCF namespaces at admission time.
+When pulling NVCF images from a private registry (e.g., NGC `nvcr.io`), Kubernetes needs `imagePullSecrets` on every pod. The helmfile stack supports this through `global.imagePullSecrets` in the environment values.
 
-This eliminates per-chart configuration -- no helmfile modifications needed.
+This eliminates per-chart configuration and does not require an admission controller.
 
-## Kyverno Approach (Recommended)
+## Helmfile Approach
 
-### 1. Install Kyverno
-
-```bash
-helm repo add kyverno https://kyverno.github.io/kyverno/
-helm repo update
-helm install kyverno kyverno/kyverno -n kyverno --create-namespace
-```
-
-### 2. Create pull secrets
+### 1. Create pull secrets
 
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system nvca-operator nvca-system nvcf-backend; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system nvca-operator nvca-system nvcf-backend; do
   kubectl create secret docker-registry nvcr-pull-secret \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
@@ -37,63 +29,28 @@ done
 
 For non-NGC registries, replace `--docker-server`, `--docker-username`, and `--docker-password`.
 
-### 3. Apply Kyverno ClusterPolicy
+### 2. Reference the secret
 
 ```yaml
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
-metadata:
-  name: nvcf-add-imagepullsecrets
-spec:
-  background: false
-  rules:
-    - name: add-imagepullsecret-to-nvcf-pods
-      match:
-        any:
-        - resources:
-            kinds:
-            - Pod
-            namespaces:
-            - "nvcf"
-            - "api-keys"
-            - "sis"
-            - "ess"
-            - "nvca-operator"
-            - "nats-system"
-            - "cassandra-system"
-            - "vault-system"
-      mutate:
-        patchStrategicMerge:
-          metadata:
-            annotations:
-              nvcf.nvidia.com/imagepullsecret-injected-by: kyverno
-          spec:
-            imagePullSecrets:
-            - name: nvcr-pull-secret
+global:
+  imagePullSecrets:
+    - name: nvcr-pull-secret
 ```
 
-```bash
-kubectl apply -f kyverno-imagepullsecret-policy.yaml
-```
-
-### 4. Deploy normally
+### 3. Deploy normally
 
 ```bash
 HELMFILE_ENV=<env> helmfile sync
 ```
 
-No helmfile modifications needed. Kyverno injects the pull secret into every pod automatically.
+The local `nvcf-cli self-hosted up` workflow creates or updates these secrets automatically when `NGC_API_KEY` is set.
 
 ## Verification
 
 ```bash
-# Check that a pod has the injected secret
+# Check that a pod has the configured secret
 kubectl get pod -n <namespace> <pod-name> -o jsonpath='{.spec.imagePullSecrets}'
 # Expected: [{"name":"nvcr-pull-secret"}]
-
-# Check the Kyverno annotation
-kubectl get pod -n <namespace> <pod-name> -o jsonpath='{.metadata.annotations.nvcf\.nvidia\.com/imagepullsecret-injected-by}'
-# Expected: kyverno
 
 # Check pull events
 kubectl get events -n <namespace> --sort-by='.lastTimestamp' | grep -i pull
@@ -108,31 +65,17 @@ kubectl get events -n <namespace> --sort-by='.lastTimestamp' | grep -i pull
 
 ## Troubleshooting
 
-### Pods still in ImagePullBackOff after applying policy
+### Pods still in ImagePullBackOff after configuring the environment
 
-The Kyverno policy only affects pods created **after** the policy is applied. Delete stuck pods to trigger recreation:
+The helmfile value only affects pods created after the value is applied. Delete stuck pods to trigger recreation:
 
 ```bash
 kubectl delete pods -n <namespace> --all
 ```
 
-### Kyverno admission controller not running
-
-```bash
-kubectl get pods -n kyverno
-# All pods should be Running
-```
-
-### Policy not matching
-
-```bash
-kubectl get clusterpolicy nvcf-add-imagepullsecrets
-# Should show READY: True
-```
-
 ### Wrong secret name
 
-The policy references `nvcr-pull-secret`. Verify the secret exists with that exact name:
+The environment references `nvcr-pull-secret`. Verify the secret exists with that exact name:
 
 ```bash
 kubectl get secret nvcr-pull-secret -n <namespace>

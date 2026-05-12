@@ -18,7 +18,10 @@ limitations under the License.
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,7 +37,10 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -61,6 +67,9 @@ var (
 const (
 	phaseControlPlaneNamespacesEnv = "NVCF_CLI_CP_NAMESPACES"
 	phaseComputePlaneNamespacesEnv = "NVCF_CLI_COMPUTE_NAMESPACES"
+	localPullSecretName            = "nvcr-pull-secret"
+	namespaceNVCAOperator          = "nvca-operator"
+	namespaceNVCASystem            = "nvca-system"
 
 	upPhasePreflight         = string(selfhosted.PhasePreflight)
 	upPhaseResolve           = string(selfhosted.PhaseResolve)
@@ -84,8 +93,34 @@ var defaultControlPlaneNamespaces = []string{
 // (apply-compute-plane). The compute plane lives in nvca-system + nvca-operator
 // per the multi-cluster topology.
 var defaultComputePlaneNamespaces = []string{
-	"nvca-system", "nvca-operator",
+	namespaceNVCASystem, namespaceNVCAOperator,
 }
+
+var localPullSecretNamespaces = []string{
+	"cassandra-system", "nats-system", "nvcf", "api-keys", "ess", "sis",
+	"vault-system", namespaceNVCAOperator, namespaceNVCASystem, "nvcf-backend",
+}
+
+const (
+	finalHealthTimeout = 5 * time.Minute
+	finalHealthPoll    = 5 * time.Second
+
+	namespaceTerminationPoll    = 250 * time.Millisecond
+	namespaceTerminationGrace   = 10 * time.Second
+	namespaceTerminationTimeout = 2 * time.Minute
+)
+
+type computePlaneHealthRequest struct {
+	ClusterName string
+	KubeContext string
+	Timeout     time.Duration
+}
+
+type computePlaneHealthResult struct {
+	BackendHealth string
+}
+
+var waitForComputePlaneHealth = waitForComputePlaneHealthDefault
 
 var selfHostedUpCmd = &cobra.Command{
 	Use:          "up",
@@ -198,6 +233,7 @@ func (r *selfHostedUpRun) run() error {
 	if err := requireExplicitICMSForSplitMode(); err != nil {
 		return err
 	}
+	applyLocalEndpointDefaults(resolveICMSURL(selfHostedICMSURL))
 	releaseLock, err := r.runPreflightAndLock()
 	if err != nil {
 		return err
@@ -255,7 +291,7 @@ func (r *selfHostedUpRun) runPreflight() (time.Time, error) {
 		return time.Time{}, r.emitCancellation(1, upPhasePreflight)
 	}
 	p1Start := r.emitPhase(1, upPhasePreflight)
-	results := runUpPreflight(r.ctx, selfhosted.PreflightConfig{Tools: selfhosted.DefaultTools()})
+	results := runUpPreflight(r.ctx, selfhosted.PreflightConfig{Tools: selfHostedPreflightTools()})
 	selfhosted.RenderText(r.c.ErrOrStderr(), results)
 	if anyFailed(results) {
 		r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhasePreflight, Err: fmt.Errorf("pre-flight checks failed")}, p1Start)
@@ -342,6 +378,9 @@ func (r *selfHostedUpRun) emitPlanOnly(stackPath string) error {
 
 func (r *selfHostedUpRun) applyControlPlane(stackPath string) error {
 	p4Start := r.emitPhaseCtx(4, upPhaseApplyCP, kubectxFor(4))
+	if err := r.ensureLocalImagePullSecrets(kubectxFor(4), 4); err != nil {
+		return r.handleHelmfilePhaseError(4, upPhaseApplyCP, selfhosted.PhaseApplyCP, "prepare image pull secrets", err, p4Start)
+	}
 	cancelWatcher, watcherDone := startWatcher(r.ctx, r.sink, 4, upPhaseApplyCP, controlPlaneNamespaces())
 	err := selfhosted.Render(selfhosted.RenderOptions{
 		StackPath:   stackPath,
@@ -420,6 +459,35 @@ func (r *selfHostedUpRun) createClusterRegistration(stackPath string, p6Start ti
 		Region:         getenvDefault("CLUSTER_REGION", upRegion),
 		IdentitySource: defaultString(identitySource, "psat"),
 	}
+	if selfHostedEnv == "local" {
+		deleted := 0
+		if rv, err := readRegisterValuesYAML(stackPath, upClusterName); err == nil && rv.ClusterID != "" {
+			if err := cc.DeleteCluster(r.ctx, rv.ClusterID); err != nil {
+				wrapped := fmt.Errorf("delete stale cluster registration %s: %w", rv.ClusterID, err)
+				r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseRegister, Err: wrapped, HTTPStatus: httpStatusFromErr(err)}, p6Start)
+				return upClusterRegistration{}, wrapped
+			}
+			deleted++
+		} else if err != nil && !os.IsNotExist(err) {
+			wrapped := fmt.Errorf("read stale register-values: %w", err)
+			r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseRegister, Err: wrapped}, p6Start)
+			return upClusterRegistration{}, wrapped
+		}
+		deletedByName, err := cc.DeleteClusterByName(r.ctx, registration.NCAID, upClusterName)
+		if err != nil {
+			wrapped := fmt.Errorf("delete existing cluster registration: %w", err)
+			r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseRegister, Err: wrapped, HTTPStatus: httpStatusFromErr(err)}, p6Start)
+			return upClusterRegistration{}, wrapped
+		}
+		deleted += deletedByName
+		if deleted > 0 {
+			_ = r.sink.Emit(r.ctx, progress.LastProgress{
+				Num:    6,
+				Detail: fmt.Sprintf("removed %d existing cluster registration(s)", deleted),
+				At:     time.Now().UTC(),
+			})
+		}
+	}
 	resp, err := cc.RegisterCluster(r.ctx, selfhosted.RegisterRequest{
 		ClusterName:    upClusterName,
 		NCAID:          registration.NCAID,
@@ -459,6 +527,9 @@ func (r *selfHostedUpRun) writeRegistrationValues(stackPath, icmsURL string, reg
 
 func (r *selfHostedUpRun) applyComputePlane(stackPath string, registration upClusterRegistration) error {
 	p7Start := r.emitPhaseCtx(7, upPhaseApplyComputePlane, kubectxFor(7))
+	if err := r.ensureLocalImagePullSecrets(kubectxFor(7), 7); err != nil {
+		return r.handleHelmfilePhaseError(7, upPhaseApplyComputePlane, selfhosted.PhaseApplyCompute, "prepare image pull secrets", err, p7Start)
+	}
 	cancelWatcher, watcherDone := startWatcher(r.ctx, r.sink, 7, upPhaseApplyComputePlane, computePlaneNamespaces())
 	helmfileFile, selector := computePlaneTarget(stackPath)
 	err := selfhosted.Render(selfhosted.RenderOptions{
@@ -486,15 +557,298 @@ func (r *selfHostedUpRun) applyComputePlane(stackPath string, registration upClu
 
 func (r *selfHostedUpRun) emitFinalHealth(registration upClusterRegistration) error {
 	p8Start := r.emitPhaseCtx(8, upPhaseFinalHealth, kubectxFor(8))
+	health, err := waitForComputePlaneHealth(r.ctx, computePlaneHealthRequest{
+		ClusterName: upClusterName,
+		KubeContext: kubectxFor(8),
+		Timeout:     finalHealthTimeout,
+	})
+	if err != nil {
+		r.emitFailure(selfhosted.Failure{
+			Phase:            selfhosted.PhaseFinalCheck,
+			Err:              err,
+			KubernetesReason: "ComputePlaneNotReady",
+		}, p8Start)
+		return &ExitCodeError{Code: 2, Msg: "final health check failed: " + err.Error()}
+	}
 	r.emitPhaseDoneCtx(8, upPhaseFinalHealth, kubectxFor(8), p8Start)
 	_ = r.sink.Emit(r.ctx, progress.Final{
 		Success:           true,
 		ClusterID:         registration.ClusterID,
 		ClusterGroupID:    registration.ClusterGroupID,
-		NVCFBackendHealth: "healthy", // placeholder; real probe is M+8
+		NVCFBackendHealth: health.BackendHealth,
 		Duration:          time.Since(r.started),
 	})
 	return nil
+}
+
+func (r *selfHostedUpRun) ensureLocalImagePullSecrets(kubeContext string, phaseNum int) error {
+	if selfHostedEnv != "local" {
+		return nil
+	}
+	apiKey := firstNonEmptyEnv("NGC_IMAGE_PULL_API_KEY", "NVCF_NGCR_API_KEY", "NVCF_NGC_API_KEY", "NGC_API_KEY")
+	if apiKey == "" {
+		_ = r.sink.Emit(r.ctx, progress.LastProgress{
+			Num:     phaseNum,
+			Detail:  "NGC_API_KEY not set; expecting pre-created nvcr-pull-secret in local namespaces",
+			At:      time.Now().UTC(),
+			Context: kubeContext,
+		})
+		return nil
+	}
+	kube, err := buildKubeClientForCtx(kubeContext)
+	if err != nil {
+		return fmt.Errorf("build kube client for pull secrets: %w", err)
+	}
+	dockerConfig, err := dockerConfigJSON("nvcr.io", "$oauthtoken", apiKey)
+	if err != nil {
+		return err
+	}
+	for _, ns := range localPullSecretNamespaces {
+		if err := ensureNamespace(r.ctx, kube, ns); err != nil {
+			return err
+		}
+		if err := ensureDockerConfigSecret(r.ctx, kube, ns, localPullSecretName, dockerConfig); err != nil {
+			return err
+		}
+	}
+	_ = r.sink.Emit(r.ctx, progress.LastProgress{
+		Num:     phaseNum,
+		Detail:  fmt.Sprintf("ensured %s in %d local namespaces", localPullSecretName, len(localPullSecretNamespaces)),
+		At:      time.Now().UTC(),
+		Context: kubeContext,
+	})
+	return nil
+}
+
+func firstNonEmptyEnv(names ...string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func dockerConfigJSON(registry, username, password string) ([]byte, error) {
+	auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+	return json.Marshal(map[string]any{
+		"auths": map[string]any{
+			registry: map[string]string{
+				"username": username,
+				"password": password,
+				"auth":     auth,
+			},
+		},
+	})
+}
+
+func ensureNamespace(ctx context.Context, kube kubernetes.Interface, name string) error {
+	for {
+		ns, err := kube.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		if err == nil {
+			if namespaceIsTerminating(ns) {
+				if err := waitForNamespaceDeletion(ctx, kube, name); err != nil {
+					return err
+				}
+				continue
+			}
+			return nil
+		}
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get namespace %s: %w", name, err)
+		}
+		_, err = kube.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+		}, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("create namespace %s: %w", name, err)
+		}
+		return nil
+	}
+}
+
+func namespaceIsTerminating(ns *corev1.Namespace) bool {
+	return ns.Status.Phase == corev1.NamespaceTerminating || ns.DeletionTimestamp != nil
+}
+
+func waitForNamespaceDeletion(ctx context.Context, kube kubernetes.Interface, name string) error {
+	started := time.Now()
+	ticker := time.NewTicker(namespaceTerminationPoll)
+	defer ticker.Stop()
+	cleanedFinalizers := false
+	for {
+		ns, err := kube.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			return nil
+		case err != nil:
+			return fmt.Errorf("get terminating namespace %s: %w", name, err)
+		case !namespaceIsTerminating(ns):
+			return nil
+		}
+		elapsed := time.Since(started)
+		if !cleanedFinalizers && elapsed >= namespaceTerminationGrace {
+			if err := clearNamespaceFinalizers(ctx, kube, ns); err != nil {
+				return err
+			}
+			cleanedFinalizers = true
+		}
+		if elapsed >= namespaceTerminationTimeout {
+			return fmt.Errorf("namespace %s still terminating after %s", name, namespaceTerminationTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func clearNamespaceFinalizers(ctx context.Context, kube kubernetes.Interface, ns *corev1.Namespace) error {
+	if len(ns.Spec.Finalizers) == 0 {
+		return nil
+	}
+	cp := ns.DeepCopy()
+	cp.Spec.Finalizers = nil
+	if _, err := kube.CoreV1().Namespaces().Finalize(ctx, cp, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("clear namespace finalizers %s: %w", ns.Name, err)
+	}
+	return nil
+}
+
+func ensureDockerConfigSecret(ctx context.Context, kube kubernetes.Interface, namespace, name string, dockerConfig []byte) error {
+	secrets := kube.CoreV1().Secrets(namespace)
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{corev1.DockerConfigJsonKey: dockerConfig},
+	}
+	current, err := secrets.Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		current.Type = corev1.SecretTypeDockerConfigJson
+		if current.Data == nil {
+			current.Data = map[string][]byte{}
+		}
+		current.Data[corev1.DockerConfigJsonKey] = dockerConfig
+		if _, err := secrets.Update(ctx, current, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update pull secret %s/%s: %w", namespace, name, err)
+		}
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get pull secret %s/%s: %w", namespace, name, err)
+	}
+	if _, err := secrets.Create(ctx, secret, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create pull secret %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
+func waitForComputePlaneHealthDefault(ctx context.Context, req computePlaneHealthRequest) (computePlaneHealthResult, error) {
+	if req.ClusterName == "" {
+		return computePlaneHealthResult{}, fmt.Errorf("cluster name is required")
+	}
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = finalHealthTimeout
+	}
+	kube, err := buildKubeClientForCtx(req.KubeContext)
+	if err != nil {
+		return computePlaneHealthResult{}, fmt.Errorf("build kube client: %w", err)
+	}
+	deadline := time.Now().Add(timeout)
+	var last string
+	for {
+		backendHealth, backendErr := getNVCFBackendHealth(ctx, req.KubeContext, req.ClusterName)
+		operatorReady, operatorReason, operatorErr := namespacePodsReady(ctx, kube, namespaceNVCAOperator)
+		systemReady, systemReason, systemErr := namespacePodsReady(ctx, kube, namespaceNVCASystem)
+		switch {
+		case backendErr != nil:
+			last = backendErr.Error()
+		case !strings.EqualFold(backendHealth, "healthy"):
+			last = "NVCFBackend health is " + defaultString(backendHealth, "unknown")
+		case operatorErr != nil:
+			last = operatorErr.Error()
+		case !operatorReady:
+			last = namespaceNVCAOperator + " not ready: " + operatorReason
+		case systemErr != nil:
+			last = systemErr.Error()
+		case !systemReady:
+			last = namespaceNVCASystem + " not ready: " + systemReason
+		default:
+			return computePlaneHealthResult{BackendHealth: backendHealth}, nil
+		}
+		if time.Now().After(deadline) {
+			return computePlaneHealthResult{}, fmt.Errorf("timed out waiting for compute plane: %s", last)
+		}
+		select {
+		case <-ctx.Done():
+			return computePlaneHealthResult{}, ctx.Err()
+		case <-time.After(finalHealthPoll):
+		}
+	}
+}
+
+func getNVCFBackendHealth(ctx context.Context, kubeContext, clusterName string) (string, error) {
+	for _, field := range []string{".status.agentStatus", ".status.health"} {
+		health, err := getNVCFBackendHealthField(ctx, kubeContext, clusterName, field)
+		if err != nil {
+			return "", err
+		}
+		if health != "" {
+			return health, nil
+		}
+	}
+	return "", nil
+}
+
+func getNVCFBackendHealthField(ctx context.Context, kubeContext, clusterName, field string) (string, error) {
+	args := []string{}
+	if kubeContext != "" {
+		args = append(args, "--context", kubeContext)
+	}
+	args = append(args, "get", "nvcfbackend", "-n", namespaceNVCAOperator, clusterName, "-o", "jsonpath={"+field+"}")
+	out, err := exec.CommandContext(ctx, "kubectl", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("kubectl %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func namespacePodsReady(ctx context.Context, kube kubernetes.Interface, namespace string) (bool, string, error) {
+	pods, err := kube.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, "", fmt.Errorf("list pods in %s: %w", namespace, err)
+	}
+	active := 0
+	for _, pod := range pods.Items {
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		active++
+		if pod.Status.Phase != corev1.PodRunning {
+			return false, pod.Name + " phase=" + string(pod.Status.Phase), nil
+		}
+		if !podReady(pod) {
+			return false, pod.Name + " containers not ready", nil
+		}
+	}
+	if active == 0 {
+		return false, "no active pods found", nil
+	}
+	return true, "", nil
+}
+
+func podReady(pod corev1.Pod) bool {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady {
+			return cond.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func (r *selfHostedUpRun) handleHelmfilePhaseError(num int, name string, phase selfhosted.PhaseID, prefix string, err error, started time.Time) error {
@@ -790,9 +1144,17 @@ var runUpPreflight = func(ctx context.Context, cfg selfhosted.PreflightConfig) [
 var runSelfHostedInit = func(ctx context.Context) error {
 	c := exec.CommandContext(ctx, os.Args[0], selfHostedInitArgs()...)
 	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	return c.Run()
+	c.Stdout = io.Discard
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	if err := c.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return fmt.Errorf("%w: %s", err, detail)
+		}
+		return err
+	}
+	return nil
 }
 
 func selfHostedInitArgs() []string {

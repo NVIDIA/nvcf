@@ -217,15 +217,20 @@ func TestCollector_UnknownSISDown(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "unknown", snap.Verdict)
 
-	// Should have 9 ComponentHealth (all healthy) + 0 ClusterRow = 10 total.
-	assert.Len(t, sink.events, 10)
+	// Should have 9 workload ComponentHealth + 1 SIS diagnostic row + 0 ClusterRow.
+	assert.Len(t, sink.events, 11)
 
-	// All component health events should be healthy.
-	for _, e := range sink.events[1:] {
+	// Workload component health events should be healthy.
+	for _, e := range sink.events[1:10] {
 		ch, ok := e.(progress.ComponentHealth)
 		require.True(t, ok, "expected ComponentHealth, got %T", e)
 		assert.True(t, ch.Healthy)
 	}
+	sisDiag, ok := sink.events[10].(progress.ComponentHealth)
+	require.True(t, ok, "expected SIS diagnostic ComponentHealth, got %T", sink.events[10])
+	assert.Equal(t, "SIS Cluster List", sisDiag.Name)
+	assert.False(t, sisDiag.Healthy)
+	assert.Contains(t, sisDiag.Message, "connection refused")
 }
 
 // TestCollector_UnknownWinsOverDegraded pins verdict precedence: when SIS is

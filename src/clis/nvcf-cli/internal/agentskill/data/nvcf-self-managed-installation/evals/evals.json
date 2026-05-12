@@ -187,7 +187,7 @@
     "id": "G12-validate-nvca-operator-install",
     "question": "How do I verify the nvca-operator installed successfully after helmfile sync?",
     "expected_skill": "nvcf-self-managed-installation",
-    "ground_truth": "The agent validated the nvca-operator Deployment (rollout status, pod running, clean logs, auto-created nvca-system and nvcf-backend namespaces), then explicitly flagged that the install is not complete until the post-helmfile-sync namespace remediation has run: pull secrets created in 'nvca-system' and 'nvcf-backend' and the Kyverno ClusterPolicy updated to include those namespaces. It verified pods in 'nvca-system' and 'nvcf-backend' reach Running before declaring the operator end-to-end healthy.",
+    "ground_truth": "The agent validated the nvca-operator Deployment (rollout status, pod running, clean logs, auto-created nvca-system and nvcf-backend namespaces), then explicitly flagged that the install is not complete until pull secrets exist in 'nvca-system' and 'nvcf-backend' and pods in those namespaces reach Running. It verified pods in 'nvca-system' and 'nvcf-backend' reach Running before declaring the operator end-to-end healthy.",
     "expected_behavior": [
       "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
       "The agent ran 'kubectl rollout status deployment/nvca-operator -n nvca-operator'",
@@ -195,7 +195,7 @@
       "The agent tailed the operator logs for bootstrap or error signals",
       "The agent verified that 'nvca-system' and 'nvcf-backend' namespaces were auto-created by the operator",
       "The agent did NOT declare the install successful based only on the operator Deployment being Ready",
-      "The agent identified the post-sync remediation as a required follow-up step (create pull secrets in 'nvca-system' and 'nvcf-backend', update the Kyverno ClusterPolicy to include those namespaces)",
+      "The agent identified pull secrets in 'nvca-system' and 'nvcf-backend' as required before end-to-end health",
       "The agent verified pods in 'nvca-system' and 'nvcf-backend' reach Running before treating the install as end-to-end healthy"
     ]
   },

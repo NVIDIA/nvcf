@@ -77,13 +77,15 @@ For separate control-plane and GPU clusters:
 ```bash
 export CONTROL_PLANE_CONTEXT="admin@control-plane"
 export COMPUTE_PLANE_CONTEXT="admin@gpu-cluster"
+export ICMS_URL="https://sis.example.com"
 
 nvcf-cli self-hosted up \
   --control-plane-context "${CONTROL_PLANE_CONTEXT}" \
   --compute-plane-context "${COMPUTE_PLANE_CONTEXT}" \
   --cluster-name "${CLUSTER_NAME}" \
   --nca-id "${NCA_ID}" \
-  --region "${REGION}"
+  --region "${REGION}" \
+  --icms-url "${ICMS_URL}"
 ```
 
 Use `--stack=/path/to/nvcf-self-managed-stack` when testing from a local source-built CLI or when you need to point at a specific stack checkout. Packaged CLI releases can use the packaged stack source unless your release notes say otherwise.
@@ -114,8 +116,24 @@ export API_KEYS_HOST=api-keys.localhost
 export API_HOST=api.localhost
 export INVOKE_HOST=invocation.localhost
 export NVCF_CLIENT_ID="${NCA_ID}"
-export NVCF_SIS_URL="${SIS_URL}"
+export NVCF_ICMS_URL="${SIS_URL}"
 ```
+
+For direct pulls from private NGC registries, export an API key with access to
+the NVCF container images before running `self-hosted up`. The local stack
+references `nvcr-pull-secret`, and the CLI creates or updates that secret in
+the local NVCF namespaces when `NGC_API_KEY` is set.
+
+```bash
+export NGC_API_KEY="<ngc-api-key-with-container-pull-access>"
+helm registry login nvcr.io -u '$oauthtoken' -p "${NGC_API_KEY}"
+```
+
+The account bootstrap registry credentials in
+`deploy/stacks/self-managed/secrets/local-secrets.yaml` must be base64-encoded
+`username:password` values. For NGC, encode `$oauthtoken:<api-key>`. Use a
+separate Helm-capable key for `helm.ngc.nvidia.com` if your container-pull key
+does not have Helm chart access.
 
 Then run:
 
@@ -125,7 +143,7 @@ nvcf-cli self-hosted up \
   --cluster-name="${CLUSTER_NAME}" \
   --nca-id="${NCA_ID}" \
   --region="${REGION}" \
-  --sis-url="${SIS_URL}" \
+  --icms-url="${SIS_URL}" \
   --refresh-token \
   --plain
 ```
@@ -141,8 +159,12 @@ If you are testing a local stack checkout, add:
 Run the CLI checks:
 
 ```bash
-nvcf-cli self-hosted check --all
-nvcf-cli self-hosted status
+nvcf-cli self-hosted check --all \
+  --cluster-name="${CLUSTER_NAME}" \
+  --icms-url="${SIS_URL}"
+nvcf-cli self-hosted status \
+  --cluster-name="${CLUSTER_NAME}" \
+  --icms-url="${SIS_URL}"
 ```
 
 Confirm Kubernetes resources:

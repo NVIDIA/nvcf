@@ -122,7 +122,7 @@ func TestRender_KubeContextFlag(t *testing.T) {
 		"--kube-context flag should appear before the verb in the argument list")
 }
 
-func TestRender_ProcessesHelmfileDirectorySequentially(t *testing.T) {
+func TestRender_HelmfileDirectoryDoesNotEmitSequentialFlag(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "helmfile")
 	require.NoError(t, os.WriteFile(fake,
@@ -141,11 +141,7 @@ func TestRender_ProcessesHelmfileDirectorySequentially(t *testing.T) {
 	})
 	require.NoError(t, err)
 	out := stdout.String()
-	assert.Contains(t, out, "--sequential-helmfiles")
-	sequentialPos := strings.Index(out, "--sequential-helmfiles")
-	verbPos := strings.Index(out, "template")
-	assert.Less(t, sequentialPos, verbPos,
-		"--sequential-helmfiles should appear before the helmfile verb")
+	assert.NotContains(t, out, "--sequential-helmfiles")
 }
 
 // TestRender_NoKubeContextOmitsFlag asserts that when KubeContext is empty no

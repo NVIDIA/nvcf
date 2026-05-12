@@ -98,14 +98,14 @@ To override arbitrary chart values, use a helmfile release `values:` block. See 
 ### 1. Create namespaces and image pull secrets (if using a private registry)
 
 ```bash
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system nvca-operator nvca-system nvcf-backend; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
 # Only if pulling from a private registry (e.g., NGC nvcr.io)
 export NGC_API_KEY="<your-key>"
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
-  kubectl create secret docker-registry nvcr-creds \
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system nvca-operator nvca-system nvcf-backend; do
+  kubectl create secret docker-registry nvcr-pull-secret \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
     --docker-password="$NGC_API_KEY" \
@@ -114,7 +114,7 @@ for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault
 done
 ```
 
-If using pull secrets, you must also configure each helmfile release to reference them. See [Image Pull Secrets](#image-pull-secrets).
+If using pull secrets, set `global.imagePullSecrets` in your helmfile environment. See [Image Pull Secrets](#image-pull-secrets).
 
 ### 2. Authenticate helm to your chart registry
 
@@ -204,7 +204,7 @@ kubectl get ns nvca-system nvcf-backend   # auto-created by the operator
 
 Operator-Deployment healthy state: `1/1 Ready`, no `CrashLoopBackOff`, no `no backend GPUs were found` in logs. If GPUs are missing, install the fake GPU operator per the section below and re-register.
 
-**Install is not complete yet.** Once the operator has created the `nvca-system` and `nvcf-backend` namespaces, workloads in those namespaces will fail with `ImagePullBackOff` (and, if Kyverno is used, admission denials) until the pull secrets and Kyverno policy are propagated to them. Follow [Post-helmfile-sync: handle nvca-system namespace](#post-helmfile-sync-handle-nvca-system-namespace) before treating the NVCA install as done. Only after pods in `nvca-system` and `nvcf-backend` reach `Running` should you consider the operator end-to-end healthy.
+**Install is not complete yet.** After the operator creates or reconciles workloads in `nvca-system` and `nvcf-backend`, verify those namespaces have `nvcr-pull-secret` and that their pods reach `Running`. Only after pods in `nvca-system` and `nvcf-backend` reach `Running` should you consider the operator end-to-end healthy.
 
 ## Clean Teardown
 
@@ -296,21 +296,16 @@ There are two distinct credential types:
 | | Control Plane Pull Secrets | API Bootstrap Registry Creds |
 |---|---|---|
 | Purpose | K8s pulls NVCF service images | NVCF API pulls user function images |
-| Config | K8s Secrets + Kyverno ClusterPolicy | `<private-values>/<env>-secrets.yaml` |
+| Config | `global.imagePullSecrets` in the helmfile environment | `<private-values>/<env>-secrets.yaml` |
 
-### Configuring with Kyverno (recommended)
+### Configuring pull secrets
 
-Use a Kyverno mutating admission policy to automatically inject `imagePullSecrets` into all pods in NVCF namespaces. This works uniformly for all charts -- no per-chart configuration or helmfile modifications needed.
+Create the `nvcr-pull-secret` Docker config secret in every NVCF namespace, then reference it with `global.imagePullSecrets`. The helmfile stack propagates that value to the NVCF charts, so no separate admission controller or chart-specific patching is needed.
 
 ```bash
-# 1. Install Kyverno
-helm repo add kyverno https://kyverno.github.io/kyverno/
-helm repo update
-helm install kyverno kyverno/kyverno -n kyverno --create-namespace
-
-# 2. Create pull secret in each namespace
 export NGC_API_KEY="<your-key>"
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system nvca-operator nvca-system nvcf-backend; do
+  kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
   kubectl create secret docker-registry nvcr-pull-secret \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
@@ -318,21 +313,21 @@ for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault
     --namespace="$ns" \
     --dry-run=client -o yaml | kubectl apply -f -
 done
-
-# 3. Apply the Kyverno ClusterPolicy
-kubectl apply -f kyverno-imagepullsecret-policy.yaml
 ```
 
-The policy mutates every pod at admission time, adding `imagePullSecrets: [{name: nvcr-pull-secret}]`. Verify with:
+Add this to the helmfile environment values:
 
-```bash
-kubectl get pod -n <namespace> <pod-name> -o jsonpath='{.spec.imagePullSecrets}'
-# Should show: [{"name":"nvcr-pull-secret"}]
+```yaml
+global:
+  imagePullSecrets:
+    - name: nvcr-pull-secret
 ```
+
+The local `nvcf-cli self-hosted up` path creates or updates these secrets automatically when `NGC_API_KEY` is set, because `environments/local.yaml` already references `nvcr-pull-secret`.
 
 Not needed if using a CSP built-in credential helper (e.g., ECR with IAM node roles).
 
-For the Kyverno policy YAML and pull secret creation script, see [references/pull-secrets.md](references/pull-secrets.md).
+For pull secret details, see [references/pull-secrets.md](references/pull-secrets.md).
 
 ## Fake GPU Operator (Non-GPU Clusters)
 
@@ -399,26 +394,23 @@ kubectl get nodes -o custom-columns="NAME:.metadata.name,GPU:.status.allocatable
 # Labeled nodes should show GPU count (e.g., 8)
 ```
 
-### Post-helmfile-sync: handle nvca-system namespace
+### Post-helmfile-sync: verify operator namespaces
 
-The NVCA operator auto-creates `nvca-system` and `nvcf-backend` namespaces. These are **not** in the initial namespace list for pull secrets or Kyverno policy. After the first `helmfile sync`:
+The NVCA operator uses `nvca-system` and `nvcf-backend` namespaces. If you did not create pull secrets in these namespaces before `helmfile sync`, create them before treating the install as complete:
 
-1. Create pull secrets in operator-managed namespaces:
-   ```bash
-   for ns in nvca-system nvcf-backend; do
-     kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
-     kubectl create secret docker-registry nvcr-pull-secret \
-       --docker-server=nvcr.io \
-       --docker-username='$oauthtoken' \
-       --docker-password="$NGC_API_KEY" \
-       --namespace="$ns" \
-       --dry-run=client -o yaml | kubectl apply -f -
-   done
-   ```
+```bash
+for ns in nvca-system nvcf-backend; do
+  kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret docker-registry nvcr-pull-secret \
+    --docker-server=nvcr.io \
+    --docker-username='$oauthtoken' \
+    --docker-password="$NGC_API_KEY" \
+    --namespace="$ns" \
+    --dry-run=client -o yaml | kubectl apply -f -
+done
+```
 
-2. Update the Kyverno ClusterPolicy to include `nvca-system` and `nvcf-backend` in the namespace match list.
-
-3. Delete any stuck NVCA pods so they are recreated with the injected pull secret.
+Delete any stuck NVCA pods so they are recreated with the configured pull secret.
 
 ### Re-register the cluster after adding fake GPUs
 
@@ -442,7 +434,7 @@ For the smoothest experience on non-GPU clusters:
 2. Install fake-gpu-operator and label target nodes
 3. Verify `nvidia.com/gpu` appears in node allocatable
 4. Create namespaces and pull secrets (include `nvca-system` and `nvcf-backend` upfront)
-5. Install Kyverno with policy covering all namespaces (include `nvca-system` and `nvcf-backend`)
+5. Set `global.imagePullSecrets` in the helmfile environment
 6. Authenticate helm to chart registry
 7. Run `helmfile sync`
 
@@ -469,7 +461,7 @@ kubectl get events -n <ns> --sort-by='.lastTimestamp'  # Recent events
 | Helm release in `failed` state | First install failed partway | `helmfile destroy` the release, then `sync` again |
 | Account bootstrap timeout | Wrong base64 credentials in secrets file | Check `kubectl logs job/nvcf-api-account-bootstrap -n nvcf` |
 | NVCA agent `CrashLoopBackOff` + "no backend GPUs found" | No GPU operator or fake GPUs on cluster | Install fake-gpu-operator, see [Fake GPU Operator](#fake-gpu-operator-non-gpu-clusters) |
-| `ImagePullBackOff` in `nvca-system` | Pull secret missing in operator-created namespace | Create secret + update Kyverno policy to include `nvca-system` |
+| `ImagePullBackOff` in `nvca-system` | Pull secret missing in operator namespace | Create `nvcr-pull-secret` in `nvca-system` and make sure `global.imagePullSecrets` is set |
 | Services fail to read vault secrets; `secrets.json` not found | Vault path hardcoded to `/home/app/vault/` in `_helpers.tpl`; the runtime resolves the mounted path relative to the working directory and drops the leading `/` | Override `podAnnotations` and set `JAVA_TOOL_OPTIONS: "-Duser.dir=/"` in release values |
 | NATS connection fails at startup; placement tag mismatch | NATS server tags hardcoded to `dc:ncp`; app derives tag from `AWS_REGION` (e.g., `us-gov-west-1`) | Set `AWS_REGION=ncp` and `NVCF_AWS_REGION=ncp` in env config |
 | `helmfile sync` finishes but no `nvca-operator` Deployment exists | `nvcaOperator.enabled` is `false` (the default); phase 5 skipped the release | Set `nvcaOperator.enabled: true` in `environments/<env>.yaml` and run `helmfile --selector name=nvca-operator sync`, see [Enable and validate the NVCA operator](#6-enable-and-validate-the-nvca-operator-opt-in) |

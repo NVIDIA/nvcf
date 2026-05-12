@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,8 +34,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apiextclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"nvcf-cli/internal/selfhosted"
 	"nvcf-cli/internal/selfhosted/auth"
@@ -56,6 +60,10 @@ func resetUpFlags(t *testing.T) {
 	// Reset before the test so that any previously-set subcommand ctx does not
 	// bleed into this test's Execute call.
 	selfHostedUpCmd.SetContext(nil)
+	prevFinalHealth := waitForComputePlaneHealth
+	waitForComputePlaneHealth = func(context.Context, computePlaneHealthRequest) (computePlaneHealthResult, error) {
+		return computePlaneHealthResult{BackendHealth: "healthy"}, nil
+	}
 	t.Cleanup(func() {
 		upClusterName = ""
 		upNCAID = "nvcf-default"
@@ -65,6 +73,7 @@ func resetUpFlags(t *testing.T) {
 		selfHostedPlain = false
 		selfHostedAccessible = false
 		selfHostedUpCmd.SetContext(nil)
+		waitForComputePlaneHealth = prevFinalHealth
 	})
 }
 
@@ -155,6 +164,10 @@ func TestSelfHostedInitArgs_DefaultConfig(t *testing.T) {
 func TestSelfHostedUp_PlainEmitsPhaseLines(t *testing.T) {
 	resetUpFlags(t)
 	disableUpWatchers(t)
+	t.Setenv("NGC_IMAGE_PULL_API_KEY", "")
+	t.Setenv("NVCF_NGCR_API_KEY", "")
+	t.Setenv("NVCF_NGC_API_KEY", "")
+	t.Setenv("NGC_API_KEY", "")
 
 	// --token=fake-jwt skips the runSelfHostedInit shell-out; we still
 	// override the var as belt-and-suspenders in case the test ordering
@@ -184,7 +197,9 @@ func TestSelfHostedUp_PlainEmitsPhaseLines(t *testing.T) {
 	// (helmfile.d/ default) and once for compute plane.
 	stackDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "out"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "out", "test-register-values.yaml"), []byte("clusterID: stale-id\n"), 0o644))
 	fakeBin := filepath.Join(t.TempDir(), "helmfile")
 	require.NoError(t, os.WriteFile(fakeBin,
 		[]byte("#!/bin/sh\nprintf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: stub\\n'\n"),
@@ -238,7 +253,10 @@ func TestSelfHostedUp_PlainEmitsPhaseLines(t *testing.T) {
 	assert.NotContains(t, out, ">>> Installing compute plane")
 
 	// Register was invoked exactly once.
+	assert.Equal(t, []string{"stale-id"}, fakeCC.deletedIDs)
+	assert.Equal(t, 1, fakeCC.deleteCalls, "up must remove the existing GPU cluster registration before registering")
 	assert.Equal(t, 1, fakeCC.registerCalls)
+	assert.Equal(t, []string{"delete-id", "delete", "register"}, fakeCC.callOrder)
 }
 
 // TestUp_PlanOnly_NoHelmfileInvocation runs the orchestrator with --plan-only
@@ -355,6 +373,7 @@ func TestUp_PlanOnly_NoHelmfileInvocation(t *testing.T) {
 	assert.True(t, plannedSeen, "planned event must appear in --plan-only output")
 	assert.True(t, finalPlanOnly, "final event must have planOnly=true in --plan-only output")
 	assert.Equal(t, 0, initCalls, "runSelfHostedInit must not be called in --plan-only mode")
+	assert.Equal(t, 0, fakeCC.deleteCalls, "DeleteClusterByName must not be called in --plan-only mode")
 	assert.Equal(t, 0, fakeCC.registerCalls, "RegisterCluster must not be called in --plan-only mode")
 }
 
@@ -827,4 +846,105 @@ func TestAuthGate_FingerprintMismatchReMints(t *testing.T) {
 	err := authGatePhase5(context.Background(), sink, time.Now())
 	require.NoError(t, err)
 	assert.Equal(t, 1, initCalled, "init must be called when fingerprint has changed (key rotation)")
+}
+
+func TestRunSelfHostedInitDoesNotLeakTokenOutput(t *testing.T) {
+	fakeCLI := filepath.Join(t.TempDir(), "nvcf-cli")
+	require.NoError(t, os.WriteFile(fakeCLI, []byte(`#!/bin/sh
+printf '[INFO] Starting fresh session...\n'
+printf '[SUCCESS] Admin token generated and saved\n'
+printf 'Token: sensitive-admin-jwt\n'
+printf 'Expires: 2026-05-12 12:04:41\n'
+`), 0o755))
+
+	oldArgs := os.Args
+	os.Args = []string{fakeCLI}
+	t.Cleanup(func() { os.Args = oldArgs })
+
+	oldStdout := os.Stdout
+	readEnd, writeEnd, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = writeEnd
+	t.Cleanup(func() { os.Stdout = oldStdout })
+
+	err = runSelfHostedInit(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, writeEnd.Close())
+	out, err := io.ReadAll(readEnd)
+	require.NoError(t, err)
+
+	assert.Empty(t, string(out), "self-hosted up must not leak init token output")
+}
+
+func TestGetNVCFBackendHealthUsesAgentStatus(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "kubectl-args.log")
+	fakeKubectl := filepath.Join(dir, "kubectl")
+	require.NoError(t, os.WriteFile(fakeKubectl, []byte(`#!/bin/sh
+printf '%s\n' "$*" > "$NVCF_TEST_KUBECTL_ARGS"
+case "$*" in
+  *'jsonpath={.status.agentStatus}'*) printf 'healthy'; exit 0 ;;
+  *) printf 'unexpected args: %s\n' "$*" >&2; exit 1 ;;
+esac
+`), 0o755))
+	t.Setenv("NVCF_TEST_KUBECTL_ARGS", logPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := getNVCFBackendHealth(context.Background(), "k3d-ncp-local", "ncp-local")
+	require.NoError(t, err)
+	assert.Equal(t, "healthy", got)
+	args, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(args), "--context k3d-ncp-local")
+	assert.Contains(t, string(args), "jsonpath={.status.agentStatus}")
+}
+
+func TestNamespacePodsReadySkipsTerminalPods(t *testing.T) {
+	kube := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "complete", Namespace: namespaceNVCASystem},
+			Status:     corev1.PodStatus{Phase: corev1.PodSucceeded},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "failed-job", Namespace: namespaceNVCASystem},
+			Status:     corev1.PodStatus{Phase: corev1.PodFailed},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "controller", Namespace: namespaceNVCASystem},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:   corev1.PodReady,
+					Status: corev1.ConditionTrue,
+				}},
+			},
+		},
+	)
+
+	ready, reason, err := namespacePodsReady(context.Background(), kube, namespaceNVCASystem)
+	require.NoError(t, err)
+	assert.True(t, ready)
+	assert.Empty(t, reason)
+}
+
+func TestEnsureNamespaceWaitsForTerminatingNamespaceBeforeRecreate(t *testing.T) {
+	const namespace = namespaceNVCASystem
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	kube := fake.NewSimpleClientset(&corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace},
+		Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating},
+	})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = kube.CoreV1().Namespaces().Delete(ctx, namespace, metav1.DeleteOptions{})
+	}()
+
+	require.NoError(t, ensureNamespace(ctx, kube, namespace))
+
+	ns, err := kube.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.NotEqual(t, corev1.NamespaceTerminating, ns.Status.Phase)
 }

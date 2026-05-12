@@ -246,6 +246,28 @@ func TestCheck_SingleClusterMode(t *testing.T) {
 	assert.Contains(t, categories, "compute-plane-cluster", "expected compute-plane-cluster in single-cluster mode")
 }
 
+func TestCheck_PreDoesNotProbeSISReachability(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkLocalOnly = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+	t.Setenv("NVCF_SIS_URL", "http://127.0.0.1:1")
+
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+	for _, l := range lines {
+		assert.NotEqual(t, "sis-reachability", l["id"], "--pre must not probe SIS reachability before install")
+	}
+}
+
 // TestCheck_SplitClusterMode verifies that providing both context flags causes
 // both control-plane and compute-plane category events (run in parallel).
 func TestCheck_SplitClusterMode(t *testing.T) {

@@ -77,7 +77,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 
 	cfg := selfhosted.PreflightConfig{
 		LocalOnly: localOnly,
-		Tools:     selfhosted.DefaultTools(),
+		Tools:     selfHostedPreflightTools(),
 	}
 
 	sink, _, err := progress.SelectRenderer(c.ErrOrStderr(), progress.RenderOpts{
@@ -165,7 +165,10 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		return selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleLocalOnly, selfhosted.RoleConfig{}, sink)
 	}
 
-	icmsURL := resolveICMSURL(selfHostedICMSURL)
+	icmsURL := ""
+	if checkAll || checkComputePlane || !checkPre {
+		icmsURL = resolveICMSURL(selfHostedICMSURL)
+	}
 	mode := kubectx.SelectMode(selfHostedControlPlaneContext, selfHostedComputePlaneContext)
 
 	switch mode {

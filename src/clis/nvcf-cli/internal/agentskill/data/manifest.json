@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-05-11T23:43:46Z",
+  "generatedAt": "2026-05-12T10:18:58Z",
   "totalFiles": 20,
-  "totalBytes": 136479,
+  "totalBytes": 133735,
   "files": [
     {
       "path": "nvcf-self-managed-cli/SKILL.md",
@@ -71,23 +71,23 @@
     },
     {
       "path": "nvcf-self-managed-installation/SKILL.md",
-      "sha256": "99f3104ad0a663005a0071d4671028183ca071da77b1bdebbde5a1f6ba528aab",
-      "size": 21880
+      "sha256": "0f640c9a4c76f53562ab74ba915bd855e4d48cdbbddcc5a88aa16999b8849999",
+      "size": 21357
     },
     {
       "path": "nvcf-self-managed-installation/evals/evals.json",
-      "sha256": "70033f4cb1feb6357b884052b317a5e23fc5d7177576c915654632b5384537c0",
-      "size": 16521
+      "sha256": "8f07f999fe261f6360ff15808688e367940fd2dbe4958b8f63a19e9472f64938",
+      "size": 16353
     },
     {
       "path": "nvcf-self-managed-installation/examples.md",
-      "sha256": "8501139f65f271d948ef4246b0c0b220f25a135685d41e3032618a0dc9061380",
-      "size": 7431
+      "sha256": "b4aae3eec9d7e080db8317dd3efce999bcd799bbc2451526851b9823d530a6f4",
+      "size": 6685
     },
     {
       "path": "nvcf-self-managed-installation/references/debugging.md",
-      "sha256": "4ff673912049028edf2e143f5385699c8c3ac260d29a52f496e5f93d9ede89ec",
-      "size": 10675
+      "sha256": "0ac5722bc1d16116f12bec62ae42bd2d1976ac9ac3fadc8f03d0d86a00ae4675",
+      "size": 10642
     },
     {
       "path": "nvcf-self-managed-installation/references/eks-example.yaml",
@@ -101,8 +101,8 @@
     },
     {
       "path": "nvcf-self-managed-installation/references/pull-secrets.md",
-      "sha256": "f21a72aa472cec16522f7fab21a9208fd706ecc939ccab68f4f4400c49359c6e",
-      "size": 3817
+      "sha256": "b0bdd01962815d68773d8baee719afc39475021049c34c1ee61559383f50db24",
+      "size": 2543
     }
   ]
 }

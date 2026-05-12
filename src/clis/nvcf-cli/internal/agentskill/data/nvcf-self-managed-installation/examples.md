@@ -81,12 +81,12 @@ docker login nvcr.io -u '$oauthtoken' -p "$NGC_API_KEY"
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system nvca-operator nvca-system nvcf-backend; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
-  kubectl create secret docker-registry nvcr-creds \
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system nvca-operator nvca-system nvcf-backend; do
+  kubectl create secret docker-registry nvcr-pull-secret \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
     --docker-password="$NGC_API_KEY" \
@@ -95,45 +95,22 @@ for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault
 done
 ```
 
-### Step 4: Add imagePullSecrets to helmfile releases
+### Step 4: Add imagePullSecrets to the helmfile environment
 
-Add the chart-specific `imagePullSecrets` key to each release. Example for cassandra in `helmfile.d/01-dependencies.yaml.gotmpl`:
+Add the global `imagePullSecrets` key to the environment values:
 
 ```yaml
-- name: cassandra
-  version: 0.8.0
-  condition: cassandra.enabled
-  namespace: cassandra-system
-  <<: *dependency
-  values:
-    - ../global.yaml.gotmpl
-    - ../<private-values>/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
-    - cassandra:
-        global:
-          imagePullSecrets:
-            - nvcr-creds
+global:
+  imagePullSecrets:
+    - name: nvcr-pull-secret
 ```
 
-See [references/pull-secrets.md](references/pull-secrets.md) for the key for every chart.
+See [references/pull-secrets.md](references/pull-secrets.md) for details.
 
 ### Step 5: Deploy
 
 ```bash
 HELMFILE_ENV=<env> helmfile sync
-```
-
-### Step 6: Patch ServiceAccounts for charts without native support
-
-After Phase 1 (dependencies) completes, OpenBao pods will be in `ImagePullBackOff`. Patch and restart:
-
-```bash
-for ns in vault-system nvcf ess; do
-  for sa in $(kubectl get sa -n "$ns" --no-headers -o custom-columns=":metadata.name"); do
-    kubectl patch serviceaccount -n "$ns" "$sa" \
-      -p '{"imagePullSecrets": [{"name": "nvcr-creds"}]}'
-  done
-done
-kubectl delete pods -n vault-system --all
 ```
 
 Verify:

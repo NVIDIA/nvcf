@@ -55,6 +55,8 @@ type RegisterResponse struct {
 // Production callers wire in the real client from internal/client/clusters.go;
 // tests pass a fake.
 type ClusterClient interface {
+	DeleteCluster(ctx context.Context, clusterID string) error
+	DeleteClusterByName(ctx context.Context, ncaID, name string) (int, error)
 	RegisterCluster(ctx context.Context, req RegisterRequest) (*RegisterResponse, error)
 	Close() error
 }
@@ -154,6 +156,54 @@ func (a *clusterClientAdapter) RegisterCluster(ctx context.Context, req Register
 		ClusterID:      resolveClusterID(resp),
 		ClusterGroupID: resolveClusterGroupID(resp),
 	}, nil
+}
+
+// DeleteClusterByName removes every SIS cluster row matching name. It is used
+// by one-click reruns, where the local GPU cluster must be registered from
+// scratch each time after the compute plane is torn down.
+func (a *clusterClientAdapter) DeleteClusterByName(ctx context.Context, ncaID, name string) (int, error) {
+	if ncaID == "" {
+		ncaID = a.cfg.ClientID
+	}
+	list, err := a.inner.ListClusters(ctx, a.sisURL, ncaID)
+	if err != nil {
+		return 0, fmt.Errorf("list clusters: %w", err)
+	}
+	deleted := 0
+	for _, cl := range list {
+		if cl.ClusterName != name && cl.ClusterID != name {
+			continue
+		}
+		if cl.ClusterID == "" {
+			return deleted, fmt.Errorf("cluster %q has empty cluster ID", name)
+		}
+		if err := a.inner.DeleteCluster(ctx, a.sisURL, cl.ClusterID); err != nil {
+			if clusterDeleteNotFound(err) {
+				continue
+			}
+			return deleted, fmt.Errorf("delete cluster %q (%s): %w", name, cl.ClusterID, err)
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+func (a *clusterClientAdapter) DeleteCluster(ctx context.Context, clusterID string) error {
+	if clusterID == "" {
+		return nil
+	}
+	if err := a.inner.DeleteCluster(ctx, a.sisURL, clusterID); err != nil {
+		if clusterDeleteNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("delete cluster %s: %w", clusterID, err)
+	}
+	return nil
+}
+
+func clusterDeleteNotFound(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "404")
 }
 
 // resolveClusterGroupID extracts the cluster-group ID from whichever field the

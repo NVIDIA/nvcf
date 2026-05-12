@@ -482,7 +482,7 @@ All `function create` flags:
 | `--secrets` | Secrets in `name=value` format (repeatable) |
 | `--tags` | Comma-separated tags |
 | `--models` | Model artifacts in `name:version:uri` format (repeatable) |
-| `--llm-model` | LLM model config in `name=<model>,uris=<uri>|<uri>,routingMethod=<round_robin|power_of_two|random>,tokenRateLimit=<limit>` format (repeatable) |
+| `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=round_robin\|power_of_two\|random,tokenRateLimit=LIMIT` format (repeatable) |
 | `--resources` | Resource artifacts in `name:version:uri` format (repeatable) |
 | `--helm-chart` | Helm chart specification |
 | `--helm-chart-service` | Helm chart service name |

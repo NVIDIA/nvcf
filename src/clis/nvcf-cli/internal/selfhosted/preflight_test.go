@@ -112,6 +112,25 @@ func TestCheckBinary_RetriesTransientVersionProbeFailure(t *testing.T) {
 	assert.Equal(t, "1.5.0", r.Detail)
 }
 
+func TestDefaultToolsWithPreferredDirUsesPinnedBinary(t *testing.T) {
+	binDir := t.TempDir()
+	pinnedHelm := filepath.Join(binDir, "helm")
+	require.NoError(t, os.WriteFile(pinnedHelm, []byte("#!/bin/sh\n"), 0o755))
+
+	tools := DefaultToolsWithPreferredDir(binDir)
+	var helm BinarySpec
+	for _, tool := range tools {
+		if tool.Name == "helm" {
+			helm = tool
+			break
+		}
+	}
+	require.NotNil(t, helm.LookPath)
+	path, err := helm.LookPath("helm")
+	require.NoError(t, err)
+	assert.Equal(t, pinnedHelm, path)
+}
+
 // captureSink records all emitted events for assertion in tests.
 type captureSink struct {
 	events []progress.Event

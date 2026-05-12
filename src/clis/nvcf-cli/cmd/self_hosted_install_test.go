@@ -188,12 +188,28 @@ func TestComputePlaneTarget_MultiClusterSplit(t *testing.T) {
 // fakeClusterClient is a test double for selfhosted.ClusterClient.
 type fakeClusterClient struct {
 	registerCalls int
+	deleteCalls   int
+	deletedIDs    []string
+	callOrder     []string
 	resp          *selfhosted.RegisterResponse
 }
 
 func (f *fakeClusterClient) RegisterCluster(_ context.Context, _ selfhosted.RegisterRequest) (*selfhosted.RegisterResponse, error) {
 	f.registerCalls++
+	f.callOrder = append(f.callOrder, "register")
 	return f.resp, nil
+}
+
+func (f *fakeClusterClient) DeleteClusterByName(_ context.Context, _, _ string) (int, error) {
+	f.deleteCalls++
+	f.callOrder = append(f.callOrder, "delete")
+	return 1, nil
+}
+
+func (f *fakeClusterClient) DeleteCluster(_ context.Context, clusterID string) error {
+	f.deletedIDs = append(f.deletedIDs, clusterID)
+	f.callOrder = append(f.callOrder, "delete-id")
+	return nil
 }
 
 func (f *fakeClusterClient) Close() error { return nil }
