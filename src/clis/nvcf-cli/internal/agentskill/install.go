@@ -54,28 +54,29 @@ func Install(ctx context.Context, targetDirs []string) error {
 	if len(targetDirs) == 0 {
 		return errors.New("agentskill: no target directories specified")
 	}
-	if err := Verify(embeddedFS); err != nil {
+	fsys := FS()
+	if err := Verify(fsys); err != nil {
 		return fmt.Errorf("manifest verification failed; refusing to install: %w", err)
 	}
-	m, err := LoadManifest(embeddedFS)
+	m, err := LoadManifest(fsys)
 	if err != nil {
 		return err
 	}
 	for _, target := range targetDirs {
-		if err := installInto(ctx, target, m); err != nil {
+		if err := installInto(ctx, fsys, target, m); err != nil {
 			return fmt.Errorf("install %s: %w", target, err)
 		}
 	}
 	return nil
 }
 
-func installInto(_ context.Context, target string, m *Manifest) error {
+func installInto(_ context.Context, fsys fs.FS, target string, m *Manifest) error {
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return err
 	}
 	for _, mf := range m.Files {
 		rel := mf.Path
-		body, err := fs.ReadFile(embeddedFS, "data/"+rel)
+		body, err := fs.ReadFile(fsys, "data/"+rel)
 		if err != nil {
 			return err
 		}
@@ -87,7 +88,7 @@ func installInto(_ context.Context, target string, m *Manifest) error {
 			return err
 		}
 	}
-	manifestBody, err := fs.ReadFile(embeddedFS, "data/manifest.json")
+	manifestBody, err := fs.ReadFile(fsys, "data/manifest.json")
 	if err != nil {
 		return err
 	}
@@ -146,7 +147,7 @@ func SkillNames(m *Manifest) []string {
 // markers from each target directory. Idempotent: missing targets or missing
 // managed skill directories return nil.
 func Uninstall(_ context.Context, targetDirs []string) error {
-	m, err := LoadManifest(embeddedFS)
+	m, err := LoadManifest(FS())
 	if err != nil {
 		return err
 	}

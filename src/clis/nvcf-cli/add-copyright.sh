@@ -84,20 +84,13 @@ BLOCK_HEADER="$(make_block_header)"
 HTML_HEADER="$(make_html_header)"
 
 SKIP_FILES=("go.sum" "go.mod")
-
-# SKIP_PATH_PREFIXES excludes whole directories from the copyright check.
-# Used for content mirrored in from another repo where the copy must remain
-# byte-identical to the upstream (a SPDX header would corrupt the bytes and
-# break the manifest verification chain).
-#
-# internal/agentskill/data/ — agent-skill markdown bundle copied from
-#   mcamp/docs/nvcf/one-click-deploy/agent-skill/. The manifest.json there
-#   records SHA256 per file; CI fails if any byte drifts.
-SKIP_PATH_PREFIXES=("internal/agentskill/data/")
+SKIP_PATH_PREFIXES=()
 
 FAILED=0
 
 while IFS= read -r file; do
+    [ -e "$file" ] || continue
+
     basename="$(basename "$file")"
     ext="${basename##*.}"
     if [ "$ext" = "$basename" ]; then
@@ -111,7 +104,7 @@ while IFS= read -r file; do
             break
         fi
     done
-    if ! $skip; then
+    if ! $skip && ((${#SKIP_PATH_PREFIXES[@]} > 0)); then
         for sp in "${SKIP_PATH_PREFIXES[@]}"; do
             case "$file" in
                 "$sp"*) skip=true; break ;;

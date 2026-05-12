@@ -1,34 +1,19 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
+genrule(
+    name = "skilldata_generated_go",
+    srcs = ["//ai-tooling/user/skills:nvcf_public_user_skills"],
+    outs = ["skilldata_generated.go"],
+    cmd = "$(location //src/clis/nvcf-cli/internal/agentskill/skilldatagen) -strip-prefix=ai-tooling/user/skills -out=$@ $(SRCS)",
+    tools = ["//src/clis/nvcf-cli/internal/agentskill/skilldatagen"],
+)
+
 go_library(
     name = "agentskill",
     srcs = [
-        "embed.go",
         "install.go",
         "manifest.go",
-    ],
-    embedsrcs = [
-        "data/manifest.json",
-        "data/nvcf-self-managed-cli/SKILL.md",
-        "data/nvcf-self-managed-cli/examples/ci-pipelines.md",
-        "data/nvcf-self-managed-cli/examples/multi-cluster.md",
-        "data/nvcf-self-managed-cli/prompts/add-compute-plane.md",
-        "data/nvcf-self-managed-cli/prompts/deploy-and-invoke.md",
-        "data/nvcf-self-managed-cli/prompts/diagnose-failed-install.md",
-        "data/nvcf-self-managed-cli/prompts/install-from-scratch.md",
-        "data/nvcf-self-managed-cli/prompts/rotate-cluster-jwks.md",
-        "data/nvcf-self-managed-cli/prompts/teardown.md",
-        "data/nvcf-self-managed-cli/reference/commands.md",
-        "data/nvcf-self-managed-cli/reference/exit-codes.md",
-        "data/nvcf-self-managed-cli/reference/flags.md",
-        "data/nvcf-self-managed-cli/reference/troubleshooting.md",
-        "data/nvcf-self-managed-installation/SKILL.md",
-        "data/nvcf-self-managed-installation/evals/evals.json",
-        "data/nvcf-self-managed-installation/examples.md",
-        "data/nvcf-self-managed-installation/references/debugging.md",
-        "data/nvcf-self-managed-installation/references/eks-example.yaml",
-        "data/nvcf-self-managed-installation/references/helmfile-structure.md",
-        "data/nvcf-self-managed-installation/references/pull-secrets.md",
+        ":skilldata_generated_go",
     ],
     importpath = "nvcf-cli/internal/agentskill",
     visibility = ["//src/clis/nvcf-cli:__subpackages__"],

@@ -1,7 +1,9 @@
 # Bazel skips these directories during package loading and Gazelle traversal.
-# Mirrors gazelle:exclude entries in root BUILD.bazel; .bazelignore is needed
-# in addition because some Bazel commands (build //..., query) load packages
-# directly without consulting BUILD-level directives.
+# Mostly mirrors gazelle:exclude entries in root BUILD.bazel; .bazelignore is
+# needed in addition because some Bazel commands (build //..., query) load
+# packages directly without consulting BUILD-level directives. ai-tooling is
+# intentionally loadable because the nvcf-cli skill bundle is generated from
+# ai-tooling/user/skills.
 #
 # Native subtrees (src/clis/nvcf-cli, src/libraries/go/lib) have their own
 # vendor/ entries listed below.
@@ -22,7 +24,6 @@ fern
 infra
 migrations
 nvidia-internal
-ai-tooling
 tools
 
 # Vendored dependencies inside the two Phase 1 subtrees. Bazel resolves these

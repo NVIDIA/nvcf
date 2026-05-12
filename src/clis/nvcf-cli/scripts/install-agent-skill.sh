@@ -14,16 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# nvcf-cli agent skill — curl-pipe installer.
+# nvcf-cli public skill installer.
 #
-# Downloads the markdown bundle from nvcf-cli's internal/agentskill/data/
-# directory (the byte-identical mirror of the source-of-truth markdown in
-# mcamp/docs, verified by manifest SHA256) and writes it into the operator's
-# agent-ecosystem skill directories. Verifies each file's SHA256 against
-# manifest.json before any write.
-#
-# Use this when nvcf-cli isn't installed yet (chicken-and-egg). Operators
-# with nvcf-cli should use 'nvcf-cli agent-skill install' instead.
+# Downloads source skill files from the NVCF monorepo's ai-tooling/user/skills
+# tree and writes them into agent-ecosystem skill directories. Use this when
+# nvcf-cli is not installed yet. Operators with nvcf-cli should use
+# 'nvcf-cli agent-skill install' instead.
 #
 # AUTHENTICATION:
 #   This script fetches from github.com/NVIDIA, which requires auth.
@@ -34,40 +30,32 @@
 # MANUAL SMOKE TEST:
 #   export GITLAB_TOKEN=<your-token>
 #
-#   # Install to a temp dir:
+#   # Install to a temp base skills dir:
 #   bash scripts/install-agent-skill.sh --target=/tmp/skill-smoke
-#   ls /tmp/skill-smoke/
-#   cat /tmp/skill-smoke/.version
+#   ls /tmp/skill-smoke/nvcf-self-managed-cli/
+#   ls /tmp/skill-smoke/nvcf-self-managed-installation/
 #
 #   # Uninstall:
 #   bash scripts/install-agent-skill.sh --uninstall --target=/tmp/skill-smoke
-#   ls /tmp/skill-smoke 2>&1
 #
-#   # Test default branch install (both ecosystem dirs):
+#   # Test default branch install:
 #   bash scripts/install-agent-skill.sh
-#   ls ~/.claude/skills/nvcf-cli/
-#   ls ~/.agents/skills/nvcf-cli/
-#
-#   # Test custom branch:
-#   bash scripts/install-agent-skill.sh --branch=mcamp/feat/m-plus-10-agent-skill --target=/tmp/skill-smoke
+#   ls ~/.claude/skills/nvcf-self-managed-cli/
+#   ls ~/.agents/skills/nvcf-self-managed-cli/
 #
 # CI SYNTAX CHECK:
 #   bash -n scripts/install-agent-skill.sh
 
 set -euo pipefail
 
-# Defaults
 DEFAULT_BRANCH="main"
 GITLAB_HOST="github.com/NVIDIA"
-# Source of truth for the embedded agent skill is the nvcf-cli repo's
-# internal/agentskill/data/ directory — the byte-identical mirror of
-# mcamp/docs/nvcf/one-click-deploy/agent-skill/, verified by manifest SHA256
-# at every CI build. Pulling from cli rather than mcamp/docs because cli is
-# the repo operators already interact with (one-stop bootstrap surface).
-GITLAB_PROJECT="ncp/nvcf/cli"
-SKILL_PATH="internal/agentskill/data"
+GITLAB_PROJECT="nvcf/nvcf"
+SOURCE_PATH="ai-tooling/user/skills"
+SKILL_NAMES=("nvcf-self-managed-cli" "nvcf-self-managed-installation")
+MANIFEST_MARKER=".nvcf-cli-public-skills.manifest.json"
+VERSION_MARKER=".nvcf-cli-public-skills.version"
 
-# State (populated by argv parse)
 BRANCH="$DEFAULT_BRANCH"
 ACTION="install"
 EXPLICIT_TARGET=""
@@ -76,35 +64,30 @@ usage() {
     cat <<'EOF'
 Usage: install-agent-skill.sh [--branch=REF] [--target=DIR] [--uninstall] [--help]
 
-Installs the nvcf-cli agent skill markdown bundle into the agent-ecosystem
-skill directories. With no args, writes to BOTH ~/.claude/skills/nvcf-cli/
-and ~/.agents/skills/nvcf-cli/. Source: nvcf-cli's internal/agentskill/data/
-directory (verified byte-identical mirror of the canonical content).
+Installs the public NVCF user skills into agent-ecosystem base skill
+directories. With no args, writes skill directories into BOTH ~/.claude/skills/
+and ~/.agents/skills/.
 
 Options:
-  --branch=REF      nvcf-cli ref to fetch from (default: main)
-  --target=DIR      install to a single directory instead of the defaults
-  --uninstall       remove from the default targets (or --target if set)
+  --branch=REF      NVCF monorepo ref to fetch from (default: main)
+  --target=DIR      install to a single base skills directory instead of the defaults
+  --uninstall       remove these skills from the default targets, or --target if set
   --help            print this message and exit
 
 Examples:
   curl -sSfL <URL> | GITLAB_TOKEN=<token> bash
   curl -sSfL <URL> | GITLAB_TOKEN=<token> bash -s -- --branch=feat/foo
   curl -sSfL <URL> | GITLAB_TOKEN=<token> bash -s -- --uninstall
-  curl -sSfL <URL> | GITLAB_TOKEN=<token> bash -s -- --target=/path/to/skill
+  curl -sSfL <URL> | GITLAB_TOKEN=<token> bash -s -- --target=/path/to/skills
 
 Environment:
   GITLAB_TOKEN      GitLab personal access token (read_repository scope)
-                    Get one at: https://github.com/NVIDIA/-/user_settings/personal_access_tokens
                     If unset, curl will attempt to use ~/.netrc credentials.
 
-Source: github.com/NVIDIA/ncp/nvcf/cli/internal/agentskill/data/
-(byte-identical mirror of mcamp/docs/nvcf/one-click-deploy/agent-skill/,
-verified by manifest SHA256 at every CI build)
+Source: github.com/NVIDIA/nvcf/nvcf/ai-tooling/user/skills/
 EOF
 }
 
-# Parse argv
 for arg in "$@"; do
     case "$arg" in
         --branch=*) BRANCH="${arg#*=}" ;;
@@ -119,33 +102,40 @@ for arg in "$@"; do
     esac
 done
 
-# Tilde-expansion for EXPLICIT_TARGET
 if [[ -n "$EXPLICIT_TARGET" ]] && [[ "$EXPLICIT_TARGET" == "~"* ]]; then
     EXPLICIT_TARGET="${EXPLICIT_TARGET/#~/$HOME}"
 fi
 
-# Resolve target list
 declare -a TARGETS
 if [[ -n "$EXPLICIT_TARGET" ]]; then
     TARGETS=("$EXPLICIT_TARGET")
 else
-    TARGETS=("$HOME/.claude/skills/nvcf-cli" "$HOME/.agents/skills/nvcf-cli")
+    TARGETS=("$HOME/.claude/skills" "$HOME/.agents/skills")
 fi
 
-# Uninstall
 if [[ "$ACTION" == "uninstall" ]]; then
     for target in "${TARGETS[@]}"; do
-        if [[ -d "$target" ]]; then
-            rm -rf "$target"
-            echo "Removed $target"
-        else
-            echo "Skipped $target (not present)"
+        removed=false
+        for skill in "${SKILL_NAMES[@]}"; do
+            skill_target="$target/$skill"
+            if [[ -d "$skill_target" ]]; then
+                rm -rf "$skill_target"
+                echo "Removed $skill_target"
+                removed=true
+            fi
+        done
+        if [[ -e "$target/$MANIFEST_MARKER" || -e "$target/$VERSION_MARKER" ]]; then
+            rm -f "$target/$MANIFEST_MARKER" "$target/$VERSION_MARKER"
+            echo "Removed install markers from $target"
+            removed=true
+        fi
+        if [[ "$removed" == false ]]; then
+            echo "Skipped $target (no installed public NVCF skills found)"
         fi
     done
     exit 0
 fi
 
-# Tooling check
 need() {
     command -v "$1" >/dev/null 2>&1 || {
         echo "Required tool not on PATH: $1" >&2
@@ -153,152 +143,180 @@ need() {
     }
 }
 need curl
-need shasum
 need mktemp
+need python3
 
-# Build curl auth flags.
-# Prefer GITLAB_TOKEN env var; fall back to ~/.netrc via curl -n.
 declare -a CURL_AUTH_FLAGS
 if [[ -n "${GITLAB_TOKEN:-}" ]]; then
     CURL_AUTH_FLAGS=(-H "PRIVATE-TOKEN: $GITLAB_TOKEN")
 else
-    # Try to find credentials in ~/.netrc
     if grep -q "$GITLAB_HOST" "$HOME/.netrc" 2>/dev/null; then
         CURL_AUTH_FLAGS=(-n)
     else
         echo "Warning: GITLAB_TOKEN not set and no ~/.netrc entry for $GITLAB_HOST." >&2
         echo "Set GITLAB_TOKEN=<personal-access-token> to authenticate." >&2
-        echo "Get a token at: https://$GITLAB_HOST/-/user_settings/personal_access_tokens" >&2
         CURL_AUTH_FLAGS=()
     fi
 fi
 
-# Build GitLab API v4 URL for a file path in the project.
-# The /-/raw/ endpoint requires a browser session; the API endpoint
-# accepts PRIVATE-TOKEN headers and works for programmatic access.
-#
-# URL format:
-#   https://HOST/api/v4/projects/PROJECT_ENCODED/repository/files/FILE_ENCODED/raw?ref=REF
-#
-# Shell-portable URL encoding (replace / with %2F only, which is all we need
-# for the project path and file paths within this repo layout).
-url_encode_path() {
-    local path="$1"
-    # Encode forward slashes only — sufficient for our paths.
-    printf '%s' "${path//\//%2F}"
+url_encode() {
+    python3 - "$1" <<'PY'
+import sys
+import urllib.parse
+
+print(urllib.parse.quote(sys.argv[1], safe=""))
+PY
 }
 
-project_encoded="$(url_encode_path "$GITLAB_PROJECT")"
+project_encoded="$(url_encode "$GITLAB_PROJECT")"
+ref_encoded="$(url_encode "$BRANCH")"
 
 gitlab_raw_url() {
     local file_path="$1"
     local file_encoded
-    file_encoded="$(url_encode_path "$file_path")"
+    file_encoded="$(url_encode "$file_path")"
     printf 'https://%s/api/v4/projects/%s/repository/files/%s/raw?ref=%s' \
-        "$GITLAB_HOST" "$project_encoded" "$file_encoded" "$BRANCH"
+        "$GITLAB_HOST" "$project_encoded" "$file_encoded" "$ref_encoded"
 }
 
-# Stage to a tmpdir, verify, then copy in.
+gitlab_tree_url() {
+    local tree_path="$1"
+    local page="$2"
+    local path_encoded
+    path_encoded="$(url_encode "$tree_path")"
+    printf 'https://%s/api/v4/projects/%s/repository/tree?path=%s&recursive=true&per_page=100&page=%s&ref=%s' \
+        "$GITLAB_HOST" "$project_encoded" "$path_encoded" "$page" "$ref_encoded"
+}
+
+validate_rel_path() {
+    local rel="$1"
+    case "$rel" in
+        ""|/*|*\\*)
+            return 1
+            ;;
+    esac
+
+    IFS='/' read -r -a parts <<< "$rel"
+    case "${parts[0]}" in
+        nvcf-self-managed-cli|nvcf-self-managed-installation) ;;
+        *) return 1 ;;
+    esac
+    for part in "${parts[@]}"; do
+        case "$part" in
+            ""|"."|".."|.*|_*)
+                return 1
+                ;;
+        esac
+    done
+}
+
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-MANIFEST_URL="$(gitlab_raw_url "$SKILL_PATH/manifest.json")"
+declare -a FILE_PATHS
+declare -a REL_PATHS
 
-echo ">>> Fetching manifest.json from $BRANCH..."
-curl -sSfL "${CURL_AUTH_FLAGS[@]}" -o "$STAGE/manifest.json" "$MANIFEST_URL"
+echo ">>> Listing public NVCF skill files from $BRANCH..."
+for skill in "${SKILL_NAMES[@]}"; do
+    page=1
+    while true; do
+        tree_json="$STAGE/tree-$skill-$page.json"
+        paths_file="$STAGE/tree-$skill-$page.paths"
+        curl -sSfL "${CURL_AUTH_FLAGS[@]}" -o "$tree_json" "$(gitlab_tree_url "$SOURCE_PATH/$skill" "$page")"
+        page_count="$(python3 - "$tree_json" "$paths_file" <<'PY'
+import json
+import sys
 
-# Validate we got JSON (not an HTML error page)
-if ! python3 -c 'import json,sys; json.load(sys.stdin)' < "$STAGE/manifest.json" 2>/dev/null && \
-   ! jq empty "$STAGE/manifest.json" 2>/dev/null; then
-    echo "manifest.json appears to be invalid JSON — authentication may have failed." >&2
-    echo "Set GITLAB_TOKEN=<personal-access-token> or add ~/.netrc credentials." >&2
-    exit 1
-fi
-
-# Parse the manifest with jq or python3 fallback.
-# manifest.json schema (from M+10.1b): files[].path, files[].sha256, totalFiles
-if command -v jq >/dev/null 2>&1; then
-    mapfile -t FILE_PATHS < <(jq -r '.files[].path' "$STAGE/manifest.json")
-    expected_count=$(jq -r '.totalFiles' "$STAGE/manifest.json")
-elif command -v python3 >/dev/null 2>&1; then
-    mapfile -t FILE_PATHS < <(python3 -c '
-import json, sys
-m = json.load(sys.stdin)
-for f in m["files"]:
-    print(f["path"])
-' < "$STAGE/manifest.json")
-    expected_count=$(python3 -c '
-import json, sys
-print(json.load(sys.stdin)["totalFiles"])
-' < "$STAGE/manifest.json")
-else
-    echo "Need either jq or python3 to parse manifest.json" >&2
-    exit 1
-fi
-
-actual_count="${#FILE_PATHS[@]}"
-if [[ "$actual_count" != "$expected_count" ]]; then
-    echo "manifest.json: totalFiles=$expected_count but listed $actual_count entries — refusing to install" >&2
-    exit 1
-fi
-
-# Path-traversal defense: reject any manifest entry containing .. or starting with /
-for path in "${FILE_PATHS[@]}"; do
-    case "$path" in
-        *..*|/*)
-            echo "manifest.json contains suspicious path: $path — refusing to install" >&2
-            exit 1
-            ;;
-    esac
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    data = json.load(f)
+if not isinstance(data, list):
+    message = data.get("message", data) if isinstance(data, dict) else data
+    raise SystemExit(f"repository tree response was not a list: {message}")
+with open(sys.argv[2], "w", encoding="utf-8") as out:
+    for item in data:
+        if item.get("type") == "blob":
+            print(item["path"], file=out)
+print(len(data))
+PY
+)"
+        page_paths=()
+        while IFS= read -r line; do
+            page_paths+=("$line")
+        done < "$paths_file"
+        for file_path in "${page_paths[@]}"; do
+            rel="${file_path#"$SOURCE_PATH"/}"
+            if [[ "$rel" == "$file_path" ]] || ! validate_rel_path "$rel"; then
+                echo "Repository tree returned suspicious path: $file_path" >&2
+                exit 1
+            fi
+            FILE_PATHS+=("$file_path")
+            REL_PATHS+=("$rel")
+        done
+        if (( page_count == 0 || page_count < 100 )); then
+            break
+        fi
+        page=$((page + 1))
+    done
 done
 
-# Fetch each file + verify SHA256
-echo ">>> Fetching $expected_count files and verifying SHA256..."
-for path in "${FILE_PATHS[@]}"; do
-    [[ -z "$path" ]] && continue
-    dst="$STAGE/$path"
+expected_count="${#REL_PATHS[@]}"
+if (( expected_count == 0 )); then
+    echo "No source skill files found under $SOURCE_PATH" >&2
+    exit 1
+fi
+
+echo ">>> Fetching $expected_count files..."
+for idx in "${!FILE_PATHS[@]}"; do
+    file_path="${FILE_PATHS[$idx]}"
+    rel="${REL_PATHS[$idx]}"
+    dst="$STAGE/$rel"
     mkdir -p "$(dirname "$dst")"
-    file_url="$(gitlab_raw_url "$SKILL_PATH/$path")"
-    curl -sSfL "${CURL_AUTH_FLAGS[@]}" -o "$dst" "$file_url"
-
-    # Look up expected hash from manifest
-    if command -v jq >/dev/null 2>&1; then
-        expected=$(jq -r --arg p "$path" '.files[] | select(.path == $p) | .sha256' "$STAGE/manifest.json")
-    else
-        expected=$(python3 -c '
-import json, sys
-m = json.load(sys.stdin)
-for f in m["files"]:
-    if f["path"] == sys.argv[1]:
-        print(f["sha256"])
-        break
-' < "$STAGE/manifest.json" "$path")
-    fi
-
-    actual=$(shasum -a 256 "$dst" | cut -d' ' -f1)
-
-    if [[ "$expected" != "$actual" ]]; then
-        echo "SHA256 mismatch for $path: expected $expected, got $actual — refusing to install" >&2
-        exit 1
-    fi
-    echo "  verified $path"
+    curl -sSfL "${CURL_AUTH_FLAGS[@]}" -o "$dst" "$(gitlab_raw_url "$file_path")"
 done
 
-echo ">>> All $expected_count files verified."
+python3 - "$STAGE" "${REL_PATHS[@]}" > "$STAGE/$MANIFEST_MARKER" <<'PY'
+import hashlib
+import json
+import os
+import sys
 
-# Now copy from STAGE to each target (only after all verifications pass)
+stage = sys.argv[1]
+paths = sorted(sys.argv[2:])
+files = []
+total_bytes = 0
+for rel in paths:
+    with open(os.path.join(stage, rel), "rb") as f:
+        body = f.read()
+    total_bytes += len(body)
+    files.append({
+        "path": rel,
+        "sha256": hashlib.sha256(body).hexdigest(),
+        "size": len(body),
+    })
+
+json.dump({
+    "schemaVersion": 1,
+    "generatedAt": "1970-01-01T00:00:00Z",
+    "totalFiles": len(files),
+    "totalBytes": total_bytes,
+    "files": files,
+}, sys.stdout, indent=2)
+print()
+PY
+
 for target in "${TARGETS[@]}"; do
     mkdir -p "$target"
-    cp "$STAGE/manifest.json" "$target/"
-    for path in "${FILE_PATHS[@]}"; do
-        [[ -z "$path" ]] && continue
-        tgt_file="$target/$path"
+    for rel in "${REL_PATHS[@]}"; do
+        tgt_file="$target/$rel"
         mkdir -p "$(dirname "$tgt_file")"
-        cp "$STAGE/$path" "$tgt_file"
+        cp "$STAGE/$rel" "$tgt_file"
     done
-    # Write a .version file with the branch ref for audit
-    printf 'branch: %s\n' "$BRANCH" > "$target/.version"
-    echo "Installed to $target"
+    cp "$STAGE/$MANIFEST_MARKER" "$target/$MANIFEST_MARKER"
+    {
+        printf 'branch: %s\n' "$BRANCH"
+        printf 'source: %s\n' "$SOURCE_PATH"
+    } > "$target/$VERSION_MARKER"
+    echo "Installed $expected_count files to $target"
 done
 
 echo ">>> Done."

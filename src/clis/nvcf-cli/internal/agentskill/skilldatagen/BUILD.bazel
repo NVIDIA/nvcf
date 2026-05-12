@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "skilldatagen_lib",
+    srcs = ["main.go"],
+    importpath = "nvcf-cli/internal/agentskill/skilldatagen",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "skilldatagen",
+    embed = [":skilldatagen_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "skilldatagen_test",
+    srcs = ["main_test.go"],
+    embed = [":skilldatagen_lib"],
+)

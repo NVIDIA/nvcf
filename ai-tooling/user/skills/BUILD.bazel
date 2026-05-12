@@ -1,0 +1,8 @@
+filegroup(
+    name = "nvcf_public_user_skills",
+    srcs = glob([
+        "nvcf-self-managed-cli/**",
+        "nvcf-self-managed-installation/**",
+    ]),
+    visibility = ["//visibility:public"],
+)

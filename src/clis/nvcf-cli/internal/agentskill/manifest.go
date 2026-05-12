@@ -26,8 +26,8 @@ import (
 	"io/fs"
 )
 
-// Manifest mirrors agent-skill/manifest.json. Field names match the JSON
-// schema produced by mcamp/docs's gen-skill-manifest.sh.
+// Manifest mirrors data/manifest.json. Field names match the JSON schema
+// produced by skilldatagen.
 type Manifest struct {
 	SchemaVersion int            `json:"schemaVersion"`
 	GeneratedAt   string         `json:"generatedAt"`
