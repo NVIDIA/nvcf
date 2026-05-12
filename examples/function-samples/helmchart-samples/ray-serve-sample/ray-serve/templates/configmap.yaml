@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-app
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  serve_app.py: |
+    """
+    Ray Serve application for NVCF.
+
+    This example shows the minimal structure for a Ray Serve deployment that
+    works as an NVCF Helm function. Replace the EchoDeployment body with your
+    model loading and inference logic.
+
+    NVCF routes requests to the 'entrypoint' Service on inferencePort. Ray Serve
+    binds to 0.0.0.0 on that same port and dispatches to the decorated handler.
+    """
+    import ray
+    from ray import serve
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+
+    ray.init(address="auto", ignore_reinit_error=True)
+
+    app = FastAPI()
+
+    @serve.deployment(
+        num_replicas=1,
+        ray_actor_options={"num_gpus": {{ .Values.gpu.count }}},
+    )
+    @serve.ingress(app)
+    class InferenceDeployment:
+        def __init__(self):
+            # Replace with your model loading logic, e.g.:
+            #   from transformers import pipeline
+            #   self.model = pipeline("text-generation", model="gpt2", device=0)
+            pass
+
+        @app.post("/infer")
+        async def infer(self, request: Request) -> JSONResponse:
+            body = await request.json()
+            # Replace with your model inference call, e.g.:
+            #   result = self.model(body.get("prompt", ""), max_new_tokens=100)
+            #   return JSONResponse({"generated_text": result[0]["generated_text"]})
+            return JSONResponse({"echo": body})
+
+        @app.get("/health")
+        async def health(self) -> JSONResponse:
+            return JSONResponse({"status": "ok"})
+
+    serve.run(
+        InferenceDeployment.bind(),
+        host="0.0.0.0",
+        port={{ .Values.inferencePort }},
+    )
+
+    import time
+    time.sleep(float("inf"))
