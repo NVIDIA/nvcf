@@ -18,6 +18,8 @@ Tony Tzeng (NVCF product, NVIDIA) confirmed in the open-source launch thread: "I
 - `helm` >= 3.12
 - For NVCF deployment: a self-managed NVCF control plane (see [self-hosted-local-development](../../../self-hosted-local-development/))
 
+> **Apple Silicon note:** `rayproject/ray` images are AMD64-only. Local testing on macOS ARM64 (k3d, kind) will fail with `exec format error`. Use an AMD64 Kubernetes cluster (cloud or remote) for a full end-to-end test.
+
 ## Deploying locally (plain Kubernetes)
 
 For CPU-only testing, disable GPU requests:
