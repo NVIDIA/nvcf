@@ -1,8 +1,6 @@
 # Ray Serve Sample
 
-This sample demonstrates how to run a [Ray Serve](https://docs.ray.io/en/latest/serve/index.html) application as an NVCF Helm function. It deploys a single Ray head pod that starts Ray Serve and exposes an inference endpoint that NVCF routes to.
-
-Tony Tzeng (NVCF product, NVIDIA) confirmed in the open-source launch thread: "In theory you should be able to run Ray Serve under KubeRay as an NVCF Function." This sample validates that path using a self-contained Helm chart, with no KubeRay operator dependency required.
+This sample demonstrates how to run a [Ray Serve](https://docs.ray.io/en/latest/serve/index.html) application as an NVCF Helm function. It deploys a single Ray head pod that starts Ray Serve and exposes an inference endpoint that NVCF routes to. No KubeRay operator is required.
 
 ## What this sample shows
 

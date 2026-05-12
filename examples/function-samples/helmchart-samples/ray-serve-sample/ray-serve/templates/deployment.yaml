@@ -44,7 +44,7 @@ spec:
           args:
             - |
               ray start --head --port=6379 --dashboard-host=0.0.0.0 --block &
-              until ray status 2>/dev/null | grep -q "healthy"; do sleep 2; done
+              until ray health-check 2>/dev/null; do sleep 2; done
               python /app/serve_app.py
           ports:
             - name: inference

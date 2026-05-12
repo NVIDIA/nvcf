@@ -32,12 +32,16 @@ data:
     NVCF routes requests to the 'entrypoint' Service on inferencePort. Ray Serve
     binds to 0.0.0.0 on that same port and dispatches to the decorated handler.
     """
+    import time
     import ray
     from ray import serve
+    from ray.serve.config import HTTPOptions
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
 
     ray.init(address="auto", ignore_reinit_error=True)
+
+    serve.start(http_options=HTTPOptions(host="0.0.0.0", port={{ .Values.inferencePort }}))
 
     app = FastAPI()
 
@@ -65,11 +69,7 @@ data:
         async def health(self) -> JSONResponse:
             return JSONResponse({"status": "ok"})
 
-    serve.run(
-        InferenceDeployment.bind(),
-        host="0.0.0.0",
-        port={{ .Values.inferencePort }},
-    )
+    serve.run(InferenceDeployment.bind())
 
-    import time
-    time.sleep(float("inf"))
+    while True:
+        time.sleep(3600)
