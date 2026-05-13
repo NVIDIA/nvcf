@@ -75,6 +75,28 @@ curl -sS -X POST "https://llm.invocation.<domain>/v1/chat/completions" \
 
 The OpenAI `model` value uses the format `<function-id>/<model-name>` so the gateway can select the target function and model.
 
+### Session Stickiness
+
+The LLM invocation gateway supports sticky routing for multi-turn OpenAI-compatible requests on `/v1/chat/completions` and `/v1/responses`. Sticky routing is not supported on `/v1/embeddings`.
+
+To keep later requests routed to the same backend, send the `x-multi-turn-session-id` response header value back as the `x-multi-turn-session-id` request header on the next request. The gateway returns `x-multi-turn-session-id` on successful supported responses. If the request does not include a valid non-empty header, the gateway derives an opaque session ID from the request input and returns it. Clients should treat a blank `x-multi-turn-session-id` request header as absent.
+
+The gateway chooses the sticky routing key in this order:
+
+| Endpoint | Precedence |
+| --- | --- |
+| `/v1/responses` | `prompt_cache_key`, `conversation.id`, `x-multi-turn-session-id`, input hash fallback |
+| `/v1/chat/completions` | `x-multi-turn-session-id`, messages hash fallback |
+
+For Responses API follow-up calls, `previous_response_id` does not override the
+sticky routing key. Continue sending `prompt_cache_key`, `conversation.id`, or
+the returned `x-multi-turn-session-id` header when the next request needs the
+same backend affinity.
+
+The session ID only affects backend selection when the deployment's LLM request router uses a cache-affinity-aware routing method for the target model. In self-managed deployments, operators configure this with `groq-multiregion` plus `cache_affinity_backend_selection_count` greater than `0`, or `pulsar` with backend KV metrics. `power-of-two`, `round-robin`, and `random` do not provide session stickiness.
+
+Clients should only use `x-multi-turn-session-id`. The gateway derives and forwards the internal `x-cache-affinity-key` to the router; clients should not send that header.
+
 ## Best Practices
 
 ### Container Versioning

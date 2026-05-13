@@ -43,6 +43,8 @@ Every subtree that an agent may work in should have its own `AGENTS.md` with bui
 
 Skills are reusable, on-demand agent instructions for specific workflows. They follow the [Agent Skills specification](https://agentskills.io/specification) and are compatible with the [Vercel Skills CLI](https://github.com/vercel-labs/skills). Skills are invoked when relevant, not auto-applied (auto-applied guidance belongs in rules, not skills).
 
+Keep durable skills focused on current behavior, stable prerequisites, and reusable workflows. Do not put in-progress MR tables, merge-order checklists, branch-specific references, or temporary cross-repo coordination status in skills. Put that information in MR descriptions, Jira comments, or temporary runbooks instead.
+
 ### Skill structure
 
 Each skill is a directory named to match its `name` frontmatter field, containing at minimum a `SKILL.md`. Names must be lowercase with hyphens only, no leading/trailing/consecutive hyphens.

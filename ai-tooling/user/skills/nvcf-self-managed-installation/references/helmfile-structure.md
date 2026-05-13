@@ -163,10 +163,24 @@ From lowest to highest priority:
 - `llm.gateway.replicaCount`
 - `llm.gateway.auth.grpcInsecure`
 - `llm.requestRouter.replicaCount`
+- `llm.requestRouter.loadBalancer`
 - `ingress.gatewayApi.routes.llmInvocation.routeAnnotations`
 - Global image registry/repository, image pull secrets, node selectors, and tracing settings are mapped into the LLM chart values.
 
 **Not passed through**: `llm.gateway.image.*`, `llm.requestRouter.image.*`, `resourcePreset`, `resources`, or any other arbitrary key. These must be set via `global.yaml.gotmpl` or release inline `values:` blocks.
+
+For sticky LLM routing, `llm.requestRouter.loadBalancer.config` can embed
+Stargate JSON. The public gateway header is `x-multi-turn-session-id`, but
+Stargate only consumes the internal `x-cache-affinity-key`. Sticky backend
+selection requires a cache-affinity-aware algorithm: `groq-multiregion` with
+`cache_affinity_backend_selection_count > 0`, or `pulsar` with backend KV
+metrics and capacity values. `power-of-two`, `round-robin`, and `random` do not
+provide multi-turn session stickiness.
+
+If a model config sets `require_cache_affinity_key: true`, direct router
+validation calls must include `x-cache-affinity-key`. Gateway clients should
+still use only `x-multi-turn-session-id`; the gateway supplies the router
+affinity header.
 
 ## Helmfile Selectors
 
