@@ -49,6 +49,19 @@ profiles:
           - public/{{ .ID }}/cover.txt
           - public/{{ .ID }}/cover.html
         expire_in: 30 days
+  go-tool:
+    stage: validate
+    image: golang:1.26-bookworm
+    variables:
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+    checks:
+      - id: unit-tests
+        type: shell
+        command: go test ./...
+      - id: build
+        type: shell
+        command: go build ./...
   docs:
     stage: validate
     image: dockerhub.nvidia.com/node:24-alpine
@@ -72,6 +85,16 @@ subprojects:
       - src/libraries/go/lib/testdata/**/*
       - src/libraries/go/lib/validator/**/*
       - src/libraries/go/lib/vendor/**/*
+  - id: ncp-local-credential-provider
+    path: tools/ncp-local-cluster/credential-provider-go
+    profile: go-tool
+    go_work: false
+    change_paths:
+      - tools/ncp-local-cluster/credential-provider-go/go.mod
+      - tools/ncp-local-cluster/credential-provider-go/go.sum
+      - tools/ncp-local-cluster/credential-provider-go/cmd/**/*
+      - tools/ncp-local-cluster/credential-provider-go/internal/**/*
+      - tools/ncp-local-cluster/credential-provider-go/hack/**/*
   - id: docs
     path: .
     profile: docs

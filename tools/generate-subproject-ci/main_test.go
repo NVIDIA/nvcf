@@ -228,6 +228,68 @@ func TestRenderPipelineGeneratesWorkspaceShellJobs(t *testing.T) {
 	}
 }
 
+func TestRenderPipelineGeneratesGoToolJobsWithoutWorkspaceSetup(t *testing.T) {
+	cfg := configFile{
+		Version:     1,
+		DefaultTags: []string{"eks", "prod"},
+		SharedChangePaths: []string{
+			".gitlab-ci.yml",
+			"tools/ci/**/*",
+		},
+		Profiles: map[string]profile{
+			"go-tool": {
+				Stage: "validate",
+				Image: "golang:1.26-bookworm",
+				Variables: map[string]string{
+					"GOTOOLCHAIN": "local",
+					"GOWORK":      "off",
+				},
+				Checks: []check{
+					{ID: "unit-tests", Type: "shell", Command: "go test ./..."},
+					{ID: "build", Type: "shell", Command: "go build ./..."},
+				},
+			},
+		},
+		Subprojects: []subproject{
+			{
+				ID:      "ncp-local-credential-provider",
+				Path:    "tools/ncp-local-cluster/credential-provider-go",
+				Profile: "go-tool",
+				GoWork:  false,
+				ChangePaths: []string{
+					"tools/ncp-local-cluster/credential-provider-go/go.mod",
+					"tools/ncp-local-cluster/credential-provider-go/go.sum",
+					"tools/ncp-local-cluster/credential-provider-go/cmd/**/*",
+					"tools/ncp-local-cluster/credential-provider-go/internal/**/*",
+				},
+			},
+		},
+	}
+
+	rendered, err := renderPipeline(cfg, "tools/ci/subproject-validations.yaml")
+	if err != nil {
+		t.Fatalf("renderPipeline failed: %v", err)
+	}
+
+	for _, needle := range []string{
+		"ncp-local-credential-provider-unit-tests:",
+		"ncp-local-credential-provider-build:",
+		`GOWORK: "off"`,
+		`cd "$CI_PROJECT_DIR/tools/ncp-local-cluster/credential-provider-go" && go test ./...`,
+		`cd "$CI_PROJECT_DIR/tools/ncp-local-cluster/credential-provider-go" && go build ./...`,
+		"tools/ncp-local-cluster/credential-provider-go/go.mod",
+		"tools/ncp-local-cluster/credential-provider-go/internal/**/*",
+	} {
+		if !strings.Contains(rendered, needle) {
+			t.Fatalf("rendered pipeline missing %q\n%s", needle, rendered)
+		}
+	}
+
+	if strings.Contains(rendered, "./tools/scripts/update-go-work") {
+		t.Fatalf("standalone Go tool jobs should not update go.work\n%s", rendered)
+	}
+}
+
 func TestRenderGoWorkIncludesConfiguredModulesAndSubprojects(t *testing.T) {
 	cfg := configFile{
 		Version:     1,
