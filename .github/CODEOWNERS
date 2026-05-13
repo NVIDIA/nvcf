@@ -48,6 +48,7 @@
 
 # Public skills and AI tooling.
 /ai-tooling/                                            @NVJCameron
+/tools/ncp-local-cluster/                               @NVIDIA/nvcf-dev
 
 # Documentation. Listed last so *.md takes precedence over service rules above.
 /docs/                                                  @NVIDIA/nvcf-admin
