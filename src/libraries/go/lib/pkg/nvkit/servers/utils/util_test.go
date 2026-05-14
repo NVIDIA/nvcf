@@ -18,6 +18,7 @@ limitations under the License.
 package utils
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -50,4 +51,18 @@ func TestGetMetadataFromRequest(t *testing.T) {
 	req.Header.Add(NotSupportedHeader, testEtagInvalid)
 	md := GetMetadataFromRequest(req)
 	require.Len(t, md.Get(NotSupportedHeader), 0)
+}
+
+func TestCustomHandlerContextHelpers(t *testing.T) {
+	ctx := ContextWithCustomHandlerForTest(context.Background(), "req-1")
+	assert.True(t, CustomHandlerContext(ctx))
+
+	requestID, ok := RequestIDFromRequestContext(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "req-1", requestID)
+
+	markerOnly := ContextWithCustomHandlerMarkerForTest(context.Background())
+	assert.True(t, CustomHandlerContext(markerOnly))
+	_, ok = RequestIDFromRequestContext(markerOnly)
+	assert.False(t, ok)
 }

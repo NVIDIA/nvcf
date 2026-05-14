@@ -87,6 +87,7 @@ go_test(
         "agent_skill_test.go",
         "cluster_registration_test.go",
         "exit_code_error_test.go",
+        "function_llm_model_test.go",
         "registry_test.go",
         "self_hosted_check_test.go",
         "self_hosted_down_test.go",

@@ -18,10 +18,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "selfhosted",
     srcs = [
+        "helm_runtime.go",
         "orchestrator.go",
         "orchestrator_errors.go",
         "output.go",
-        "helm_runtime.go",
         "preflight.go",
         "register.go",
         "render.go",

@@ -16,6 +16,7 @@
 package cobraautobind
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -115,4 +116,21 @@ func TestAutobindFlagsFromStruct_errors(t *testing.T) {
 		}
 		require.NoError(t, AutobindFlagsFromStruct(&cobra.Command{Use: "t"}, viper.New(), &nonStringSlice{}))
 	})
+}
+
+func TestErrorMessages(t *testing.T) {
+	cause := errors.New("not an int")
+	defaultErr := &InvalidDefaultError{
+		fieldType:       "int",
+		fullFlag:        "server.port",
+		conversionError: cause,
+	}
+	require.Equal(t, `invalid default for int flag "server.port": not an int`, defaultErr.Error())
+	require.ErrorIs(t, defaultErr, cause)
+
+	unsupportedErr := &UnsupportedFieldTypeError{
+		fieldType: "chan int",
+		fullFlag:  "worker.events",
+	}
+	require.Equal(t, "unsupported field type for flag: worker.events (chan int)", unsupportedErr.Error())
 }

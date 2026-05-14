@@ -44,6 +44,7 @@ go_test(
         "client_test.go",
         "clusters_test.go",
         "host_header_transport_test.go",
+        "llm_config_test.go",
         "multi_token_transport_test.go",
     ],
     embed = [":client"],

@@ -11,6 +11,25 @@ The following third-party licenses are included in the vendor directory:
 
     vendor/cloud.google.com/go/compute/metadata/LICENSE
     vendor/dario.cat/mergo/LICENSE
+    vendor/github.com/aws/aws-sdk-go-v2/config/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/credentials/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/internal/configsources/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/internal/endpoints/v2/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/internal/ini/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/internal/sync/singleflight/LICENSE
+    vendor/github.com/aws/aws-sdk-go-v2/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/service/ecr/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/service/ecrpublic/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/service/internal/presigned-url/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/service/signin/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/service/sso/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/service/ssooidc/LICENSE.txt
+    vendor/github.com/aws/aws-sdk-go-v2/service/sts/LICENSE.txt
+    vendor/github.com/awslabs/amazon-ecr-credential-helper/ecr-login/LICENSE
+    vendor/github.com/aws/smithy-go/internal/sync/singleflight/LICENSE
+    vendor/github.com/aws/smithy-go/LICENSE
     vendor/github.com/beorn7/perks/LICENSE
     vendor/github.com/cenkalti/backoff/v5/LICENSE
     vendor/github.com/cespare/xxhash/v2/LICENSE.txt
@@ -47,6 +66,7 @@ The following third-party licenses are included in the vendor directory:
     vendor/github.com/hashicorp/go-retryablehttp/LICENSE
     vendor/github.com/inconshreveable/mousetrap/LICENSE
     vendor/github.com/jarcoal/httpmock/LICENSE
+    vendor/github.com/jmespath/go-jmespath/LICENSE
     vendor/github.com/json-iterator/go/LICENSE
     vendor/github.com/KimMachineGun/automemlimit/LICENSE
     vendor/github.com/mailru/easyjson/LICENSE
@@ -59,6 +79,7 @@ The following third-party licenses are included in the vendor directory:
     vendor/github.com/oklog/run/LICENSE
     vendor/github.com/opencontainers/go-digest/LICENSE
     vendor/github.com/opencontainers/go-digest/LICENSE.docs
+    vendor/github.com/opencontainers/image-spec/LICENSE
     vendor/github.com/openzipkin/zipkin-go/LICENSE
     vendor/github.com/pbnjay/memory/LICENSE
     vendor/github.com/pelletier/go-toml/v2/LICENSE
@@ -83,10 +104,12 @@ The following third-party licenses are included in the vendor directory:
     vendor/github.com/stretchr/testify/LICENSE
     vendor/github.com/subosito/gotenv/LICENSE
     vendor/github.com/urfave/cli/v2/LICENSE
+    vendor/github.com/volcengine/volcengine-go-sdk/LICENSE.txt
     vendor/github.com/x448/float16/LICENSE
     vendor/github.com/xrash/smetrics/LICENSE
     vendor/golang.org/x/net/LICENSE
     vendor/golang.org/x/oauth2/LICENSE
+    vendor/golang.org/x/sync/LICENSE
     vendor/golang.org/x/sys/LICENSE
     vendor/golang.org/x/term/LICENSE
     vendor/golang.org/x/text/LICENSE
@@ -110,6 +133,8 @@ The following third-party licenses are included in the vendor directory:
     vendor/go.opentelemetry.io/proto/otlp/LICENSE
     vendor/gopkg.in/evanphx/json-patch.v4/LICENSE
     vendor/gopkg.in/inf.v0/LICENSE
+    vendor/gopkg.in/yaml.v2/LICENSE
+    vendor/gopkg.in/yaml.v2/LICENSE.libyaml
     vendor/gopkg.in/yaml.v3/LICENSE
     vendor/go.uber.org/atomic/LICENSE.txt
     vendor/go.uber.org/automaxprocs/LICENSE
@@ -128,6 +153,7 @@ The following third-party licenses are included in the vendor directory:
     vendor/k8s.io/kube-openapi/pkg/validation/spec/LICENSE
     vendor/k8s.io/utils/internal/third_party/forked/golang/LICENSE
     vendor/k8s.io/utils/LICENSE
+    vendor/oras.land/oras-go/v2/LICENSE
     vendor/sigs.k8s.io/json/LICENSE
     vendor/sigs.k8s.io/randfill/LICENSE
     vendor/sigs.k8s.io/structured-merge-diff/v6/LICENSE

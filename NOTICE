@@ -274,6 +274,27 @@ The following third-party licenses are included in this repository:
     src/libraries/go/lib/NOTICE
     src/libraries/go/lib/vendor/cloud.google.com/go/compute/metadata/LICENSE
     src/libraries/go/lib/vendor/dario.cat/mergo/LICENSE
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/config/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/credentials/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/internal/configsources/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/internal/endpoints/v2/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/internal/ini/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/internal/sync/singleflight/LICENSE
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/NOTICE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/service/ecr/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/service/ecrpublic/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/service/internal/presigned-url/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/service/signin/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/service/sso/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/service/ssooidc/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/aws-sdk-go-v2/service/sts/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/aws/smithy-go/internal/sync/singleflight/LICENSE
+    src/libraries/go/lib/vendor/github.com/aws/smithy-go/LICENSE
+    src/libraries/go/lib/vendor/github.com/aws/smithy-go/NOTICE
+    src/libraries/go/lib/vendor/github.com/awslabs/amazon-ecr-credential-helper/ecr-login/LICENSE
     src/libraries/go/lib/vendor/github.com/beorn7/perks/LICENSE
     src/libraries/go/lib/vendor/github.com/cenkalti/backoff/v5/LICENSE
     src/libraries/go/lib/vendor/github.com/cespare/xxhash/v2/LICENSE.txt
@@ -311,6 +332,7 @@ The following third-party licenses are included in this repository:
     src/libraries/go/lib/vendor/github.com/hashicorp/go-retryablehttp/LICENSE
     src/libraries/go/lib/vendor/github.com/inconshreveable/mousetrap/LICENSE
     src/libraries/go/lib/vendor/github.com/jarcoal/httpmock/LICENSE
+    src/libraries/go/lib/vendor/github.com/jmespath/go-jmespath/LICENSE
     src/libraries/go/lib/vendor/github.com/josharian/intern/license.md
     src/libraries/go/lib/vendor/github.com/json-iterator/go/LICENSE
     src/libraries/go/lib/vendor/github.com/KimMachineGun/automemlimit/LICENSE
@@ -324,6 +346,7 @@ The following third-party licenses are included in this repository:
     src/libraries/go/lib/vendor/github.com/oklog/run/LICENSE
     src/libraries/go/lib/vendor/github.com/opencontainers/go-digest/LICENSE
     src/libraries/go/lib/vendor/github.com/opencontainers/go-digest/LICENSE.docs
+    src/libraries/go/lib/vendor/github.com/opencontainers/image-spec/LICENSE
     src/libraries/go/lib/vendor/github.com/openzipkin/zipkin-go/LICENSE
     src/libraries/go/lib/vendor/github.com/pbnjay/memory/LICENSE
     src/libraries/go/lib/vendor/github.com/pelletier/go-toml/v2/LICENSE
@@ -352,6 +375,8 @@ The following third-party licenses are included in this repository:
     src/libraries/go/lib/vendor/github.com/stretchr/testify/LICENSE
     src/libraries/go/lib/vendor/github.com/subosito/gotenv/LICENSE
     src/libraries/go/lib/vendor/github.com/urfave/cli/v2/LICENSE
+    src/libraries/go/lib/vendor/github.com/volcengine/volcengine-go-sdk/LICENSE.txt
+    src/libraries/go/lib/vendor/github.com/volcengine/volcengine-go-sdk/NOTICE.txt
     src/libraries/go/lib/vendor/github.com/x448/float16/LICENSE
     src/libraries/go/lib/vendor/github.com/xrash/smetrics/LICENSE
     src/libraries/go/lib/vendor/go.opentelemetry.io/auto/sdk/LICENSE
@@ -377,6 +402,7 @@ The following third-party licenses are included in this repository:
     src/libraries/go/lib/vendor/go.yaml.in/yaml/v3/NOTICE
     src/libraries/go/lib/vendor/golang.org/x/net/LICENSE
     src/libraries/go/lib/vendor/golang.org/x/oauth2/LICENSE
+    src/libraries/go/lib/vendor/golang.org/x/sync/LICENSE
     src/libraries/go/lib/vendor/golang.org/x/sys/LICENSE
     src/libraries/go/lib/vendor/golang.org/x/term/LICENSE
     src/libraries/go/lib/vendor/golang.org/x/text/LICENSE
@@ -389,6 +415,9 @@ The following third-party licenses are included in this repository:
     src/libraries/go/lib/vendor/google.golang.org/protobuf/LICENSE
     src/libraries/go/lib/vendor/gopkg.in/evanphx/json-patch.v4/LICENSE
     src/libraries/go/lib/vendor/gopkg.in/inf.v0/LICENSE
+    src/libraries/go/lib/vendor/gopkg.in/yaml.v2/LICENSE
+    src/libraries/go/lib/vendor/gopkg.in/yaml.v2/LICENSE.libyaml
+    src/libraries/go/lib/vendor/gopkg.in/yaml.v2/NOTICE
     src/libraries/go/lib/vendor/gopkg.in/yaml.v3/LICENSE
     src/libraries/go/lib/vendor/gopkg.in/yaml.v3/NOTICE
     src/libraries/go/lib/vendor/k8s.io/api/LICENSE
@@ -401,6 +430,7 @@ The following third-party licenses are included in this repository:
     src/libraries/go/lib/vendor/k8s.io/kube-openapi/pkg/validation/spec/LICENSE
     src/libraries/go/lib/vendor/k8s.io/utils/internal/third_party/forked/golang/LICENSE
     src/libraries/go/lib/vendor/k8s.io/utils/LICENSE
+    src/libraries/go/lib/vendor/oras.land/oras-go/v2/LICENSE
     src/libraries/go/lib/vendor/sigs.k8s.io/json/LICENSE
     src/libraries/go/lib/vendor/sigs.k8s.io/randfill/LICENSE
     src/libraries/go/lib/vendor/sigs.k8s.io/randfill/NOTICE
