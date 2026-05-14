@@ -32,6 +32,7 @@ See below for descriptions of all cluster features.
 | Dynamic GPU Discovery            | Enables automatic detection and management of allocatable GPU capacity within the cluster via the NVIDIA GPU Operator. This capability is **strongly recommended** and would only be disabled in cases where [Manual Instance Configuration](./configuration.md) is required. |
 | Caching Support                  | Enhances application performance by storing frequently accessed data (models, resources and containers) in a cache. See [cluster-caching](./configuration.md).                                                                                                                                |
 | Optimized AI Workload Scheduling | Enable support for optimized AI workload scheduling using [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler). Additional setup details: [KAI Scheduler](./kai-scheduler.md)                                                                                        |
+| Shared Cluster mode | Partitions the Kubernetes cluster's nodes into NVCF and non-NVCF pools. Set the label `nvca.nvcf.nvidia.io/schedule=true` on all nodes that can receive NVCF workload Pods. **Note**: this is an advanced use case and should not be used unless absolutely necessary                        |
 
 <Note>
 Removing the Dynamic GPU Discovery will require manual instance configuration. See [Manual Instance Configuration](./configuration.md).

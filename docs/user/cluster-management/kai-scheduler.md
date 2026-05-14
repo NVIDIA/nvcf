@@ -11,7 +11,18 @@ Upgrade to latest [KAI Scheduler release](https://github.com/kai-scheduler/KAI-S
 
 </Note>
 
-Create `values.yaml` with queue attributes:
+NVCA's KAI scheduler integration expects default queues to exist with names `default-parent-queue` (parent) and `default-queue` (child);
+other queues may exist in the cluster.
+
+<Warning>
+One caveat is that NVCA expects all queues used to create NVCF workloads to have unlimited (`-1`) quotas and limits
+to ensure full cluster capacity utilization and accurate usage tracking. If the cluster is partitioned to serve both NVCF and non-NVCF workloads
+and KAI scheduler queue quotas/limits are limited to reflect this, then [Shared Cluster mode](./configuration.md#cluster-features) must be enabled so non-NVCF workload nodes
+are accurately excluded from tracking and scheduling by NVCA.
+
+</Warning>
+
+Create `values.yaml` with [default queue](https://raw.githubusercontent.com/NVIDIA/KAI-Scheduler/refs/heads/main/docs/quickstart/default-queues.yaml) attributes:
 
 <Accordion title="kai-scheduler-queues.yaml">
 ```yaml title="kai-scheduler-queues.yaml"
