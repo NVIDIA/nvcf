@@ -22,8 +22,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
@@ -70,6 +74,13 @@ const (
 	errFailedToLoadConfig   = "failed to load config: %w"
 	errFailedToCreateClient = "failed to create client: %w"
 )
+
+var directOIDCHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+type oidcDiscoveryDocument struct {
+	Issuer  string `json:"issuer"`
+	JwksURI string `json:"jwks_uri"`
+}
 
 func initClusterRegistrationCmds() {
 	clusterCmd.AddCommand(clusterRegisterCmd)
@@ -156,10 +167,7 @@ func fetchJWKSFromURL(config *client.Config, baseURL string) (issuer string, jwk
 		return "", "", fmt.Errorf("failed to fetch OIDC config from %s: %w", oidcURL, err)
 	}
 
-	var oidcDoc struct {
-		Issuer  string `json:"issuer"`
-		JwksURI string `json:"jwks_uri"`
-	}
+	var oidcDoc oidcDiscoveryDocument
 	if err := json.Unmarshal([]byte(oidcRaw), &oidcDoc); err != nil {
 		return "", "", fmt.Errorf("failed to parse OIDC config from %s: %w", oidcURL, err)
 	}
@@ -186,6 +194,105 @@ func fetchJWKSFromURL(config *client.Config, baseURL string) (issuer string, jwk
 	}
 
 	return oidcDoc.Issuer, jwksData, nil
+}
+
+func supportsDirectOIDCDiscovery(issuer string) bool {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	return host != "kubernetes.default.svc.cluster.local" &&
+		host != "kubernetes.default.svc" &&
+		host != "kubernetes.default" &&
+		!strings.HasSuffix(host, ".svc") &&
+		!strings.HasSuffix(host, ".svc.cluster.local")
+}
+
+func fetchDirectOIDCJWKS(ctx context.Context, issuerURL string, httpClient *http.Client) (issuer string, jwks string, err error) {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
+	discoveryURL := strings.TrimRight(issuerURL, "/") + "/.well-known/openid-configuration"
+	logging.Info("Fetching OIDC discovery from issuer %s ...", discoveryURL)
+
+	oidcRaw, err := getHTTPString(ctx, httpClient, discoveryURL)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to fetch OIDC config from %s: %w", discoveryURL, err)
+	}
+
+	var oidcDoc oidcDiscoveryDocument
+	if err := json.Unmarshal([]byte(oidcRaw), &oidcDoc); err != nil {
+		return "", "", fmt.Errorf("failed to parse OIDC config from %s: %w", discoveryURL, err)
+	}
+	if oidcDoc.Issuer == "" || oidcDoc.JwksURI == "" {
+		return "", "", fmt.Errorf("OIDC config at %s missing issuer or jwks_uri", discoveryURL)
+	}
+	if oidcDoc.Issuer != issuerURL {
+		return "", "", fmt.Errorf("OIDC config at %s issuer %q does not match requested issuer %q", discoveryURL, oidcDoc.Issuer, issuerURL)
+	}
+
+	jwksURL, err := resolveOIDCJWKSURL(discoveryURL, oidcDoc.JwksURI)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve JWKS URI %q: %w", oidcDoc.JwksURI, err)
+	}
+
+	logging.Info("Fetching JWKS from issuer %s ...", jwksURL)
+	jwksData, err := getHTTPString(ctx, httpClient, jwksURL)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to fetch JWKS from %s: %w", jwksURL, err)
+	}
+
+	var check json.RawMessage
+	if err := json.Unmarshal([]byte(jwksData), &check); err != nil {
+		return "", "", fmt.Errorf("JWKS from %s is not valid JSON: %w", jwksURL, err)
+	}
+
+	return oidcDoc.Issuer, jwksData, nil
+}
+
+func getHTTPString(ctx context.Context, httpClient *http.Client, rawURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("%d from %s: %s", resp.StatusCode, rawURL, strings.TrimSpace(string(body)))
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(body)), nil
+}
+
+func resolveOIDCJWKSURL(discoveryURL, jwksURI string) (string, error) {
+	base, err := url.Parse(discoveryURL)
+	if err != nil {
+		return "", err
+	}
+	ref, err := url.Parse(jwksURI)
+	if err != nil {
+		return "", err
+	}
+	return base.ResolveReference(ref).String(), nil
 }
 
 // fetchClusterJWKS fetches JWKS using the following precedence:
@@ -245,10 +352,7 @@ func fetchK8sOIDCJWKS(config *client.Config) (issuer string, jwks string, err er
 	logging.Debug("OIDC configuration: %s", oidcConfigRaw)
 
 	// Parse issuer from OIDC config
-	var oidcResponse struct {
-		Issuer  string `json:"issuer"`
-		JwksURI string `json:"jwks_uri"`
-	}
+	var oidcResponse oidcDiscoveryDocument
 	if err := json.Unmarshal([]byte(oidcConfigRaw), &oidcResponse); err != nil {
 		return "", "", fmt.Errorf("failed to parse OIDC configuration: %w", err)
 	}
@@ -258,6 +362,19 @@ func fetchK8sOIDCJWKS(config *client.Config) (issuer string, jwks string, err er
 	}
 
 	logging.Info("Detected OIDC issuer: %s", oidcResponse.Issuer)
+
+	if supportsDirectOIDCDiscovery(oidcResponse.Issuer) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var directIssuer, directJWKS string
+		directIssuer, directJWKS, err = fetchDirectOIDCJWKS(ctx, oidcResponse.Issuer, directOIDCHTTPClient)
+		if err == nil {
+			logging.Success("Successfully fetched issuer JWKS (%d bytes)", len(directJWKS))
+			return directIssuer, directJWKS, nil
+		}
+		logging.Warning("Direct OIDC issuer discovery failed (%v), falling back to Kubernetes API server JWKS", err)
+	}
 
 	// Fetch JWKS from K8s API server
 	logging.Info("Fetching JWKS from cluster...")

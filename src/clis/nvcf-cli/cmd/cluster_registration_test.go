@@ -18,7 +18,10 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -111,6 +114,90 @@ func TestOIDCConfigParsing(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, oidcResponse.Issuer)
 		assert.Empty(t, oidcResponse.JwksURI)
+	})
+}
+
+func TestOIDCIssuerDirectDiscovery(t *testing.T) {
+	tests := []struct {
+		name   string
+		issuer string
+		want   bool
+	}{
+		{"EKS public issuer", "https://oidc.eks.eu-west-1.amazonaws.com/id/cluster-id", true},
+		{"custom HTTPS issuer", "https://issuer.example.com/nvcf", true},
+		{"Kubernetes service issuer", "https://kubernetes.default.svc.cluster.local", false},
+		{"Kubernetes default alias", "https://kubernetes.default", false},
+		{"in-cluster service host", "https://oidc.nvcf.svc.cluster.local", false},
+		{"plain SPIFFE issuer", "spiffe://ncp-local.nvidia.com", false},
+		{"empty issuer", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, supportsDirectOIDCDiscovery(tt.issuer))
+		})
+	}
+}
+
+func TestFetchDirectOIDCJWKS(t *testing.T) {
+	t.Run("fetches JWKS from issuer discovery document", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"issuer":"` + server.URL + `","jwks_uri":"` + server.URL + `/keys"}`))
+		})
+		mux.HandleFunc("/keys", func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"keys":[{"kid":"eks-public-key"}]}`))
+		})
+
+		issuer, jwks, err := fetchDirectOIDCJWKS(context.Background(), server.URL, server.Client())
+		require.NoError(t, err)
+		assert.Equal(t, server.URL, issuer)
+		assert.Contains(t, jwks, "eks-public-key")
+	})
+
+	t.Run("resolves relative jwks_uri against discovery document", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		mux.HandleFunc("/oidc/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"issuer":"` + server.URL + `/oidc","jwks_uri":"/jwks"}`))
+		})
+		mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"keys":[{"kid":"relative-key"}]}`))
+		})
+
+		issuer, jwks, err := fetchDirectOIDCJWKS(context.Background(), server.URL+"/oidc", server.Client())
+		require.NoError(t, err)
+		assert.Equal(t, server.URL+"/oidc", issuer)
+		assert.Contains(t, jwks, "relative-key")
+	})
+
+	t.Run("rejects discovery issuer mismatch", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server := httptest.NewServer(mux)
+		defer server.Close()
+
+		mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = w.Write([]byte(`{"issuer":"https://different.example.com","jwks_uri":"` + server.URL + `/keys"}`))
+		})
+		mux.HandleFunc("/keys", func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("JWKS endpoint should not be called when issuer mismatches")
+		})
+
+		issuer, jwks, err := fetchDirectOIDCJWKS(context.Background(), server.URL, server.Client())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not match requested issuer")
+		assert.Empty(t, issuer)
+		assert.Empty(t, jwks)
 	})
 }
 
