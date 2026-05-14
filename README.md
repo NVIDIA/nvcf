@@ -78,10 +78,16 @@ Kubernetes resources.
 
 ## Building with Bazel
 
-The `nvcf-cli` binary, multi-platform release matrix, and OCI image are built
-with Bazel. The shared Go library under `src/libraries/go/lib` also has Bazel
-targets. Other subtrees still use their existing build systems and will be
-onboarded one at a time.
+Bazel is the build, test, and packaging tool across the monorepo. Native
+subtrees (`src/clis/nvcf-cli`, `src/libraries/go/lib`) build fully under
+Bazel today. Phase B has additionally landed Bazel scaffolds in
+synthetic-import upstreams: `nvcf-grpc-proxy`, `nvcf-ratelimiter`,
+`nvcf-nats-auth-callout-service`, `nvcf-cache/nvcf-unbound` (dns-cache),
+`nvcf-image-credential-helper`, and `nvca`. Their `BUILD.bazel`,
+`MODULE.bazel`, and `rules/oci/` files are picked up automatically when
+the subtrees are synced into the umbrella; from the umbrella you can
+build, test, and produce OCI images for any of them without leaving the
+monorepo.
 
 Quick start (Linux):
 
@@ -90,9 +96,17 @@ curl -fSL -o ~/.local/bin/bazel \
   "https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-$(dpkg --print-architecture)"
 chmod +x ~/.local/bin/bazel
 
+# Native subtrees
 bazel build //src/clis/nvcf-cli:nvcf-cli            # host binary
 bazel test  //src/clis/nvcf-cli/...                 # unit tests
 bazel build //src/clis/nvcf-cli:dist                # all 5 platforms
+
+# Phase B upstream example: build the grpc-proxy multi-arch OCI image
+bazel build //src/invocation-plane-services/grpc-proxy:image_index
+bazel test  //src/invocation-plane-services/grpc-proxy/...
+
+# Run the full tree
+bazel test //...
 ```
 
 Quick start (macOS):
@@ -113,9 +127,12 @@ network or VPN required), add `--config=remote-write`:
 bazel build --config=remote-write //src/clis/nvcf-cli/...
 ```
 
-Full setup, day-to-day commands, OCI image build/push, stamping, caches, and
-CI map live in [`BAZEL.md`](BAZEL.md). For CLI-specific developer flow see
-[`src/clis/nvcf-cli/README.md`](src/clis/nvcf-cli/README.md).
+Full setup, day-to-day commands, OCI image build/push, stamping, caches,
+remote-cache probe, and CI map live in [`BAZEL.md`](BAZEL.md). For the
+end-to-end monorepo overview (how upstream services flow into the
+umbrella, how the OSS mirror is produced, how the cache is provisioned),
+see [`nvidia-internal/nvcf-monorepo-guide/`](nvidia-internal/nvcf-monorepo-guide/README.md).
+For CLI-specific developer flow see [`src/clis/nvcf-cli/README.md`](src/clis/nvcf-cli/README.md).
 
 ## Support
 
