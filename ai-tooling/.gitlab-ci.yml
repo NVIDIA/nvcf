@@ -32,9 +32,9 @@ nv_aces_placeholder:
     - when: always
   allow_failure: true
 
-# Override the template's manual trigger so Layer 2 live agent eval runs automatically.
+# Override the template rules so Layer 2 live agent eval stays automatic and non-blocking.
 # Requires NVIDIA_INFERENCE_KEY as a masked CI/CD variable.
-"skill_live_agent_eval (manual)":
+skill_live_agent_eval:
   rules:
     - when: always
   allow_failure: true
