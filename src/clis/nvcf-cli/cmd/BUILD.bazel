@@ -21,7 +21,6 @@ go_library(
         "admin.go",
         "agent_skill.go",
         "apikey.go",
-        "assets.go",
         "cluster.go",
         "cluster_registration.go",
         "cluster_utils.go",

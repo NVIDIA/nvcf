@@ -352,7 +352,7 @@ deployment state, and other operational data.
 
 | **Chart** | `helm-nvcf-cassandra` |
 | --- | --- |
-| **Version** | `0.14.3` |
+| **Version** | `0.14.5` |
 | **Namespace** | `cassandra-system` |
 | **Depends on** | None (can be installed in parallel with NATS) |
 
@@ -424,7 +424,7 @@ should use a minimum of 3 replicas.
 ```bash
 helm upgrade --install cassandra \
   oci://${REGISTRY}/${REPOSITORY}/helm-nvcf-cassandra \
-  --version 0.14.3 \
+  --version 0.14.5 \
   --namespace cassandra-system \
   --wait --wait-for-jobs --timeout 15m \
   -f cassandra-values.yaml

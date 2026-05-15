@@ -704,7 +704,6 @@ Additional `function invoke` flags:
 | `--timeout` | Request timeout in seconds (default: 60) |
 | `--poll-duration` | Invocation hold-open duration in seconds (default: 5) |
 | `--input-file` | JSON file with invocation configuration |
-| `--input-asset-references` | Input asset references (repeatable) |
 
 **Queue Management**
 

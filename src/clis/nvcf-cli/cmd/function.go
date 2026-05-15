@@ -398,13 +398,12 @@ type DeleteConfig struct {
 
 // InvokeConfig represents the JSON configuration for invoke command
 type InvokeConfig struct {
-	FunctionID           string                 `json:"functionId"`
-	VersionID            string                 `json:"versionId"`
-	InferenceURL         string                 `json:"inferenceUrl"` // Function's inference endpoint (e.g., "/echo")
-	RequestBody          map[string]interface{} `json:"requestBody"`
-	Timeout              int                    `json:"timeout,omitempty"`
-	InputAssetReferences []string               `json:"inputAssetReferences,omitempty"`
-	PollDurationSeconds  int                    `json:"pollDurationSeconds,omitempty"`
+	FunctionID          string                 `json:"functionId"`
+	VersionID           string                 `json:"versionId"`
+	InferenceURL        string                 `json:"inferenceUrl"` // Function's inference endpoint (e.g., "/echo")
+	RequestBody         map[string]interface{} `json:"requestBody"`
+	Timeout             int                    `json:"timeout,omitempty"`
+	PollDurationSeconds int                    `json:"pollDurationSeconds,omitempty"`
 
 	// gRPC-specific fields
 	GRPCService   string `json:"grpcService,omitempty"`   // gRPC service name (e.g., "nvidia.nvcf.v1.InferenceService")
@@ -487,16 +486,15 @@ var invokeFlags struct {
 	// Input file
 	inputFile string
 
-	functionID           string
-	versionID            string
-	requestBody          string
-	timeout              int
-	inputAssetReferences []string
-	pollDurationSeconds  int
-	useGRPC              bool // Use gRPC proxy instead of direct REST invocation
-	grpcService          string
-	grpcMethod           string
-	grpcPlaintext        bool
+	functionID          string
+	versionID           string
+	requestBody         string
+	timeout             int
+	pollDurationSeconds int
+	useGRPC             bool // Use gRPC proxy instead of direct REST invocation
+	grpcService         string
+	grpcMethod          string
+	grpcPlaintext       bool
 }
 
 var updateFlags struct {
@@ -578,7 +576,6 @@ func init() {
 	invokeCmd.Flags().StringVar(&invokeFlags.versionID, "version-id", "", "Version ID (required)")
 	invokeCmd.Flags().StringVar(&invokeFlags.requestBody, "request-body", "", "JSON request body (required)")
 	invokeCmd.Flags().IntVar(&invokeFlags.timeout, "timeout", 60, "Request timeout in seconds")
-	invokeCmd.Flags().StringSliceVar(&invokeFlags.inputAssetReferences, "input-asset-references", []string{}, "Input asset references")
 	invokeCmd.Flags().IntVar(&invokeFlags.pollDurationSeconds, "poll-duration", 5, "Invocation hold-open duration in seconds")
 	invokeCmd.Flags().BoolVar(&invokeFlags.useGRPC, "grpc", false, "Use gRPC invocation (native Go client)")
 	invokeCmd.Flags().StringVar(&invokeFlags.grpcService, "grpc-service", "", "gRPC service name")
@@ -797,9 +794,8 @@ func generateDemoFolder(functionID, versionID string, createConfig *CreateConfig
 				"return_logprobs": false,
 			},
 		},
-		"timeout":              120,
-		"pollDurationSeconds":  10,
-		"inputAssetReferences": []string{"asset-123", "asset-456"},
+		"timeout":             120,
+		"pollDurationSeconds": 10,
 	}
 
 	if err := writeJSONFile(filepath.Join(folderName, "invoke.json"), invokeJSON); err != nil {
@@ -1195,9 +1191,6 @@ func loadInvokeConfig(cmd *cobra.Command) (*InvokeConfig, error) {
 	}
 	if cmd.Flags().Changed("timeout") {
 		config.Timeout = invokeFlags.timeout
-	}
-	if cmd.Flags().Changed("input-asset-references") {
-		config.InputAssetReferences = invokeFlags.inputAssetReferences
 	}
 	if cmd.Flags().Changed("poll-duration") {
 		config.PollDurationSeconds = invokeFlags.pollDurationSeconds
@@ -1824,24 +1817,9 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 
 	// Use saved function context if function ID/version not specified
 	currentState := state.GetState()
-	if config.FunctionID == "" && currentState.FunctionID != "" {
-		config.FunctionID = currentState.FunctionID
-		logging.Info("Using saved function ID: %s", config.FunctionID)
-	}
-	if config.VersionID == "" && currentState.VersionID != "" {
-		config.VersionID = currentState.VersionID
-		logging.Info("Using saved version ID: %s", config.VersionID)
-	}
-
-	// Validate required fields
-	if config.FunctionID == "" {
-		return fmt.Errorf("function ID is required (use --function-id, specify in JSON file, or create a function first)")
-	}
-	if config.VersionID == "" {
-		return fmt.Errorf("version ID is required (use --version-id, specify in JSON file, or create a function first)")
-	}
-	if config.RequestBody == nil {
-		return fmt.Errorf("request body is required (use --request-body or specify in JSON file)")
+	applySavedInvokeContext(config, currentState)
+	if err := validateInvokeConfig(config); err != nil {
+		return err
 	}
 
 	// Load client configuration
@@ -1857,25 +1835,41 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 	}
 	defer nvcfClient.Close()
 
-	ctx := context.Background()
-
 	// Check for gRPC invocation mode
 	if invokeFlags.useGRPC {
 		logging.Info("Using gRPC proxy invocation for function %s (version %s)...", config.FunctionID, config.VersionID)
 		return invokeViaGRPC(clientConfig, currentState, config)
 	}
 
-	logging.Info("Using direct REST invocation for function %s (version %s)...", config.FunctionID, config.VersionID)
+	return invokeViaREST(context.Background(), nvcfClient, config)
+}
 
-	// Prepare invocation options
-	var options *client.InvokeFunctionOptions
-	if config.InferenceURL != "" || len(config.InputAssetReferences) > 0 || config.PollDurationSeconds > 0 {
-		options = &client.InvokeFunctionOptions{
-			InferenceURL:         config.InferenceURL,
-			InputAssetReferences: config.InputAssetReferences,
-			PollDurationSeconds:  config.PollDurationSeconds,
-		}
+func applySavedInvokeContext(config *InvokeConfig, currentState *state.State) {
+	if config.FunctionID == "" && currentState.FunctionID != "" {
+		config.FunctionID = currentState.FunctionID
+		logging.Info("Using saved function ID: %s", config.FunctionID)
 	}
+	if config.VersionID == "" && currentState.VersionID != "" {
+		config.VersionID = currentState.VersionID
+		logging.Info("Using saved version ID: %s", config.VersionID)
+	}
+}
+
+func validateInvokeConfig(config *InvokeConfig) error {
+	if config.FunctionID == "" {
+		return fmt.Errorf("function ID is required (use --function-id, specify in JSON file, or create a function first)")
+	}
+	if config.VersionID == "" {
+		return fmt.Errorf("version ID is required (use --version-id, specify in JSON file, or create a function first)")
+	}
+	if config.RequestBody == nil {
+		return fmt.Errorf("request body is required (use --request-body or specify in JSON file)")
+	}
+	return nil
+}
+
+func invokeViaREST(ctx context.Context, nvcfClient *client.Client, config *InvokeConfig) error {
+	logging.Info("Using direct REST invocation for function %s (version %s)...", config.FunctionID, config.VersionID)
 
 	// Invoke function via direct REST
 	resp, err := nvcfClient.InvokeFunctionWithOptions(
@@ -1884,11 +1878,25 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 		config.VersionID,
 		config.RequestBody,
 		config.Timeout,
-		options,
+		invokeOptionsFromConfig(config),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to invoke function: %w", err)
 	}
+	return outputInvokeResponse(resp)
+}
+
+func invokeOptionsFromConfig(config *InvokeConfig) *client.InvokeFunctionOptions {
+	if config.InferenceURL == "" && config.PollDurationSeconds <= 0 {
+		return nil
+	}
+	return &client.InvokeFunctionOptions{
+		InferenceURL:        config.InferenceURL,
+		PollDurationSeconds: config.PollDurationSeconds,
+	}
+}
+
+func outputInvokeResponse(resp *client.InvokeFunctionResponse) error {
 	if IsJSONOutput() {
 		return OutputJSON(resp)
 	}
@@ -1908,26 +1916,25 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Result Location: %s\n", resp.LocationURL)
 	}
 
-	// Print response body
 	if resp.ResponseBody != nil {
-		fmt.Printf("\nResponse:\n")
-		output, err := json.MarshalIndent(resp.ResponseBody, "", "  ")
-		if err != nil {
-			fmt.Printf("%v\n", resp.ResponseBody)
-		} else {
-			fmt.Printf("%s\n", string(output))
-		}
-	} else if resp.Response != nil {
-		fmt.Printf("\nResponse:\n")
-		output, err := json.MarshalIndent(resp.Response, "", "  ")
-		if err != nil {
-			fmt.Printf("%v\n", resp.Response)
-		} else {
-			fmt.Printf("%s\n", string(output))
-		}
+		printInvokePayload(resp.ResponseBody)
+		return nil
+	}
+	if resp.Response != nil {
+		printInvokePayload(resp.Response)
 	}
 
 	return nil
+}
+
+func printInvokePayload(payload interface{}) {
+	fmt.Printf("\nResponse:\n")
+	output, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		fmt.Printf("%v\n", payload)
+		return
+	}
+	fmt.Printf("%s\n", string(output))
 }
 
 // invokeViaGRPC invokes a function using gRPC protocol

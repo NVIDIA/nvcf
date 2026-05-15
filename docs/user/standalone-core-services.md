@@ -74,7 +74,7 @@ The Spot Instance Service (SIS) handles cluster registration and GPU resource ma
 
 | **Chart** | `helm-nvcf-sis` |
 | --- | --- |
-| **Version** | `1.14.2` |
+| **Version** | `1.14.3` |
 | **Namespace** | `sis` |
 | **Depends on** | Infrastructure only |
 
@@ -104,7 +104,7 @@ sis:
 ```bash
 helm upgrade --install sis \
   oci://${REGISTRY}/${REPOSITORY}/helm-nvcf-sis \
-  --version 1.14.2 \
+  --version 1.14.3 \
   --namespace sis \
   --wait --timeout 10m \
   -f sis-values.yaml

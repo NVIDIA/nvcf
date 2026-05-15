@@ -27,8 +27,21 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
     build-essential cmake pkg-config perl lld \
     ca-certificates \
     jq unzip \
+    libssl-dev \
   && rm -rf /var/lib/apt/lists/* \
   && update-alternatives --install /usr/bin/ld ld /usr/bin/ld.lld 100
+# libssl-dev provides the system openssl headers + libs at
+# /usr/include/openssl/*.h and /usr/lib/x86_64-linux-gnu/libssl.so.
+# Rust Phase B services (rs-autoscaler !113 first; future Rust services
+# that pull scylla / reqwest-with-native-tls) feed those paths to the
+# openssl-sys build script via a crate.annotation in their MODULE.bazel:
+#   build_script_env = {
+#     OPENSSL_LIB_DIR     = /usr/lib/x86_64-linux-gnu,
+#     OPENSSL_INCLUDE_DIR = /usr/include,
+#     OPENSSL_NO_VENDOR   = 1,
+#   }
+# Without libssl-dev the build script reports "openssl/opensslv.h:
+# No such file or directory" even though the env vars are set.
 # jq is required by the cds/cicd-pipelines `.vault-reader-before-script`
 # template, which iterates `$SECRETS_TO_RETRIEVE_IN_JSON | jq -c '.[]'`
 # to drive vault secret retrieval. Without jq the loop silently runs

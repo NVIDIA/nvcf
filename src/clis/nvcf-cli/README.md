@@ -787,8 +787,7 @@ nvcf-cli invoke --grpc --request-body '{"input": "test"}'
   --version-id "ver-12345678-1234-1234-1234-123456789abc" \
   --request-body '{"input": "Hello, World!", "parameters": {"temperature": 0.7}}' \
   --timeout 60 \
-  --poll-duration 5 \
-  --asset-references "asset-123"
+  --poll-duration 5
 
 # Or invoke with JSON configuration
 ./nvcf-cli invoke --input-file invoke.json
@@ -834,8 +833,7 @@ The OpenAI `model` value must use `${FUNCTION_ID}/${MODEL_NAME}`.
     }
   },
   "timeout": 120,
-  "pollDurationSeconds": 2,
-  "inputAssetReferences": ["asset-123", "asset-456"]
+  "pollDurationSeconds": 2
 }
 ```
 
@@ -903,9 +901,6 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 
 # List all versions of a specific function
 ./nvcf-cli list versions func-12345678-1234-1234-1234-123456789abc
-
-# List all assets in your account
-./nvcf-cli list assets
 
 # List available cluster groups and GPUs
 ./nvcf-cli list clusters
@@ -979,67 +974,6 @@ Deployment:
 
 ---
 
-### **Asset Management Commands** *Uses `NVCF_API_KEY`*
-
-Manage files and assets for function inputs/outputs:
-
-```bash
-# Set the required token
-export NVCF_API_KEY="nvapi-your-general-operations-token"
-
-# Create a new asset and get upload URL
-./nvcf-cli assets create --content-type "image/png" --description "Profile image"
-
-# Upload a file in one step (create asset + upload)
-./nvcf-cli assets upload /path/to/file.png --description "My image"
-
-# Get details of a specific asset
-./nvcf-cli assets get asset-12345678-1234-1234-1234-123456789abc
-
-# Delete an asset
-./nvcf-cli assets delete asset-12345678-1234-1234-1234-123456789abc
-```
-
-**Example asset workflow:**
-```bash
-# 1. Upload an image
-$ ./nvcf-cli assets upload /path/to/input.png --description "Input image"
-Uploading asset: input.png (1.2 MB)
-Asset uploaded successfully!
-Asset ID: asset-12345678-1234-1234-1234-123456789abc
-Upload URL: https://api.nvcf.nvidia.com/v2/nvcf/assets/asset-12345678/upload
-
-# 2. List all assets
-$ ./nvcf-cli list assets
-Assets:
-- ID: asset-12345678, Description: Input image, Type: image/png, Size: 1.2MB, Created: 2023-12-01T10:00:00Z
-
-# 3. Use asset in function invocation
-$ ./nvcf-cli invoke func-abc123 ver-def456 '{"image_asset": "asset-12345678-1234-1234-1234-123456789abc"}' --asset-references asset-12345678-1234-1234-1234-123456789abc
-
-# 4. Get asset details
-$ ./nvcf-cli assets get asset-12345678-1234-1234-1234-123456789abc
-Asset Details:
-  ID: asset-12345678-1234-1234-1234-123456789abc
-  Description: Input image
-  Content Type: image/png
-  Size: 1.2 MB
-  Status: READY
-  Created: 2023-12-01T10:00:00Z
-
-# 5. Clean up
-$ ./nvcf-cli assets delete asset-12345678-1234-1234-1234-123456789abc
-Asset deleted successfully!
-```
-
-**Supported file types:**
-- Images: `.jpg`, `.jpeg`, `.png`, `.gif`
-- Documents: `.pdf`, `.txt`, `.csv`, `.json`
-- Archives: `.zip`, `.tar`, `.gz`
-- Generic: `application/octet-stream` (fallback)
-
----
-
 ### **Queue Management Commands** *Uses `NVCF_API_KEY`*
 
 Monitor function execution and queue status:
@@ -1099,7 +1033,7 @@ Request Position:
 ```bash
 # Step 1: Set up authentication tokens
 export NVCF_TOKEN="nvapi-your-function-creation-token"        # For create, deploy, delete
-export NVCF_API_KEY="nvapi-your-general-operations-token"    # For invoke, list, assets, queue
+export NVCF_API_KEY="nvapi-your-general-operations-token"    # For invoke, list, queue
 
 # Step 2: Discover available GPU resources (uses NVCF_API_KEY)
 ./nvcf-cli list clusters
@@ -1146,22 +1080,16 @@ echo '{
   --max-instances 4 \
   --max-request-concurrency 20
 
-# Step 7: Upload an asset (uses NVCF_API_KEY)
-./nvcf-cli assets upload input.jpg --description "Test image"
-# Returns: Asset ID: asset-12345678-1234-1234-1234-123456789abc
-
-# Step 8: Invoke with asset (uses NVCF_API_KEY)
+# Step 7: Invoke the function (uses NVCF_API_KEY)
 ./nvcf-cli invoke \
   func-12345678-1234-1234-1234-123456789abc \
   ver-87654321-4321-4321-4321-123456789abc \
-  '{"input": "Hello from CLI!", "image_asset": "asset-12345678-1234-1234-1234-123456789abc"}' \
-  --asset-references asset-12345678-1234-1234-1234-123456789abc
+  '{"input": "Hello from CLI!"}'
 
-# Step 9: Monitor queue status (uses NVCF_API_KEY)
+# Step 8: Monitor queue status (uses NVCF_API_KEY)
 ./nvcf-cli queue status func-12345678-1234-1234-1234-123456789abc ver-87654321-4321-4321-4321-123456789abc
 
-# Step 10: Clean up (uses respective tokens)
-./nvcf-cli assets delete asset-12345678-1234-1234-1234-123456789abc    # uses NVCF_API_KEY
+# Step 9: Clean up (uses NVCF_TOKEN)
 ./nvcf-cli delete func-12345678-1234-1234-1234-123456789abc ver-87654321-4321-4321-4321-123456789abc  # uses NVCF_TOKEN only
 ```
 
@@ -1183,13 +1111,10 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 # 4. Check deployment queue status
 ./nvcf-cli queue status func-12345678-1234-1234-1234-123456789abc ver-87654321-4321-4321-4321-123456789abc
 
-# 5. List all available assets
-./nvcf-cli list assets
-
-# 6. List available GPU cluster groups
+# 5. List available GPU cluster groups
 ./nvcf-cli list clusters
 
-# 7. Export function details as JSON for automation
+# 6. Export function details as JSON for automation
 ./nvcf-cli get function --function-id func-12345678-1234-1234-1234-123456789abc --version-id ver-87654321-4321-4321-4321-123456789abc --json > function-details.json
 ```
 
@@ -1198,7 +1123,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 ```bash
 # Set up both tokens for full functionality
 export NVCF_TOKEN="nvapi-your-function-creation-token"      # Create, deploy, delete
-export NVCF_API_KEY="nvapi-your-general-operations-token"  # Invoke, list, assets
+export NVCF_API_KEY="nvapi-your-general-operations-token"  # Invoke, list, queue
 
 # 1. Enable debug mode to see token selection
 export NVCF_CLI_DEBUG=true
@@ -1304,9 +1229,6 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # fallback
 ./nvcf-cli invoke --debug func-123 ver-456 '{"input": "test"}'
 # Output: DEBUG: Using API KEY for POST /v2/nvcf/functions/func-123/versions/ver-456/invocations
 
-# Asset management (uses NVCF_API_KEY)
-./nvcf-cli assets --debug upload file.jpg
-# Output: DEBUG: Using API KEY for POST /v2/nvcf/assets
 ```
 
 ### **Authentication Token Summary**
@@ -1317,7 +1239,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # fallback
 | `deploy` | `NVCF_TOKEN` | `NVCF_API_KEY` | `./nvcf-cli deploy --debug ...` |
 | `delete` | `NVCF_TOKEN` | **None** | `./nvcf-cli delete --debug ...` |
 | `invoke` | `NVCF_API_KEY` | `NVCF_TOKEN` | `./nvcf-cli invoke --debug ...` |
-| `list`, `get`, `assets`, `queue` | `NVCF_API_KEY` | `NVCF_TOKEN` | `./nvcf-cli list --debug ...` |
+| `list`, `get`, `queue` | `NVCF_API_KEY` | `NVCF_TOKEN` | `./nvcf-cli list --debug ...` |
 
 ### **Configuration Issues**
 
@@ -1343,7 +1265,6 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # fallback
 │   ├── invoke.go          # Invoke function command
 │   ├── list.go            # List resources command
 │   ├── get.go             # Get detailed information
-│   ├── assets.go          # Asset management commands
 │   └── queue.go           # Queue management commands
 ├── internal/
 │   └── client/            # NVCF client implementation
@@ -1434,19 +1355,12 @@ The CLI now provides comprehensive coverage of NVIDIA Cloud Function APIs:
 | **API Category** | **Status** | **Endpoints** |
 |------------------|------------|---------------|
 | **Function Management** | Complete | Create, Deploy, Update, Delete, List, Get Details |
-| **Function Invocation** | Complete | Invoke with hold-open hint, Asset references |
-| **Asset Management** | Complete | Create, Upload, List, Get, Delete (Hidden CLI) |
+| **Function Invocation** | Complete | Invoke with hold-open hint |
 | **Cluster Groups** | Complete | List available GPU resources |
 | **Queue Management** | Complete | Position, Details, Status |
 | **Function Sharing** | ⏳ Planned | Authorization management |
 
-**Total API Methods Supported**: 17+ endpoints across all major functional areas
-
-### **Hidden Commands**
-
-Some CLI commands are available but hidden from the main help menu for advanced users:
-
-- **Asset Management** (`./nvcf-cli assets`): Full asset upload, management, and deletion functionality is available but hidden from the main CLI menu. Use `./nvcf-cli assets --help` to access these features.
+**Total API Methods Supported**: Core function, invocation, cluster group, and queue endpoints
 
 ---
 

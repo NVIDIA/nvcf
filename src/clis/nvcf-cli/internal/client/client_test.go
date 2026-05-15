@@ -101,12 +101,20 @@ func TestInvokeFunctionWithOptionsUsesFunctionHostnameRouting(t *testing.T) {
 			wantHost:      "func-123.invocation.example.com:8080",
 		},
 		{
-			name:          "self hosted host header adds function prefix",
-			baseInvokeURL: "http://invocation.localhost:8080",
+			name:          "self hosted host header keeps gateway transport host",
+			baseInvokeURL: "http://127.0.0.1:8080",
 			inferenceURL:  "/echo",
 			invokeHost:    "invocation.localhost",
-			wantURL:       "http://func-123.invocation.localhost:8080/echo",
+			wantURL:       "http://127.0.0.1:8080/echo",
 			wantHost:      "func-123.invocation.localhost",
+		},
+		{
+			name:          "self hosted elb host header keeps elb transport host",
+			baseInvokeURL: "http://elb.example.com",
+			inferenceURL:  "/echo",
+			invokeHost:    "invocation.elb.example.com",
+			wantURL:       "http://elb.example.com/echo",
+			wantHost:      "func-123.invocation.elb.example.com",
 		},
 	}
 
@@ -380,13 +388,6 @@ func TestIsAdminOperation(t *testing.T) {
 			path:     "/v2/nvcf/clusterGroups",
 			expected: false,
 			reason:   "Cluster groups listing is a user operation",
-		},
-		{
-			name:     "Asset operations",
-			method:   "GET",
-			path:     "/v2/nvcf/assets",
-			expected: false,
-			reason:   "Asset operations are user-level",
 		},
 	}
 

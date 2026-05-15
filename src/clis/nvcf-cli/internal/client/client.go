@@ -1323,9 +1323,8 @@ func (c *Client) WaitForFunctionDeployment(ctx context.Context, functionID, vers
 
 // InvokeFunctionRequest represents a function invocation request
 type InvokeFunctionRequest struct {
-	RequestBody          map[string]interface{} `json:"requestBody"`
-	InputAssetReferences []string               `json:"inputAssetReferences,omitempty"`
-	PollDurationSeconds  int                    `json:"pollDurationSeconds,omitempty"`
+	RequestBody         map[string]interface{} `json:"requestBody"`
+	PollDurationSeconds int                    `json:"pollDurationSeconds,omitempty"`
 }
 
 // InvokeFunctionResponse represents a function invocation response
@@ -1342,9 +1341,8 @@ type InvokeFunctionResponse struct {
 
 // InvokeFunctionOptions represents options for function invocation
 type InvokeFunctionOptions struct {
-	InferenceURL         string   // Function's inference endpoint (e.g., "/echo")
-	InputAssetReferences []string // Optional input asset references
-	PollDurationSeconds  int      // Optional invocation hold-open duration in seconds
+	InferenceURL        string // Function's inference endpoint (e.g., "/echo")
+	PollDurationSeconds int    // Optional invocation hold-open duration in seconds
 }
 
 // InvokeFunction invokes a function.
@@ -1364,7 +1362,7 @@ func (c *Client) InvokeFunctionWithOptions(ctx context.Context, functionID, vers
 	if err != nil {
 		return nil, err
 	}
-	fullURL, err := directInvocationURL(c.invokeBaseURL(), functionID, inferenceURL)
+	fullURL, err := c.directInvokeURL(functionID, inferenceURL)
 	if err != nil {
 		return nil, err
 	}
@@ -1410,6 +1408,32 @@ func (c *Client) invokeBaseURL() string {
 	return c.baseURL
 }
 
+func (c *Client) directInvokeURL(functionID, inferenceURL string) (string, error) {
+	if c.config.InvokeHost != "" {
+		return gatewayInvocationURL(c.invokeBaseURL(), inferenceURL)
+	}
+	return directInvocationURL(c.invokeBaseURL(), functionID, inferenceURL)
+}
+
+func gatewayInvocationURL(baseInvokeURL, inferenceURL string) (string, error) {
+	u, err := url.Parse(baseInvokeURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse invoke URL %q: %w", baseInvokeURL, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("invoke URL must include scheme and host: %q", baseInvokeURL)
+	}
+
+	u.Path = path.Join(u.Path, inferenceURL)
+	if !strings.HasPrefix(u.Path, "/") {
+		u.Path = "/" + u.Path
+	}
+	if strings.HasSuffix(inferenceURL, "/") && !strings.HasSuffix(u.Path, "/") {
+		u.Path += "/"
+	}
+	return u.String(), nil
+}
+
 func (c *Client) newInvokeRequest(ctx context.Context, fullURL, functionID string, requestBody map[string]interface{}, options *InvokeFunctionOptions) (*http.Request, error) {
 	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
@@ -1443,9 +1467,6 @@ func applyInvokeOptions(req *http.Request, options *InvokeFunctionOptions) {
 		return
 	}
 
-	for _, ref := range options.InputAssetReferences {
-		req.Header.Add("NVCF-INPUT-ASSET-REFERENCES", ref)
-	}
 	if options.PollDurationSeconds > 0 {
 		req.Header.Set("NVCF-POLL-SECONDS", fmt.Sprintf("%d", options.PollDurationSeconds))
 	}
@@ -1577,33 +1598,6 @@ type GPU struct {
 type Cluster struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
-}
-
-// CreateAssetRequest represents the request to create an asset
-type CreateAssetRequest struct {
-	ContentType string `json:"contentType"`
-	Description string `json:"description"`
-}
-
-// CreateAssetResponse represents the response from creating an asset
-type CreateAssetResponse struct {
-	AssetID     string `json:"assetId,omitempty"`
-	UploadURL   string `json:"uploadUrl,omitempty"`
-	ContentType string `json:"contentType,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-// AssetResponse represents an asset details response
-type AssetResponse struct {
-	AssetID     string `json:"assetId,omitempty"`
-	ContentType string `json:"contentType,omitempty"`
-	Description string `json:"description,omitempty"`
-	CreatedAt   string `json:"createdAt,omitempty"`
-}
-
-// ListAssetsResponse represents the response from listing assets
-type ListAssetsResponse struct {
-	Assets []AssetResponse `json:"assets,omitempty"`
 }
 
 // GetPositionInQueueResponse represents queue position response
@@ -1747,99 +1741,6 @@ func (c *Client) ListClusterGroups(ctx context.Context) (*ClusterGroupsResponse,
 	}
 
 	return &result, nil
-}
-
-// === Asset Management ===
-
-// CreateAsset creates a new asset and returns upload URL
-func (c *Client) CreateAsset(ctx context.Context, req *CreateAssetRequest) (*CreateAssetResponse, error) {
-	// Validate required fields (per OpenAPI spec)
-	if req.ContentType == "" {
-		return nil, fmt.Errorf("contentType is required")
-	}
-	if req.Description == "" {
-		return nil, fmt.Errorf("description is required")
-	}
-
-	resp, err := c.makeRequest(ctx, "POST", "/v2/nvcf/assets", req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
-	}
-
-	var result CreateAssetResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, nil
-}
-
-// GetAsset retrieves details for a specific asset
-func (c *Client) GetAsset(ctx context.Context, assetID string) (*AssetResponse, error) {
-	endpoint := fmt.Sprintf("/v2/nvcf/assets/%s", url.PathEscape(assetID))
-
-	resp, err := c.makeRequest(ctx, "GET", endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
-	}
-
-	var result AssetResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, nil
-}
-
-// ListAssets retrieves a list of assets for the account
-func (c *Client) ListAssets(ctx context.Context) (*ListAssetsResponse, error) {
-	resp, err := c.makeRequest(ctx, "GET", "/v2/nvcf/assets", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
-	}
-
-	var result ListAssetsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, nil
-}
-
-// DeleteAsset deletes a specific asset
-func (c *Client) DeleteAsset(ctx context.Context, assetID string) error {
-	endpoint := fmt.Sprintf("/v2/nvcf/assets/%s", url.PathEscape(assetID))
-
-	resp, err := c.makeRequest(ctx, "DELETE", endpoint, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
-	}
-
-	return nil
 }
 
 // === Queue Management ===
