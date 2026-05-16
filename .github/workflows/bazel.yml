@@ -1,0 +1,106 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Bazel build + test on the public NVIDIA/nvcf mirror.
+#
+# Matrix entries reference subtrees that have their Bazel scaffold
+# mirrored to GitHub (each subtree's upstream .oss-allowlist controls
+# whether BUILD.bazel files reach this mirror). Add a row when a new
+# subtree's OSS-flip MR merges upstream.
+#
+# Image push targets, internal NGC registry pulls, and the nvcfbarn
+# remote cache are all internal-only; this workflow runs build + test
+# only. It pulls the same bazel-ci toolchain image the GitLab pipeline
+# uses, mirrored to ghcr.io by the bazel-ci-image workflow.
+
+name: bazel
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: bazel-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BAZEL_CI_IMAGE: ghcr.io/${{ github.repository }}/bazel-ci:0.3.0
+
+jobs:
+  bazel:
+    name: bazel (${{ matrix.subtree.id }})
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/bazel-ci:0.3.0
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        subtree:
+          # Umbrella's own Phase 1 targets (native subtrees wired into
+          # the root MODULE.bazel: nvcf-cli + nvcf-go-lib).
+          - id: umbrella-phase1
+            path: .
+          # Synthetic-import subtrees whose Bazel scaffold is on the
+          # public mirror. Add new entries here as their OSS-flip MRs
+          # merge upstream and the next sync brings them in.
+          - id: grpc-proxy
+            path: src/invocation-plane-services/grpc-proxy
+          - id: nats-auth-callout
+            path: src/invocation-plane-services/nats-auth-callout
+          - id: nvca
+            path: src/compute-plane-services/nvca
+          - id: image-credential-helper
+            path: src/compute-plane-services/image-credential-helper
+          - id: function-autoscaler
+            path: src/control-plane-services/function-autoscaler
+          - id: helm-reval
+            path: src/control-plane-services/helm-reval
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if subtree has no MODULE.bazel yet
+        id: precheck
+        run: |
+          if [ ! -f "${{ matrix.subtree.path }}/MODULE.bazel" ]; then
+            echo "no MODULE.bazel at ${{ matrix.subtree.path }} -- skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # bazelisk is preinstalled in the bazel-ci image as `bazel`.
+      - name: bazel version
+        if: steps.precheck.outputs.skip == 'false'
+        working-directory: ${{ matrix.subtree.path }}
+        run: bazel version
+
+      - name: Cache Bazel repository + disk caches
+        if: steps.precheck.outputs.skip == 'false'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
+          key: bazel-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.path), format('{0}/.bazelversion', matrix.subtree.path)) }}
+          restore-keys: |
+            bazel-${{ matrix.subtree.id }}-
+
+      - name: bazel build //...
+        if: steps.precheck.outputs.skip == 'false'
+        working-directory: ${{ matrix.subtree.path }}
+        run: bazel build //...
+
+      - name: bazel test //...
+        if: steps.precheck.outputs.skip == 'false'
+        working-directory: ${{ matrix.subtree.path }}
+        run: bazel test --flaky_test_attempts=3 //...
