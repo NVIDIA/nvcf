@@ -46,25 +46,25 @@ jobs:
       fail-fast: false
       matrix:
         subtree:
-          # Umbrella's own Phase 1 targets (native subtrees wired into
-          # the root MODULE.bazel: nvcf-cli + nvcf-go-lib).
-          - id: umbrella-phase1
-            path: .
-          # Synthetic-import subtrees whose Bazel scaffold is on the
-          # public mirror. Add new entries here as their OSS-flip MRs
-          # merge upstream and the next sync brings them in.
+          # Synthetic-import subtrees whose Bazel scaffold is fully on
+          # the public mirror today (root + per-package BUILD.bazel
+          # files). Add entries as the umbrella's imports.yaml pin is
+          # bumped to bring in the rest:
+          # - umbrella-phase1 (.): needs src/clis/nvcf-cli/BUILD.bazel
+          #   and src/libraries/go/lib/BUILD.bazel on the mirror via
+          #   their own subtree .oss-allowlist (the umbrella MR
+          #   ci/github-actions-bazel adds these entries; the sync
+          #   that follows will surface them).
+          # - nvca, helm-reval, function-autoscaler: their root and
+          #   per-package BUILD.bazel files are merged upstream but
+          #   the umbrella's imports.yaml hasn't been bumped to pull
+          #   the new commits.
+          # - image-credential-helper: OSS-flip MR !82 still open;
+          #   no MODULE.bazel on the mirror yet.
           - id: grpc-proxy
             path: src/invocation-plane-services/grpc-proxy
           - id: nats-auth-callout
             path: src/invocation-plane-services/nats-auth-callout
-          - id: nvca
-            path: src/compute-plane-services/nvca
-          - id: image-credential-helper
-            path: src/compute-plane-services/image-credential-helper
-          - id: function-autoscaler
-            path: src/control-plane-services/function-autoscaler
-          - id: helm-reval
-            path: src/control-plane-services/helm-reval
     steps:
       - uses: actions/checkout@v4
 
