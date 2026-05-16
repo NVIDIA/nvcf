@@ -46,25 +46,35 @@ jobs:
       fail-fast: false
       matrix:
         subtree:
-          # Synthetic-import subtrees whose Bazel scaffold is fully on
-          # the public mirror today (root + per-package BUILD.bazel
-          # files). Add entries as the umbrella's imports.yaml pin is
-          # bumped to bring in the rest:
-          # - umbrella-phase1 (.): needs src/clis/nvcf-cli/BUILD.bazel
-          #   and src/libraries/go/lib/BUILD.bazel on the mirror via
-          #   their own subtree .oss-allowlist (the umbrella MR
-          #   ci/github-actions-bazel adds these entries; the sync
-          #   that follows will surface them).
-          # - nvca, helm-reval, function-autoscaler: their root and
-          #   per-package BUILD.bazel files are merged upstream but
-          #   the umbrella's imports.yaml hasn't been bumped to pull
-          #   the new commits.
-          # - image-credential-helper: OSS-flip MR !82 still open;
-          #   no MODULE.bazel on the mirror yet.
+          # Full matrix. The precheck step skips entries that don't
+          # have a MODULE.bazel on the mirror yet (their upstream
+          # OSS-flip MR is still open, or the umbrella's imports.yaml
+          # pin hasn't been bumped past that flip). Entries fill in
+          # automatically as the underlying syncs land.
+          - id: umbrella-phase1
+            path: .
           - id: grpc-proxy
             path: src/invocation-plane-services/grpc-proxy
           - id: nats-auth-callout
             path: src/invocation-plane-services/nats-auth-callout
+          - id: ratelimiter
+            path: src/invocation-plane-services/ratelimiter
+          - id: http-invocation
+            path: src/invocation-plane-services/http-invocation
+          - id: llm-gateway
+            path: src/invocation-plane-services/llm-gateway
+          - id: nvca
+            path: src/compute-plane-services/nvca
+          - id: dns-cache
+            path: src/compute-plane-services/dns-cache
+          - id: ess-agent
+            path: src/compute-plane-services/ess-agent
+          - id: image-credential-helper
+            path: src/compute-plane-services/image-credential-helper
+          - id: function-autoscaler
+            path: src/control-plane-services/function-autoscaler
+          - id: helm-reval
+            path: src/control-plane-services/helm-reval
     steps:
       - uses: actions/checkout@v4
 
