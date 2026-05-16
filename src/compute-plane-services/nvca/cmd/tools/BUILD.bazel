@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("//rules/oci:defs.bzl", "go_oci_multi_binary_image")
+
+# Multi-binary "tools" image, replacing the legacy tools-images lane
+# (pipelines/components.yml) which used goreleaser to build the same
+# binaries from .goreleaser.yaml and packaged them under /usr/dist/.
+# This image is for operator diagnostics; binaries are placed under
+# /usr/bin/ to match the rest of the nvca image family. No default
+# entrypoint -- callers invoke a specific binary.
+go_oci_multi_binary_image(
+    name = "image",
+    base = "@distroless_go",
+    binaries = {
+        "//cmd/discover-gpus:discover-gpus": "/usr/bin/discover-gpus",
+        "//cmd/export-cluster-pubkeys:export-cluster-pubkeys": "/usr/bin/export-cluster-pubkeys",
+    },
+    entrypoint = ["/usr/bin/discover-gpus"],
+    extra_registries = {
+        "devops": "nvcr.io/nv-ngc-devops/tools",
+        "ncp_dev": "nvcr.io/0651155215864979/ncp-dev/tools",
+    },
+    registry = "nvcr.io/qtfpt1h0bieu/byocdev/tools",
+    tags = ["tools"],
+    visibility = ["//visibility:public"],
+)

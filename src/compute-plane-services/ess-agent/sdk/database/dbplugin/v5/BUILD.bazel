@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "dbplugin",
+    srcs = [
+        "database.go",
+        "grpc_client.go",
+        "grpc_database_plugin.go",
+        "grpc_server.go",
+        "marshalling.go",
+        "middleware.go",
+        "plugin_client.go",
+        "plugin_factory.go",
+        "plugin_server.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/database/dbplugin/v5",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/database/dbplugin/v5/proto",
+        "//sdk/helper/base62",
+        "//sdk/helper/consts",
+        "//sdk/helper/pluginutil",
+        "//sdk/logical",
+        "@com_github_armon_go_metrics//:go-metrics",
+        "@com_github_golang_protobuf//ptypes",
+        "@com_github_hashicorp_errwrap//:errwrap",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@com_github_hashicorp_go_plugin//:go-plugin",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/structpb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":dbplugin",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "dbplugin_test",
+    srcs = [
+        "conversions_test.go",
+        "grpc_client_test.go",
+        "grpc_server_test.go",
+        "middleware_test.go",
+        "plugin_client_test.go",
+    ],
+    embed = [":dbplugin"],
+    deps = [
+        "//sdk/database/dbplugin/v5/proto",
+        "//sdk/helper/consts",
+        "//sdk/helper/pluginutil",
+        "//sdk/helper/wrapping",
+        "//sdk/logical",
+        "@com_github_golang_protobuf//ptypes",
+        "@com_github_golang_protobuf//ptypes/timestamp",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@com_github_stretchr_testify//mock",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/structpb",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

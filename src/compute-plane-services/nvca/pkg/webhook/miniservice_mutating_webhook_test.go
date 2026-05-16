@@ -646,6 +646,90 @@ func applyPatches(t *testing.T, base []byte, patches []jsonpatch.Operation) []by
 	return patched
 }
 
+// ─── mutatePodSpec ServiceAccountName tests ───────────────────────────────────
+
+func TestMiniserviceMutatePodSpec_ServiceAccountName(t *testing.T) {
+	const msSA = "miniservice-instance-permissions"
+	tests := []struct {
+		name     string
+		fff      featureflag.Fetcher
+		metaSA   string
+		podSA    string
+		expectSA string
+	}{
+		{
+			name:     "flag disabled, pod has no SA: overrides with meta SA",
+			fff:      &featureflagmock.Fetcher{},
+			metaSA:   msSA,
+			podSA:    "",
+			expectSA: msSA,
+		},
+		{
+			name:     "flag disabled, pod has default SA: overrides with meta SA",
+			fff:      &featureflagmock.Fetcher{},
+			metaSA:   msSA,
+			podSA:    "default",
+			expectSA: msSA,
+		},
+		{
+			name:     "flag disabled, pod has custom SA: overrides with meta SA",
+			fff:      &featureflagmock.Fetcher{},
+			metaSA:   msSA,
+			podSA:    "operator-created-sa",
+			expectSA: msSA,
+		},
+		{
+			name: "flag enabled, pod has no SA: overrides with meta SA",
+			fff: &featureflagmock.Fetcher{
+				EnabledFFs: []*featureflag.FeatureFlag{featureflag.AllowWorkloadKubernetesAPIAccess},
+			},
+			metaSA:   msSA,
+			podSA:    "",
+			expectSA: msSA,
+		},
+		{
+			name: "flag enabled, pod has default SA: overrides with meta SA",
+			fff: &featureflagmock.Fetcher{
+				EnabledFFs: []*featureflag.FeatureFlag{featureflag.AllowWorkloadKubernetesAPIAccess},
+			},
+			metaSA:   msSA,
+			podSA:    "default",
+			expectSA: msSA,
+		},
+		{
+			name: "flag enabled, pod has custom SA: preserves pod SA",
+			fff: &featureflagmock.Fetcher{
+				EnabledFFs: []*featureflag.FeatureFlag{featureflag.AllowWorkloadKubernetesAPIAccess},
+			},
+			metaSA:   msSA,
+			podSA:    "operator-created-sa",
+			expectSA: "operator-created-sa",
+		},
+		{
+			name:     "meta has no SA: pod SA unchanged",
+			fff:      &featureflagmock.Fetcher{},
+			metaSA:   "",
+			podSA:    "operator-created-sa",
+			expectSA: "operator-created-sa",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wh := &miniserviceMutatingWebhook{fff: tt.fff}
+			ps := corev1.PodSpec{
+				ServiceAccountName: tt.podSA,
+				Containers:         []corev1.Container{{Name: "app"}},
+			}
+			meta := nvcatypes.MiniserviceMetadata{
+				ServiceAccountName: tt.metaSA,
+			}
+			wh.mutatePodSpec(&ps, meta)
+			assert.Equal(t, tt.expectSA, ps.ServiceAccountName)
+		})
+	}
+}
+
 // ─── mutatePodSpec BYOObservability tests ─────────────────────────────────────
 
 func TestMiniserviceMutatePodSpec_BYOObservability(t *testing.T) {

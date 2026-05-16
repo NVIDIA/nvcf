@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "roottoken",
+    srcs = [
+        "decode.go",
+        "encode.go",
+        "otp.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/helper/roottoken",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/helper/xor",
+        "@com_github_hashicorp_go_secure_stdlib_base62//:base62",
+        "@com_github_hashicorp_go_uuid//:go-uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":roottoken",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "roottoken_test",
+    srcs = [
+        "encode_test.go",
+        "otp_test.go",
+    ],
+    embed = [":roottoken"],
+    deps = ["@com_github_stretchr_testify//assert"],
+)

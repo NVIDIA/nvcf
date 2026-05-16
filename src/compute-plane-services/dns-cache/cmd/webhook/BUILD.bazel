@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+go_library(
+    name = "webhook_lib",
+    srcs = [
+        "cabundle.go",
+        "certs.go",
+        "main.go",
+        "metrics.go",
+        "mutate_certificates.go",
+        "mutate_dns.go",
+    ],
+    importpath = "github.com/nvidia/nvcf-dns-cache/cmd/webhook",
+    visibility = ["//visibility:private"],
+    deps = [
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/promauto",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+        "@io_k8s_api//admission/v1:admission",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/api/resource",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_apimachinery//pkg/runtime/serializer",
+        "@io_k8s_client_go//kubernetes",
+        "@io_k8s_client_go//rest",
+        "@io_k8s_klog_v2//:klog",
+    ],
+)
+
+go_binary(
+    name = "webhook",
+    embed = [":webhook_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Three multi-arch image pushes, all to nvcr.io but distinct repos and
+# credentials. bazel-image-push in .gitlab-ci.yml swaps the docker
+# config per push so crane picks up the right auth.
+#
+#   :image_push_devops  -> nvcr.io/nv-ngc-devops/nvcf-dns-cache
+#                          (NGC_DEVOPS_API_KEY CI/CD variable)
+#   :image_push_ncp_dev -> nvcr.io/0651155215864979/ncp-dev/nvcf-dns-cache
+#                          (same NGC_DEVOPS_API_KEY token grants access
+#                          to both nv-ngc-devops and ncp-dev)
+#
+# The Bazel scaffold is excluded from the OSS snapshot via
+# .oss-allowlist (urm.nvidia.com / nvcr.io references are internal-only
+# infra). dns-cache OSS users build via the Dockerfile + Makefile path.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":webhook",
+    binary_path = "/usr/bin/app",
+    extra_registries = {
+        "devops": "nvcr.io/nv-ngc-devops/nvcf-dns-cache",
+        "ncp_dev": "nvcr.io/0651155215864979/ncp-dev/nvcf-dns-cache",
+    },
+    tags = ["nvcf-dns-cache"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "webhook_test",
+    srcs = ["mutate_test.go"],
+    embed = [":webhook_lib"],
+    deps = [
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/resource",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+    ],
+)

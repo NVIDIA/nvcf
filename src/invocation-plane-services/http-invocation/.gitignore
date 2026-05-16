@@ -24,3 +24,6 @@ doc-src/proto
 kubeconfig.json
 
 vault/secrets.json
+
+# Bazel symlinks (created by bazel build/test)
+/bazel-*

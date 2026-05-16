@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Cargo workspace files have to be exported here for the crate_universe
+# `crate.from_cargo` extension to read them by label.
+exports_files([
+    ".cargo/config.toml",
+    "Cargo.lock",
+    "Cargo.toml",
+])
+
+alias(
+    name = "nvcf-invocation-service",
+    actual = "//crates/server:server",
+    visibility = ["//visibility:public"],
+)

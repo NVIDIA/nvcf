@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "inmem",
+    srcs = [
+        "inmem.go",
+        "inmem_ha.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/physical/inmem",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/physical",
+        "@com_github_armon_go_radix//:go-radix",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":inmem",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "inmem_test",
+    srcs = [
+        "cache_test.go",
+        "inmem_ha_test.go",
+        "inmem_test.go",
+        "physical_view_test.go",
+        "transactions_test.go",
+    ],
+    embed = [":inmem"],
+    deps = [
+        "//sdk/helper/logging",
+        "//sdk/physical",
+        "@com_github_armon_go_metrics//:go-metrics",
+        "@com_github_armon_go_radix//:go-radix",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+    ],
+)

@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "testing",
+    srcs = ["test_helpers.go"],
+    importpath = "github.com/hashicorp/vault/sdk/database/dbplugin/v5/testing",
+    visibility = ["//visibility:public"],
+    deps = ["//sdk/database/dbplugin/v5:dbplugin"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":testing",
+    visibility = ["//visibility:public"],
+)

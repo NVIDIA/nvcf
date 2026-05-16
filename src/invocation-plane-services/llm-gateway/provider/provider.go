@@ -60,7 +60,8 @@ type ProxyRequest struct {
 	Header   http.Header
 	Body     io.ReadCloser
 	// InputTokens and TokenEstimate are forwarded as Stargate proxy headers when
-	// known. Native /v1/responses requires X-Input-Tokens for routing metadata.
+	// known. Stargate requires X-Input-Tokens for native /v1/responses and
+	// /v1/embeddings routing metadata.
 	InputTokens   int
 	TokenEstimate int
 }

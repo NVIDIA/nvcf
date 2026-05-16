@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "keysutil",
+    srcs = [
+        "cache.go",
+        "consts.go",
+        "encrypted_key_storage.go",
+        "lock_manager.go",
+        "policy.go",
+        "transit_lru.go",
+        "transit_syncmap.go",
+        "util.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/helper/keysutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/helper/errutil",
+        "//sdk/helper/jsonutil",
+        "//sdk/helper/kdf",
+        "//sdk/helper/locksutil",
+        "//sdk/logical",
+        "@com_github_hashicorp_errwrap//:errwrap",
+        "@com_github_hashicorp_go_uuid//:go-uuid",
+        "@com_github_hashicorp_golang_lru//:golang-lru",
+        "@org_golang_x_crypto//chacha20poly1305",
+        "@org_golang_x_crypto//ed25519",
+        "@org_golang_x_crypto//hkdf",
+        "@org_golang_x_crypto//sha3",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":keysutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "keysutil_test",
+    srcs = [
+        "encrypted_key_storage_test.go",
+        "policy_test.go",
+    ],
+    embed = [":keysutil"],
+    deps = [
+        "//sdk/helper/errutil",
+        "//sdk/helper/jsonutil",
+        "//sdk/logical",
+        "@com_github_hashicorp_go_secure_stdlib_strutil//:strutil",
+        "@com_github_mitchellh_copystructure//:copystructure",
+        "@org_golang_x_crypto//ed25519",
+    ],
+)

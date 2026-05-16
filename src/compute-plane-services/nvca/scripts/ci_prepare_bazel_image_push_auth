@@ -76,9 +76,9 @@ write_vault_config() {
 }
 
 if [[ -n "${NGC_REGISTRY_TOKEN:-}" ]]; then
-  write_token_config "${NGC_REGISTRY_TOKEN}" "${HOME}/.docker-kaze"
+  write_token_config "${NGC_REGISTRY_TOKEN}" "${HOME}/.docker-byocdev"
 else
-  write_vault_config "${NGC_REGISTRY_DOCKERCONFIG_SECRET:-dockerconfigjson-base64}" "${HOME}/.docker-kaze"
+  write_vault_config "${NGC_REGISTRY_DOCKERCONFIG_SECRET:-dockerconfigjson-base64}" "${HOME}/.docker-byocdev"
 fi
 
 if [[ -n "${NGC_DEVOPS_API_KEY:-}" ]]; then

@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "compressutil",
+    srcs = ["compress.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/compressutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_golang_snappy//:snappy",
+        "@com_github_hashicorp_errwrap//:errwrap",
+        "@com_github_pierrec_lz4//:lz4",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":compressutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "compressutil_test",
+    srcs = ["compress_test.go"],
+    embed = [":compressutil"],
+)

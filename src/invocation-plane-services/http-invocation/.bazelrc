@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ============================================================================
+# Bazel configuration for nvcf-invocation-service.
+#
+# First Rust Phase B service. Tracks the canonical Phase B scaffold from
+# nvcf-ratelimiter / nvcf-grpc-proxy (Go), adapted for rules_rust +
+# crate_universe + cargo_build_script. See the umbrella's BAZEL.md.
+# ============================================================================
+
+build --compilation_mode=fastbuild
+common --enable_bzlmod
+build --incompatible_strict_action_env
+common --enable_platform_specific_config
+
+# Proto toolchain (used by crates/server/build.rs through tonic-build +
+# prost; we point PROTOC at the hermetic protoc from @protobuf//:protoc
+# via cargo_build_script's build_script_env).
+common --incompatible_enable_proto_toolchain_resolution
+
+test --test_output=errors
+test --test_env=HOME=/tmp
+test --test_env=XDG_CACHE_HOME=/tmp/.cache
+
+startup --host_jvm_args=-Xmx2g
+
+# CARGO_BAZEL_REPIN=1 bazel sync regenerates crate_universe lockfiles
+# when Cargo.lock changes. Without it, the repin step has to be invoked
+# manually -- see scripts/repin-crates if added later.
+
+# ---- Workspace status (build stamping) ----
+# Feeds tools/workspace_status.sh keys (STABLE_VERSION, STABLE_GIT_COMMIT,
+# STABLE_OCI_TAG, ...) into the stamped OCI tags emitted by the
+# rust_oci_image push targets.
+build --workspace_status_command=tools/workspace_status.sh
+
+# CI profile.
+build:ci --jobs=16
+
+# Debug / release profiles.
+build:debug --compilation_mode=dbg
+build:debug -s
+build:release --compilation_mode=opt
+build:release --strip=always

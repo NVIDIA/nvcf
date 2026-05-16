@@ -18,6 +18,36 @@ limitations under the License.
 
 A proxy service that facilitates communication between clients and NVIDIA Cloud Functions (NVCF) workers. This service handles HTTP/3 CONNECT endpoints, HTTP/1 CONNECT endpoints, and HTTP/1-2 forwarding for GRPC requests.
 
+## Build with Bazel
+
+Bazel is the canonical build path. The legacy Dockerfile + `go build`
+flow stays available for dev iteration outside Bazel.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run all tests with auto-retry on timing-sensitive failures.
+bazel test //... --flaky_test_attempts=3
+
+# Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
+bazel build //:image_index
+
+# Push to the internal NGC registries (kaze / nv-ngc-devops / ncp-dev).
+bazel run //:image_push
+bazel run //:image_push_devops
+bazel run //:image_push_ncp_dev
+
+# Regenerate per-package BUILD files after Go source changes.
+bazel run //:gazelle
+
+# Refresh module graph after go.mod changes.
+bazel mod tidy
+```
+
+The image is published from CI on the default branch. Local pushes
+need an `nvcr.io` docker login in the active `DOCKER_CONFIG`.
+
 ## Overview
 
 The NVCF GRPC Proxy runs the following endpoints:

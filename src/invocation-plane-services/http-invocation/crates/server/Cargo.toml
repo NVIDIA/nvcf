@@ -31,7 +31,17 @@ anyhow = "1"
 async-nats = "0.47"
 async-trait = "0.1"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
+# Use aws-sdk-s3's default features (which include rustls) instead of the
+# explicit aws-lc-rs path. The `default-https-client` feature pulls in
+# aws-lc-sys, whose build script copies a bundled include/ directory at
+# build time; crate_universe materializes that directory as a flat file
+# and the build script panics with `Failed to copy include directory`.
+# Reverting to defaults switches the HTTPS provider to rustls and
+# sidesteps the issue. sigv4a is dropped (no multi-region S3 usage in
+# this service); http-1x is dropped (the SDK negotiates HTTP/1.1 vs
+# HTTP/2 on its own per the default-https-client). Matches the
+# aws-sdk-s3 spec used in the experimental Bazel monorepo.
+aws-sdk-s3 = { version = "1", features = ["rt-tokio"] }
 aws-smithy-async = "1"
 aws-smithy-runtime = "1"
 aws-smithy-runtime-api = "1"

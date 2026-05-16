@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "authmetadata",
+    srcs = ["auth_metadata.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/authmetadata",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/framework",
+        "//sdk/logical",
+        "@com_github_hashicorp_go_secure_stdlib_strutil//:strutil",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":authmetadata",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "authmetadata_test",
+    srcs = [
+        "auth_metadata_acc_test.go",
+        "auth_metadata_test.go",
+    ],
+    embed = [":authmetadata"],
+    deps = [
+        "//sdk/framework",
+        "//sdk/logical",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+    ],
+)

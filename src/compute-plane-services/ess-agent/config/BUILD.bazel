@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "config",
+    srcs = [
+        "auth.go",
+        "config.go",
+        "consul.go",
+        "convert.go",
+        "dedup.go",
+        "default_delimiters.go",
+        "env.go",
+        "exec.go",
+        "logfile.go",
+        "mapstructure.go",
+        "nomad.go",
+        "retry.go",
+        "ssl.go",
+        "syslog.go",
+        "telemetry.go",
+        "template.go",
+        "transport.go",
+        "vault.go",
+        "wait.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template/config",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//api",
+        "//signals",
+        "//version",
+        "@com_github_hashicorp_hcl//:hcl",
+        "@com_github_mitchellh_go_homedir//:go-homedir",
+        "@com_github_mitchellh_mapstructure//:mapstructure",
+        "@com_github_pkg_errors//:errors",
+        "@org_golang_x_exp//maps",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":config",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "config_test",
+    srcs = [
+        "auth_test.go",
+        "config_test.go",
+        "consul_test.go",
+        "convert_test.go",
+        "dedup_test.go",
+        "default_delimiters_test.go",
+        "env_test.go",
+        "exec_test.go",
+        "mapstructure_test.go",
+        "nomad_test.go",
+        "retry_test.go",
+        "ssl_test.go",
+        "syslog_test.go",
+        "telemetry_test.go",
+        "template_test.go",
+        "transport_test.go",
+        "vault_test.go",
+        "wait_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":config"],
+    deps = [
+        "//api",
+        "//signals",
+        "@com_github_mitchellh_mapstructure//:mapstructure",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

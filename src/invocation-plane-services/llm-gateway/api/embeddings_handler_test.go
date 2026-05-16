@@ -35,10 +35,12 @@ func TestProxyEmbeddingsForwardsBodyAndHeaders(t *testing.T) {
 	t.Parallel()
 
 	type capturedRequest struct {
-		Path       string
-		RoutingKey string
-		Model      string
-		BodyModel  string
+		Path          string
+		RoutingKey    string
+		Model         string
+		InputTokens   string
+		TokenEstimate string
+		BodyModel     string
 	}
 
 	captured := make(chan capturedRequest, 1)
@@ -53,10 +55,12 @@ func TestProxyEmbeddingsForwardsBodyAndHeaders(t *testing.T) {
 		}
 
 		captured <- capturedRequest{
-			Path:       r.URL.Path,
-			RoutingKey: r.Header.Get("X-Routing-Key"),
-			Model:      r.Header.Get("X-Model"),
-			BodyModel:  payload.Model,
+			Path:          r.URL.Path,
+			RoutingKey:    r.Header.Get("X-Routing-Key"),
+			Model:         r.Header.Get("X-Model"),
+			InputTokens:   r.Header.Get("X-Input-Tokens"),
+			TokenEstimate: r.Header.Get("X-Token-Estimate"),
+			BodyModel:     payload.Model,
 		}
 		w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		_, _ = io.WriteString(w, `{"object":"list","data":[],"model":"company-name/model-name"}`)
@@ -103,6 +107,12 @@ func TestProxyEmbeddingsForwardsBodyAndHeaders(t *testing.T) {
 	}
 	if got.Model != "company-name/model-name" {
 		t.Fatalf("header model = %q, want company-name/model-name", got.Model)
+	}
+	if got.InputTokens != "7" {
+		t.Fatalf("input tokens header = %q, want 7", got.InputTokens)
+	}
+	if got.TokenEstimate != "7" {
+		t.Fatalf("token estimate header = %q, want 7", got.TokenEstimate)
 	}
 	if got.BodyModel != "company-name/model-name" {
 		t.Fatalf("body model = %q, want company-name/model-name", got.BodyModel)

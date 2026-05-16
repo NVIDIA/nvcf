@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "jsonutil",
+    srcs = ["json.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/jsonutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/helper/compressutil",
+        "@com_github_hashicorp_errwrap//:errwrap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jsonutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "jsonutil_test",
+    srcs = ["json_test.go"],
+    embed = [":jsonutil"],
+    deps = ["//sdk/helper/compressutil"],
+)

@@ -1,2 +1,6 @@
 # Build artifacts
 /webhook
+
+# Bazel workspace symlinks (bazel writes these next to the WORKSPACE
+# pointing into ~/.cache/bazel; never commit them).
+/bazel-*

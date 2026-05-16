@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "certutil",
+    srcs = [
+        "helpers.go",
+        "types.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/helper/certutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/helper/errutil",
+        "//sdk/helper/jsonutil",
+        "@com_github_hashicorp_errwrap//:errwrap",
+        "@com_github_mitchellh_mapstructure//:mapstructure",
+        "@org_golang_x_crypto//cryptobyte",
+        "@org_golang_x_crypto//cryptobyte/asn1",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":certutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "certutil_test",
+    srcs = ["certutil_test.go"],
+    embed = [":certutil"],
+    deps = ["@com_github_fatih_structs//:structs"],
+)

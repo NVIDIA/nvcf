@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "logging",
+    srcs = [
+        "logfile.go",
+        "logging.go",
+        "syslog.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template/logging",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "@com_github_hashicorp_go_syslog//:go-syslog",
+        "@com_github_hashicorp_logutils//:logutils",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":logging",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "logging_test",
+    srcs = [
+        "logfile_test.go",
+        "logging_test.go",
+        "syslog_test.go",
+    ],
+    # TestSyslogFilter needs a /dev/log Unix socket that Bazel's
+    # sandbox doesn't provide. Upstream consul-template test surface
+    # we don't actively maintain; tag manual until rewritten with a
+    # syslog server mock or sandbox-friendly skip.
+    tags = ["manual"],
+    embed = [":logging"],
+    deps = [
+        "//config",
+        "@com_github_hashicorp_go_syslog//:go-syslog",
+        "@com_github_hashicorp_logutils//:logutils",
+        "@com_github_stretchr_testify//require",
+    ],
+)

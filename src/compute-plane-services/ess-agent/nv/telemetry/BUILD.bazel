@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "telemetry",
+    srcs = [
+        "instruments.go",
+        "telemetry.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template/nv/telemetry",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//semconv/v1.19.0:v1_19_0",
+        "@io_opentelemetry_go_otel_exporters_prometheus//:prometheus",
+        "@io_opentelemetry_go_otel_exporters_stdout_stdoutmetric//:stdoutmetric",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk//resource",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":telemetry",
+    visibility = ["//visibility:public"],
+)

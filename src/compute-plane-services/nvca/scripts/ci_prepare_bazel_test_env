@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Prepare tools and environment variables needed by Bazel unit tests.
+# Source this script from GitLab CI so PATH and KUBEBUILDER_ASSETS persist.
+
+if [[ -n "${BASH_VERSION:-}" && "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  __ci_prepare_bazel_test_env_shell_opts="$(set +o)"
+  trap 'eval "${__ci_prepare_bazel_test_env_shell_opts}"; unset __ci_prepare_bazel_test_env_shell_opts; trap - RETURN' RETURN
+fi
+
+set -euo pipefail
+
+bazel version
+
+if ! command -v go >/dev/null 2>&1; then
+  GO_VERSION="1.25.0"
+  echo "[envtest] installing go ${GO_VERSION} into /usr/local"
+  curl -fSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+    | tar -C /usr/local -xz
+  export PATH="/usr/local/go/bin:${PATH}"
+  go version
+fi
+
+if [[ ! -x ./scripts/setup_envtest ]]; then
+  echo "[envtest] scripts/setup_envtest missing; envtest-dependent tests will fail" >&2
+  return 1 2>/dev/null || exit 1
+fi
+
+# scripts/setup_envtest writes a single export line to stdout and progress to stderr.
+eval "$(./scripts/setup_envtest)"
+export KUBEBUILDER_ASSETS
+echo "[envtest] KUBEBUILDER_ASSETS=${KUBEBUILDER_ASSETS:-unset}"
+if [[ -z "${KUBEBUILDER_ASSETS:-}" ]]; then
+  echo "[envtest] FATAL: KUBEBUILDER_ASSETS not set; envtest tests will fail" >&2
+  return 1 2>/dev/null || exit 1
+fi

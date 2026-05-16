@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "pluginutil",
+    srcs = [
+        "env.go",
+        "multiplexing.go",
+        "multiplexing.pb.go",
+        "multiplexing_grpc.pb.go",
+        "run_config.go",
+        "runner.go",
+        "tls.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/helper/pluginutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/helper/certutil",
+        "//sdk/helper/consts",
+        "//sdk/helper/wrapping",
+        "@com_github_hashicorp_errwrap//:errwrap",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@com_github_hashicorp_go_plugin//:go-plugin",
+        "@com_github_hashicorp_go_secure_stdlib_mlock//:mlock",
+        "@com_github_hashicorp_go_secure_stdlib_strutil//:strutil",
+        "@com_github_hashicorp_go_uuid//:go-uuid",
+        "@com_github_hashicorp_go_version//:go-version",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":pluginutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "pluginutil_test",
+    srcs = [
+        "env_test.go",
+        "multiplexing_test.go",
+        "run_config_test.go",
+    ],
+    embed = [":pluginutil"],
+    deps = [
+        "//sdk/helper/wrapping",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@com_github_hashicorp_go_plugin//:go-plugin",
+        "@com_github_stretchr_testify//mock",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//metadata",
+    ],
+)

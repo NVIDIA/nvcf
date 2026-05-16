@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "dbutil",
+    srcs = [
+        "dbutil.go",
+        "parseurl.go",
+        "quoteidentifier.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/database/helper/dbutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/database/dbplugin",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":dbutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "dbutil_test",
+    srcs = ["dbutil_test.go"],
+    embed = [":dbutil"],
+    deps = ["//sdk/database/dbplugin"],
+)

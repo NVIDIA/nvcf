@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "kdf",
+    srcs = ["kdf.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/kdf",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":kdf",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "kdf_test",
+    srcs = ["kdf_test.go"],
+    embed = [":kdf"],
+)

@@ -11,6 +11,7 @@
 # AI agent local config (per-user settings, ephemeral plans)
 .claude/settings.local.json
 .claude/plans/
+.claude/scheduled_tasks.lock
 .codex/settings.local.json
 .cursor/settings.local.json
 **/superpowers/plans/

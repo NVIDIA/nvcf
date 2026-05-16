@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "logical",
+    srcs = [
+        "audit.go",
+        "auth.go",
+        "connection.go",
+        "controlgroup.go",
+        "error.go",
+        "identity.pb.go",
+        "lease.go",
+        "logical.go",
+        "logical_storage.go",
+        "managed_key.go",
+        "plugin.pb.go",
+        "request.go",
+        "response.go",
+        "response_util.go",
+        "secret.go",
+        "storage.go",
+        "storage_inmem.go",
+        "storage_view.go",
+        "system_view.go",
+        "testing.go",
+        "token.go",
+        "translate_response.go",
+        "version.pb.go",
+        "version_grpc.pb.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/logical",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/helper/consts",
+        "//sdk/helper/jsonutil",
+        "//sdk/helper/license",
+        "//sdk/helper/logging",
+        "//sdk/helper/pluginutil",
+        "//sdk/helper/wrapping",
+        "//sdk/physical",
+        "//sdk/physical/inmem",
+        "@com_github_hashicorp_errwrap//:errwrap",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@com_github_hashicorp_go_multierror//:go-multierror",
+        "@com_github_hashicorp_go_sockaddr//:go-sockaddr",
+        "@com_github_mitchellh_copystructure//:copystructure",
+        "@com_github_mitchellh_go_testing_interface//:go-testing-interface",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":logical",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "logical_test",
+    srcs = [
+        "lease_test.go",
+        "response_util_test.go",
+        "storage_inmem_test.go",
+        "storage_test.go",
+        "token_test.go",
+    ],
+    embed = [":logical"],
+    deps = ["@com_github_go_test_deep//:deep"],
+)

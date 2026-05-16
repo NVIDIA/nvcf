@@ -251,6 +251,7 @@ func (h *OpenAIProxyHandlers) handleAudioToTextProxy(ec echo.Context, translatio
 		headers,
 		io.NopCloser(bytes.NewReader(outboundBody)),
 		int64(len(outboundBody)),
+		0,
 	)
 	if err != nil {
 		return err
@@ -338,6 +339,7 @@ func (h *OpenAIProxyHandlers) SpeechToSpeech(ec echo.Context) error {
 		headers,
 		io.NopCloser(bytes.NewReader(outboundBody)),
 		int64(len(outboundBody)),
+		0,
 	)
 	if err != nil {
 		return err

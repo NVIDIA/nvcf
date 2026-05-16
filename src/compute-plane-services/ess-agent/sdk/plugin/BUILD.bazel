@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "plugin",
+    srcs = [
+        "backend.go",
+        "grpc_backend.go",
+        "grpc_backend_client.go",
+        "grpc_backend_server.go",
+        "grpc_storage.go",
+        "grpc_system.go",
+        "logger.go",
+        "middleware.go",
+        "plugin.go",
+        "plugin_v5.go",
+        "serve.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/plugin",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/helper/consts",
+        "//sdk/helper/license",
+        "//sdk/helper/pluginutil",
+        "//sdk/helper/wrapping",
+        "//sdk/logical",
+        "//sdk/plugin/pb",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@com_github_hashicorp_go_plugin//:go-plugin",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":plugin",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "plugin_test",
+    srcs = [
+        "grpc_backend_test.go",
+        "grpc_system_test.go",
+        "logger_test.go",
+        "storage_test.go",
+    ],
+    embed = [":plugin"],
+    deps = [
+        "//sdk/helper/consts",
+        "//sdk/helper/logging",
+        "//sdk/logical",
+        "//sdk/plugin/mock",
+        "//sdk/plugin/pb",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@com_github_hashicorp_go_plugin//:go-plugin",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_protobuf//proto",
+    ],
+)

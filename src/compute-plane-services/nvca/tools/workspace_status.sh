@@ -23,12 +23,19 @@ if [ "$COMMIT" != "unknown" ] && [ -n "$(git status --porcelain 2>/dev/null)" ];
     DIRTY="-dirty"
 fi
 
-# CI overrides for VERSION (from git tag or MR sha) and BUILD_USER.
-# When unset, fall back to the values the legacy nvcf-cli Makefile computed.
+normalize_version() {
+    local version="$1"
+    printf '%s\n' "${version#v}"
+}
+
+# CI overrides for VERSION and BUILD_USER. Release jobs should use the
+# normalized versioning artifact; MR jobs get an MR-scoped pre-release tag.
 if [ -n "${NVCF_VERSION:-}" ]; then
-    VERSION="${NVCF_VERSION}"
-elif TAG=$(git describe --tags --exact-match HEAD 2>/dev/null); then
-    VERSION="${TAG}"
+    VERSION="$(normalize_version "${NVCF_VERSION}")"
+elif [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
+    VERSION="mr-${CI_MERGE_REQUEST_IID}"
+elif [ -n "${EGX_VERSION:-}" ]; then
+    VERSION="$(normalize_version "${EGX_VERSION}")"
 else
     VERSION="mr-${COMMIT}"
 fi

@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "kubernetes",
+    srcs = ["kubernetes.go"],
+    importpath = "github.com/hashicorp/vault/api/auth/kubernetes",
+    visibility = ["//visibility:public"],
+    deps = ["//api"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":kubernetes",
+    visibility = ["//visibility:public"],
+)

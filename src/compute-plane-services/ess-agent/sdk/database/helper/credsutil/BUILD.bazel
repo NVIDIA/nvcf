@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "credsutil",
+    srcs = [
+        "credsutil.go",
+        "sql.go",
+        "usernames.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/database/helper/credsutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/database/dbplugin",
+        "@com_github_hashicorp_go_secure_stdlib_base62//:base62",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":credsutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "credsutil_test",
+    srcs = [
+        "credsutil_test.go",
+        "usernames_test.go",
+    ],
+    embed = [":credsutil"],
+)

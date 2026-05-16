@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "template",
+    srcs = [
+        "brain.go",
+        "funcs.go",
+        "nomad_funcs.go",
+        "nv_funcs.go",
+        "scratch.go",
+        "template.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template/template",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//dependency",
+        "@com_github_burntsushi_toml//:toml",
+        "@com_github_davecgh_go_spew//spew",
+        "@com_github_hashicorp_consul_api//:api",
+        "@com_github_hashicorp_go_sockaddr//template",
+        "@com_github_imdario_mergo//:mergo",
+        "@com_github_masterminds_sprig_v3//:sprig",
+        "@com_github_pkg_errors//:errors",
+        "@in_gopkg_yaml_v2//:yaml_v2",
+        "@org_golang_x_exp//maps",
+        "@org_golang_x_text//cases",
+        "@org_golang_x_text//language",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":template",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "template_test",
+    srcs = [
+        "brain_test.go",
+        "funcs_test.go",
+        "scratch_test.go",
+        "template_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    # TestFileSandbox assumes cwd is the repo root (legacy
+    # `go test ./...` behavior). Bazel runs tests from the package
+    # dir, so the relative paths like "template/funcs_test.go" don't
+    # resolve. Tag manual until the test is rewritten to use
+    # runfiles-relative paths.
+    tags = ["manual"],
+    embed = [":template"],
+    deps = [
+        "//dependency",
+        "@com_github_hashicorp_consul_api//:api",
+        "@com_github_stretchr_testify//require",
+    ],
+)

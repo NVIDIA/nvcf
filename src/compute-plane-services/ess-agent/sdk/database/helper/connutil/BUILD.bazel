@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "connutil",
+    srcs = [
+        "connutil.go",
+        "sql.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/database/helper/connutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/database/dbplugin",
+        "//sdk/database/helper/dbutil",
+        "@com_github_hashicorp_errwrap//:errwrap",
+        "@com_github_hashicorp_go_secure_stdlib_parseutil//:parseutil",
+        "@com_github_mitchellh_mapstructure//:mapstructure",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":connutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "connutil_test",
+    srcs = ["sql_test.go"],
+    embed = [":connutil"],
+    deps = ["@com_github_stretchr_testify//assert"],
+)

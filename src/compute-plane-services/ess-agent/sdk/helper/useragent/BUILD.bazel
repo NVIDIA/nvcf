@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "useragent",
+    srcs = ["useragent.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/useragent",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/logical",
+        "//sdk/version",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":useragent",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "useragent_test",
+    srcs = ["useragent_test.go"],
+    embed = [":useragent"],
+    deps = ["//sdk/logical"],
+)

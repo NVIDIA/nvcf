@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "pathmanager",
+    srcs = ["pathmanager.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/pathmanager",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_hashicorp_go_immutable_radix//:go-immutable-radix"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":pathmanager",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "pathmanager_test",
+    srcs = ["pathmanager_test.go"],
+    embed = [":pathmanager"],
+)

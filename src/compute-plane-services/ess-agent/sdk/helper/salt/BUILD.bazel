@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "salt",
+    srcs = ["salt.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/salt",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/logical",
+        "@com_github_hashicorp_errwrap//:errwrap",
+        "@com_github_hashicorp_go_uuid//:go-uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":salt",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "salt_test",
+    srcs = ["salt_test.go"],
+    embed = [":salt"],
+    deps = [
+        "//sdk/logical",
+        "@com_github_hashicorp_go_uuid//:go-uuid",
+    ],
+)

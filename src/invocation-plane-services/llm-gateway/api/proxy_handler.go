@@ -50,6 +50,7 @@ func (h *OpenAIProxyHandlers) forwardJSONRequest(
 	c *GatewayContext,
 	reqCtx *requestctx.RequestContext,
 	body []byte,
+	inputTokens int,
 ) error {
 	outboundBody := body
 	if reqCtx != nil && reqCtx.Model != "" {
@@ -68,6 +69,7 @@ func (h *OpenAIProxyHandlers) forwardJSONRequest(
 		c.Request().Header.Clone(),
 		io.NopCloser(bytes.NewReader(outboundBody)),
 		int64(len(outboundBody)),
+		inputTokens,
 	)
 	if err != nil {
 		return err
@@ -100,6 +102,7 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 	headers http.Header,
 	body io.ReadCloser,
 	contentLength int64,
+	inputTokens int,
 ) (*provider.ProxyResponse, error) {
 	if h.handlers.proxyProvider == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "proxy endpoint is not configured")
@@ -118,11 +121,13 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 		c.UserContext(),
 		reqCtx,
 		&provider.ProxyRequest{
-			Method:   c.Request().Method,
-			Path:     stargatePath(c.Request().URL.Path),
-			RawQuery: c.Request().URL.RawQuery,
-			Header:   headers,
-			Body:     body,
+			Method:        c.Request().Method,
+			Path:          stargatePath(c.Request().URL.Path),
+			RawQuery:      c.Request().URL.RawQuery,
+			Header:        headers,
+			Body:          body,
+			InputTokens:   inputTokens,
+			TokenEstimate: inputTokens,
 		},
 	)
 	if err != nil {

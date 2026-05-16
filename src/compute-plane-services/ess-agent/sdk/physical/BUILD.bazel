@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "physical",
+    srcs = [
+        "cache.go",
+        "encoding.go",
+        "entry.go",
+        "error.go",
+        "latency.go",
+        "physical.go",
+        "physical_access.go",
+        "physical_view.go",
+        "testing.go",
+        "transactions.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/physical",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/helper/locksutil",
+        "//sdk/helper/pathmanager",
+        "@com_github_armon_go_metrics//:go-metrics",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@com_github_hashicorp_go_multierror//:go-multierror",
+        "@com_github_hashicorp_golang_lru//:golang-lru",
+        "@org_uber_go_atomic//:atomic",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":physical",
+    visibility = ["//visibility:public"],
+)

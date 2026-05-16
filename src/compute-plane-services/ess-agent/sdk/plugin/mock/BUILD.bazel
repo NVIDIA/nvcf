@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "mock",
+    srcs = [
+        "backend.go",
+        "path_errors.go",
+        "path_internal.go",
+        "path_kv.go",
+        "path_raw.go",
+        "path_special.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/plugin/mock",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/framework",
+        "//sdk/helper/errutil",
+        "//sdk/logical",
+        "//sdk/plugin/pb",
+        "@com_github_hashicorp_errwrap//:errwrap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":mock",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "mock_test",
+    srcs = ["backend_test.go"],
+    embed = [":mock"],
+    deps = ["//sdk/logical"],
+)

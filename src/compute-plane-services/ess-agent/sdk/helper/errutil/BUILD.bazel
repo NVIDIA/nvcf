@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "errutil",
+    srcs = ["error.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/errutil",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":errutil",
+    visibility = ["//visibility:public"],
+)

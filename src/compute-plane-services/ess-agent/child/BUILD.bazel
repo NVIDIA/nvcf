@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "child",
+    srcs = [
+        "child.go",
+        "command-prep.go",
+        "command-prep_windows.go",
+        "sys_nix.go",
+        "sys_windows.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template/child",
+    visibility = ["//visibility:public"],
+    deps = ["//signals"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":child",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "child_test",
+    srcs = [
+        "child_test.go",
+        "command-prep_test.go",
+    ],
+    # TestReload_noSignal is a known race flake in upstream consul-template
+    # code; see KNOWN_TEST_ISSUES.md §5 and the legacy go-test command in
+    # the prior .gitlab-ci.yml which carried the same -skip filter.
+    args = ["-test.skip=TestReload_noSignal"],
+    embed = [":child"],
+    deps = [
+        "//signals",
+        "@com_github_hashicorp_go_gatedio//:go-gatedio",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@org_golang_x_sys//unix",
+    ],
+)

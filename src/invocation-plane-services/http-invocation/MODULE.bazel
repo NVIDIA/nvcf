@@ -1,0 +1,138 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Bzlmod module definition for nvcf-invocation-service.
+
+First Rust Phase B service. Single-crate Cargo workspace:
+  crates/server/  -> nvcf_invocation_service_lib + server binary
+
+Tracks the canonical NVCF Phase B pattern (ratelimiter/grpc-proxy for Go,
+this is the Rust counterpart). The umbrella nvcf/nvcf consumes this
+subtree as a synthetic import; this file is also picked up there but the
+umbrella has its own root MODULE.bazel.
+"""
+
+module(
+    name = "nvcf_invocation_service",
+    version = "0.0.1",
+)
+
+# ============================================================================
+# OCI containers (multi-arch). Mirrors the umbrella's MODULE.bazel.
+# ============================================================================
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_oci", version = "2.2.7")
+bazel_dep(name = "rules_pkg", version = "1.2.0")
+bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
+bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
+
+# rules_pkg's `pkg_tar` runs through a Python builder, which pulls in
+# rules_python's hermetic interpreter. CI runs as root in the bazel-ci
+# container, and rules_python rejects root-user setup by default
+# (https://github.com/bazelbuild/rules_python/pull/713).
+bazel_dep(name = "rules_python", version = "1.4.1")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    ignore_root_user_error = True,
+    python_version = "3.11",
+)
+
+# ============================================================================
+# Rust
+# ============================================================================
+bazel_dep(name = "rules_rust", version = "0.69.0")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2021",
+    versions = ["1.91.1"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
+crate.from_cargo(
+    name = "nvcf_invocation_crates",
+    cargo_config = "//:.cargo/config.toml",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = [
+        "//:Cargo.toml",
+        "//crates/server:Cargo.toml",
+    ],
+    supported_platform_triples = [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+    ],
+)
+use_repo(crate, "nvcf_invocation_crates")
+
+# ============================================================================
+# Prebuilt protoc toolchain. crates/server/build.rs feeds proto files
+# through tonic-build/prost; we override its protoc with the one Bazel
+# fetches via toolchains_protoc so the build is hermetic instead of
+# relying on protoc_bin_vendored at runtime.
+# ============================================================================
+bazel_dep(name = "toolchains_protoc", version = "0.6.1")
+
+protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
+protoc.toolchain(
+    google_protobuf = "com_google_protobuf",
+    version = "v29.0",
+)
+use_repo(protoc, "com_google_protobuf")
+
+# protobuf comes in transitively (toolchains_protoc + rules_oci both pull it),
+# but bzlmod requires an explicit bazel_dep + use_repo for the main module to
+# reference @protobuf//:protoc and @protobuf//:well_known_type_protos from the
+# cargo_build_script in crates/server/BUILD.bazel.
+bazel_dep(name = "protobuf", version = "29.1", repo_name = "protobuf")
+
+# ============================================================================
+# C++ cross-compilation (multi-arch container builds).
+# Only the cross toolchain is registered; native arch uses host gcc.
+# ============================================================================
+zig = use_extension("@hermetic_cc_toolchain//toolchain:ext.bzl", "toolchains")
+use_repo(zig, "zig_sdk")
+
+register_toolchains(
+    "@zig_sdk//toolchain:linux_arm64_gnu.2.38",
+)
+
+# ============================================================================
+# OCI base image. Rust + jemalloc dynamically link to glibc, so distroless/cc
+# (which ships libc) is required -- distroless/go would crash on first malloc.
+# Same image the legacy Dockerfile uses; pinned to the index digest so the
+# manifest cannot drift.
+# ============================================================================
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+oci.pull(
+    name = "distroless_cc",
+    digest = "sha256:80e21701e5253088ee8ca22f2ad8fc5d08ca5bf730a6eea5d68ea268c33e9831",
+    image = "nvcr.io/nvidia/distroless/cc",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64",
+    ],
+)
+use_repo(
+    oci,
+    "distroless_cc",
+    "distroless_cc_linux_amd64",
+    "distroless_cc_linux_arm64",
+)

@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "pb",
+    srcs = [
+        "backend.pb.go",
+        "backend_grpc.pb.go",
+        "translation.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/plugin/pb",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/helper/errutil",
+        "//sdk/helper/wrapping",
+        "//sdk/logical",
+        "@com_github_golang_protobuf//ptypes",
+        "@com_github_hashicorp_go_secure_stdlib_parseutil//:parseutil",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":pb",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "pb_test",
+    srcs = ["translation_test.go"],
+    embed = [":pb"],
+    deps = [
+        "//sdk/helper/errutil",
+        "//sdk/helper/wrapping",
+        "//sdk/logical",
+    ],
+)

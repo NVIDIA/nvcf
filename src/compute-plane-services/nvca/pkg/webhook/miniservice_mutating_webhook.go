@@ -360,7 +360,10 @@ func (w *miniserviceMutatingWebhook) mutatePodSpec(ps *corev1.PodSpec, meta nvca
 	_ = translatecommon.AddMixedEnvsToContainers(overrideableEnvVars, ps.InitContainers, meta.EnvVars...)
 	_ = translatecommon.AddMixedEnvsToContainers(overrideableEnvVars, ps.Containers, meta.EnvVars...)
 
-	if meta.ServiceAccountName != "" {
+	// If the pod is allowed k8s api access (ex. when an operator created it), and it has set a non-default service account,
+	// use it instead of the service account override.
+	if meta.ServiceAccountName != "" && (!w.fff.IsFeatureFlagEnabled(featureflag.AllowWorkloadKubernetesAPIAccess) ||
+		ps.ServiceAccountName == "" || ps.ServiceAccountName == "default") {
 		ps.ServiceAccountName = meta.ServiceAccountName
 	}
 

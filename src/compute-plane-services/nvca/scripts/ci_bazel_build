@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Run the Bazel test/build targets used by the GitLab bazel job.
+
+set -euo pipefail
+
+bazel_flags=()
+if [[ -n "${BAZEL_REMOTE_FLAGS:-}" ]]; then
+  # BAZEL_REMOTE_FLAGS is produced by scripts/.bazel-remote-probe as shell words.
+  # shellcheck disable=SC2206
+  bazel_flags+=(${BAZEL_REMOTE_FLAGS})
+fi
+if [[ -n "${BAZEL_DISK_CACHE:-}" ]]; then
+  bazel_flags+=("--disk_cache=${BAZEL_DISK_CACHE}")
+fi
+if [[ -n "${BAZEL_REPO_CACHE:-}" ]]; then
+  bazel_flags+=("--repository_cache=${BAZEL_REPO_CACHE}")
+fi
+
+bazel test "${bazel_flags[@]}" --flaky_test_attempts=3 //...
+bazel build "${bazel_flags[@]}" \
+  //cmd/nvca:image_index \
+  //cmd/nvca-operator:image_index \
+  //cmd/cluster-validator:image_index \
+  //cmd/tools:image_index

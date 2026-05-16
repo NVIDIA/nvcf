@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "watch",
+    srcs = [
+        "vault_token.go",
+        "view.go",
+        "watcher.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template/watch",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//api",
+        "//config",
+        "//dependency",
+        "//nv",
+        "//nv/telemetry",
+        "@com_github_pkg_errors//:errors",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":watch",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "watch_test",
+    srcs = [
+        "dependencies_test.go",
+        "vault_token_test.go",
+        "view_test.go",
+        "watch_test.go",
+        "watcher_test.go",
+    ],
+    embed = [":watch"],
+    deps = [
+        "//api",
+        "//config",
+        "//dependency",
+    ],
+)

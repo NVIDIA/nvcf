@@ -194,7 +194,7 @@ func (h *OpenAIProxyHandlers) Embeddings(ec echo.Context) error {
 		attribute.Int("gen_ai.usage.input_tokens", inputTokens),
 	)
 
-	return h.forwardJSONRequest(c, reqCtx, rawBody)
+	return h.forwardJSONRequest(c, reqCtx, rawBody, inputTokens)
 }
 
 func (h *OpenAIProxyHandlers) Reranking(ec echo.Context) error {
@@ -236,7 +236,7 @@ func (h *OpenAIProxyHandlers) Reranking(ec echo.Context) error {
 		attribute.Int("gateway.reranking.instruction_length", len(ptr.Deref(request.Instruction))),
 	)
 
-	return h.forwardJSONRequest(c, reqCtx, rawBody)
+	return h.forwardJSONRequest(c, reqCtx, rawBody, inputTokens)
 }
 
 func (h *OpenAIProxyHandlers) TextToSpeech(ec echo.Context) error {
@@ -289,6 +289,7 @@ func (h *OpenAIProxyHandlers) TextToSpeech(ec echo.Context) error {
 		c.Request().Header.Clone(),
 		io.NopCloser(bytes.NewReader(outboundBody)),
 		int64(len(outboundBody)),
+		inputTokens,
 	)
 	if err != nil {
 		return err

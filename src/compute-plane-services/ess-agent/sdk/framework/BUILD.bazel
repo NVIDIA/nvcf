@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "framework",
+    srcs = [
+        "backend.go",
+        "field_data.go",
+        "field_type.go",
+        "filter.go",
+        "identity.go",
+        "lease.go",
+        "openapi.go",
+        "path.go",
+        "path_map.go",
+        "path_struct.go",
+        "policy_map.go",
+        "secret.go",
+        "template.go",
+        "testing.go",
+        "wal.go",
+    ],
+    importpath = "github.com/hashicorp/vault/sdk/framework",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sdk/helper/consts",
+        "//sdk/helper/errutil",
+        "//sdk/helper/identitytpl",
+        "//sdk/helper/jsonutil",
+        "//sdk/helper/license",
+        "//sdk/helper/logging",
+        "//sdk/helper/salt",
+        "//sdk/helper/wrapping",
+        "//sdk/logical",
+        "@com_github_evanphx_json_patch_v5//:json-patch",
+        "@com_github_hashicorp_errwrap//:errwrap",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@com_github_hashicorp_go_kms_wrapping_entropy_v2//:entropy",
+        "@com_github_hashicorp_go_multierror//:go-multierror",
+        "@com_github_hashicorp_go_secure_stdlib_parseutil//:parseutil",
+        "@com_github_hashicorp_go_secure_stdlib_strutil//:strutil",
+        "@com_github_hashicorp_go_uuid//:go-uuid",
+        "@com_github_mitchellh_mapstructure//:mapstructure",
+        "@com_github_ryanuber_go_glob//:go-glob",
+        "@org_golang_x_text//cases",
+        "@org_golang_x_text//language",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":framework",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "framework_test",
+    srcs = [
+        "backend_test.go",
+        "field_data_test.go",
+        "identity_test.go",
+        "lease_test.go",
+        "openapi_test.go",
+        "path_map_test.go",
+        "path_struct_test.go",
+        "path_test.go",
+        "policy_map_test.go",
+        "secret_test.go",
+        "wal_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":framework"],
+    deps = [
+        "//sdk/helper/consts",
+        "//sdk/helper/jsonutil",
+        "//sdk/helper/salt",
+        "//sdk/helper/wrapping",
+        "//sdk/logical",
+        "@com_github_go_test_deep//:deep",
+        "@com_github_hashicorp_go_secure_stdlib_strutil//:strutil",
+        "@com_github_stretchr_testify//require",
+    ],
+)

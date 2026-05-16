@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//rules/oci:defs.bzl", "go_oci_multi_binary_image")
+
+go_library(
+    name = "nvca-operator_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvca-operator",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//pkg/operator/reconcile",
+        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
+        "@com_github_urfave_cli_v2//:cli",
+    ],
+)
+
+go_binary(
+    name = "nvca-operator",
+    embed = [":nvca-operator_lib"],
+    visibility = ["//visibility:public"],
+    # Mirrors Dockerfile.nvca-operator ldflags.
+    x_defs = {
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
+    },
+)
+
+# Multi-binary OCI image: matches Dockerfile.nvca-operator which COPYs
+# three binaries (nvca-operator + nvca-mirror + nvca-operator-cleanup)
+# into a single image, with nvca-operator as the default entrypoint.
+# tini-based CMD from the Dockerfile is not replicated here; the
+# Kubernetes pod spec sets the command directly. Re-evaluate if any
+# workload relies on /tini.
+go_oci_multi_binary_image(
+    name = "image",
+    base = "@distroless_go",
+    binaries = {
+        ":nvca-operator": "/usr/bin/nvca-operator",
+        "//cmd/nvca-mirror:nvca-mirror": "/usr/bin/nvca-mirror",
+        "//cmd/nvca-operator-cleanup:nvca-operator-cleanup": "/usr/bin/nvca-operator-cleanup",
+    },
+    entrypoint = ["/usr/bin/nvca-operator"],
+    extra_registries = {
+        "devops": "nvcr.io/nv-ngc-devops/nvca-operator",
+        "ncp_dev": "nvcr.io/0651155215864979/ncp-dev/nvca-operator",
+    },
+    registry = "nvcr.io/qtfpt1h0bieu/byocdev/nvca-operator",
+    tags = ["nvca-operator"],
+    visibility = ["//visibility:public"],
+)

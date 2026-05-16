@@ -2,6 +2,36 @@
 
 A rate limiting service for NVIDIA Cloud Functions (NVCF) that controls the rate of invocation requests to NVCF functions based on configurable policies. This service helps prevent abuse and ensures fair resource allocation by limiting the number of requests that can be made to specific functions.
 
+## Build with Bazel
+
+Bazel is the canonical build path. The legacy Dockerfile + `go build`
+flow stays available for dev iteration outside Bazel.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run all tests with auto-retry on timing-sensitive failures.
+bazel test //... --flaky_test_attempts=3
+
+# Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
+bazel build //:image_index
+
+# Push to the internal NGC registries (kaze / nv-ngc-devops / ncp-dev).
+bazel run //:image_push
+bazel run //:image_push_devops
+bazel run //:image_push_ncp_dev
+
+# Regenerate per-package BUILD files after Go source changes.
+bazel run //:gazelle
+
+# Refresh module graph after go.mod changes.
+bazel mod tidy
+```
+
+The image is published from CI on the default branch. Local pushes
+need an `nvcr.io` docker login in the active `DOCKER_CONFIG`.
+
 ## Overview
 
 The NVCF Rate Limiter provides:
