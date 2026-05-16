@@ -27,7 +27,7 @@ permissions:
 
 env:
   BAZEL_CI_VERSION: "0.3.0"
-  IMAGE: ghcr.io/${{ github.repository }}/bazel-ci
+  IMAGE: ghcr.io/nvidia/nvcf/bazel-ci
 
 jobs:
   build-and-push:
