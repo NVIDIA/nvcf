@@ -36,7 +36,8 @@ clusters can run at the same time.
 | Docker credential file mount | yes | yes | yes |
 | Gateway API and Envoy Gateway | yes | yes | no |
 | nginx route validation | yes | yes | no |
-| Control-plane SIS/ReVal/NATS routes | no | yes | no |
+| Control-plane SIS/ReVal helper routes | no | yes | no |
+| Control-plane NATS route | no | self-managed stack | no |
 | Compute aliases for SIS/ReVal/NATS | no | no | yes |
 | CSI SMB driver | yes | no | yes |
 | fake GPU operator | yes | no | yes |
@@ -64,8 +65,10 @@ ports to the control-plane host ports:
 | ReVal | `8080` | `CONTROL_PLANE_HTTP_PORT` |
 | NATS | `4222` | `CONTROL_PLANE_NATS_PORT` |
 
-The control-plane cluster exposes matching Gateway routes for these services.
-HTTP traffic is host-routed by Envoy Gateway. NATS uses a TCP listener.
+The local control-plane addon exposes helper Gateway routes for SIS and ReVal.
+The NATS route is owned by the self-managed stack `nvcf-gateway-routes` chart.
+ncp-local still provisions the Gateway TCP listener and the compute-cluster
+alias that targets it.
 
 ## Configuration
 
@@ -90,7 +93,7 @@ COMPUTE_CLUSTER_PREFIX
 ```
 
 `CONTROL_PLANE_DOMAIN` defaults to `nvcf-control-plane.test`. The same value is
-used when rendering control-plane Gateway hostnames and compute-plane CoreDNS
+used when rendering local SIS/ReVal Gateway hostnames and compute-plane CoreDNS
 aliases, so a custom domain does not create DNS records that Envoy will reject
 on host matching.
 

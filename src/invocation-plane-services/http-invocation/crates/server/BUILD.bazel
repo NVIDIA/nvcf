@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@nvcf_invocation_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//rules/oci:defs.bzl", "rust_oci_image")
+
+# build.rs uses tonic-build + prost-build to compile crates/server/proto/*.proto.
+# Inside the crate it tries to find protoc via protoc_bin_vendored, but we
+# override PROTOC to the hermetic @protobuf//:protoc the bzlmod protoc
+# extension fetches; that way both local Bazel builds and CI go through the
+# same protoc binary.
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    build_script_env = {
+        "PROTOC": "$(execpath @protobuf//:protoc)",
+        # @protobuf//:well_known_type_protos is a filegroup whose files
+        # live in the cargo_runfiles tree under protobuf+/src/google/protobuf/
+        # (sibling of _main/). cargo_build_script runs from
+        # _main/crates/server/, so the well-known-type include dir resolves
+        # via three parent hops.
+        "PROTOC_WKT_DIR": "../../../protobuf+/src",
+    },
+    data = glob(["proto/**/*.proto"]) + [
+        "@protobuf//:well_known_type_protos",
+    ],
+    tools = [
+        "@protobuf//:protoc",
+    ],
+    deps = all_crate_deps(build = True),
+)
+
+rust_library(
+    name = "nvcf_invocation_service_lib",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/server.rs"],
+    ),
+    aliases = aliases(),
+    # All three targets (library, binary, test) get the same crate_features.
+    # The library needs them so its optional jemalloc deps are picked up
+    # (and so the cfg-gated `use ... as _;` stubs in lib.rs that satisfy
+    # #![deny(unused_crate_dependencies)] fire). rust_test with `crate
+    # = ...` does NOT inherit them, so they have to be set on the test
+    # target too. Mirrors the experimental scaffold at
+    # /home/balaji/personal/nvcf-monorepo/nvcf-invocation-service/crates/server/BUILD.bazel.
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_name = "nvcf_invocation_service",
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":build_script"] + all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "server",
+    srcs = ["src/server.rs"],
+    aliases = aliases(),
+    # Mirrors the legacy default feature set: jemalloc + profiling (pprof HTTP).
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":nvcf_invocation_service_lib"] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "nvcf_invocation_service_test",
+    crate = ":nvcf_invocation_service_lib",
+    # `rust_test` with `crate = ...` does not inherit features from the
+    # library, so set them explicitly to match how the binary builds.
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    deps = all_crate_deps(normal_dev = True),
+)
+
+# Multi-arch OCI image. Distroless/cc base (libc; required for Rust +
+# jemalloc), binary at /usr/local/bin/server. Build/load/index/tar
+# targets live here. The internal NGC publish lanes (kaze,
+# nv-ngc-devops, ncp-dev) are defined under //nvidia-internal:* so the
+# registry coordinates stay out of the public OSS snapshot.
+rust_oci_image(
+    name = "image",
+    base = "@distroless_cc",
+    binary = ":server",
+    binary_path = "/usr/local/bin/server",
+    tags = ["nvcf-invocation-service"],
+    visibility = ["//visibility:public"],
+)

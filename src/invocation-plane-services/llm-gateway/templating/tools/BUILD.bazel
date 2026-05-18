@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "tools",
+    srcs = [
+        "call.go",
+        "call_id.go",
+        "calls.go",
+        "config.go",
+        "envelope.go",
+        "glm.go",
+        "kimi.go",
+        "minimax.go",
+        "parse_bare_array.go",
+        "parse_json.go",
+        "parse_native.go",
+    ],
+    embedsrcs = [
+        "embed/bare_array_call_schema.json",
+        "embed/bare_array_parameters_call_schema.json",
+        "embed/bare_call_schema.json",
+        "embed/generic_tool_call_sysprompt.tmpl",
+        "embed/parallel_call_schema.json",
+        "embed/single_call_schema.json",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/templating/tools",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/container/set",
+        "//internal/encoding/json",
+        "//internal/must",
+        "//internal/pool",
+        "//internal/ptr",
+        "//models",
+        "//templating/output",
+        "@com_github_go_viper_mapstructure_v2//:mapstructure",
+        "@com_github_kaptinlin_jsonrepair//:jsonrepair",
+        "@com_github_rs_zerolog//log",
+        "@com_github_santhosh_tekuri_jsonschema_v5//:jsonschema",
+        "@com_jetify_go_typeid//:typeid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":tools",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "tools_test",
+    srcs = [
+        "calls_test.go",
+        "envelope_external_test.go",
+        "envelope_test.go",
+        "glm_test.go",
+        "kimi_test.go",
+        "minimax_test.go",
+        "parse_native_internals_test.go",
+        "parse_native_test.go",
+        "tool_call_parsing_test.go",
+    ],
+    embed = [":tools"],
+    deps = [
+        "//internal/ptr",
+        "//models",
+        "//templating/prompt",
+        "//templating/testhelpers",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

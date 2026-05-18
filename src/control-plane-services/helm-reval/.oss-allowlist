@@ -32,15 +32,21 @@ vendor/**
 
 # Bazel scaffold. Mirrored to GitHub so OSS users can `bazel build //...`
 # and `bazel test //...` against the same sources we build internally.
-# BUILD.bazel and *.bzl under cmd/, pkg/, vendor/, etc. are already
-# covered by the **-style allowlist rules above; the entries below cover
-# the top-level files that no glob otherwise matches.
+# Some references inside MODULE.bazel (the distroless base image, the
+# bazel-ci CI runner image) still resolve to internal NVIDIA registries;
+# OSS contributors can swap MODULE.bazel's oci.pull entry for a public
+# distroless base. BUILD.bazel and *.bzl under cmd/, pkg/, vendor/, etc.
+# are already covered by the **-style allowlist rules above; the entries
+# below cover the top-level files that no glob otherwise matches.
+BUILD.bazel
+MODULE.bazel
+MODULE.bazel.lock
 .bazelrc
 .bazelversion
 .bazelignore
-MODULE.bazel
-MODULE.bazel.lock
-BUILD.bazel
-rules/**
+patches/**
 platforms/**
+rules/**
+scripts/.bazel-remote-probe
+third_party/**
 tools/workspace_status.sh

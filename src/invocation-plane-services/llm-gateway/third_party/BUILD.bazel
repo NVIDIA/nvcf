@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Bridge target for the libtokenizers static library. The two
+# http_archives in MODULE.bazel each expose a per-arch cc_import; this
+# alias select()s on the target platform so go_library cdeps can carry
+# a single label without arch-aware deps lists at every callsite.
+cc_library(
+    name = "libtokenizers",
+    visibility = ["//visibility:public"],
+    deps = select({
+        "@platforms//cpu:arm64": ["@libtokenizers_linux_arm64//:libtokenizers"],
+        "@platforms//cpu:x86_64": ["@libtokenizers_linux_amd64//:libtokenizers"],
+    }),
+)

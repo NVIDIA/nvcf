@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "api",
+    srcs = [
+        "auth_middleware.go",
+        "chat_handler.go",
+        "context.go",
+        "handlers.go",
+        "middleware.go",
+        "model_ids.go",
+        "openai_endpoint_handlers.go",
+        "openai_remaining_handlers.go",
+        "openai_surface.go",
+        "provider_error.go",
+        "proxy_handler.go",
+        "ratelimit.go",
+        "request_models.go",
+        "responses_converter.go",
+        "responses_handler.go",
+        "routes.go",
+        "session_affinity.go",
+        "token_count.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//api/adapters/openairesponses",
+        "//config",
+        "//internal/must",
+        "//internal/ptr",
+        "//internal/servicetier",
+        "//mcp",
+        "//models",
+        "//nvcf",
+        "//provider",
+        "//ratelimit",
+        "//requestctx",
+        "//telemetry",
+        "//templating/prompt",
+        "//templating/tools",
+        "//tokenizers",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_labstack_echo_v4//:echo",
+        "@com_github_rs_zerolog//log",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel//propagation",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":api",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "api_test",
+    srcs = [
+        "auth_middleware_test.go",
+        "embeddings_handler_test.go",
+        "middleware_telemetry_test.go",
+        "middleware_test.go",
+        "model_ids_test.go",
+        "openai_routes_test.go",
+        "rate_limit_accounting_test.go",
+        "responses_handler_test.go",
+        "session_affinity_test.go",
+    ],
+    embed = [":api"],
+    deps = [
+        "//api/adapters/openairesponses",
+        "//config",
+        "//internal/ptr",
+        "//models",
+        "//nvcf",
+        "//provider",
+        "//ratelimit",
+        "//requestctx",
+        "//telemetry",
+        "@com_github_labstack_echo_v4//:echo",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//propagation",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)

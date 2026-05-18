@@ -300,3 +300,84 @@ func Test_generateExportersAndService(t *testing.T) {
 		})
 	}
 }
+
+// Test_exporterMetrics_Datadog_KeepsFirstCumulativeSample is a regression test
+// for the missing nvct_worker_service_result_total metric in Datadog (task
+// scenario). Without metrics.sums.initial_cumulative_monotonic_value=keep, the
+// Datadog exporter drops the first observed sample of a cumulative monotonic
+// counter, which silently loses single-sample counters emitted by short-lived
+// task pods.
+func Test_exporterMetrics_Datadog_KeepsFirstCumulativeSample(t *testing.T) {
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Metrics: &Telemetry{
+				Name:     "example-metrics",
+				Protocol: ProtocolGRPC,
+				Provider: ProviderDatadog,
+				Endpoint: "datadoghq.com",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+
+	exporterId, err := exporterMetrics(cfg, otelConfig)
+	if err != nil {
+		t.Fatalf("exporterMetrics() unexpected error = %v", err)
+	}
+
+	expectedExporterId := fmt.Sprintf("datadog/%s-example-metrics-metrics", ProviderDatadog)
+	assert.Equal(t, expectedExporterId, exporterId, "unexpected exporter id")
+
+	exporter, ok := otelConfig.Exporters[exporterId]
+	if !ok {
+		t.Fatalf("exporter %q not registered in otelConfig.Exporters", exporterId)
+	}
+
+	metricsBlock, ok := exporter["metrics"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected exporter[\"metrics\"] to be a map, got %T", exporter["metrics"])
+	}
+	sumsBlock, ok := metricsBlock["sums"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected metrics[\"sums\"] to be a map, got %T", metricsBlock["sums"])
+	}
+
+	assert.Equal(t, "to_delta", sumsBlock["cumulative_monotonic_mode"],
+		"cumulative_monotonic_mode must be set explicitly")
+	assert.Equal(t, "keep", sumsBlock["initial_cumulative_monotonic_value"],
+		"initial_cumulative_monotonic_value must be 'keep' so the first sample of "+
+			"short-lived counters (e.g. nvct_worker_service_result_total) is not dropped")
+	assert.Equal(t, "15s", exporter["timeout"],
+		"exporter timeout must be set to bound the final batch flush before short-lived task pods terminate")
+}
+
+// Datadog metrics exporter must work for both GRPC and HTTP transport
+// configurations — the cumulative-monotonic fix is protocol-agnostic.
+func Test_exporterMetrics_Datadog_ProtocolAgnostic(t *testing.T) {
+	for _, proto := range []Protocol{ProtocolGRPC, ProtocolHTTP} {
+		t.Run(string(proto), func(t *testing.T) {
+			cfg := TelemetryConfig{
+				Telemetries: Telemetries{
+					Metrics: &Telemetry{
+						Name:     "example-metrics",
+						Protocol: proto,
+						Provider: ProviderDatadog,
+						Endpoint: "datadoghq.com",
+					},
+				},
+			}
+			otelConfig := &OpenTelemetryConfig{}
+			initializeConfigMaps(otelConfig)
+
+			exporterId, err := exporterMetrics(cfg, otelConfig)
+			if err != nil {
+				t.Fatalf("exporterMetrics(proto=%s) unexpected error = %v", proto, err)
+			}
+			exporter := otelConfig.Exporters[exporterId]
+			metricsBlock := exporter["metrics"].(map[string]interface{})
+			sumsBlock := metricsBlock["sums"].(map[string]interface{})
+			assert.Equal(t, "keep", sumsBlock["initial_cumulative_monotonic_value"])
+		})
+	}
+}

@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rs_autoscaler_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//rules/oci:defs.bzl", "rust_oci_image")
+
+# build.rs uses tonic-build + prost-build to compile crates/server/proto/nvcf.proto.
+# Inside the crate it tries to find protoc via protoc_bin_vendored, but we
+# override PROTOC to the hermetic @protobuf//:protoc the bzlmod protoc
+# extension fetches; same pattern as nvcf-invocation-service !313.
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    build_script_env = {
+        "PROTOC": "$(execpath @protobuf//:protoc)",
+        # @protobuf//:well_known_type_protos is a filegroup whose files
+        # live in the cargo_runfiles tree under protobuf+/src/google/protobuf/
+        # (sibling of _main/). cargo_build_script runs from
+        # _main/crates/server/, so the well-known-type include dir resolves
+        # via three parent hops.
+        "PROTOC_WKT_DIR": "../../../protobuf+/src",
+    },
+    data = glob(["proto/**/*.proto"]) + [
+        "@protobuf//:well_known_type_protos",
+    ],
+    tools = [
+        "@protobuf//:protoc",
+    ],
+    deps = all_crate_deps(build = True),
+)
+
+rust_library(
+    name = "rs_autoscaler_lib",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/server.rs"],
+    ),
+    aliases = aliases(),
+    crate_name = "rs_autoscaler",
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":build_script"] + all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "server",
+    srcs = ["src/server.rs"],
+    aliases = aliases(),
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":rs_autoscaler_lib"] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "rs_autoscaler_test",
+    crate = ":rs_autoscaler_lib",
+    deps = all_crate_deps(normal_dev = True),
+)
+
+# Multi-arch OCI image. distroless/cc base (libc; required for Rust +
+# openssl-sys-vendored), binary at /usr/local/bin/server.
+# Build/load/index/tar targets live here. The internal NGC publish
+# lanes (kaze, nv-ngc-devops, ncp-dev) are defined under
+# //nvidia-internal:* so the registry coordinates stay out of the
+# public OSS snapshot.
+rust_oci_image(
+    name = "image",
+    base = "@distroless_cc",
+    binary = ":server",
+    binary_path = "/usr/local/bin/server",
+    tags = ["rs-autoscaler"],
+    visibility = ["//visibility:public"],
+)

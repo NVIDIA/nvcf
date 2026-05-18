@@ -1,10 +1,70 @@
 # llm-api-gateway
 
-> Note: this project does not build outside NVIDIA yet. The bootstrap step
-> populates `nvidia-lpu-vendor/` from `github.com/nvidia-lpu/*` Go modules
-> (`harmony`, `minijinja`, `parsec`) that are not publicly available today.
-> Without access to those modules, `mise run bootstrap` and any `go build`
-> that follows will fail. Public release of those dependencies is in progress.
+> Note: this project does not build outside NVIDIA yet. The Bazel
+> build path fetches `github.com/nvidia-lpu/{harmony,minijinja,parsec}`
+> Go modules from private repositories; the legacy Makefile path uses
+> `mise run bootstrap` to populate `nvidia-lpu-vendor/` from the same
+> modules. Both paths require an authorized GitHub token. Public release
+> of those dependencies is in progress.
+
+## Build with Bazel
+
+Bazel is the canonical build path. Set `NV_GITHUB_TOKEN` (a GitHub PAT
+with SSO-authorized access to the `nvidia-lpu` org) in your environment
+or as a CI/CD variable; Gazelle's `go_deps` extension uses it to fetch
+`github.com/nvidia-lpu/{harmony,minijinja,parsec}`. Without it the
+build fails when fetching those modules.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run all tests with auto-retry on timing-sensitive failures.
+# Two tokenizer-fixture-dependent tests are tagged `manual` and are
+# excluded from `//...`; run them explicitly when the legacy
+# `bin/setup-tokenizers.sh` working tree is in place.
+bazel test //... --flaky_test_attempts=3
+
+# Build the linux/amd64 OCI image index for each binary. arm64 is
+# disabled by default in rules/oci/private/common.bzl because zig's
+# lld (under hermetic_cc_toolchain) rejects the
+# `-Wl,--allow-multiple-definition` flag that upstream harmony /
+# minijinja require to link multiple Rust static libs.
+bazel build //:image_index
+bazel build //:rate_limit_sync_worker_image_index
+
+# Push to the internal NGC registries (kaze / nv-ngc-devops / ncp-dev).
+bazel run //:image_push
+bazel run //:image_push_devops
+bazel run //:image_push_ncp_dev
+
+# Regenerate per-package BUILD files after Go source changes.
+bazel run //:gazelle
+
+# Refresh module graph after go.mod changes.
+bazel mod tidy
+```
+
+### Bazel scaffold notes
+
+- `patches/` carries small unified diffs applied via
+  `go_deps.module_override` against three external modules:
+  - `daulet/tokenizers` — strips the upstream Rust BUILD and wires
+    libtokenizers.a (fetched as an `http_archive` in `MODULE.bazel`,
+    sha256-pinned) as a `cdep`.
+  - `nvidia-lpu/harmony` and `nvidia-lpu/minijinja` — supply a
+    hand-written BUILD that wraps the per-arch
+    libharmony_cabi.a / libminijinja_cabi.a (shipped inside the
+    module zip) in `cc_import` + `cc_library` select(), then
+    feeds them to `go_library` via `cdeps`. Also renames the
+    misdeclared `package harmony_cabi` -> `package uniffi` to
+    match the directory name.
+- `third_party/BUILD.bazel` exposes a select()-on-arch
+  `cc_library` that the daulet/tokenizers patch consumes for
+  libtokenizers.
+
+Local Bazel cache setup is documented in the nvcf/nvcf umbrella's
+`nvidia-internal/bazel-cheatsheet.md`.
 
 `llm-api-gateway` is a slimmed-down OpenAI-compatible gateway for routing chat
 and responses traffic onto NVCF functions. It was bootstrapped from

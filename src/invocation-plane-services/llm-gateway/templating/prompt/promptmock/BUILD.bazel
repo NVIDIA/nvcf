@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "promptmock",
+    srcs = [
+        "text_template.go",
+        "tokenized_template.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/templating/prompt/promptmock",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//models",
+        "//templating/output",
+        "//templating/prompt",
+        "//templating/token",
+        "//templating/tools",
+        "@org_uber_go_mock//gomock",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":promptmock",
+    visibility = ["//visibility:public"],
+)

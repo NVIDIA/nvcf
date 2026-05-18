@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "prompt",
+    srcs = [
+        "chat.go",
+        "classification.go",
+        "deepseek.go",
+        "doc.go",
+        "ephemeral_template.go",
+        "jinja.go",
+        "llama.go",
+        "openai_disabled.go",
+        "orderedmap.go",
+        "parser.go",
+        "prompt.go",
+        "reranking.go",
+        "template.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/templating/prompt",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/container/set",
+        "//internal/encoding/json",
+        "//internal/must",
+        "//internal/pool",
+        "//internal/ptr",
+        "//models",
+        "//templating/output",
+        "//templating/token",
+        "//templating/tools",
+        "@com_github_nvidia_lpu_minijinja//:minijinja",
+        "@com_github_nvidia_lpu_parsec//orderedmap",
+        "@com_github_rs_zerolog//log",
+        "@dev_mway_go_chrono//clock",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":prompt",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "prompt_test",
+    srcs = [
+        "ephemeral_template_test.go",
+        "llama_test.go",
+        "orderedmap_test.go",
+        "prompt_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":prompt"],
+    # Some tests open files under ../../lib/tokenizers/vendor/ which
+    # are outside this package's sandbox. Tag manual so `bazel test //...`
+    # skips them; running them needs a working dir at the repo root
+    # with the legacy `bin/setup-tokenizers.sh` artifact tree in place.
+    tags = ["manual"],
+    deps = [
+        "//internal/must",
+        "//internal/ptr",
+        "//models",
+        "//templating",
+        "//templating/testhelpers",
+        "//templating/tools",
+        "@com_github_nvidia_lpu_minijinja//:minijinja",
+        "@com_github_nvidia_lpu_parsec//orderedmap",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@tools_gotest_v3//golden",
+    ],
+)

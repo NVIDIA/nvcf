@@ -1,0 +1,83 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@gazelle//:def.bzl", "gazelle")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+# gazelle:prefix github.com/hashicorp/consul-template
+# gazelle:proto disable_global
+# gazelle:go_naming_convention import_alias
+
+# Non-Go top-level dirs.
+# gazelle:exclude docs
+# gazelle:exclude examples
+# gazelle:exclude nv_releases
+# gazelle:exclude scripts
+
+gazelle(
+    name = "gazelle",
+)
+
+go_library(
+    name = "consul-template_lib",
+    srcs = [
+        "cli.go",
+        "flags.go",
+        "main.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//api",
+        "//config",
+        "//logging",
+        "//manager",
+        "//nv",
+        "//nv/telemetry",
+        "//service_os",
+        "//signals",
+        "//version",
+        "@com_github_hashicorp_go_uuid//:go-uuid",
+    ],
+)
+
+go_binary(
+    name = "ess-agent",
+    embed = [":consul-template_lib"],
+    visibility = ["//visibility:public"],
+    # Mirror Dockerfile ldflags. ess-agent does not consume the
+    # nvcf-go version package; stamping is left to STABLE_VERSION/
+    # STABLE_GIT_COMMIT via workspace_status.sh + container tags.
+)
+
+go_test(
+    name = "consul-template_test",
+    srcs = [
+        "cli_test.go",
+        "main_test.go",
+    ],
+    embed = [":consul-template_lib"],
+    deps = [
+        "//config",
+        "//dependency",
+        "//nv",
+        "//signals",
+        "//test",
+        "@com_github_hashicorp_consul_sdk//testutil",
+        "@com_github_hashicorp_go_gatedio//:go-gatedio",
+    ],
+)
+
+# Multi-arch OCI image. Distroless/go base, binary at /usr/bin/ess-agent.
+# Build/load/index/tar targets live here. The internal NGC publish lanes
+# (kaze, nv-ngc-devops, ncp-dev) are defined under //nvidia-internal:*
+# so the registry coordinates stay out of the public OSS snapshot.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":ess-agent",
+    binary_path = "/usr/bin/ess-agent",
+    tags = ["ess-agent"],
+    visibility = ["//visibility:public"],
+)

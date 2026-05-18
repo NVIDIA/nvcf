@@ -324,6 +324,18 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 				"enabled":         true,
 				"hostname_source": "first_resource",
 			},
+			// Ensure short-lived counters (e.g. nvct_worker_service_result_total
+			// emitted by task containers) are not silently dropped while the
+			// Datadog exporter waits for a t-1 baseline. Keeping the initial
+			// value exports the first observed sample as-is, and a bounded
+			// shutdown timeout flushes the final batch before the task pod exits.
+			"metrics": map[string]interface{}{
+				"sums": map[string]interface{}{
+					"cumulative_monotonic_mode": "to_delta",
+					"initial_cumulative_monotonic_value": "keep",
+				},
+			},
+			"timeout": "15s",
 		}
 	case ProviderAzureMonitor:
 		exporterType = "azuremonitor"

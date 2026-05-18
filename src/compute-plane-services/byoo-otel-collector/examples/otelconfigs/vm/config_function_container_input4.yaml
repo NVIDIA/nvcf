@@ -144,6 +144,11 @@ exporters:
     host_metadata:
       enabled: true
       hostname_source: first_resource
+    metrics:
+      sums:
+        cumulative_monotonic_mode: to_delta
+        initial_cumulative_monotonic_value: keep
+    timeout: 15s
   otlp/SERVICENOW-nv-lightstep-stg-traces:
     endpoint: endpoint:8323
     headers:

@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "ratelimit",
+    srcs = [
+        "admission.go",
+        "defaults.go",
+        "nats_synchronizer.go",
+        "nop_limiter.go",
+        "olric_store.go",
+        "pubsub_consumer.go",
+        "pubsub_synchronizer.go",
+        "ratelimit.go",
+        "ratelimit_result.go",
+        "resources.go",
+        "sync_events.go",
+        "synchronizer.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pubsub",
+        "//telemetry",
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_olric_data_olric//:olric",
+        "@com_github_rs_zerolog//:zerolog",
+        "@com_github_rs_zerolog//log",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@org_golang_x_sync//errgroup",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ratelimit",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ratelimit_test",
+    srcs = [
+        "fake_store_test.go",
+        "nats_synchronizer_test.go",
+        "olric_cluster_test.go",
+        "pubsub_consumer_mock_test.go",
+        "pubsub_consumer_test.go",
+        "pubsub_consumer_unit_test.go",
+        "ratelimit_result_test.go",
+        "ratelimit_sync_test.go",
+        "ratelimit_test.go",
+        "sync_events_test.go",
+    ],
+    embed = [":ratelimit"],
+    deps = [
+        "//config",
+        "//ratelimit/ratelimitmock",
+        "//util",
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_stretchr_testify//require",
+        "@com_github_stretchr_testify//suite",
+        "@org_uber_go_mock//gomock",
+    ],
+)

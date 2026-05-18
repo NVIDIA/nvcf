@@ -1,0 +1,72 @@
+--- a/BUILD.bazel	2026-05-15 10:35:29.681683399 -0700
++++ b/BUILD.bazel	2026-05-15 13:38:24.919511727 -0700
+@@ -1,59 +1,20 @@
+-load("@crate_index//:defs.bzl", "aliases", "all_crate_deps")
+-load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
+-load("@rules_go//go:def.bzl", "go_library", "go_test")
+-load("@rules_rust//rust:defs.bzl", "rust_static_library")
+-
+-# gazelle:exclude release
+-# gazelle:prefix github.com/daulet/tokenizers
+-gazelle(
+-    name = "gazelle",
+-)
+-
+-gazelle(
+-    name = "gazelle-update-repos",
+-    args = [
+-        "-from_file=go.mod",
+-        "-to_macro=deps.bzl%go_dependencies",
+-        "-prune",
+-    ],
+-    command = "update-repos",
+-)
+-
+-rust_static_library(
+-    name = "tokenizers_rs",
+-    srcs = glob([
+-        "src/**/*.rs",
+-    ]),
+-    version = "1.20.2",
+-    aliases = aliases(),
+-    proc_macro_deps = all_crate_deps(
+-        proc_macro = True,
+-    ),
+-    visibility = ["//visibility:public"],
+-    deps = all_crate_deps(),
+-)
+-
+-go_test(
+-    name = "tokenizers_test",
+-    srcs = ["tokenizer_test.go"],
+-    data = ["//test:data"],
+-    embedsrcs = ["//test:embeddata"],
+-    deps = [
+-        ":tokenizers",
+-        "@com_github_stretchr_testify//assert",
+-        "@com_github_stretchr_testify//require",
+-    ],
+-)
++load("@io_bazel_rules_go//go:def.bzl", "go_library")
+ 
++# Replaces upstream daulet/tokenizers BUILD.bazel which relies on Cargo
++# + rust_static_library. We provide libtokenizers.a separately via the
++# `libtokenizers_linux_{amd64,arm64}` http_archives in llm-api-gateway's
++# MODULE.bazel; the cdep label below resolves to whichever arch's static
++# library matches the target platform.
++#
++# The `@io_bazel_rules_go` apparent name is what go_deps maps `rules_go`
++# to inside its fetched external repos; `@rules_go` is not visible here.
+ go_library(
+     name = "tokenizers",
+     srcs = [
+         "tokenizer.go",
+         "tokenizers.h",
+     ],
+-    cdeps = [
+-        ":tokenizers_rs",
+-    ],
++    cdeps = ["@@//third_party:libtokenizers"],
+     cgo = True,
+     importpath = "github.com/daulet/tokenizers",
+     visibility = ["//visibility:public"],

@@ -1,0 +1,64 @@
+diff --git a/BUILD.bazel b/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/BUILD.bazel
+@@ -0,0 +1,46 @@
++load("@io_bazel_rules_go//go:def.bzl", "go_library")
++
++# Same pattern as the harmony patch: wrap per-arch libminijinja_cabi.a
++# in cc_import + select(), feed to go_library via cdeps so Bazel exposes
++# the .a to the linker.
++cc_import(
++    name = "libminijinja_cabi_linux_amd64",
++    static_library = "lib/x86_64-unknown-linux-musl/libminijinja_cabi.a",
++    visibility = ["//visibility:private"],
++)
++
++cc_import(
++    name = "libminijinja_cabi_linux_arm64",
++    static_library = "lib/aarch64-unknown-linux-musl/libminijinja_cabi.a",
++    visibility = ["//visibility:private"],
++)
++
++cc_library(
++    name = "libminijinja_cabi",
++    deps = select({
++        "@io_bazel_rules_go//go/platform:linux_arm64": [":libminijinja_cabi_linux_arm64"],
++        "@io_bazel_rules_go//go/platform:linux_amd64": [":libminijinja_cabi_linux_amd64"],
++    }),
++    visibility = ["//visibility:private"],
++)
++
++go_library(
++    name = "minijinja",
++    srcs = [
++        "environment.go",
++        "environment_options.go",
++        "interner.go",
++        "list_encoder.go",
++        "minijinja.h",
++        "object_encoder.go",
++    ],
++    cdeps = [":libminijinja_cabi"],
++    cgo = True,
++    clinkopts = ["-ldl", "-lm", "-Wl,--allow-multiple-definition"],
++    importpath = "github.com/nvidia-lpu/minijinja",
++    visibility = ["//visibility:public"],
++    deps = [
++        "//internal/set",
++        "@dev_mway_go_chrono//clock",
++    ],
++)
+diff --git a/internal/set/BUILD.bazel b/internal/set/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/internal/set/BUILD.bazel
+@@ -0,0 +1,8 @@
++load("@io_bazel_rules_go//go:def.bzl", "go_library")
++
++go_library(
++    name = "set",
++    srcs = ["set.go"],
++    importpath = "github.com/nvidia-lpu/minijinja/internal/set",
++    visibility = ["//:__subpackages__"],
++)

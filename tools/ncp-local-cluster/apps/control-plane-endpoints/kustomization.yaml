@@ -8,4 +8,3 @@ resources:
   - namespaces.yaml
   - httproute-sis.yaml
   - httproute-reval.yaml
-  - tcproute-nats.yaml

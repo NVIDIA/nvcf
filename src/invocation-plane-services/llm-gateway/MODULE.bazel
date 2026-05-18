@@ -1,0 +1,232 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Bzlmod module definition for llm-api-gateway.
+
+Two binaries:
+  cmd/llm-api-gateway                     -> main HTTP gateway
+  cmd/llm-api-gateway-rate-limit-sync-worker -> rate limit sync worker
+
+Dependencies that need special handling:
+
+- github.com/nvidia-lpu/{harmony,minijinja,parsec} are private NVIDIA
+  Go modules with embedded cgo bindings to Rust static libraries. They
+  ship pre-built libharmony_cabi.a / libminijinja_cabi.a in the module
+  zip; cgo's #cgo LDFLAGS: ${SRCDIR}/... directives find them
+  automatically. Gazelle's go_deps extension fetches them like any
+  other module; auth is provided by `git config url.insteadOf` against
+  github.com (see .gitlab-ci.yml).
+
+- github.com/daulet/tokenizers needs libtokenizers.a linked in via
+  cgo. We fetch it as a public OCI release tarball via http_archive
+  (per-arch sha256-pinned, see below) and inject the cc_import as a
+  cdep via go_deps.gazelle_override + a tiny BUILD patch.
+"""
+
+module(
+    name = "llm_api_gateway",
+    version = "0.0.1",
+)
+
+# ============================================================================
+# OCI containers.
+# ============================================================================
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_cc", version = "0.0.17")
+bazel_dep(name = "rules_oci", version = "2.2.7")
+bazel_dep(name = "rules_pkg", version = "1.2.0")
+bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
+bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
+bazel_dep(name = "rules_python", version = "1.4.1")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    ignore_root_user_error = True,
+    python_version = "3.11",
+)
+
+# ============================================================================
+# Go.
+# ============================================================================
+bazel_dep(name = "rules_go", version = "0.60.0")
+bazel_dep(name = "gazelle", version = "0.48.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.25.6")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+
+# daulet/tokenizers needs libtokenizers.a linked. Apply a patch that
+# strips the upstream Cargo-based BUILD.bazel and replaces it with a
+# minimal Gazelle-generated go_library that consumes our cc_import.
+# The patch is applied to the fetched module BEFORE Gazelle scans.
+go_deps.module_override(
+    patch_strip = 1,
+    patches = ["//patches:daulet_tokenizers_strip_rust_build.patch"],
+    path = "github.com/daulet/tokenizers",
+)
+go_deps.gazelle_override(
+    # The patch above provides a complete BUILD.bazel for daulet/tokenizers
+    # that wires cdeps = ["@@//third_party:libtokenizers"]. Telling Gazelle
+    # not to regenerate keeps the cdeps in place.
+    build_file_generation = "off",
+    path = "github.com/daulet/tokenizers",
+)
+
+# Upstream harmony ships no BUILD.bazel and uses cgo to link
+# libharmony_cabi.a (the pre-built Rust static library shipped in the
+# module zip at ext/target/<triple>/dist/). Gazelle would generate a
+# BUILD that puts the .a only in clinkopts as a path string; Bazel's
+# sandbox then doesn't expose the file to ld at link time. Patch in
+# a hand-written BUILD.bazel that lists the .a in srcs (per-arch via
+# select) so Bazel correctly materializes it in the sandbox.
+#
+# The uniffi back-end (encoding_uniffi.go + internal/uniffi) is opt-in
+# via `-tags uniffi` per upstream BUILD_INSTRUCTIONS.md and is not
+# included in this BUILD; the default `encoding_raw_ffi.go` path is
+# what ships.
+go_deps.module_override(
+    patch_strip = 1,
+    patches = ["//patches:nvidia_lpu_harmony_build.patch"],
+    path = "github.com/nvidia-lpu/harmony",
+)
+go_deps.gazelle_override(
+    build_file_generation = "off",
+    path = "github.com/nvidia-lpu/harmony",
+)
+
+# Upstream minijinja: same story as harmony. Patch in a hand-written
+# BUILD.bazel that puts libminijinja_cabi.a in srcs (per-arch via
+# select) so the linker can find it.
+go_deps.module_override(
+    patch_strip = 1,
+    patches = ["//patches:nvidia_lpu_minijinja_build.patch"],
+    path = "github.com/nvidia-lpu/minijinja",
+)
+go_deps.gazelle_override(
+    build_file_generation = "off",
+    path = "github.com/nvidia-lpu/minijinja",
+)
+use_repo(
+    go_deps,
+    "com_github_daulet_tokenizers",
+    "com_github_go_viper_mapstructure_v2",
+    "com_github_google_uuid",
+    "com_github_kaptinlin_jsonrepair",
+    "com_github_labstack_echo_v4",
+    "com_github_maypok86_otter",
+    "com_github_nats_io_nats_go",
+    "com_github_nvidia_lpu_harmony",
+    "com_github_nvidia_lpu_minijinja",
+    "com_github_nvidia_lpu_parsec",
+    "com_github_olric_data_olric",
+    "com_github_rs_zerolog",
+    "com_github_santhosh_tekuri_jsonschema_v5",
+    "com_github_stretchr_testify",
+    "com_google_cloud_go_pubsub_v2",
+    "com_jetify_go_sse",
+    "com_jetify_go_typeid",
+    "dev_mway_go_chrono",
+    "io_k8s_api",
+    "io_k8s_apimachinery",
+    "io_k8s_client_go",
+    "io_opentelemetry_go_otel",
+    "io_opentelemetry_go_otel_exporters_otlp_otlpmetric_otlpmetricgrpc",
+    "io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracegrpc",
+    "io_opentelemetry_go_otel_exporters_stdout_stdouttrace",
+    "io_opentelemetry_go_otel_metric",
+    "io_opentelemetry_go_otel_sdk",
+    "io_opentelemetry_go_otel_sdk_metric",
+    "io_opentelemetry_go_otel_trace",
+    "org_golang_google_api",
+    "org_golang_google_grpc",
+    "org_golang_google_protobuf",
+    "org_golang_x_sync",
+    "org_uber_go_mock",
+    "tools_gotest_v3",
+)
+
+# ============================================================================
+# libtokenizers static library. Public GitHub release from
+# daulet/tokenizers; per-arch tarballs, each contains a single
+# libtokenizers.a at the root. Pinned by sha256 for reproducibility.
+# ============================================================================
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+_LIBTOKENIZERS_VERSION = "v1.24.0"
+
+http_archive(
+    name = "libtokenizers_linux_amd64",
+    build_file_content = """
+# Native cc_import; no load() so the http_archive's repo doesn't need
+# visibility into @rules_cc. The cc_import works in Bazel 8 against
+# rules_cc 0.0.x as well as the native fallback.
+cc_import(
+    name = "libtokenizers",
+    static_library = "libtokenizers.a",
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "a553d787ea53b14163e7422dc5f9832cff8fb2e3246b1d46fa58a43a72e67a64",
+    urls = ["https://github.com/daulet/tokenizers/releases/download/{v}/libtokenizers.Linux-x86_64.tar.gz".format(v = _LIBTOKENIZERS_VERSION)],
+)
+
+http_archive(
+    name = "libtokenizers_linux_arm64",
+    build_file_content = """
+# Native cc_import; no load() so the http_archive's repo doesn't need
+# visibility into @rules_cc. The cc_import works in Bazel 8 against
+# rules_cc 0.0.x as well as the native fallback.
+cc_import(
+    name = "libtokenizers",
+    static_library = "libtokenizers.a",
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "099329526f29b99a25ede493555f5cf2fa09c59c5da028d469ea515231842d85",
+    urls = ["https://github.com/daulet/tokenizers/releases/download/{v}/libtokenizers.Linux-aarch64.tar.gz".format(v = _LIBTOKENIZERS_VERSION)],
+)
+
+# ============================================================================
+# C++ cross-compilation (multi-arch container builds).
+# ============================================================================
+zig = use_extension("@hermetic_cc_toolchain//toolchain:ext.bzl", "toolchains")
+use_repo(zig, "zig_sdk")
+
+register_toolchains(
+    "@zig_sdk//toolchain:linux_arm64_gnu.2.38",
+)
+
+# ============================================================================
+# OCI base image. distroless/cc (not distroless/go) because the cgo
+# linkage from harmony / minijinja / tokenizers requires libc.
+# ============================================================================
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+oci.pull(
+    name = "distroless_cc",
+    digest = "sha256:80e21701e5253088ee8ca22f2ad8fc5d08ca5bf730a6eea5d68ea268c33e9831",
+    image = "nvcr.io/nvidia/distroless/cc",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64",
+    ],
+)
+use_repo(
+    oci,
+    "distroless_cc",
+    "distroless_cc_linux_amd64",
+    "distroless_cc_linux_arm64",
+)

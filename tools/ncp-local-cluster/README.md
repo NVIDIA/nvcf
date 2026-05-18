@@ -155,9 +155,10 @@ make build-and-deploy-multicluster \
   CONTROL_PLANE_DOMAIN=control-plane.dev.test
 ```
 
-The domain is applied to both compute-plane CoreDNS aliases and control-plane
-Gateway route hostnames for SIS and ReVal. NATS uses a TCP route and receives
-only the compute DNS alias.
+The domain is applied to compute-plane CoreDNS aliases and to the local
+control-plane Gateway route hostnames for SIS and ReVal. The NATS Gateway route
+is owned by the self-managed stack `nvcf-gateway-routes` chart; ncp-local only
+provides the Gateway TCP listener and the compute-plane DNS alias.
 
 Run the dry Makefile checks without creating k3d clusters:
 

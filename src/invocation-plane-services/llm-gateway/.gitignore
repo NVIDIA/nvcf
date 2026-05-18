@@ -18,3 +18,8 @@
 dist/
 libtokenizers.a
 /llm-api-gateway
+
+# Bazel output symlinks at the workspace root.
+/bazel-*
+.bazel-cache/
+user.bazelrc

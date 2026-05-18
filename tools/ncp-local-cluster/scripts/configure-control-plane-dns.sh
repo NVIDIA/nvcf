@@ -21,21 +21,28 @@ if [ "${1:-}" = "--dry-run" ]; then
   dry_run=true
 fi
 
-cluster_name="${CLUSTER_NAME:-ncp-local-compute-1}"
 domain="${CONTROL_PLANE_DOMAIN:-nvcf-control-plane.test}"
-network_name="k3d-${cluster_name}"
 
-gateway_ip="${CONTROL_PLANE_GATEWAY_IP:-}"
-if [ -z "$gateway_ip" ]; then
-  gateway_ip="$(docker network inspect "$network_name" --format '{{ (index .IPAM.Config 0).Gateway }}')"
+sis_ip="${CONTROL_PLANE_SIS_SERVICE_IP:-}"
+reval_ip="${CONTROL_PLANE_REVAL_SERVICE_IP:-}"
+nats_ip="${CONTROL_PLANE_NATS_SERVICE_IP:-}"
+
+if [ -z "$sis_ip" ]; then
+  sis_ip="$(kubectl -n sis get service api -o jsonpath='{.spec.clusterIP}')"
+fi
+if [ -z "$reval_ip" ]; then
+  reval_ip="$(kubectl -n nvcf get service reval -o jsonpath='{.spec.clusterIP}')"
+fi
+if [ -z "$nats_ip" ]; then
+  nats_ip="$(kubectl -n nats-system get service nats -o jsonpath='{.spec.clusterIP}')"
 fi
 
-if [ -z "$gateway_ip" ] || [ "$gateway_ip" = "<no value>" ]; then
-  echo "ERROR: unable to determine Docker gateway IP for ${network_name}" >&2
+if [ -z "$sis_ip" ] || [ -z "$reval_ip" ] || [ -z "$nats_ip" ]; then
+  echo "ERROR: unable to determine compute alias service ClusterIPs" >&2
   exit 1
 fi
 
-echo "Configuring CoreDNS ${domain} zone to ${gateway_ip}"
+echo "Configuring CoreDNS ${domain} zone to compute alias Services"
 
 yaml="$(cat <<YAML
 apiVersion: v1
@@ -49,9 +56,9 @@ data:
         errors
         cache 30
         hosts {
-            ${gateway_ip} sis.${domain}
-            ${gateway_ip} reval.${domain}
-            ${gateway_ip} nats.${domain}
+            ${sis_ip} sis.${domain}
+            ${reval_ip} reval.${domain}
+            ${nats_ip} nats.${domain}
             fallthrough
         }
     }

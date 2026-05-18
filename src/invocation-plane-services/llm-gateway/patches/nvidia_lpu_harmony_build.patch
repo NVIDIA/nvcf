@@ -1,0 +1,86 @@
+--- a/internal/uniffi/harmony_cabi.go
++++ b/internal/uniffi/harmony_cabi.go
+@@ -1,4 +1,4 @@
+-package harmony_cabi
++package uniffi
+ 
+ // #include <uniffi.h>
+ import "C"
+diff --git a/BUILD.bazel b/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/BUILD.bazel
+@@ -0,0 +1,51 @@
++load("@io_bazel_rules_go//go:def.bzl", "go_library")
++
++# Replaces upstream harmony (no BUILD shipped). Wraps the per-arch
++# libharmony_cabi.a static library in cc_import + select(); go_library's
++# cdeps attribute consumes it. This makes the .a a proper Bazel input
++# that the sandbox exposes to ld at link time (the path-as-string in
++# upstream's `#cgo LDFLAGS: ${SRCDIR}/...` would otherwise not be
++# materialized).
++cc_import(
++    name = "libharmony_cabi_linux_amd64",
++    static_library = "ext/target/x86_64-unknown-linux-musl/dist/libharmony_cabi.a",
++    visibility = ["//visibility:private"],
++)
++
++cc_import(
++    name = "libharmony_cabi_linux_arm64",
++    static_library = "ext/target/aarch64-unknown-linux-musl/dist/libharmony_cabi.a",
++    visibility = ["//visibility:private"],
++)
++
++cc_library(
++    name = "libharmony_cabi",
++    deps = select({
++        "@io_bazel_rules_go//go/platform:linux_arm64": [":libharmony_cabi_linux_arm64"],
++        "@io_bazel_rules_go//go/platform:linux_amd64": [":libharmony_cabi_linux_amd64"],
++    }),
++    visibility = ["//visibility:private"],
++)
++
++go_library(
++    name = "harmony",
++    srcs = [
++        "cgo.go",
++        "encoding_raw_ffi.go",
++        "encoding_uniffi.go",
++        "harmony.go",
++        "harmony.h",
++        "prefill.go",
++        "streamable_parser.go",
++    ],
++    cdeps = [":libharmony_cabi"],
++    cgo = True,
++    clinkopts = ["-ldl", "-lm", "-Wl,--allow-multiple-definition"],
++    importpath = "github.com/nvidia-lpu/harmony",
++    visibility = ["//visibility:public"],
++    deps = [
++        "//internal/uniffi",
++        "@dev_mway_go_pool//:pool",
++        "@dev_mway_go_x//slices",
++    ],
++)
+diff --git a/internal/uniffi/BUILD.bazel b/internal/uniffi/BUILD.bazel
+new file mode 100644
+--- /dev/null
++++ b/internal/uniffi/BUILD.bazel
+@@ -0,0 +1,17 @@
++load("@io_bazel_rules_go//go:def.bzl", "go_library")
++
++# Replaces upstream's missing BUILD for internal/uniffi. The directory
++# is `internal/uniffi` but the .go file declares `package harmony_cabi`;
++# the patch alongside this one renames it to `uniffi` so rules_go's
++# strict package-name check is satisfied.
++go_library(
++    name = "uniffi",
++    srcs = [
++        "harmony_cabi.go",
++        "harmony_uniffi.h",
++        "uniffi.h",
++    ],
++    cgo = True,
++    importpath = "github.com/nvidia-lpu/harmony/internal/uniffi",
++    visibility = ["//:__subpackages__"],
++)

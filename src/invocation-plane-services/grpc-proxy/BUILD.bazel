@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@gazelle//:def.bzl", "gazelle")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+# gazelle:prefix nvcf-grpc-proxy
+# gazelle:exclude local
+# gazelle:exclude vault
+# Keep the pre-generated nvcf/pb/*.pb.go and ratelimiter/pb/*.pb.go as
+# plain Go sources; do not regenerate them from .proto here. The upstream
+# repo's existing protoc flow handles regeneration; Bazel just compiles
+# the committed .pb.go files. Saves us a full protoc rules setup for a
+# pilot that does not need it.
+# gazelle:proto disable_global
+# gazelle:go_naming_convention import_alias
+gazelle(name = "gazelle")
+
+go_library(
+    name = "nvcf-grpc-proxy_lib",
+    srcs = ["main.go"],
+    importpath = "nvcf-grpc-proxy",
+    visibility = ["//visibility:private"],
+    # Build-time stamping. Mirrors the existing Dockerfile's go build
+    # behavior; values are resolved by tools/workspace_status.sh when
+    # bazel is invoked with --stamp.
+    x_defs = {
+        "main.Version": "{STABLE_VERSION}",
+        "main.GitCommit": "{STABLE_GIT_COMMIT}",
+        "main.GitBranch": "{STABLE_GIT_BRANCH}",
+        "main.BuildDate": "{BUILD_DATE}",
+        "main.BuildUser": "{STABLE_BUILD_USER}",
+        "main.GoVersion": "{STABLE_GO_VERSION}",
+    },
+    deps = [
+        "//proxy",
+        "@com_github_nvidia_nvcf_go//pkg/nvkit/config",
+        "@com_github_nvidia_nvcf_go//pkg/nvkit/logs",
+        "@com_github_nvidia_nvcf_go//pkg/nvkit/tracing",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_pflag//:pflag",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_binary(
+    name = "nvcf-grpc-proxy",
+    embed = [":nvcf-grpc-proxy_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "nvcf-grpc-proxy_test",
+    srcs = ["main_test.go"],
+    embed = [":nvcf-grpc-proxy_lib"],
+    deps = [
+        "@com_github_samber_lo//:lo",
+        "@org_golang_x_sync//errgroup",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+# Multi-arch OCI image. Matches the existing Dockerfile contract: the
+# binary lands at /usr/bin/app on a hardened distroless/go base.
+# Generated targets:
+#   //:image            host-arch image
+#   //:image_index      multi-arch index (amd64 + arm64)
+#   //:image_load       loads host-arch image into local docker
+# Push targets are defined in //nvidia-internal:BUILD.bazel so that the
+# internal registry coordinates stay out of the public OSS snapshot.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":nvcf-grpc-proxy",
+    binary_path = "/usr/bin/app",
+    tags = ["nvcf-grpc-proxy"],
+    visibility = ["//visibility:public"],
+)

@@ -41,6 +41,16 @@ nvcfGatewayRoutes:
       namespace: gateway
       # Listener (sectionName) on the Gateway to attach routes to
       listenerName: tcp
+    # Gateway for NATS client traffic over TCP.
+    # This route is disabled by default; when enabled, the referenced Gateway
+    # must expose a compatible TCP listener for NATS.
+    nats:
+      # Name of the Gateway resource to attach the NATS TCPRoute to
+      name: nats-gateway
+      # Namespace where the Gateway exists
+      namespace: gateway
+      # Listener (sectionName) on the Gateway to attach the route to
+      listenerName: nats
 
   # HTTPRoute configurations
   routes:
@@ -143,6 +153,17 @@ nvcfGatewayRoutes:
         name: grpc
         namespace: nvcf
         port: 10081
+      routeAnnotations: {}
+
+    # NATS client TCPRoute. Disabled by default because existing Gateway
+    # installs may not have a NATS TCP listener on port 4222.
+    nats:
+      enabled: false
+      name: nats
+      backend:
+        name: nats
+        namespace: nats-system
+        port: 4222
       routeAnnotations: {}
 
   # PodMonitors for Envoy Gateway proxy pods.

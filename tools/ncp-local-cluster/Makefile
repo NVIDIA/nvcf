@@ -67,6 +67,14 @@ KSM_NAMESPACE := observability
 KSM_RELEASE := kube-state-metrics
 KSM_CHART := prometheus-community/kube-state-metrics
 
+# === Credential provider sample image ===
+SAMPLE_IMAGE_REGISTRY ?= nvcr.io
+SAMPLE_NGC_ORG ?= ngc-org
+SAMPLE_NGC_TEAM ?= ngc-team
+SAMPLE_IMAGE_NAME ?= alpine-k8s
+SAMPLE_IMAGE_TAG ?= 1.30.12
+SAMPLE_IMAGE ?=
+
 # === Tool Check Macro ===
 # Usage: $(call require,<tool>,<install hint>)
 define require
@@ -185,14 +193,12 @@ destroy-control-plane: ## Destroy the local control-plane cluster
 start-compute-plane: ensure-docker-config ## Start one local compute-plane k3d cluster
 	@$(MAKE) CLUSTER_NAME=$(COMPUTE_CLUSTER_NAME) K3D_CONFIG_FILE=$(COMPUTE_PLANE_CONFIG_FILE) start
 
-deploy-compute-plane-addons: configure-compute-control-plane-dns deploy-compute-control-plane-endpoints deploy-csi-smb wait-for-csi-smb deploy-fake-gpu-operator wait-for-fake-gpu-operator validate-deployment cleanup-sample ## Deploy compute-plane addons only
+deploy-compute-plane-addons: deploy-compute-control-plane-endpoints configure-compute-control-plane-dns deploy-csi-smb wait-for-csi-smb deploy-fake-gpu-operator wait-for-fake-gpu-operator validate-deployment cleanup-sample ## Deploy compute-plane addons only
 	@echo "OK Compute-plane addons deployed"
 
 configure-compute-control-plane-dns: ## Configure compute-cluster DNS for local control-plane endpoints
-	$(call require,docker,See https://docs.docker.com/get-docker/)
 	$(call require,kubectl,See https://kubernetes.io/docs/tasks/tools/)
 	@CONTROL_PLANE_DOMAIN="$(CONTROL_PLANE_DOMAIN)" \
-		CLUSTER_NAME="$(COMPUTE_CLUSTER_NAME)" \
 		bash ./scripts/configure-control-plane-dns.sh
 
 deploy-compute-control-plane-endpoints: ## Deploy compute-cluster aliases for control-plane services
@@ -201,8 +207,9 @@ deploy-compute-control-plane-endpoints: ## Deploy compute-cluster aliases for co
 	@echo "========== COMPUTE CONTROL-PLANE ENDPOINT ALIASES =========="
 	@kubectl kustomize ./apps/compute-control-plane-endpoints | kubectl apply -f -
 	@CONTROL_PLANE_DOMAIN="$(CONTROL_PLANE_DOMAIN)" \
-		CONTROL_PLANE_HTTP_PORT="$(CONTROL_PLANE_HTTP_PORT)" \
-		CONTROL_PLANE_NATS_PORT="$(CONTROL_PLANE_NATS_PORT)" \
+		CONTROL_PLANE_CLUSTER_NAME="$(CONTROL_PLANE_CLUSTER_NAME)" \
+		CONTROL_PLANE_LB_HTTP_PORT="$(CONTROL_PLANE_HTTP_PORT)" \
+		CONTROL_PLANE_LB_NATS_PORT="$(CONTROL_PLANE_NATS_PORT)" \
 		CLUSTER_NAME="$(COMPUTE_CLUSTER_NAME)" \
 		bash ./scripts/configure-control-plane-endpoints.sh
 	@echo "OK Compute-plane endpoint aliases deployed for $(CONTROL_PLANE_DOMAIN)"
@@ -277,7 +284,13 @@ check-gateway-api:
 deploy-sample: # Depends on the cluster being up
 	@echo "========== CREDENTIAL PROVIDER VALIDATION =========="
 	@echo "Building and deploying sample application from ./sample directory..."
-	@kubectl kustomize ./sample | kubectl apply -f -
+	@SAMPLE_IMAGE="$(SAMPLE_IMAGE)" \
+		SAMPLE_IMAGE_REGISTRY="$(SAMPLE_IMAGE_REGISTRY)" \
+		SAMPLE_NGC_ORG="$(SAMPLE_NGC_ORG)" \
+		SAMPLE_NGC_TEAM="$(SAMPLE_NGC_TEAM)" \
+		SAMPLE_IMAGE_NAME="$(SAMPLE_IMAGE_NAME)" \
+		SAMPLE_IMAGE_TAG="$(SAMPLE_IMAGE_TAG)" \
+		bash ./scripts/render-sample.sh | kubectl apply -f -
 	@echo "Sample application deployment complete."
 
 deploy-nginx:
