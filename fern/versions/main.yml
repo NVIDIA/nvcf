@@ -218,6 +218,8 @@ navigation:
   - section: Development
     skip-slug: true
     contents:
+      - page: Architecture Overview
+        path: ../../docs/dev/architecture.md
       - page: Local Development
         path: ../../docs/user/local-development.md
       - page: Fake GPU Operator
