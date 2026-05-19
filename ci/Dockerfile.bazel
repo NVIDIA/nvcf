@@ -18,6 +18,7 @@ FROM ubuntu:24.04
 ARG BAZELISK_VERSION=1.25.0
 ARG BAZEL_VERSION=8.6.0
 ARG GRPCURL_VERSION=1.9.1
+ARG KUBEBUILDER_TOOLS_VERSION=1.30.3
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -70,6 +71,30 @@ RUN arch="$(uname -m)" && case "$arch" in x86_64) arch=x86_64;; aarch64|arm64) a
 RUN printf '#!/usr/bin/env bash\ndocker compose "$@"\n' > /usr/local/bin/docker-compose \
   && chmod +x /usr/local/bin/docker-compose
 
+# envtest binaries (Apache 2.0): supplies kube-apiserver, etcd, and
+# kubectl that controller-runtime's envtest framework loads via
+# KUBEBUILDER_ASSETS. nvca's //pkg/storage:storage_test and
+# //internal/miniservice:miniservice_test rely on envtest; without these
+# binaries the tests panic with "KUBEBUILDER_ASSETS not set".
+#
+# Source: kubernetes-sigs/controller-tools releases. The legacy
+# storage.googleapis.com/kubebuilder-tools/ bucket was retired and
+# returns 403; the canonical mirror is now controller-tools GitHub
+# releases (see envtest-releases.yaml in that repo). Tarball layout:
+#   controller-tools/envtest/{etcd,kube-apiserver,kubectl}
+# `--strip-components=2` drops both parents so binaries land directly
+# under /usr/local/kubebuilder/bin/.
+#
+# Version pin: kept in lockstep with the controller-runtime version
+# in nvca's go.mod (currently controller-runtime v0.19.x -> K8s 1.30.x).
+ENV KUBEBUILDER_ASSETS=/usr/local/kubebuilder/bin
+RUN arch="$(uname -m)" && case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac \
+  && mkdir -p /usr/local/kubebuilder/bin \
+  && curl -fSL "https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-v${KUBEBUILDER_TOOLS_VERSION}/envtest-v${KUBEBUILDER_TOOLS_VERSION}-linux-${arch}.tar.gz" \
+     | tar -xz --strip-components=2 -C /usr/local/kubebuilder/bin \
+  && /usr/local/kubebuilder/bin/kube-apiserver --version \
+  && /usr/local/kubebuilder/bin/etcd --version
+
 # Bazelisk (installed as `bazel`).
 RUN arch="$(uname -m)" && case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac \
   && curl -fSL -o /usr/local/bin/bazel \
@@ -83,4 +108,4 @@ RUN mkdir /tmp/warmup && cd /tmp/warmup \
   && bazel version \
   && rm -rf /tmp/warmup
 
-LABEL description="NVCF monorepo Bazel CI image - Ubuntu 24.04 + Bazel ${BAZEL_VERSION}"
+LABEL description="NVCF monorepo Bazel CI image - Ubuntu 24.04 + Bazel ${BAZEL_VERSION} + kubebuilder-tools ${KUBEBUILDER_TOOLS_VERSION}"
