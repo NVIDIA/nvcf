@@ -121,6 +121,7 @@ type computePlaneHealthResult struct {
 }
 
 var waitForComputePlaneHealth = waitForComputePlaneHealthDefault
+var selfHostedUpCurrentKubeContext = currentKubeContextName
 
 var selfHostedUpCmd = &cobra.Command{
 	Use:          "up",
@@ -231,7 +232,7 @@ func noopUpCleanup() {
 }
 
 func (r *selfHostedUpRun) run() error {
-	if err := requireExplicitICMSForSplitMode(); err != nil {
+	if err := validateSelfHostedUpLocalK3DMode(); err != nil {
 		return err
 	}
 	applyLocalEndpointDefaults(resolveICMSURL(selfHostedICMSURL))
@@ -269,17 +270,39 @@ func (r *selfHostedUpRun) run() error {
 	return r.emitFinalHealth(registration)
 }
 
-func requireExplicitICMSForSplitMode() error {
-	if kubectx.SelectMode(selfHostedControlPlaneContext, selfHostedComputePlaneContext) != kubectx.ModeSplit {
-		return nil
+func validateSelfHostedUpLocalK3DMode() error {
+	if !strings.EqualFold(selfHostedEnv, "local") {
+		return &ExitCodeError{
+			Code: 3,
+			Msg:  "self-hosted up only supports --env local; use control-plane profile, compute-plane register, and compute-plane install for non-local deployments",
+		}
 	}
-	if selfHostedICMSURL != "" {
-		return nil
+	if kubectx.SelectMode(selfHostedControlPlaneContext, selfHostedComputePlaneContext) != kubectx.ModeSingle {
+		return &ExitCodeError{
+			Code: 3,
+			Msg:  "self-hosted up only supports local k3d single-cluster deployments; use control-plane profile, compute-plane register, and compute-plane install for split-cluster deployments",
+		}
 	}
-	return &ExitCodeError{
-		Code: 3,
-		Msg:  "split-cluster mode requires explicit --icms-url=<https://sis.…>; the control-plane ICMS endpoint won't be reachable from the compute-plane context",
+	currentContext, err := selfHostedUpCurrentKubeContext()
+	if err != nil {
+		return fmt.Errorf("read current kube context: %w", err)
 	}
+	if !strings.HasPrefix(currentContext, "k3d-") {
+		return &ExitCodeError{
+			Code: 3,
+			Msg:  fmt.Sprintf("self-hosted up requires a k3d kube context; current context %q is not k3d. Use control-plane profile, compute-plane register, and compute-plane install for non-local deployments", currentContext),
+		}
+	}
+	return nil
+}
+
+func currentKubeContextName() (string, error) {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	cfg, err := rules.Load()
+	if err != nil {
+		return "", err
+	}
+	return cfg.CurrentContext, nil
 }
 
 func (r *selfHostedUpRun) runPreflightAndLock() (func(), error) {

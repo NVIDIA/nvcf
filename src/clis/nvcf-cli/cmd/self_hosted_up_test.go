@@ -61,19 +61,29 @@ func resetUpFlags(t *testing.T) {
 	// bleed into this test's Execute call.
 	selfHostedUpCmd.SetContext(nil)
 	prevFinalHealth := waitForComputePlaneHealth
+	prevCurrentKubeContext := selfHostedUpCurrentKubeContext
 	waitForComputePlaneHealth = func(context.Context, computePlaneHealthRequest) (computePlaneHealthResult, error) {
 		return computePlaneHealthResult{BackendHealth: "healthy"}, nil
+	}
+	selfHostedUpCurrentKubeContext = func() (string, error) {
+		return "k3d-ncp-local", nil
 	}
 	t.Cleanup(func() {
 		upClusterName = ""
 		upNCAID = "nvcf-default"
 		upRegion = "us-west-1"
 		upPlanOnly = false
+		selfHostedEnv = "local"
+		selfHostedICMSURL = ""
+		selfHostedNATSURL = ""
 		selfHostedJSON = false
 		selfHostedPlain = false
 		selfHostedAccessible = false
+		selfHostedControlPlaneContext = ""
+		selfHostedComputePlaneContext = ""
 		selfHostedUpCmd.SetContext(nil)
 		waitForComputePlaneHealth = prevFinalHealth
+		selfHostedUpCurrentKubeContext = prevCurrentKubeContext
 	})
 }
 
@@ -591,11 +601,46 @@ func TestKubectxFor_SplitCluster(t *testing.T) {
 	}
 }
 
-// TestUp_SplitClusterRequiresICMSURL asserts that running `up` with both
-// context flags set but without --icms-url returns ExitCodeError{Code:3} before
-// any phase work is done. In split-cluster mode the compute plane cannot reach
-// the control plane's derived ICMS endpoint, so an explicit URL is mandatory.
-func TestUp_SplitClusterRequiresICMSURL(t *testing.T) {
+func TestSelfHostedUp_RejectsNonLocalEnvBeforePreflight(t *testing.T) {
+	resetUpFlags(t)
+	disableUpWatchers(t)
+	selfHostedToken = "fake-jwt"
+	t.Cleanup(func() { selfHostedToken = "" })
+
+	prevPreflight := runUpPreflight
+	t.Cleanup(func() { runUpPreflight = prevPreflight })
+	preflightCalls := 0
+	runUpPreflight = func(_ context.Context, _ selfhosted.PreflightConfig) []selfhosted.CheckResult {
+		preflightCalls++
+		return []selfhosted.CheckResult{{ID: "stub", Category: "binaries", Severity: "info", Passed: true, Message: "ok"}}
+	}
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "up",
+		"--cluster-name=test",
+		"--stack", stackDir,
+		"--env=prd",
+		"--plain",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err, "up must reject non-local environments before preflight")
+	var ece *ExitCodeError
+	require.ErrorAs(t, err, &ece, "expected ExitCodeError")
+	assert.Equal(t, 3, ece.Code)
+	assert.Contains(t, ece.Msg, "self-hosted up only supports --env local")
+	assert.Contains(t, ece.Msg, "compute-plane register")
+	assert.Equal(t, 0, preflightCalls, "preflight must not run for non-local env")
+}
+
+func TestSelfHostedUp_RejectsSplitClusterModeBeforePreflight(t *testing.T) {
 	resetUpFlags(t)
 	disableUpWatchers(t)
 
@@ -611,8 +656,6 @@ func TestUp_SplitClusterRequiresICMSURL(t *testing.T) {
 		selfHostedICMSURL = ""
 	})
 
-	// Stub preflight so we don't need real tool binaries; it should NOT be
-	// reached because the ICMS-URL gate fires before phase 1.
 	prevPreflight := runUpPreflight
 	t.Cleanup(func() { runUpPreflight = prevPreflight })
 	preflightCalls := 0
@@ -634,18 +677,62 @@ func TestUp_SplitClusterRequiresICMSURL(t *testing.T) {
 		"--stack", stackDir,
 		"--control-plane-context=cp",
 		"--compute-plane-context=gpu1",
-		// Intentionally no --icms-url
+		"--icms-url=http://sis.example.test",
 		"--json",
 	})
 
 	err := rootCmd.Execute()
-	require.Error(t, err, "up must fail without --icms-url in split-cluster mode")
+	require.Error(t, err, "up must reject split-cluster mode")
 	var ece *ExitCodeError
 	require.ErrorAs(t, err, &ece, "expected ExitCodeError")
-	assert.Equal(t, 3, ece.Code, "exit code must be 3 for missing --icms-url in split-cluster mode")
-	assert.Contains(t, ece.Msg, "split-cluster mode requires explicit --icms-url", "error message must mention --icms-url")
+	assert.Equal(t, 3, ece.Code)
+	assert.Contains(t, ece.Msg, "self-hosted up only supports local k3d single-cluster")
+	assert.Contains(t, ece.Msg, "control-plane profile")
+	assert.Contains(t, ece.Msg, "compute-plane register")
 
-	assert.Equal(t, 0, preflightCalls, "preflight must not be called when ICMS-URL gate fires")
+	assert.Equal(t, 0, preflightCalls, "preflight must not run for split-cluster mode")
+}
+
+func TestSelfHostedUp_RejectsNonK3DContextBeforePreflight(t *testing.T) {
+	resetUpFlags(t)
+	disableUpWatchers(t)
+	selfHostedToken = "fake-jwt"
+	t.Cleanup(func() { selfHostedToken = "" })
+
+	selfHostedUpCurrentKubeContext = func() (string, error) {
+		return "arn:aws:eks:eu-west-1:123456789012:cluster/nvcf-mvp-euw1b", nil
+	}
+
+	prevPreflight := runUpPreflight
+	t.Cleanup(func() { runUpPreflight = prevPreflight })
+	preflightCalls := 0
+	runUpPreflight = func(_ context.Context, _ selfhosted.PreflightConfig) []selfhosted.CheckResult {
+		preflightCalls++
+		return []selfhosted.CheckResult{{ID: "stub", Category: "binaries", Severity: "info", Passed: true, Message: "ok"}}
+	}
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "up",
+		"--cluster-name=test",
+		"--stack", stackDir,
+		"--plain",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err, "up must reject non-k3d current kube contexts")
+	var ece *ExitCodeError
+	require.ErrorAs(t, err, &ece, "expected ExitCodeError")
+	assert.Equal(t, 3, ece.Code)
+	assert.Contains(t, ece.Msg, "self-hosted up requires a k3d kube context")
+	assert.Contains(t, ece.Msg, "compute-plane register")
+	assert.Equal(t, 0, preflightCalls, "preflight must not run for non-k3d contexts")
 }
 
 // newTestFingerprintServer starts a minimal httptest.Server that serves

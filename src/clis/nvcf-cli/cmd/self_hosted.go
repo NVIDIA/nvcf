@@ -124,11 +124,12 @@ func init() {
 //  1. --icms-url flag (explicit user override).
 //  2. NVCF_ICMS_URL env var.
 //  3. NVCF_SIS_URL env var (legacy local quickstart name).
-//  4. Derive from config.BaseHTTPURL by replacing the leading "api." host
+//  4. icms_url from the CLI config file.
+//  5. Derive from config.BaseHTTPURL by replacing the leading "api." host
 //     prefix with "sis." — e.g. http://api.localhost:8080 → http://sis.localhost:8080.
 //     This matches the multi-cluster gateway-routes layout where api/sis/invocation
 //     are sibling HTTPRoutes on the shared envoy gateway.
-//  5. Fallback to BaseHTTPURL unchanged (single-host deployments where the
+//  6. Fallback to BaseHTTPURL unchanged (single-host deployments where the
 //     gateway is fronted by one DNS name).
 func resolveICMSURL(flagValue string) string {
 	if flagValue != "" {
@@ -143,6 +144,9 @@ func resolveICMSURL(flagValue string) string {
 	cfg, err := client.LoadConfigWithoutAuth()
 	if err != nil {
 		return ""
+	}
+	if cfg.ICMSURL != "" {
+		return cfg.ICMSURL
 	}
 	base := cfg.BaseHTTPURL
 	if base == "" {

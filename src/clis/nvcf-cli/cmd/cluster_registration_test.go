@@ -368,6 +368,18 @@ func TestGetICMSURL(t *testing.T) {
 		assert.Equal(t, "http://default-api:8080", result)
 	})
 
+	t.Run("returns config ICMS URL before deriving from BaseHTTPURL", func(t *testing.T) {
+		cmd := &cobra.Command{}
+		addClusterICMSURLFlags(cmd)
+
+		config := &client.Config{
+			BaseHTTPURL: "http://api.localhost:8080",
+			ICMSURL:     "http://configured-sis.localhost:8080",
+		}
+		result := getICMSURL(cmd, config)
+		assert.Equal(t, "http://configured-sis.localhost:8080", result)
+	})
+
 	t.Run("returns empty when both flag and config are empty", func(t *testing.T) {
 		cmd := &cobra.Command{}
 		addClusterICMSURLFlags(cmd)

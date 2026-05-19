@@ -71,6 +71,7 @@ type Config struct {
 	BaseHTTPURL    string
 	BaseGRPCURL    string
 	BaseInvokeURL  string // Dedicated endpoint for function invocations
+	ICMSURL        string // ICMS/SIS endpoint for self-hosted cluster registration
 	DefaultTimeout time.Duration
 	AuthType       AuthType
 	Debug          bool
@@ -183,6 +184,7 @@ func LoadConfig() (*Config, error) {
 		BaseHTTPURL:    getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com"),
 		BaseGRPCURL:    getConfigValueWithDefault("grpc_url", getConfigValueWithDefault("base_grpc_url", "grpc.nvcf.nvidia.com:443")),
 		BaseInvokeURL:  getConfigValueWithDefault("invoke_url", getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com")),
+		ICMSURL:        getConfigValue("icms_url"),
 		DefaultTimeout: 300 * time.Second,
 		Debug:          viper.GetBool("debug"),
 		Demo:           viper.GetBool("demo"),
@@ -337,6 +339,7 @@ func LoadConfigWithoutAuth() (*Config, error) {
 		BaseHTTPURL:    getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com"),
 		BaseGRPCURL:    getConfigValueWithDefault("grpc_url", getConfigValueWithDefault("base_grpc_url", "grpc.nvcf.nvidia.com:443")),
 		BaseInvokeURL:  getConfigValueWithDefault("invoke_url", getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com")),
+		ICMSURL:        getConfigValue("icms_url"),
 		DefaultTimeout: 300 * time.Second,
 		Debug:          viper.GetBool("debug"),
 		Demo:           viper.GetBool("demo"),

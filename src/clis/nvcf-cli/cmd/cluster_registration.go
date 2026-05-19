@@ -404,6 +404,9 @@ func getICMSURL(cmd *cobra.Command, config *client.Config) string {
 	if v := os.Getenv("NVCF_ICMS_URL"); v != "" {
 		return v
 	}
+	if config.ICMSURL != "" {
+		return config.ICMSURL
+	}
 	if derived, ok := deriveICMSFromAPI(config.BaseHTTPURL); ok {
 		return derived
 	}

@@ -19,8 +19,11 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -154,6 +157,39 @@ func TestResolveICMSURL_LegacySISEnv(t *testing.T) {
 	t.Setenv("NVCF_SIS_URL", "http://sis.localhost:8080")
 	got := resolveICMSURL("")
 	assert.Equal(t, "http://sis.localhost:8080", got)
+}
+
+func TestResolveICMSURL_ConfigBeforeDerived(t *testing.T) {
+	configureSelfHostedTestConfig(t, `
+base_http_url: "http://api.localhost:8080"
+icms_url: "http://configured-sis.localhost:8080"
+`)
+
+	got := resolveICMSURL("")
+	assert.Equal(t, "http://configured-sis.localhost:8080", got)
+}
+
+func configureSelfHostedTestConfig(t *testing.T, body string) {
+	t.Helper()
+	prevCfgFile := cfgFile
+	viper.Reset()
+	viper.SetEnvPrefix("NVCF")
+	viper.AutomaticEnv()
+	t.Setenv("NVCF_ICMS_URL", "")
+	t.Setenv("NVCF_SIS_URL", "")
+	cfgFile = ""
+
+	configPath := filepath.Join(t.TempDir(), "nvcf-cli.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(body), 0o600))
+	viper.SetConfigFile(configPath)
+	require.NoError(t, viper.ReadInConfig())
+
+	t.Cleanup(func() {
+		cfgFile = prevCfgFile
+		viper.Reset()
+		viper.SetEnvPrefix("NVCF")
+		viper.AutomaticEnv()
+	})
 }
 
 func TestResolveRegisterEndpointValues_LocalSplitUsesControlPlaneExternalEndpoints(t *testing.T) {
