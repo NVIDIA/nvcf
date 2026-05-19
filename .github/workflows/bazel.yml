@@ -31,14 +31,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BAZEL_CI_IMAGE: ghcr.io/nvidia/nvcf/bazel-ci:0.3.0
+  BAZEL_CI_IMAGE: ghcr.io/nvidia/nvcf/bazel-ci:0.4.0
 
 jobs:
   bazel:
     name: bazel (${{ matrix.subtree.id }})
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.3.0
+      image: ghcr.io/nvidia/nvcf/bazel-ci:0.4.0
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
