@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -36,6 +38,20 @@ type ControlPlaneProfile struct {
 	APIVersion   string       `yaml:"apiVersion"`
 	Kind         string       `yaml:"kind"`
 	ControlPlane ControlPlane `yaml:"controlPlane"`
+}
+
+func WriteFile(path string, doc ControlPlaneProfile) error {
+	body, err := yaml.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("marshal control-plane profile: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
 }
 
 type ControlPlane struct {

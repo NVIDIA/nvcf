@@ -253,6 +253,9 @@ func (r *selfHostedUpRun) run() error {
 	if err := r.applyControlPlane(resolved.Path); err != nil {
 		return err
 	}
+	if err := r.writeControlPlaneProfile(resolved.Path); err != nil {
+		return err
+	}
 	if err := r.checkControlPlane(); err != nil {
 		return err
 	}
@@ -402,6 +405,32 @@ func (r *selfHostedUpRun) applyControlPlane(stackPath string) error {
 	if r.ctx.Err() != nil {
 		return r.emitCancellation(5, upPhaseCheckCP)
 	}
+	return nil
+}
+
+func (r *selfHostedUpRun) writeControlPlaneProfile(stackPath string) error {
+	path, err := writeControlPlaneProfile(controlPlaneProfileWriteRequest{
+		StackPath:           stackPath,
+		ClusterName:         upClusterName,
+		NCAID:               upNCAID,
+		Region:              upRegion,
+		Env:                 selfHostedEnv,
+		ControlPlaneContext: selfHostedControlPlaneContext,
+		ComputePlaneContext: selfHostedComputePlaneContext,
+		ICMSURL:             resolveICMSURL(selfHostedICMSURL),
+		NATSURL:             selfHostedNATSURL,
+	})
+	if err != nil {
+		wrapped := fmt.Errorf("writing control-plane profile: %w", err)
+		r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseApplyCP, Err: wrapped}, time.Now().UTC())
+		return wrapped
+	}
+	_ = r.sink.Emit(r.ctx, progress.LastProgress{
+		Num:     4,
+		Detail:  "Wrote control-plane profile: " + path,
+		At:      time.Now().UTC(),
+		Context: kubectxFor(4),
+	})
 	return nil
 }
 

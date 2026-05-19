@@ -23,11 +23,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"nvcf-cli/internal/selfhosted"
+	"nvcf-cli/internal/selfhosted/auth"
+	"nvcf-cli/internal/selfhosted/controlplaneprofile"
+	"nvcf-cli/internal/state"
 )
 
 // resetInstallFlags restores the install command flag vars to their zero
@@ -36,6 +40,8 @@ import (
 func resetInstallFlags(t *testing.T) {
 	t.Helper()
 	selfHostedEnv = "local"
+	selfHostedNoApply = false
+	selfHostedToken = ""
 	selfHostedControlPlaneContext = ""
 	selfHostedComputePlaneContext = ""
 	t.Cleanup(func() {
@@ -45,6 +51,8 @@ func resetInstallFlags(t *testing.T) {
 		selfHostedICMSURL = ""
 		selfHostedNATSURL = ""
 		selfHostedEnv = "local"
+		selfHostedNoApply = false
+		selfHostedToken = ""
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
 	})
@@ -73,6 +81,100 @@ func TestSelfHostedInstall_ControlPlane_NoApply(t *testing.T) {
 	require.NoError(t, rootCmd.Execute())
 
 	assert.Contains(t, stdout.String(), "kind: ConfigMap")
+}
+
+func TestSelfHostedInstall_ControlPlane_AppliesByDefault(t *testing.T) {
+	resetInstallFlags(t)
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
+
+	fakeBin := filepath.Join(t.TempDir(), "helmfile")
+	require.NoError(t, os.WriteFile(fakeBin,
+		[]byte("#!/bin/sh\nlast=\nfor arg in \"$@\"; do last=\"$arg\"; done\nprintf 'verb=%s\\n' \"$last\"\n"),
+		0o755))
+	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NVCF_BASE_HTTP_URL", "http://api.localhost:8080")
+
+	sm := state.NewStateManager()
+	require.NoError(t, sm.Load())
+	s := sm.GetState()
+	s.Token = "cached-token"
+	s.TokenExpiration = time.Now().Add(24 * time.Hour)
+	s.SelfHostedAuth = &state.SelfHostedAuth{
+		Token:     "cached-token",
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+		Fingerprint: &state.FingerprintRef{
+			IssuerURL:       "http://api.localhost:8080",
+			JWKSKid:         "kid",
+			APIKeysEndpoint: "http://api-keys.localhost:8080",
+		},
+	}
+	require.NoError(t, sm.Save())
+
+	prevAuthProbe := authProbe
+	prevInit := runSelfHostedInit
+	t.Cleanup(func() {
+		authProbe = prevAuthProbe
+		runSelfHostedInit = prevInit
+	})
+	authProbe = func(context.Context, string) (*auth.Fingerprint, error) {
+		return &auth.Fingerprint{IssuerURL: "http://api.localhost:8080", JWKSKid: "kid", APIKeysEndpoint: "http://api-keys.localhost:8080"}, nil
+	}
+	initCalls := 0
+	runSelfHostedInit = func(context.Context) error {
+		initCalls++
+		return nil
+	}
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetArgs([]string{
+		"self-hosted", "install", "--control-plane",
+		"--stack", stackDir,
+	})
+	require.NoError(t, rootCmd.Execute())
+
+	assert.Contains(t, stdout.String(), "verb=apply")
+	assert.Equal(t, 1, initCalls)
+}
+
+func TestSelfHostedInstall_ControlPlane_WritesProfile(t *testing.T) {
+	resetInstallFlags(t)
+	selfHostedToken = "test-token"
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
+
+	fakeBin := filepath.Join(t.TempDir(), "helmfile")
+	require.NoError(t, os.WriteFile(fakeBin,
+		[]byte("#!/bin/sh\nprintf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: from-fake\\n'\n"),
+		0o755))
+	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{
+		"self-hosted", "install", "--control-plane",
+		"--stack", stackDir,
+		"--cluster-name=nvcf-cp",
+		"--nca-id=nvcf-default",
+		"--region=us-west-1",
+		"--icms-url=http://sis.localhost:8080",
+	})
+	require.NoError(t, rootCmd.Execute())
+
+	profilePath := filepath.Join(stackDir, "out", "control-plane-profile.yaml")
+	body, err := os.ReadFile(profilePath)
+	require.NoError(t, err)
+	_, err = controlplaneprofile.ParseAndValidate(body, controlplaneprofile.ValidateOptions{Require: controlplaneprofile.RequireBoth})
+	require.NoError(t, err)
+	assert.Contains(t, stderr.String(), "Wrote control-plane profile:")
+	assert.Contains(t, stderr.String(), profilePath)
 }
 
 func TestSelfHostedInstall_ComputePlane_RegistersAndRenders(t *testing.T) {

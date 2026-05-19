@@ -33,6 +33,7 @@ go_library(
         "registry.go",
         "root.go",
         "self_hosted.go",
+        "self_hosted_control_plane_profile.go",
         "self_hosted_check.go",
         "self_hosted_control_plane.go",
         "self_hosted_down.go",

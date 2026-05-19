@@ -236,6 +236,8 @@ func TestSelfHostedUp_PlainEmitsPhaseLines(t *testing.T) {
 	assert.Regexp(t, `\[03/8\] render-cp: starting`, out)
 	assert.Regexp(t, `\[04/8\] apply-cp: starting`, out)
 	assert.Regexp(t, `\[04/8\] apply-cp: complete`, out)
+	profilePath := filepath.Join(stackDir, "out", "control-plane-profile.yaml")
+	assert.Contains(t, out, "Wrote control-plane profile: "+profilePath)
 	assert.Regexp(t, `\[05/8\] check-cp: starting`, out)
 	assert.Regexp(t, `\[06/8\] register: starting`, out)
 	assert.Regexp(t, `\[06/8\] register: complete`, out)
@@ -257,6 +259,10 @@ func TestSelfHostedUp_PlainEmitsPhaseLines(t *testing.T) {
 	assert.Equal(t, 1, fakeCC.deleteCalls, "up must remove the existing GPU cluster registration before registering")
 	assert.Equal(t, 1, fakeCC.registerCalls)
 	assert.Equal(t, []string{"delete-id", "delete", "register"}, fakeCC.callOrder)
+	profileBody, err := os.ReadFile(profilePath)
+	require.NoError(t, err)
+	assert.Contains(t, string(profileBody), "kind: ControlPlaneProfile")
+	assert.Contains(t, string(profileBody), "clusterName: test")
 }
 
 // TestUp_PlanOnly_NoHelmfileInvocation runs the orchestrator with --plan-only

@@ -21,11 +21,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/selfhosted"
+	"nvcf-cli/internal/selfhosted/progress"
 )
 
 // newClusterClientForSelfHosted is a package-level seam so unit tests can
@@ -49,6 +51,11 @@ var fetchClusterIdentity = func(ctx context.Context, kctx string) (issuer string
 	return fetchClusterJWKS(cfg, "")
 }
 
+type discardProgressSink struct{}
+
+func (discardProgressSink) Emit(context.Context, progress.Event) error { return nil }
+func (discardProgressSink) Close() error                               { return nil }
+
 var (
 	installControlPlane bool
 	installComputePlane bool
@@ -68,7 +75,7 @@ func init() {
 	selfHostedCmd.AddCommand(selfHostedInstallCmd)
 	selfHostedInstallCmd.Flags().BoolVar(&installControlPlane, "control-plane", false, "Render the control-plane release set")
 	selfHostedInstallCmd.Flags().BoolVar(&installComputePlane, "compute-plane", false, "Render the compute-plane release set (requires --cluster-name)")
-	selfHostedInstallCmd.Flags().StringVar(&installClusterName, "cluster-name", "", "Cluster name for compute-plane installs")
+	selfHostedInstallCmd.Flags().StringVar(&installClusterName, "cluster-name", "", "Cluster name for generated artifacts and compute-plane installs")
 	selfHostedInstallCmd.Flags().StringVar(&installNCAID, "nca-id", "nvcf-default", "NCA ID (account) the cluster registers under")
 	selfHostedInstallCmd.Flags().StringVar(&installRegion, "region", "us-west-1", "Cluster region (ICMS requires non-empty)")
 }
@@ -94,15 +101,38 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 	fmt.Fprintf(c.ErrOrStderr(), ">>> Resolving stack: %s\n", stackDescriptor(resolved))
 
 	if installControlPlane {
-		return selfhosted.Render(selfhosted.RenderOptions{
+		if err := selfhosted.Render(selfhosted.RenderOptions{
 			StackPath:   resolved.Path,
 			Env:         selfHostedEnv,
-			Apply:       false,
+			Apply:       !selfHostedNoApply,
 			KubeContext: selfHostedControlPlaneContext, // M+9: empty in single-cluster mode
 			Stdout:      c.OutOrStdout(),
 			Stderr:      c.ErrOrStderr(),
 			Ctx:         c.Context(),
+		}); err != nil {
+			return err
+		}
+		path, err := writeControlPlaneProfile(controlPlaneProfileWriteRequest{
+			StackPath:           resolved.Path,
+			ClusterName:         installClusterName,
+			NCAID:               installNCAID,
+			Region:              installRegion,
+			Env:                 selfHostedEnv,
+			ControlPlaneContext: selfHostedControlPlaneContext,
+			ComputePlaneContext: selfHostedComputePlaneContext,
+			ICMSURL:             resolveICMSURL(selfHostedICMSURL),
+			NATSURL:             selfHostedNATSURL,
 		})
+		if err != nil {
+			return fmt.Errorf("writing control-plane profile: %w", err)
+		}
+		fmt.Fprintf(c.ErrOrStderr(), "Wrote control-plane profile:\n  %s\n", path)
+		if !selfHostedNoApply && selfHostedToken == "" {
+			if err := authGatePhase5ForcedRefresh(c.Context(), discardProgressSink{}, time.Now().UTC()); err != nil {
+				return fmt.Errorf("auth-gate: %w", err)
+			}
+		}
+		return nil
 	}
 	// --compute-plane: register cluster then render worker-layer manifests.
 	icmsURL := resolveICMSURL(selfHostedICMSURL)
@@ -177,6 +207,15 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 			"CLUSTER_REGION=" + region,
 		},
 	})
+}
+
+func authGatePhase5ForcedRefresh(ctx context.Context, sink progress.EventSink, p5Start time.Time) error {
+	previousRefreshToken := selfHostedRefreshToken
+	selfHostedRefreshToken = true
+	defer func() {
+		selfHostedRefreshToken = previousRefreshToken
+	}()
+	return authGatePhase5(ctx, sink, p5Start)
 }
 
 // computePlaneTarget picks the helmfile target for the worker layer. If the
