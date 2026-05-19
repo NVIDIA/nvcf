@@ -37,6 +37,7 @@ func resetComputePlaneFlags(t *testing.T) {
 	selfHostedEnv = "local"
 	selfHostedStack = ""
 	selfHostedNoApply = false
+	selfHostedICMSURL = ""
 	selfHostedControlPlaneContext = ""
 	selfHostedComputePlaneContext = ""
 	prevRuntimeResolver := resolveSelfHostedHelmRuntimeMode
@@ -51,6 +52,7 @@ func resetComputePlaneFlags(t *testing.T) {
 		selfHostedEnv = "local"
 		selfHostedStack = ""
 		selfHostedNoApply = false
+		selfHostedICMSURL = ""
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
 		computePlaneInstallValues = ""
@@ -314,20 +316,90 @@ func TestComputePlaneRegisterDryRunStopsOnReachabilityFailure(t *testing.T) {
 	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after reachability failure")
 }
 
-func TestComputePlaneRegisterWithoutDryRunIsNotImplementedYet(t *testing.T) {
+func TestComputePlaneRegisterCallsSISAfterValidation(t *testing.T) {
 	resetComputePlaneFlags(t)
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(_ context.Context, kctx string) (string, string, string, error) {
+		assert.Equal(t, "gpu-context", kctx)
+		return "https://k8s.example/issuer", `{"keys":[{"kid":"key-1"}]}`, "psat", nil
+	}
+
+	var gotReachability reachability.CheckRequest
+	computePlaneRegisterReachabilityCheck = func(_ context.Context, req reachability.CheckRequest) error {
+		gotReachability = req
+		return nil
+	}
+
+	fakeCC := &fakeClusterClient{resp: &selfhosted.RegisterResponse{ClusterID: "cluster-id", ClusterGroupID: "group-id"}}
+	var gotSISURL string
+	prevClientFactory := newClusterClientForSelfHosted
+	t.Cleanup(func() { newClusterClientForSelfHosted = prevClientFactory })
+	newClusterClientForSelfHosted = func(sisURL string) (selfhosted.ClusterClient, error) {
+		gotSISURL = sisURL
+		return fakeCC, nil
+	}
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "--icms-url", "https://sis-admin.example.test", "compute-plane", "register",
+		"--control-plane-profile", profileFile,
+		"--cluster-name", "gpu-a",
+		"--kube-context", "gpu-context",
+		"--region", "eu-west-1",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	assert.Equal(t, "https://sis-admin.example.test", gotSISURL)
+	assert.Equal(t, "https://sis-admin.example.test", gotReachability.ICMSURL)
+	assert.Equal(t, 1, fakeCC.registerCalls)
+	assert.Equal(t, "gpu-a", fakeCC.lastRegisterRequest.ClusterName)
+	assert.Equal(t, "nvcf-default", fakeCC.lastRegisterRequest.NCAID)
+	assert.Equal(t, "eu-west-1", fakeCC.lastRegisterRequest.Region)
+	assert.Equal(t, "https://k8s.example/issuer", fakeCC.lastRegisterRequest.OIDCIssuer)
+	assert.Equal(t, `{"keys":[{"kid":"key-1"}]}`, fakeCC.lastRegisterRequest.JWKS)
+
+	out := stdout.String()
+	assert.Contains(t, out, "dryRun: false")
+	assert.Contains(t, out, "icmsURL: https://sis-admin.example.test")
+	assert.Contains(t, out, "clusterID: cluster-id")
+	assert.Contains(t, out, "clusterGroupID: group-id")
+	assert.Contains(t, out, "sisMutation: completed")
+	assert.Contains(t, out, "valuesWrite: skipped")
+}
+
+func TestComputePlaneRegisterStopsBeforeSISOnReachabilityFailure(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+
+	computePlaneRegisterReachabilityCheck = func(context.Context, reachability.CheckRequest) error {
+		return assert.AnError
+	}
+
+	prevClientFactory := newClusterClientForSelfHosted
+	t.Cleanup(func() { newClusterClientForSelfHosted = prevClientFactory })
+	newClusterClientForSelfHosted = func(string) (selfhosted.ClusterClient, error) {
+		t.Fatal("SIS client must not be constructed after reachability failure")
+		return nil, nil
+	}
 
 	rootCmd.SetOut(&bytes.Buffer{})
 	rootCmd.SetErr(&bytes.Buffer{})
 	rootCmd.SetArgs([]string{
 		"self-hosted", "compute-plane", "register",
-		"--control-plane-profile", "control-plane-profile.yaml",
+		"--control-plane-profile", profileFile,
 		"--cluster-name", "gpu-a",
 	})
 
 	err := rootCmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "only --dry-run is supported")
+	assert.ErrorIs(t, err, assert.AnError)
 }
 
 func installFakeComputePlaneHelmfile(t *testing.T) string {

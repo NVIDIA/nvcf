@@ -27,6 +27,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/selfhosted"
 	"nvcf-cli/internal/selfhosted/controlplaneprofile"
 	"nvcf-cli/internal/selfhosted/reachability"
@@ -188,9 +189,6 @@ func computePlaneInstallEnv(valuesPath, clusterName, ncaID string) []string {
 }
 
 func runSelfHostedComputePlaneRegister(c *cobra.Command, _ []string) error {
-	if !computePlaneRegisterDryRun {
-		return fmt.Errorf("compute-plane register only --dry-run is supported in this phase")
-	}
 	if computePlaneRegisterProfile == "" {
 		return fmt.Errorf("--control-plane-profile is required")
 	}
@@ -202,9 +200,10 @@ func runSelfHostedComputePlaneRegister(c *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	registrationICMSURL := computePlaneRegisterICMSURL(selected.Endpoints.ICMSURL)
 	if err := computePlaneRegisterReachabilityCheck(c.Context(), reachability.CheckRequest{
 		TargetClusterName: computePlaneRegisterClusterName,
-		ICMSURL:           selected.Endpoints.ICMSURL,
+		ICMSURL:           registrationICMSURL,
 		ReValURL:          selected.Endpoints.ReValURL,
 		NATSURL:           selected.Endpoints.NATSURL,
 		SISHost:           validation.Profile.ControlPlane.Hosts.SIS,
@@ -229,22 +228,65 @@ func runSelfHostedComputePlaneRegister(c *cobra.Command, _ []string) error {
 	}
 
 	cp := validation.Profile.ControlPlane
+	var registration *selfhosted.RegisterResponse
+	if !computePlaneRegisterDryRun {
+		cc, err := newClusterClientForSelfHosted(registrationICMSURL)
+		if err != nil {
+			return fmt.Errorf("constructing cluster client: %w", err)
+		}
+		defer cc.Close()
+		registration, err = cc.RegisterCluster(c.Context(), selfhosted.RegisterRequest{
+			ClusterName:    computePlaneRegisterClusterName,
+			NCAID:          cp.NCAID,
+			Region:         computePlaneRegisterRegion,
+			JWKS:           jwks,
+			OIDCIssuer:     oidcIssuer,
+			IdentitySource: identitySource,
+		})
+		if err != nil {
+			return fmt.Errorf("cluster register: %w", err)
+		}
+	}
+
 	out := c.OutOrStdout()
-	fmt.Fprintln(out, "dryRun: true")
+	fmt.Fprintf(out, "dryRun: %t\n", computePlaneRegisterDryRun)
 	fmt.Fprintf(out, "clusterName: %s\n", computePlaneRegisterClusterName)
 	fmt.Fprintf(out, "controlPlaneClusterName: %s\n", cp.ClusterName)
 	fmt.Fprintf(out, "ncaID: %s\n", cp.NCAID)
 	fmt.Fprintf(out, "region: %s\n", computePlaneRegisterRegion)
 	fmt.Fprintf(out, "kubeContext: %s\n", computePlaneRegisterKubeContext)
 	fmt.Fprintf(out, "endpointScope: %s\n", selected.Name)
-	fmt.Fprintf(out, "icmsURL: %s\n", selected.Endpoints.ICMSURL)
+	fmt.Fprintf(out, "icmsURL: %s\n", registrationICMSURL)
 	fmt.Fprintf(out, "revalURL: %s\n", selected.Endpoints.ReValURL)
 	fmt.Fprintf(out, "natsURL: %s\n", selected.Endpoints.NATSURL)
 	fmt.Fprintf(out, "oidcIssuer: %s\n", oidcIssuer)
 	fmt.Fprintf(out, "identitySource: %s\n", identitySource)
-	fmt.Fprintln(out, "sisMutation: skipped")
+	if registration != nil {
+		fmt.Fprintf(out, "clusterID: %s\n", registration.ClusterID)
+		fmt.Fprintf(out, "clusterGroupID: %s\n", registration.ClusterGroupID)
+		fmt.Fprintln(out, "sisMutation: completed")
+	} else {
+		fmt.Fprintln(out, "sisMutation: skipped")
+	}
 	fmt.Fprintln(out, "valuesWrite: skipped")
 	return nil
+}
+
+func computePlaneRegisterICMSURL(profileICMSURL string) string {
+	if strings.TrimSpace(selfHostedICMSURL) != "" {
+		return selfHostedICMSURL
+	}
+	if v := os.Getenv("NVCF_ICMS_URL"); strings.TrimSpace(v) != "" {
+		return v
+	}
+	if v := os.Getenv("NVCF_SIS_URL"); strings.TrimSpace(v) != "" {
+		return v
+	}
+	cfg, err := client.LoadConfigWithoutAuth()
+	if err == nil && strings.TrimSpace(cfg.ICMSURL) != "" {
+		return cfg.ICMSURL
+	}
+	return profileICMSURL
 }
 
 func shouldProbeComputeRegisterHTTP(endpointScope selfhosted.ControlPlaneProfileEndpointScopeName) bool {
