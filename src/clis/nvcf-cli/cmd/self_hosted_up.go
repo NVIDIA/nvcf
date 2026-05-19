@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 
 	corev1 "k8s.io/api/core/v1"
@@ -1241,6 +1242,11 @@ func selfHostedInitArgs() []string {
 // requiring a real HTTP server. Production callers use auth.Probe directly.
 var authProbe = auth.Probe
 
+// stdinIsTerminal is a package-level seam so tests can simulate TTY / non-TTY
+// stdin without manipulating the actual file descriptor. Production callers
+// resolve to term.IsTerminal against os.Stdin.
+var stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+
 // authGatePhase5 implements the M+8.G decision tree:
 //  1. Probe control-plane fingerprint from config.BaseHTTPURL.
 //  2. Load cached SelfHostedAuth from state.
@@ -1252,53 +1258,23 @@ var authProbe = auth.Probe
 // Errors from Probe are non-fatal in "fall-through" mode: cache_corruption
 // or network errors → fall through to re-mint via init. Only init errors
 // are reported as phase_failed.
-func authGatePhase5(ctx context.Context, sink progress.EventSink, p5Start time.Time) error {
-	// Step 1: probe fingerprint (non-fatal: probe failures fall through to re-mint).
-	// LoadConfigWithoutAuth is used so missing NVCF_API_KEY / NVCF_TOKEN don't
-	// cause a hard failure here — this path runs before init has minted a token.
-	cfg, err := client.LoadConfigWithoutAuth()
+func authGatePhase5(ctx context.Context, sink progress.EventSink, _ time.Time) error {
+	fp, err := probeControlPlaneFingerprint(ctx, sink)
 	if err != nil {
-		return fmt.Errorf("load client config: %w", err)
+		return err
 	}
-	var fp *auth.Fingerprint
-	if cfg.BaseHTTPURL != "" {
-		probedFP, probeErr := authProbe(ctx, cfg.BaseHTTPURL)
-		if probeErr == nil {
-			fp = probedFP
-		} else {
-			_ = sink.Emit(ctx, progress.LastProgress{
-				Num:    5,
-				Detail: fmt.Sprintf("fingerprint probe failed (%v); falling through to re-mint", probeErr),
-				At:     time.Now().UTC(),
-			})
-		}
+	if !selfHostedRefreshToken && tryUseCachedAdminToken(ctx, sink, fp) {
+		return nil
 	}
-
-	// Step 2: try cached auth (skipped if --refresh-token).
-	if !selfHostedRefreshToken && fp != nil {
-		sm := state.NewStateManager()
-		if err := sm.Load(); err == nil {
-			if cached := sm.GetState().SelfHostedAuth; cached != nil && cached.Token != "" {
-				cachedFP := fingerprintFromRef(cached.Fingerprint)
-				cache := &auth.Cache{
-					Token:       cached.Token,
-					ExpiresAt:   cached.ExpiresAt,
-					Fingerprint: cachedFP,
-				}
-				if cache.Valid(time.Now().UTC(), fp) {
-					_ = sink.Emit(ctx, progress.LastProgress{
-						Num:    5,
-						Detail: "using cached admin token (fingerprint matches)",
-						At:     time.Now().UTC(),
-					})
-					selfHostedToken = cached.Token
-					return nil
-				}
-			}
-		}
+	// REQ-8: with no cached token usable, the next step would prompt via
+	// `nvcf-cli init`. Bail with a clear, actionable error when --non-interactive
+	// is set or stdin is not a TTY, rather than letting init block on a stdin read
+	// in CI.
+	if selfHostedNonInter || !stdinIsTerminal() {
+		return fmt.Errorf("admin token required but cannot prompt " +
+			"(--non-interactive set or stdin is not a TTY); " +
+			"pass --token=$JWT or run `nvcf-cli init` interactively first")
 	}
-
-	// Step 3: re-mint via init.
 	_ = sink.Emit(ctx, progress.LastProgress{
 		Num:    5,
 		Detail: "minting admin token via API Keys service",
@@ -1307,37 +1283,98 @@ func authGatePhase5(ctx context.Context, sink progress.EventSink, p5Start time.T
 	if err := runSelfHostedInit(ctx); err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
-
-	// Step 4: persist Token+TokenExpiration that init wrote, alongside fingerprint.
-	if fp != nil {
-		sm := state.NewStateManager()
-		if err := sm.Load(); err != nil {
-			// Init succeeded but we can't read state — log and continue.
-			// The token is in the state file; we just couldn't add the fingerprint.
-			_ = sink.Emit(ctx, progress.LastProgress{
-				Num:    5,
-				Detail: fmt.Sprintf("warn: load state after init failed (%v); fingerprint not persisted", err),
-				At:     time.Now().UTC(),
-			})
-			return nil
-		}
-		s := sm.GetState()
-		if s.Token != "" {
-			s.SelfHostedAuth = &state.SelfHostedAuth{
-				Token:       s.Token,
-				ExpiresAt:   s.TokenExpiration,
-				Fingerprint: fingerprintRefFromAuth(fp),
-			}
-			if err := sm.Save(); err != nil {
-				_ = sink.Emit(ctx, progress.LastProgress{
-					Num:    5,
-					Detail: fmt.Sprintf("warn: save SelfHostedAuth failed (%v)", err),
-					At:     time.Now().UTC(),
-				})
-			}
-		}
-	}
+	persistAdminAuthAfterInit(ctx, sink, fp)
 	return nil
+}
+
+// probeControlPlaneFingerprint loads the client config and probes the
+// control-plane fingerprint. Probe failures are non-fatal: a nil fingerprint
+// signals the caller to fall through to a re-mint via init.
+func probeControlPlaneFingerprint(ctx context.Context, sink progress.EventSink) (*auth.Fingerprint, error) {
+	cfg, err := client.LoadConfigWithoutAuth()
+	if err != nil {
+		return nil, fmt.Errorf("load client config: %w", err)
+	}
+	if cfg.BaseHTTPURL == "" {
+		return nil, nil
+	}
+	fp, probeErr := authProbe(ctx, cfg.BaseHTTPURL)
+	if probeErr != nil {
+		_ = sink.Emit(ctx, progress.LastProgress{
+			Num:    5,
+			Detail: fmt.Sprintf("fingerprint probe failed (%v); falling through to re-mint", probeErr),
+			At:     time.Now().UTC(),
+		})
+		return nil, nil
+	}
+	return fp, nil
+}
+
+// tryUseCachedAdminToken returns true and assigns selfHostedToken when a
+// valid cached admin token matching the probed fingerprint is found.
+func tryUseCachedAdminToken(ctx context.Context, sink progress.EventSink, fp *auth.Fingerprint) bool {
+	if fp == nil {
+		return false
+	}
+	sm := state.NewStateManager()
+	if err := sm.Load(); err != nil {
+		return false
+	}
+	cached := sm.GetState().SelfHostedAuth
+	if cached == nil || cached.Token == "" {
+		return false
+	}
+	cache := &auth.Cache{
+		Token:       cached.Token,
+		ExpiresAt:   cached.ExpiresAt,
+		Fingerprint: fingerprintFromRef(cached.Fingerprint),
+	}
+	if !cache.Valid(time.Now().UTC(), fp) {
+		return false
+	}
+	_ = sink.Emit(ctx, progress.LastProgress{
+		Num:    5,
+		Detail: "using cached admin token (fingerprint matches)",
+		At:     time.Now().UTC(),
+	})
+	selfHostedToken = cached.Token
+	return true
+}
+
+// persistAdminAuthAfterInit re-reads the state file (which init populated),
+// then writes the SelfHostedAuth record so a subsequent run can match the
+// cached token against the probed fingerprint. Failures here are warnings,
+// not errors: init already wrote the token, so the next run can still use
+// it; it just won't short-circuit on the fingerprint match.
+func persistAdminAuthAfterInit(ctx context.Context, sink progress.EventSink, fp *auth.Fingerprint) {
+	if fp == nil {
+		return
+	}
+	sm := state.NewStateManager()
+	if err := sm.Load(); err != nil {
+		_ = sink.Emit(ctx, progress.LastProgress{
+			Num:    5,
+			Detail: fmt.Sprintf("warn: load state after init failed (%v); fingerprint not persisted", err),
+			At:     time.Now().UTC(),
+		})
+		return
+	}
+	s := sm.GetState()
+	if s.Token == "" {
+		return
+	}
+	s.SelfHostedAuth = &state.SelfHostedAuth{
+		Token:       s.Token,
+		ExpiresAt:   s.TokenExpiration,
+		Fingerprint: fingerprintRefFromAuth(fp),
+	}
+	if err := sm.Save(); err != nil {
+		_ = sink.Emit(ctx, progress.LastProgress{
+			Num:    5,
+			Detail: fmt.Sprintf("warn: save SelfHostedAuth failed (%v)", err),
+			At:     time.Now().UTC(),
+		})
+	}
 }
 
 // fingerprintFromRef converts the persisted state.FingerprintRef to the

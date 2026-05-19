@@ -822,6 +822,12 @@ func TestAuthGate_RefreshTokenForcesReMint(t *testing.T) {
 		selfHostedToken = ""
 	})
 
+	// Force the TTY seam to true so the non-interactive gate does not short-circuit
+	// before reaching the init path under test.
+	prevTTY := stdinIsTerminal
+	t.Cleanup(func() { stdinIsTerminal = prevTTY })
+	stdinIsTerminal = func() bool { return true }
+
 	// Stub client.LoadConfig by patching the seam at authGatePhase5 level:
 	// inject baseHTTPURL via env so the real LoadConfig returns our server URL.
 	t.Setenv("NVCF_BASE_HTTP_URL", srv.URL)
@@ -938,12 +944,358 @@ func TestAuthGate_FingerprintMismatchReMints(t *testing.T) {
 		selfHostedToken = ""
 	})
 
+	// Force the TTY seam to true so the non-interactive gate does not short-circuit
+	// before reaching the init path under test.
+	prevTTY := stdinIsTerminal
+	t.Cleanup(func() { stdinIsTerminal = prevTTY })
+	stdinIsTerminal = func() bool { return true }
+
 	t.Setenv("NVCF_BASE_HTTP_URL", srv.URL)
 
 	var sink progress.EventSink = nullSink{}
 	err := authGatePhase5(context.Background(), sink, time.Now())
 	require.NoError(t, err)
 	assert.Equal(t, 1, initCalled, "init must be called when fingerprint has changed (key rotation)")
+}
+
+// TestAuthGate_NonInteractiveExitsCleanly verifies that --non-interactive bails
+// out with a clear error rather than letting `nvcf-cli init` block on a stdin
+// read in CI. REQ-8.
+func TestAuthGate_NonInteractiveExitsCleanly(t *testing.T) {
+	srv := newTestFingerprintServer(t, "key-x")
+
+	stateDir := t.TempDir()
+	t.Setenv("HOME", stateDir)
+
+	prevProbe := authProbe
+	t.Cleanup(func() { authProbe = prevProbe })
+	authProbe = func(context.Context, string) (*auth.Fingerprint, error) {
+		return &auth.Fingerprint{
+			IssuerURL:       srv.URL,
+			JWKSKid:         "key-x",
+			APIKeysEndpoint: srv.URL + "/api-keys",
+		}, nil
+	}
+
+	initCalled := 0
+	prevInit := runSelfHostedInit
+	t.Cleanup(func() { runSelfHostedInit = prevInit })
+	runSelfHostedInit = func(context.Context) error {
+		initCalled++
+		return nil
+	}
+
+	selfHostedNonInter = true
+	selfHostedToken = ""
+	t.Cleanup(func() {
+		selfHostedNonInter = false
+		selfHostedToken = ""
+	})
+
+	// TTY=true so the only reason to bail is --non-interactive.
+	prevTTY := stdinIsTerminal
+	t.Cleanup(func() { stdinIsTerminal = prevTTY })
+	stdinIsTerminal = func() bool { return true }
+
+	t.Setenv("NVCF_BASE_HTTP_URL", srv.URL)
+
+	var sink progress.EventSink = nullSink{}
+	err := authGatePhase5(context.Background(), sink, time.Now())
+	require.Error(t, err, "auth gate must error under --non-interactive when no cached token")
+	assert.Contains(t, err.Error(), "non-interactive")
+	assert.Equal(t, 0, initCalled, "runSelfHostedInit must NOT be invoked under --non-interactive")
+}
+
+// TestAuthGate_NonTTYExitsCleanly verifies that piped (non-TTY) stdin bails
+// out the same way as --non-interactive, since `nvcf-cli init` cannot prompt.
+// REQ-8.
+func TestAuthGate_NonTTYExitsCleanly(t *testing.T) {
+	srv := newTestFingerprintServer(t, "key-y")
+
+	stateDir := t.TempDir()
+	t.Setenv("HOME", stateDir)
+
+	prevProbe := authProbe
+	t.Cleanup(func() { authProbe = prevProbe })
+	authProbe = func(context.Context, string) (*auth.Fingerprint, error) {
+		return &auth.Fingerprint{
+			IssuerURL:       srv.URL,
+			JWKSKid:         "key-y",
+			APIKeysEndpoint: srv.URL + "/api-keys",
+		}, nil
+	}
+
+	initCalled := 0
+	prevInit := runSelfHostedInit
+	t.Cleanup(func() { runSelfHostedInit = prevInit })
+	runSelfHostedInit = func(context.Context) error {
+		initCalled++
+		return nil
+	}
+
+	selfHostedNonInter = false
+	selfHostedToken = ""
+	t.Cleanup(func() {
+		selfHostedNonInter = false
+		selfHostedToken = ""
+	})
+
+	// Simulate piped/non-TTY stdin; --non-interactive is not set.
+	prevTTY := stdinIsTerminal
+	t.Cleanup(func() { stdinIsTerminal = prevTTY })
+	stdinIsTerminal = func() bool { return false }
+
+	t.Setenv("NVCF_BASE_HTTP_URL", srv.URL)
+
+	var sink progress.EventSink = nullSink{}
+	err := authGatePhase5(context.Background(), sink, time.Now())
+	require.Error(t, err, "auth gate must error under non-TTY stdin when no cached token")
+	assert.Contains(t, err.Error(), "TTY")
+	assert.Equal(t, 0, initCalled, "runSelfHostedInit must NOT be invoked when stdin is not a TTY")
+}
+
+// recordingSink captures every progress event for later assertions. Used by
+// the helper unit tests below to verify warning-emission semantics on
+// non-fatal failures.
+type recordingSink struct {
+	events []progress.Event
+}
+
+func (r *recordingSink) Emit(_ context.Context, e progress.Event) error {
+	r.events = append(r.events, e)
+	return nil
+}
+func (r *recordingSink) Close() error { return nil }
+
+func (r *recordingSink) details() []string {
+	out := make([]string, 0, len(r.events))
+	for _, e := range r.events {
+		if lp, ok := e.(progress.LastProgress); ok {
+			out = append(out, lp.Detail)
+		}
+	}
+	return out
+}
+
+// TestProbeControlPlaneFingerprint_Success exercises the happy path: a
+// reachable control-plane URL whose OIDC/JWKS discovery returns a usable
+// fingerprint.
+func TestProbeControlPlaneFingerprint_Success(t *testing.T) {
+	srv := newTestFingerprintServer(t, "key-probe")
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NVCF_BASE_HTTP_URL", srv.URL)
+
+	prevProbe := authProbe
+	t.Cleanup(func() { authProbe = prevProbe })
+	authProbe = func(context.Context, string) (*auth.Fingerprint, error) {
+		return &auth.Fingerprint{
+			IssuerURL:       srv.URL,
+			JWKSKid:         "key-probe",
+			APIKeysEndpoint: srv.URL + "/api-keys",
+		}, nil
+	}
+
+	sink := &recordingSink{}
+	fp, err := probeControlPlaneFingerprint(context.Background(), sink)
+	require.NoError(t, err)
+	require.NotNil(t, fp)
+	assert.Equal(t, "key-probe", fp.JWKSKid)
+	assert.Empty(t, sink.details(), "no warning emitted on the happy path")
+}
+
+// TestProbeControlPlaneFingerprint_ProbeFailureIsNonFatal verifies that a
+// transport-level probe failure falls through (nil fingerprint, nil error)
+// and emits an explanatory warning rather than aborting the auth gate.
+func TestProbeControlPlaneFingerprint_ProbeFailureIsNonFatal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NVCF_BASE_HTTP_URL", "http://api.example")
+
+	prevProbe := authProbe
+	t.Cleanup(func() { authProbe = prevProbe })
+	authProbe = func(context.Context, string) (*auth.Fingerprint, error) {
+		return nil, errors.New("connection refused")
+	}
+
+	sink := &recordingSink{}
+	fp, err := probeControlPlaneFingerprint(context.Background(), sink)
+	require.NoError(t, err)
+	assert.Nil(t, fp)
+	require.Len(t, sink.details(), 1)
+	assert.Contains(t, sink.details()[0], "fingerprint probe failed")
+	assert.Contains(t, sink.details()[0], "connection refused")
+}
+
+// TestTryUseCachedAdminToken_HappyPath verifies that a valid cached token
+// matching the probed fingerprint short-circuits the gate and assigns
+// selfHostedToken.
+func TestTryUseCachedAdminToken_HappyPath(t *testing.T) {
+	srv := newTestFingerprintServer(t, "key-cache")
+	t.Setenv("HOME", t.TempDir())
+
+	sm := state.NewStateManager()
+	require.NoError(t, sm.Load())
+	s := sm.GetState()
+	s.SelfHostedAuth = &state.SelfHostedAuth{
+		Token:     "cached-happy",
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+		Fingerprint: &state.FingerprintRef{
+			IssuerURL:       srv.URL,
+			JWKSKid:         "key-cache",
+			APIKeysEndpoint: srv.URL + "/api-keys",
+		},
+	}
+	require.NoError(t, sm.Save())
+
+	selfHostedToken = ""
+	t.Cleanup(func() { selfHostedToken = "" })
+
+	fp := &auth.Fingerprint{
+		IssuerURL:       srv.URL,
+		JWKSKid:         "key-cache",
+		APIKeysEndpoint: srv.URL + "/api-keys",
+	}
+	sink := &recordingSink{}
+	ok := tryUseCachedAdminToken(context.Background(), sink, fp)
+	assert.True(t, ok, "valid cached token must be accepted")
+	assert.Equal(t, "cached-happy", selfHostedToken)
+	require.Len(t, sink.details(), 1)
+	assert.Contains(t, sink.details()[0], "using cached admin token")
+}
+
+// TestTryUseCachedAdminToken_NilFingerprintShortCircuits verifies that a nil
+// probed fingerprint causes a clean false return without touching state.
+func TestTryUseCachedAdminToken_NilFingerprintShortCircuits(t *testing.T) {
+	selfHostedToken = ""
+	t.Cleanup(func() { selfHostedToken = "" })
+
+	sink := &recordingSink{}
+	ok := tryUseCachedAdminToken(context.Background(), sink, nil)
+	assert.False(t, ok)
+	assert.Empty(t, selfHostedToken)
+	assert.Empty(t, sink.details())
+}
+
+// TestTryUseCachedAdminToken_FingerprintMismatchReturnsFalse verifies that a
+// cached token whose stored fingerprint does NOT match the probed fingerprint
+// is rejected (forcing the caller to fall through to re-mint via init).
+func TestTryUseCachedAdminToken_FingerprintMismatchReturnsFalse(t *testing.T) {
+	srv := newTestFingerprintServer(t, "key-new")
+	t.Setenv("HOME", t.TempDir())
+
+	sm := state.NewStateManager()
+	require.NoError(t, sm.Load())
+	s := sm.GetState()
+	s.SelfHostedAuth = &state.SelfHostedAuth{
+		Token:     "cached-stale",
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+		Fingerprint: &state.FingerprintRef{
+			IssuerURL:       srv.URL,
+			JWKSKid:         "key-old",
+			APIKeysEndpoint: srv.URL + "/api-keys",
+		},
+	}
+	require.NoError(t, sm.Save())
+
+	selfHostedToken = ""
+	t.Cleanup(func() { selfHostedToken = "" })
+
+	fp := &auth.Fingerprint{
+		IssuerURL:       srv.URL,
+		JWKSKid:         "key-new",
+		APIKeysEndpoint: srv.URL + "/api-keys",
+	}
+	sink := &recordingSink{}
+	ok := tryUseCachedAdminToken(context.Background(), sink, fp)
+	assert.False(t, ok, "stale cache must be rejected on fingerprint mismatch")
+	assert.Empty(t, selfHostedToken)
+	assert.Empty(t, sink.details(), "no success event when cache is rejected")
+}
+
+// TestTryUseCachedAdminToken_EmptyCacheReturnsFalse verifies that an empty
+// SelfHostedAuth record (no prior init persisted) returns false.
+func TestTryUseCachedAdminToken_EmptyCacheReturnsFalse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	selfHostedToken = ""
+	t.Cleanup(func() { selfHostedToken = "" })
+
+	fp := &auth.Fingerprint{IssuerURL: "http://api.example", JWKSKid: "k"}
+	sink := &recordingSink{}
+	ok := tryUseCachedAdminToken(context.Background(), sink, fp)
+	assert.False(t, ok)
+	assert.Empty(t, selfHostedToken)
+}
+
+// TestPersistAdminAuthAfterInit_WritesAuthRecord verifies that a successful
+// init followed by persistAdminAuthAfterInit lands a SelfHostedAuth record
+// keyed to the probed fingerprint so the next run can short-circuit.
+func TestPersistAdminAuthAfterInit_WritesAuthRecord(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	sm := state.NewStateManager()
+	require.NoError(t, sm.Load())
+	s := sm.GetState()
+	s.Token = "fresh-token"
+	s.TokenExpiration = time.Now().Add(12 * time.Hour)
+	require.NoError(t, sm.Save())
+
+	fp := &auth.Fingerprint{
+		IssuerURL:       "http://api.example",
+		JWKSKid:         "kid-fresh",
+		APIKeysEndpoint: "http://api-keys.example",
+	}
+	sink := &recordingSink{}
+	persistAdminAuthAfterInit(context.Background(), sink, fp)
+
+	sm2 := state.NewStateManager()
+	require.NoError(t, sm2.Load())
+	got := sm2.GetState().SelfHostedAuth
+	require.NotNil(t, got, "SelfHostedAuth must be persisted")
+	assert.Equal(t, "fresh-token", got.Token)
+	require.NotNil(t, got.Fingerprint)
+	assert.Equal(t, "kid-fresh", got.Fingerprint.JWKSKid)
+	assert.Empty(t, sink.details(), "no warnings emitted on the happy path")
+}
+
+// TestPersistAdminAuthAfterInit_NilFingerprintIsNoOp verifies that a missing
+// probed fingerprint (because the probe failed earlier in the gate) causes
+// the persist step to no-op silently.
+func TestPersistAdminAuthAfterInit_NilFingerprintIsNoOp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	sm := state.NewStateManager()
+	require.NoError(t, sm.Load())
+	s := sm.GetState()
+	s.Token = "fresh-token"
+	require.NoError(t, sm.Save())
+
+	sink := &recordingSink{}
+	persistAdminAuthAfterInit(context.Background(), sink, nil)
+
+	sm2 := state.NewStateManager()
+	require.NoError(t, sm2.Load())
+	assert.Nil(t, sm2.GetState().SelfHostedAuth, "no auth record written when fingerprint is nil")
+	assert.Empty(t, sink.details())
+}
+
+// TestPersistAdminAuthAfterInit_EmptyTokenIsNoOp verifies that if init
+// completed but no token was written to state (degenerate but possible),
+// persistAdminAuthAfterInit does not write a placeholder SelfHostedAuth.
+func TestPersistAdminAuthAfterInit_EmptyTokenIsNoOp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	sm := state.NewStateManager()
+	require.NoError(t, sm.Load())
+	// Intentionally leave s.Token empty.
+	require.NoError(t, sm.Save())
+
+	fp := &auth.Fingerprint{IssuerURL: "http://api.example", JWKSKid: "k"}
+	sink := &recordingSink{}
+	persistAdminAuthAfterInit(context.Background(), sink, fp)
+
+	sm2 := state.NewStateManager()
+	require.NoError(t, sm2.Load())
+	assert.Nil(t, sm2.GetState().SelfHostedAuth, "empty token must not produce a SelfHostedAuth record")
 }
 
 func TestRunSelfHostedInitDoesNotLeakTokenOutput(t *testing.T) {

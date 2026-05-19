@@ -116,9 +116,11 @@ func TestSelfHostedInstall_ControlPlane_AppliesByDefault(t *testing.T) {
 
 	prevAuthProbe := authProbe
 	prevInit := runSelfHostedInit
+	prevTTY := stdinIsTerminal
 	t.Cleanup(func() {
 		authProbe = prevAuthProbe
 		runSelfHostedInit = prevInit
+		stdinIsTerminal = prevTTY
 	})
 	authProbe = func(context.Context, string) (*auth.Fingerprint, error) {
 		return &auth.Fingerprint{IssuerURL: "http://api.localhost:8080", JWKSKid: "kid", APIKeysEndpoint: "http://api-keys.localhost:8080"}, nil
@@ -128,6 +130,9 @@ func TestSelfHostedInstall_ControlPlane_AppliesByDefault(t *testing.T) {
 		initCalls++
 		return nil
 	}
+	// Forced-refresh auth gate skips the cache and proceeds to init; stub the TTY
+	// seam to true so the non-interactive gate does not short-circuit.
+	stdinIsTerminal = func() bool { return true }
 
 	var stdout bytes.Buffer
 	rootCmd.SetOut(&stdout)

@@ -50,6 +50,7 @@ func TestSelfHostedFlags_OnlyOneContextErrors(t *testing.T) {
 	t.Cleanup(func() {
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
+		selfHostedNonInter = false
 	})
 	err := rootCmd.Execute()
 	require.Error(t, err)
