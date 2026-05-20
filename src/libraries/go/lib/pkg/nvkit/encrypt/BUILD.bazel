@@ -29,6 +29,7 @@ go_library(
 go_test(
     name = "encrypt_test",
     srcs = ["jose_test.go"],
+    data = ["//src/libraries/go/lib/pkg/nvkit/test/keys/aes:keys"],
     embed = [":encrypt"],
     deps = [
         "//src/libraries/go/lib/pkg/nvkit/errors",

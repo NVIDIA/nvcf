@@ -35,6 +35,7 @@ go_binary(
 go_test(
     name = "icms-translate_test",
     srcs = ["main_test.go"],
+    data = ["//src/libraries/go/lib/testdata/icms-translate:testdata"],
     embed = [":icms-translate_lib"],
     deps = [
         "//src/libraries/go/lib/pkg/icms-translate/cmd",

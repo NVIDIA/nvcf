@@ -21,6 +21,7 @@ use opentelemetry::KeyValue;
 use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithTonicConfig};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
+use tonic::transport::ClientTlsConfig;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -64,6 +65,13 @@ pub fn initialize_tracing(
     let mut exporter_builder = SpanExporter::builder().with_tonic();
 
     if let Some(endpoint) = settings.otlp_endpoint() {
+        // tonic only enables TLS when an explicit `ClientTlsConfig` is supplied; the
+        // `tls-webpki-roots` feature alone is not enough — without this the channel will
+        // fail with "Connecting to HTTPS without TLS enabled" against an `https://` collector.
+        if endpoint.starts_with("https://") {
+            exporter_builder =
+                exporter_builder.with_tls_config(ClientTlsConfig::new().with_enabled_roots());
+        }
         exporter_builder = exporter_builder.with_endpoint(endpoint);
     }
 

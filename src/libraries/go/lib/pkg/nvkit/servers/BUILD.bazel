@@ -61,6 +61,7 @@ go_test(
         "grpc_test.go",
         "server_test.go",
     ],
+    data = ["//src/libraries/go/lib/pkg/nvkit/test/certs:certs"],
     embed = [":servers"],
     deps = [
         "//src/libraries/go/lib/pkg/nvkit/auth",

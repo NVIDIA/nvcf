@@ -38,6 +38,7 @@ go_test(
         "jwtcache_test.go",
         "types_test.go",
     ],
+    data = glob(["test/**"]),
     embed = [":oauth"],
     deps = [
         "//src/libraries/go/lib/pkg/core",
