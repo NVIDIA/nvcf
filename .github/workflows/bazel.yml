@@ -126,10 +126,19 @@ jobs:
           restore-keys: |
             bazel-${{ matrix.subtree.id }}-
 
+      # Disable the internal nvcfbarn Buildbarn remote cache for GHA.
+      # The umbrella's root .bazelrc sets `build --config=remote` by
+      # default, which on GitLab CDS runners routes through the
+      # nvcfbarn.nvidia.com:8980 cache. GHA's GitHub-hosted runners
+      # have no DNS path to that host, so leaving the default in place
+      # produces:
+      #   UNAVAILABLE: Unable to resolve host nvcfbarn.nvidia.com
+      # Passing `--remote_cache=` overrides the .bazelrc default with
+      # an empty value, falling back to local action/repo caches only.
       - name: bazel build //...
         if: steps.precheck.outputs.skip == 'false'
         working-directory: ${{ matrix.subtree.path }}
-        run: bazel build //...
+        run: bazel build --remote_cache= //...
 
       - name: bazel test //...
         # `tests_enabled: false` on the matrix row keeps the subtree in the
@@ -139,4 +148,4 @@ jobs:
         # underlying drift is fixed.
         if: steps.precheck.outputs.skip == 'false' && matrix.subtree.tests_enabled != false
         working-directory: ${{ matrix.subtree.path }}
-        run: bazel test --flaky_test_attempts=3 //...
+        run: bazel test --remote_cache= --flaky_test_attempts=3 //...
