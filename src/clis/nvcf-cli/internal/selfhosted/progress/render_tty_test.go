@@ -18,9 +18,12 @@ limitations under the License.
 package progress
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -526,6 +529,120 @@ func TestTTY_CheckComplete(t *testing.T) {
 	assertGolden(t, "testdata/tty_check_complete.golden", final.View())
 }
 
+func TestCheckOneShotRenderer_FlushesFailedSummaryOnFinal(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+
+	var buf bytes.Buffer
+	r := NewCheckOneShotRenderer(&buf, ModelOpts{
+		Mode:      ModeCheck,
+		Output:    &buf,
+		AsciiOnly: true,
+	})
+
+	ctx := context.Background()
+	require.NoError(t, r.Emit(ctx, CheckStarted{Category: "local-host-tools", ID: "kubectl-on-path"}))
+	require.NoError(t, r.Emit(ctx, CheckCompleted{
+		Category: "local-host-tools",
+		ID:       "kubectl-on-path",
+		Passed:   true,
+		Severity: "info",
+		Message:  "kubectl 1.30.2 on PATH",
+		Detail:   "1.30.2",
+	}))
+	require.NoError(t, r.Emit(ctx, CategoryCompleted{Category: "local-host-tools", PassedCount: 1, FailedCount: 0}))
+	require.NoError(t, r.Emit(ctx, CheckStarted{Category: "pre-kubernetes-setup", ID: "gateway-api"}))
+	require.NoError(t, r.Emit(ctx, CheckCompleted{
+		Category: "pre-kubernetes-setup",
+		ID:       "gateway-api",
+		Passed:   false,
+		Severity: "error",
+		Message:  "Gateway API CRDs not installed",
+	}))
+	require.NoError(t, r.Emit(ctx, CategoryCompleted{Category: "pre-kubernetes-setup", PassedCount: 0, FailedCount: 1}))
+	require.NoError(t, r.Emit(ctx, Final{Success: false, Verdict: "failed", TotalChecks: 2, PassedCount: 1, FailedCount: 1}))
+
+	out := buf.String()
+	assert.Contains(t, out, "Pre-flight checks for NVCF self-hosted install")
+	assert.Contains(t, out, "[✓] kubectl 1.30.2 on PATH (1.30.2)")
+	assert.Contains(t, out, "[✘] Gateway API CRDs not installed")
+	assert.Contains(t, out, "Status: ✘ failed  (1/2 passed, 1 failed)")
+}
+
+func TestCheckOneShotRenderer_UsesFinalTallyForStatus(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+
+	var buf bytes.Buffer
+	r := NewCheckOneShotRenderer(&buf, ModelOpts{
+		Mode:      ModeCheck,
+		Output:    &buf,
+		AsciiOnly: true,
+	})
+
+	ctx := context.Background()
+	require.NoError(t, r.Emit(ctx, CheckStarted{Category: "local-host-tools", ID: "kubectl-on-path"}))
+	require.NoError(t, r.Emit(ctx, CheckCompleted{
+		Category: "local-host-tools",
+		ID:       "kubectl-on-path",
+		Passed:   true,
+		Severity: "info",
+		Message:  "kubectl 1.30.2 on PATH",
+	}))
+	require.NoError(t, r.Emit(ctx, CategoryCompleted{Category: "local-host-tools", PassedCount: 1, FailedCount: 0}))
+	require.NoError(t, r.Emit(ctx, Final{Success: false, Verdict: "failed", TotalChecks: 2, PassedCount: 1, FailedCount: 1}))
+
+	assert.Contains(t, buf.String(), "Status: ✘ failed  (1/2 passed, 1 failed)")
+}
+
+func TestCheckOneShotRenderer_SerializesConcurrentCheckEvents(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+
+	var buf bytes.Buffer
+	r := NewCheckOneShotRenderer(&buf, ModelOpts{
+		Mode:      ModeCheck,
+		Output:    &buf,
+		AsciiOnly: true,
+	})
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("cp-%d", i)
+			require.NoError(t, r.Emit(ctx, CheckStarted{Category: "control-plane-cluster", ID: id}))
+			require.NoError(t, r.Emit(ctx, CheckCompleted{
+				Category: "control-plane-cluster",
+				ID:       id,
+				Passed:   true,
+				Severity: "info",
+				Message:  id + " passed",
+			}))
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("gpu-%d", i)
+			require.NoError(t, r.Emit(ctx, CheckStarted{Category: "compute-plane-cluster", ID: id}))
+			require.NoError(t, r.Emit(ctx, CheckCompleted{
+				Category: "compute-plane-cluster",
+				ID:       id,
+				Passed:   true,
+				Severity: "info",
+				Message:  id + " passed",
+			}))
+		}(i)
+	}
+	wg.Wait()
+	require.NoError(t, r.Emit(ctx, CategoryCompleted{Category: "control-plane-cluster", PassedCount: 100, FailedCount: 0}))
+	require.NoError(t, r.Emit(ctx, CategoryCompleted{Category: "compute-plane-cluster", PassedCount: 100, FailedCount: 0}))
+	require.NoError(t, r.Emit(ctx, Final{Success: true, Verdict: "ok", TotalChecks: 200, PassedCount: 200, FailedCount: 0}))
+
+	out := buf.String()
+	assert.Contains(t, out, "control-plane-cluster")
+	assert.Contains(t, out, "compute-plane-cluster")
+	assert.Contains(t, out, "Status: ✓ ok  (200/200 passed, 0 failed)")
+}
+
 // ─── M+9 split-cluster TTY tests ─────────────────────────────────────────────
 
 // TestTTY_DownRunning verifies the ModeDown header label ("teardown" not
@@ -673,9 +790,9 @@ func TestTTY_SplitInstallHeader(t *testing.T) {
 func TestTTY_RecentLogPanel(t *testing.T) {
 	clock := pinnedClock()
 	m := NewModel(ModelOpts{
-		Cluster: "ncp-local",
-		NowFunc: clock.Now,
-		Started: ts("2026-04-29T01:23:43Z"),
+		Cluster:   "ncp-local",
+		NowFunc:   clock.Now,
+		Started:   ts("2026-04-29T01:23:43Z"),
 		AsciiOnly: true,
 	})
 	m.SetSize(120, 40)
@@ -688,7 +805,7 @@ func TestTTY_RecentLogPanel(t *testing.T) {
 	// Apply a few LogLine events.
 	updateModel(&m, LogLine{Stream: "stdout", Source: "helmfile", Line: "Pulling cassandra:0.12.0"})
 	updateModel(&m, LogLine{Stream: "stdout", Source: "helmfile", Line: "Comparing release=cassandra"})
-	updateModel(&m, LogLine{Stream: "stdout", Source: "helmfile", Line: ""}) // dropped: blank line
+	updateModel(&m, LogLine{Stream: "stdout", Source: "helmfile", Line: ""})       // dropped: blank line
 	updateModel(&m, LogLine{Stream: "stdout", Source: "helmfile", Line: "  \t  "}) // dropped: whitespace
 	updateModel(&m, LogLine{Stream: "stdout", Source: "helmfile", Line: "Upgrading release=nats"})
 

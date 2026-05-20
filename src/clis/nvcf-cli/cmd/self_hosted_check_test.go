@@ -20,13 +20,17 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"nvcf-cli/internal/selfhosted/progress"
 )
 
 // TestCheck_LegacyOutputJSONWarnsAndStreams verifies that passing the deprecated
@@ -117,6 +121,40 @@ func TestSelfHostedCheck_WaitTimesOutCleanly(t *testing.T) {
 	assert.Error(t, err)
 	assert.True(t, elapsed >= 2*time.Second && elapsed < 5*time.Second,
 		"wait should have honored 2s timeout, got %s", elapsed)
+}
+
+func TestCheck_OneShotTTYUsesStaticRenderer(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedPlain = false
+		selfHostedAccessible = false
+		selfHostedWait = ""
+		checkWriterIsTTY = isWriterTTY
+	})
+
+	checkWriterIsTTY = func(io.Writer) bool { return true }
+	var stderr bytes.Buffer
+
+	sink, err := selectCheckRenderer(&stderr, false)
+	require.NoError(t, err)
+	require.IsType(t, &progress.CheckOneShotRenderer{}, sink)
+
+	ctx := context.Background()
+	require.NoError(t, sink.Emit(ctx, progress.CheckStarted{Category: "test", ID: "forced"}))
+	require.NoError(t, sink.Emit(ctx, progress.CheckCompleted{
+		Category: "test",
+		ID:       "forced",
+		Passed:   false,
+		Severity: "error",
+		Message:  "forced failure",
+	}))
+	require.NoError(t, sink.Emit(ctx, progress.CategoryCompleted{Category: "test", PassedCount: 0, FailedCount: 1}))
+	require.NoError(t, sink.Emit(ctx, progress.Final{Success: false, Verdict: "failed", TotalChecks: 1, PassedCount: 0, FailedCount: 1}))
+
+	out := stderr.String()
+	assert.Contains(t, out, "Pre-flight checks for NVCF self-hosted install")
+	assert.Contains(t, out, "[✘] forced failure")
+	assert.Contains(t, out, "Status: ✘ failed  (0/1 passed, 1 failed)")
 }
 
 // TestCheck_PreflightStreamingOrder verifies that for each tool the events arrive
