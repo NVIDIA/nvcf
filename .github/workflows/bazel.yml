@@ -65,7 +65,12 @@ jobs:
             path: src/invocation-plane-services/llm-gateway
           - id: nvca
             path: src/compute-plane-services/nvca
-            tests_enabled: false  # GitLab passes fresh; GHA fails on TestGetNetworkPoliciesData* / TestGetMiniServiceRBACCmData. Containment until env-diff diagnosed (NVCF-10347).
+            # Build-only on GHA: TestReconcile_ModelCache (pkg/storage) fails
+            # under envtest >= 1.30 because the test fakes JobSuccessCriteriaMet
+            # on a NonIndexed Job without a SuccessPolicy, which the apiserver
+            # now rejects. Tracked under NVCF-10347 for a test-layer fix by the
+            # nvca team; do not change reconciler logic to satisfy this.
+            tests_skip: true
           - id: dns-cache
             path: src/compute-plane-services/dns-cache
           - id: ess-agent
@@ -141,11 +146,14 @@ jobs:
         run: bazel build --remote_cache= //...
 
       - name: bazel test //...
-        # `tests_enabled: false` on the matrix row keeps the subtree in the
-        # matrix for build-coverage but skips this test step. Used when the
-        # build passes but tests fail with an environment delta from GitLab
-        # CI (per the documented build-only policy). Re-enable once the
-        # underlying drift is fixed.
-        if: steps.precheck.outputs.skip == 'false' && matrix.subtree.tests_enabled != false
+        # `tests_skip: true` on the matrix row keeps the subtree in the matrix
+        # for build coverage but skips this step. Used when the build passes
+        # but tests fail with an environment delta from GitLab CI (per the
+        # documented build-only policy). Default is to run tests. NOTE: the
+        # gate uses a positive-skip field (negated below). The previous form
+        # `tests_enabled != false` silently skipped tests for every row that
+        # did not set the key explicitly, because GitHub Actions expressions
+        # coerce missing matrix keys to null which compares equal to false.
+        if: steps.precheck.outputs.skip == 'false' && !matrix.subtree.tests_skip
         working-directory: ${{ matrix.subtree.path }}
         run: bazel test --remote_cache= --flaky_test_attempts=3 //...
