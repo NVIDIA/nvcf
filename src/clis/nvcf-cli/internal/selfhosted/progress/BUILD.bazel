@@ -22,6 +22,7 @@ go_library(
         "event.go",
         "k8s_watcher.go",
         "log_line_writer.go",
+        "render_check_oneshot.go",
         "render_jsonl.go",
         "render_plain.go",
         "render_status_oneshot.go",

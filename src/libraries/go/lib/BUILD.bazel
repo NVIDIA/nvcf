@@ -13,29 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library", "go_test")
-
-go_library(
-    name = "config",
-    srcs = [
-        "render.go",
-        "telemetries.go",
-    ],
-    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config",
-    visibility = ["//visibility:public"],
-    deps = [
-        "//src/libraries/go/lib/pkg/otelconfig/backendconfig",
-        "@in_gopkg_yaml_v3//:yaml_v3",
-    ],
-)
-
-go_test(
-    name = "config_test",
-    srcs = ["render_test.go"],
-    embed = [":config"],
-    deps = [
-        "//src/libraries/go/lib/pkg/otelconfig/backendconfig",
-        "@com_github_stretchr_testify//assert",
-        "@in_gopkg_yaml_v3//:yaml_v3",
-    ],
-)
+# gazelle:prefix github.com/NVIDIA/nvcf/src/libraries/go/lib
+# gazelle:exclude vendor
+# gazelle:exclude testdata
+# Phase 1 keeps protobuf out of the toolchain; pre-generated .pb.go files are
+# treated as plain Go sources. Re-enable when protobuf/rules_proto land in
+# MODULE.bazel.
+# gazelle:proto disable_global
+# Disambiguate consumers of the errors API that gazelle would otherwise leave
+# with an empty deps list because the proto package historically defined two
+# rules with the same importpath (nverrors_go_proto and errors).
+# gazelle:resolve go github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1 //src/libraries/go/lib/pkg/nvkit/api/errors/v1:errors

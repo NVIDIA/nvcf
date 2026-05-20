@@ -6,7 +6,7 @@ Quick reference for working with **nvcf-image-credential-helper**, a Kubernetes 
 
 **Repository structure:**
 - `cmd/image-credential-helper/` - Main binary entrypoint
-- `credhelper/` - Core credential helper logic (ECR, Volcengine, K8s helpers)
+- `vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential/` - Vendored shared credential helper logic
 - `examples/` - Sample Kubernetes manifests
 - `docker/` - Dockerfile for local/CI use (not shipped yet)
 
@@ -20,9 +20,9 @@ make lint    # golangci-lint (goheader, etc.)
 
 **Run specific tests:**
 ```bash
-go test ./credhelper                     # All tests in package
-go test ./credhelper -run TestECRHelper  # Single test function
-go test -v ./...                         # Verbose output
+go test ./cmd/image-credential-helper                    # Main package tests
+go test ./cmd/image-credential-helper -run Test_runGlobal # Single test function
+go test -v ./...                                         # Verbose output
 ```
 
 **Build:**
@@ -74,21 +74,19 @@ func TestECRHelper_Matches(t *testing.T) {
 - Follow standard Go formatting (gofmt)
 - License headers required on all Go files (enforced by goheader linter)
 
-**Adding new registry support:**
-1. Implement `CustomAuthHelper` interface in `credhelper/`
-2. Add `Matches(serverURL *url.URL) (match, isPublic bool)` method
-3. Add `Run(ctx, refURL, keyID, secretKey) (username, password, error)` method
-4. Register helper in `credhelper/credhelper.go`
+**Credential helper behavior:**
+- Registry helper support lives in the shared nvcf-go `imagecredential` package.
+- Make registry-provider changes upstream in nvcf-go, then update `go.mod` and `vendor/` here.
 
 **Package structure:**
 ```
 cmd/image-credential-helper/  - Binary entrypoint
-credhelper/
+vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential/
   credhelper.go      - Core CredHelper interface and registry
   ecr.go             - AWS ECR helper
   volcengine.go      - Volcengine helper
   k8shelper.go       - Kubernetes secret update logic
-  k8shelper_objects.go - K8s object builders
+  imagecredential.go - K8s object builders
 ```
 
 ## Commit & PR Instructions
@@ -108,7 +106,7 @@ Closes #<issue-number>  # or use NO-REF if no ticket
 
 **Examples:**
 ```
-feat(credhelper): add support for Azure Container Registry
+feat(imagecredential): add support for Azure Container Registry
 fix(ecr): handle FIPS endpoint correctly
 test(volcengine): add unit tests for token refresh
 ```
@@ -179,32 +177,7 @@ find vendor -name "LICENSE*" -type f | sort
 
 ## Adding New Registry Support
 
-To add support for a new container registry:
-
-1. Create a new file `credhelper/<provider>.go`
-2. Implement the `CustomAuthHelper` interface:
-```go
-type myHelper struct {
-    newClient func(ctx context.Context, ...) (myClient, error)
-}
-
-func (h myHelper) Matches(serverURL *url.URL) (match, isPublic bool) {
-    // Return true if this helper handles the registry
-}
-
-func (h myHelper) Run(ctx context.Context, refURL *url.URL, keyID, secretKey string) (username, password string, err error) {
-    // Fetch short-lived credentials from the provider
-}
-```
-3. Register in `credhelper/credhelper.go`:
-```go
-var customAuthHelpers = map[string]CustomAuthHelper{
-    "ecr":        ecrHelper{},
-    "volcengine": volcengineHelper{},
-    "myprovider": myHelper{},  // Add here
-}
-```
-4. Add tests in `credhelper/<provider>_test.go`
+Add registry-provider support in the shared nvcf-go `imagecredential` package first. Then update this repo's nvcf-go module version, run `make vendor-update`, and keep the vendored tests/build files in sync.
 
 ## Quick Links
 

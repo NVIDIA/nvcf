@@ -3,18 +3,18 @@ module github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper
 go 1.25.0
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.41.2
-	github.com/aws/aws-sdk-go-v2/config v1.32.10
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.10
-	github.com/aws/smithy-go v1.24.1
-	github.com/awslabs/amazon-ecr-credential-helper/ecr-login v0.10.1
+	github.com/aws/aws-sdk-go-v2 v1.41.2 // indirect
+	github.com/aws/aws-sdk-go-v2/config v1.32.10 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.10 // indirect
+	github.com/aws/smithy-go v1.24.1 // indirect
+	github.com/awslabs/amazon-ecr-credential-helper/ecr-login v0.10.1 // indirect
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.11.1
-	github.com/volcengine/volcengine-go-sdk v1.1.30
+	github.com/volcengine/volcengine-go-sdk v1.1.30 // indirect
 	k8s.io/api v0.35.3
 	k8s.io/apimachinery v0.35.3
 	k8s.io/client-go v11.0.0+incompatible
-	oras.land/oras-go/v2 v2.6.0
+	oras.land/oras-go/v2 v2.6.0 // indirect
 	sigs.k8s.io/controller-runtime v0.21.0
 )
 
@@ -33,7 +33,7 @@ replace (
 	k8s.io/component-base => k8s.io/component-base v0.35.3
 )
 
-require github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260512103107-793c25223b40
+require github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00
 
 require (
 	dario.cat/mergo v1.0.2 // indirect

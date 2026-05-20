@@ -22,7 +22,6 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper/cmd/image-credential-helper",
     visibility = ["//visibility:private"],
     deps = [
-        "//credhelper",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/icms-translate/translate/common",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/imagecredential",
         "@com_github_sirupsen_logrus//:logrus",
@@ -69,7 +68,6 @@ go_test(
     srcs = ["run_test.go"],
     embed = [":image-credential-helper_lib"],
     deps = [
-        "//credhelper",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/icms-translate/translate/common",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/imagecredential",
         "@com_github_stretchr_testify//assert",

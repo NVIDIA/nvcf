@@ -4,7 +4,7 @@ dario.cat/mergo
 # github.com/Masterminds/semver/v3 v3.4.0
 ## explicit; go 1.21
 github.com/Masterminds/semver/v3
-# github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260512103107-793c25223b40
+# github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00
 ## explicit; go 1.25.0
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util

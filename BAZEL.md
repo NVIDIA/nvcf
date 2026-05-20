@@ -153,6 +153,28 @@ bazel mod tidy
 Gazelle is configured to skip everything outside Phase 1 scope, so it will
 not touch synthetic-import subtrees or vendored directories.
 
+#### Rust equivalent
+
+There is no Gazelle equivalent for Rust. BUILD files for `rust_library`
+and `rust_binary` targets are written by hand; only third-party crate
+metadata is generated, by `crate_universe`. When you edit a Rust crate's
+`Cargo.toml` or `Cargo.lock`, repin the crate index:
+
+```bash
+# Repin all crate_universe hubs in the module graph:
+CARGO_BAZEL_REPIN=1 bazel mod deps
+
+# Narrow to a single hub (faster):
+CARGO_BAZEL_REPIN=true CARGO_BAZEL_REPIN_ALLOWLIST=<hub_name> bazel mod deps
+```
+
+Do not run `bazel sync --only=...` here. `bazel sync` is a WORKSPACE-mode
+command and Bazel 8 rejects it on bzlmod-only repos with
+`ERROR: WORKSPACE has to be enabled for sync command to work`.
+
+Commit any diffs to `Cargo.lock` and `MODULE.bazel.lock`. See the
+`bazel-rust-crate-universe` skill for the full onboarding flow.
+
 ### Build graph queries (useful for review)
 
 ```bash

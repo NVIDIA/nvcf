@@ -19,10 +19,10 @@ bazel test //... --flaky_test_attempts=3
 # Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
 bazel build //cmd/nvcf-nats-auth-callout-service:image_index
 
-# Push to the internal NGC registries (kaze / nv-ngc-devops / ncp-dev).
-bazel run //cmd/nvcf-nats-auth-callout-service:image_push_kaze
-bazel run //cmd/nvcf-nats-auth-callout-service:image_push_devops
-bazel run //cmd/nvcf-nats-auth-callout-service:image_push_ncp_dev
+# Push to the legacy NVCF self-managed NGC registry
+# (nvcr.io/0544956542906249/nvcf-nats-auth-callout-service). See
+# nvidia-internal/destinations.bzl for the destination catalog.
+bazel run //nvidia-internal:image_push_nvcf_internal
 
 # Regenerate per-package BUILD files after Go source changes.
 bazel run //:gazelle

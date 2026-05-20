@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("@nvcf_invocation_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//rules/oci:defs.bzl", "rust_oci_image")
@@ -92,6 +93,14 @@ rust_test(
 # targets live here. The internal NGC publish lanes (kaze,
 # nv-ngc-devops, ncp-dev) are defined under //nvidia-internal:* so the
 # registry coordinates stay out of the public OSS snapshot.
+
+pkg_tar(
+    name = "config_layer",
+    srcs = glob(["resources/*.yaml"]),
+    package_dir = "/etc/server/config",
+    visibility = ["//visibility:private"],
+)
+
 rust_oci_image(
     name = "image",
     base = "@distroless_cc",
@@ -99,4 +108,5 @@ rust_oci_image(
     binary_path = "/usr/local/bin/server",
     tags = ["nvcf-invocation-service"],
     visibility = ["//visibility:public"],
+    extra_layers = [":config_layer"],
 )

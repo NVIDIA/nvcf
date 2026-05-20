@@ -6,7 +6,7 @@
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("//rules/oci/private:common.bzl", "DEFAULT_BASE", "create_oci_image")
 
-def _rust_oci_image_impl(name, visibility, binary, binary_path, base, entrypoint, registry, extra_registries, tags):
+def _rust_oci_image_impl(name, visibility, binary, binary_path, base, entrypoint, registry, extra_registries, tags, extra_layers):
     # Lay the binary down at a stable absolute path so the entrypoint
     # and pod-spec command can reference it directly. Defaults to
     # /usr/local/bin/{binary_target_name}, matching the legacy Dockerfile.
@@ -30,7 +30,7 @@ def _rust_oci_image_impl(name, visibility, binary, binary_path, base, entrypoint
 
     create_oci_image(
         name = name,
-        tars = [layer_name],
+        tars = [layer_name] + list(extra_layers),
         base = base,
         entrypoint = entry,
         visibility = visibility,
@@ -56,6 +56,10 @@ rust_oci_image = macro(
             doc = "Base OCI image.",
             default = DEFAULT_BASE,
             configurable = False,
+        ),
+        "extra_layers": attr.label_list(
+              doc = "Additional pkg_tar layers to stack on top of the binary layer.",
+              configurable = False,
         ),
         "entrypoint": attr.string_list(
             doc = "Container entrypoint. Defaults to [binary_path].",

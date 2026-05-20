@@ -22,7 +22,6 @@ WORKDIR /app
 COPY go.mod go.sum ./
 COPY vendor ./vendor
 COPY cmd ./cmd
-COPY credhelper ./credhelper
 
 # ------------------------------------------------------------------------------
 # Builder stage – compile image-credential-helper binary for all TARGETARCHS

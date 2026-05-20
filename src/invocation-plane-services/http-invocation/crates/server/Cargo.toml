@@ -72,7 +72,7 @@ nkeys = "0.4"
 notify = "8"
 oauth2 = { version = "5.0.0-rc.1", features = ["rustls-tls"] }
 opentelemetry = { version = "0.31.0", features = ["trace"] }
-opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "tls-webpki-roots"] }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-semantic-conventions = { version = "0.31.0", features = ["semconv_experimental"] }
 pin-project-lite = "0.2"

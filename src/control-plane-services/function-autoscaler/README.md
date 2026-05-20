@@ -5,9 +5,11 @@ A high-performance, distributed autoscaling service for NVIDIA Cloud Functions (
 ## Build with Bazel
 
 CI runs `bazel test //...` and publishes the image via
-`bazel run //nvidia-internal:image_push_kaze` (plus the `_devops` and
-`_ncp_dev` variants for the alternate NGC registries). Tracks the
-canonical Phase B scaffold from nvcf-invocation-service !313.
+`bazel run //nvidia-internal:image_push_nvcf_autoscaling` to
+`nvcr.io/ema5hzr4ziav/nvcf_autoscaling`, the legacy NGC tenant the
+pre-Bazel CI used (`NGC_IMAGE_PATH=nvcr.io/ema5hzr4ziav` +
+`DOCKER_IMAGE_NAME=nvcf_autoscaling`). Tracks the canonical Phase B
+scaffold from nvcf-invocation-service !313.
 
 Requires [bazelisk](https://github.com/bazelbuild/bazelisk) and
 `libssl-dev` installed (Ubuntu / Debian). The bazel-ci image ships
@@ -26,13 +28,11 @@ bazel build //crates/server:image_index
 # Load the host-arch image into the local docker daemon.
 bazel run //crates/server:image_load
 
-# Push the multi-arch image to the three internal NGC registries.
-# Push targets live under //nvidia-internal:image_push_kaze* (see
+# Push the single-arch image to the legacy NGC tenant. The push target
+# lives under //nvidia-internal:image_push_nvcf_autoscaling (see
 # nvidia-internal/BUILD.bazel); the registry coordinates are
 # NVIDIA-internal and intentionally kept out of the public mirror.
-bazel run //nvidia-internal:image_push_kaze
-bazel run //nvidia-internal:image_push_devops
-bazel run //nvidia-internal:image_push_ncp_dev
+bazel run //nvidia-internal:image_push_nvcf_autoscaling
 
 # Repin crate_universe after Cargo.lock changes.
 CARGO_BAZEL_REPIN=1 bazel mod tidy

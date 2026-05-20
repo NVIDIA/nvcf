@@ -41,7 +41,6 @@ doc-src/proto
 
 # sensitive files
 kubeconfig.json
-settings-local.yaml
 local_env/vault/secrets.json
 local_env/vault/secrets_*_local.json
 

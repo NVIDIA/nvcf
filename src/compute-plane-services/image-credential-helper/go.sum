@@ -1257,8 +1257,8 @@ github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym
 github.com/JohnCGriffin/overflow v0.0.0-20211019200055-46fa312c352c/go.mod h1:X0CRv0ky0k6m906ixxpzmDRLvX58TFUKS2eePweuyxk=
 github.com/Masterminds/semver/v3 v3.4.0 h1:Zog+i5UMtVoCU8oKka5P7i9q9HgrJeGzI9SA1Xbatp0=
 github.com/Masterminds/semver/v3 v3.4.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260512103107-793c25223b40 h1:Lf5GESyLYwspV0nKB/e/G+BUW4I6L+d6MuldXjiaRWA=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260512103107-793c25223b40/go.mod h1:ws5YuneVcbUreSNoeuBiprrZSo/O9aj/8C4ekc6oHJE=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00 h1:Iqcjq6b+aK1mpw97SuzA/sDKnNN1lCgTPbVb1CfzIrc=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00/go.mod h1:a81YFpCa6Wl01ZNx+2wF7NXoPcn0bWWY4GLrUOpnN1g=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=
 github.com/ajstarks/deck v0.0.0-20200831202436-30c9fc6549a9/go.mod h1:JynElWSGnm/4RlzPXRlREEwqTHAN3T56Bv2ITsFT3gY=
 github.com/ajstarks/deck/generate v0.0.0-20210309230005-c3f852c02e19/go.mod h1:T13YZdzov6OU0A1+RfKZiZN9ca6VeKdBdyDV+BY97Tk=

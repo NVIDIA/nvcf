@@ -20,6 +20,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -47,6 +48,8 @@ var (
 var newInotifyProberForSelfHosted = func() selfhosted.NodeInotifyProber {
 	return selfhosted.NewInotifyProber()
 }
+
+var checkWriterIsTTY = isWriterTTY
 
 var selfHostedCheckCmd = &cobra.Command{
 	Use:          "check",
@@ -92,11 +95,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		Tools:     selfHostedPreflightTools(),
 	}
 
-	sink, _, err := progress.SelectRenderer(c.ErrOrStderr(), progress.RenderOpts{
-		JSON:       selfHostedJSON,
-		Plain:      selfHostedPlain,
-		Accessible: selfHostedAccessible,
-	})
+	sink, err := selectCheckRenderer(c.ErrOrStderr(), selfHostedWait != "")
 	if err != nil {
 		return err
 	}
@@ -163,6 +162,29 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			return ctx.Err()
 		}
 	}
+}
+
+func selectCheckRenderer(w io.Writer, wait bool) (progress.EventSink, error) {
+	if !wait && !selfHostedJSON && !selfHostedPlain && !selfHostedAccessible && checkWriterIsTTY(w) {
+		return progress.NewCheckOneShotRenderer(w, progress.ModelOpts{
+			Mode:                progress.ModeCheck,
+			Output:              w,
+			Cluster:             checkClusterName,
+			ControlPlaneContext: selfHostedControlPlaneContext,
+			ComputePlaneContext: selfHostedComputePlaneContext,
+		}), nil
+	}
+
+	sink, _, err := progress.SelectRenderer(w, progress.RenderOpts{
+		JSON:                selfHostedJSON,
+		Plain:               selfHostedPlain,
+		Accessible:          selfHostedAccessible,
+		Mode:                progress.ModeCheck,
+		Cluster:             checkClusterName,
+		ControlPlaneContext: selfHostedControlPlaneContext,
+		ComputePlaneContext: selfHostedComputePlaneContext,
+	})
+	return sink, err
 }
 
 // runPreflightByRole dispatches RunPreflightForRole using the role(s) derived

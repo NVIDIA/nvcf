@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# nvcf-nats-auth-callout-service Service Configuration
+# This file contains the complete configuration options for the nvcf-nats-auth-callout-service service
+# All settings can be overridden via environment variables or CLI flags
+
+# Server configuration
+server:
+  port: "8080" # Server port (CLI: --port, -p) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT)
+
+# Service configuration
+service:
+  name: "nvcf-nats-auth-callout-service" # Service name (CLI: --service-name) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NAME)
+  nats_url: "nats://localhost:4222" # NATS server URL (CLI: --nats-url) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NATS_URL)
+  nkey_seed: "" # NKey seed for authentication (CLI: --nkey-seed) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY_SEED) (required)
+  nkey_signature: "" # Signing key seed for JWT signing (CLI: --nkey-signature) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY_SIGNATURE) (required)
+  plugin_configs: {} # Plugin configurations (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN_CONFIGS)
+  account_configs: {} # Account configurations (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT_CONFIGS)
+
+# Logging configuration
+logging:
+  level: "info" # Log level: debug, info, warn, error (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_LEVEL)
+  format: "console" # Log format: console, json (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_FORMAT)
+  output: "stdout" # Log output: stdout, stderr, file (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_OUTPUT)
+  caller: true # Include caller information (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_CALLER)
+  stacktrace_level: "error" # Log level for stack traces (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_STACKTRACE_LEVEL)
+  development: false # Development mode (enables console encoder) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_DEVELOPMENT)
+  disable_timestamp: false # Disable timestamp in logs (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_DISABLE_TIMESTAMP)
+  sampling:
+    initial: 100 # Initial sampling rate (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_SAMPLING_INITIAL)
+    thereafter: 100 # After initial, sample 1 out of every N messages (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_SAMPLING_THEREAFTER)
+  fields:
+    service_name: "nvcf-nats-auth-callout-service" # Service name field in logs (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_FIELDS_SERVICE_NAME)
+    version: "dev" # Version field in logs (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_FIELDS_VERSION)
+    environment: "development" # Environment field in logs (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_FIELDS_ENVIRONMENT)
+
+# Tracing configuration (optional - disabled by default)
+tracing:
+  enabled: true # Enable/disable tracing (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_ENABLED)
+  provider: "noop" # Tracing provider: otel, lightstep, noop (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_PROVIDER)
+  
+  # OpenTelemetry configuration (used when provider is "otel")
+  otel:
+    endpoint: "http://localhost:4317" # OTLP gRPC endpoint (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_ENDPOINT)
+    http_endpoint: "http://localhost:4318/v1/traces" # OTLP HTTP endpoint (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_HTTP_ENDPOINT)
+    insecure: true # Use insecure connection (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_INSECURE)
+    environment: "development" # Environment tag (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_ENVIRONMENT)
+    sampling_ratio: "1.0" # Sampling ratio 0.0-1.0 (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_SAMPLING_RATIO)
+    headers:
+      authorization: "" # Authorization header (loaded from secret) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_HEADERS_AUTHORIZATION)
+      x-api-key: "" # API key header (loaded from secret) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_HEADERS_X_API_KEY)
+    timeout_ms: 10000 # Connection timeout in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_TIMEOUT_MS)
+    retry_delay_ms: 5000 # Retry delay in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_RETRY_DELAY_MS)
+    max_export_batch_size: 512 # Maximum export batch size (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_MAX_EXPORT_BATCH_SIZE)
+    export_timeout_ms: 30000 # Export timeout in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_EXPORT_TIMEOUT_MS)
+    max_queue_size: 2048 # Maximum queue size (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_MAX_QUEUE_SIZE)
+    schedule_delay_ms: 5000 # Schedule delay in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_SCHEDULE_DELAY_MS)
+    compression: "gzip" # Compression: none, gzip (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_COMPRESSION)
+
+  # Lightstep configuration (used when provider is "lightstep")
+  lightstep:
+    endpoint: "ingest.lightstep.com:443" # Lightstep endpoint (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_ENDPOINT)
+    access_token: "" # Access token (loaded from secret) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_ACCESS_TOKEN)
+    environment: "development" # Environment tag (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_ENVIRONMENT)
+    sampling_ratio: "1.0" # Sampling ratio 0.0-1.0 (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_SAMPLING_RATIO)
+    timeout_ms: 10000 # Connection timeout in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_TIMEOUT_MS)
+    max_export_batch_size: 512 # Maximum export batch size (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_MAX_EXPORT_BATCH_SIZE)
+    export_timeout_ms: 30000 # Export timeout in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_EXPORT_TIMEOUT_MS)
+    max_queue_size: 2048 # Maximum queue size (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_MAX_QUEUE_SIZE)
+    schedule_delay_ms: 5000 # Schedule delay in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_SCHEDULE_DELAY_MS)
+    compression: "gzip" # Compression: none, gzip (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_COMPRESSION)
+    insecure: false # Use insecure connection (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_INSECURE)
+
+# Metrics configuration
+metrics:
+  enabled: true # Enable/disable metrics endpoint (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_ENABLED)
+  port: "9090" # Metrics server port (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_PORT)

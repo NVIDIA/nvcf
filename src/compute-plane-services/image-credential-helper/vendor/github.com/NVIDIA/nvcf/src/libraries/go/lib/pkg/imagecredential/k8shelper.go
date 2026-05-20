@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package credhelper
+package imagecredential
 
 import (
 	"bytes"
@@ -36,9 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// UpdateMatchingSecrets will update all existing NVCF workload secrets with username/auth token
-// using corresponding static credentials in workloadCredCfg.K8sSecrets. The secret index in workloadCredCfg.K8sSecrets
-// is used to generate the matching workload secret name in namespace.
+// UpdateMatchingSecrets updates existing NVCF workload and worker pull secrets with short-lived credentials.
 func UpdateMatchingSecrets(
 	ctx context.Context,
 	k8sClient kubernetes.Interface,
@@ -77,7 +75,6 @@ func updateMatchingSecrets(
 	return errors.Join(errs...)
 }
 
-// buildDockerSecretSet returns the set of secret names that are Docker config JSON type.
 func buildDockerSecretSet(secrets []corev1.Secret) map[string]struct{} {
 	secretSet := map[string]struct{}{}
 	for _, secret := range secrets {
@@ -88,10 +85,8 @@ func buildDockerSecretSet(secrets []corev1.Secret) map[string]struct{} {
 	return secretSet
 }
 
-// updateSecretFunc updates a single registry auth secret with short-lived credentials and returns whether any auth was updated.
 type updateSecretFunc func(ctx context.Context, log *logrus.Entry, customAuthHelpers []CustomAuthHelper, secret common.RegistryAuthSecret) bool
 
-// updateSecretsForCredCfg updates K8s secrets for each entry in credCfg, using namePrefix and index for secret names.
 func updateSecretsForCredCfg(
 	ctx context.Context,
 	secretClient interface {
@@ -127,7 +122,6 @@ func updateSecretsForCredCfg(
 	return errs
 }
 
-// applySecretUpdate gets the secret, sets DockerConfigJson data, and updates it via RetryK8s.
 func applySecretUpdate(
 	ctx context.Context,
 	secretClient interface {
@@ -161,17 +155,12 @@ func applySecretUpdate(
 	})
 }
 
-// credCacheItem contains short-lived credentials received from an auth helper.
 type credCacheItem struct {
 	username    string
 	token       string
 	needsUpdate bool
 }
 
-// newUpdateSecretCachedFunc returns a function that runs customAuthHelpers on each auth in secret,
-// updating secret with short-lived credentials if necessary.
-// credCache is updated with the static, long-lived credentials in secret as a key,
-// value as the short-lived credentials so subsequent calls skip unnecessary API calls.
 func newUpdateSecretCachedFunc(credCache map[string]map[string]credCacheItem) updateSecretFunc {
 	return func(
 		ctx context.Context,
@@ -183,7 +172,6 @@ func newUpdateSecretCachedFunc(credCache map[string]map[string]credCacheItem) up
 	}
 }
 
-// updateSecretAuths updates each auth in secret via getOrFetchCachedCreds and returns whether any auth was updated.
 func updateSecretAuths(
 	ctx context.Context,
 	log *logrus.Entry,
@@ -208,8 +196,6 @@ func updateSecretAuths(
 	return anyUpdated
 }
 
-// getOrFetchCachedCreds returns username, token, and whether the secret needs updating,
-// using credCache to avoid repeated auth API calls.
 func getOrFetchCachedCreds(
 	ctx context.Context,
 	credCache map[string]map[string]credCacheItem,
@@ -236,6 +222,7 @@ func getOrFetchCachedCreds(
 	return username, token, needsUpdate, nil
 }
 
+// RetryK8s retries retryable Kubernetes API errors with the client-go default backoff.
 func RetryK8s(fn func() error) error {
 	return retry.OnError(retry.DefaultBackoff, isRetryableK8sError, fn)
 }

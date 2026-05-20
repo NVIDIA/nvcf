@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package credhelper
+package imagecredential
 
 import (
 	"context"
@@ -34,12 +34,16 @@ import (
 )
 
 const (
-	// ociRegistryScheme is the OCI scheme for the registry from helm.sh/helm/v3/pkg/registry.OCIScheme
+	// ociRegistryScheme is the OCI scheme from helm.sh/helm/v3/pkg/registry.OCIScheme.
 	ociRegistryScheme = "oci"
 	ecrPublicName     = "public.ecr.aws"
 )
 
-var ecrPattern = regexp.MustCompile(`^(\d{12})\.dkr[\.\-]ecr(\-fips)?\.([a-zA-Z0-9][a-zA-Z0-9-_]*)\.(amazonaws\.com(?:\.cn)?|on\.(?:aws|amazonwebservices\.com\.cn)|sc2s\.sgov\.gov|c2s\.ic\.gov|cloud\.adc-e\.uk|csp\.hci\.ic\.gov)$`)
+var ecrPattern = regexp.MustCompile(
+	`^(\d{12})\.dkr[.-]ecr(-fips)?\.([a-zA-Z0-9][a-zA-Z0-9-_]*)\.` +
+		`(amazonaws\.com(?:\.cn)?|on\.(?:aws|amazonwebservices\.com\.cn)|` +
+		`sc2s\.sgov\.gov|c2s\.ic\.gov|cloud\.adc-e\.uk|csp\.hci\.ic\.gov)$`,
+)
 
 type ecrHelper struct {
 	newClient func(ctx context.Context, reg *ecrloginapi.Registry, creds AuthHelperCredentials) (ecrClient, error)

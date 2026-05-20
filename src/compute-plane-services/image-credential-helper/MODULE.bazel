@@ -15,8 +15,8 @@
 
 """Bzlmod module definition for nvcf-image-credential-helper.
 
-Single Go binary plus one internal library package (credhelper/). Vendored
-dependencies live in vendor/ for legacy go build/test flows; Bazel
+Single Go binary. Shared credential helper code is vendored from nvcf-go's
+imagecredential package for legacy go build/test flows; Bazel
 resolves all deps via Gazelle's go_deps extension from go.mod and ignores
 vendor/ (.bazelignore).
 
@@ -64,8 +64,23 @@ go_sdk.download(version = "1.25.0")
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")
 
+# The shared NVCF Go library (github.com/NVIDIA/nvcf/src/libraries/go/lib)
+# ships pre-generated BUILD.bazel files that reference `@rules_go`. From
+# inside the fetched module's bzlmod context that name does not resolve;
+# force Gazelle to re-generate the module's BUILD.bazel files in this
+# repo's bzlmod context so the references work. Same workaround used by
+# helm-reval-api / nvca / grpc-proxy / ratelimiter when those repos
+# consume this module. Without this override the GHA Bazel build fails
+# at analysis time with "unknown repo 'rules_go' requested from
+# @@gazelle++go_deps+com_github_nvidia_nvcf_src_libraries_go_lib".
+go_deps.gazelle_override(
+    build_file_generation = "clean",
+    directives = ["gazelle:proto disable_global"],
+    path = "github.com/NVIDIA/nvcf/src/libraries/go/lib",
+)
+
 # Auto-managed by `bazel mod tidy`. Re-run after adding new imports in
-# cmd/ or credhelper/. The list is generated from the transitive closure
+# cmd/ or imported shared packages. The list is generated from the transitive closure
 # of go.mod.
 use_repo(
     go_deps,

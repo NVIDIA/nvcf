@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package credhelper
+package imagecredential
 
 import (
 	"context"
@@ -28,25 +28,26 @@ import (
 )
 
 type CredHelper interface {
-	// GetRegistryCredentials will return a username and token for the given OCI-compliant registry specified in ref
-	// for the long-lived username/password basic credentials, if ref matches any helper.
-	// Otherwise username/password are returned as-is.
+	// GetRegistryCredentials returns a username and token for OCI registries handled by a custom helper.
+	// If no helper matches, the username and password are returned as-is.
 	GetRegistryCredentials(ctx context.Context, ref string, creds AuthHelperCredentials) (username, password string, err error)
 }
 
-// NewCredHelper returns a CredHelper to fetch tokens for certain CSP Helm/image registries.
+// NewCredHelper returns a CredHelper to fetch short-lived tokens for supported third-party registries.
 func NewCredHelper() CredHelper {
 	return credHelper{}
 }
 
 type credHelper struct{}
 
+// AuthHelperCredentials contains the long-lived registry credentials used to fetch short-lived tokens.
 type AuthHelperCredentials struct {
 	Username    string
 	Password    string
 	LoadFromEnv bool
 }
 
+// CustomAuthHelper fetches short-lived credentials for a supported registry provider.
 type CustomAuthHelper interface {
 	Matches(serverURL *url.URL) (match bool, isPublic bool)
 	Run(ctx context.Context, refURL *url.URL, creds AuthHelperCredentials) (username, password string, err error)
@@ -60,6 +61,7 @@ var (
 	}
 )
 
+// RegisterAuthHelper registers or replaces a custom registry auth helper.
 func RegisterAuthHelper(name string, h CustomAuthHelper) {
 	customAuthHelpersMu.Lock()
 	customAuthHelpers[name] = h
@@ -120,7 +122,7 @@ type inMemoryCredsStore struct {
 	m  map[string]orasauth.Credential
 }
 
-// NewCredentialStore returns an in-memory creds store, safe for concurrent use.
+// NewCredentialStore returns an in-memory credentials store, safe for concurrent use.
 func NewCredentialStore() orascredentials.Store {
 	return &inMemoryCredsStore{m: map[string]orasauth.Credential{}}
 }
