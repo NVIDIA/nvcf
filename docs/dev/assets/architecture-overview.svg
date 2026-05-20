@@ -1,123 +1,171 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="680" viewBox="0 0 980 680" font-family="Inter, Segoe UI, Arial, sans-serif">
   <defs>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --svg-bg: #f7f9f7;
+        --svg-panel: #ffffff;
+        --svg-panel-muted: #eef3ef;
+        --svg-border: #c8d0d6;
+        --svg-text: #1f2520;
+        --svg-muted: #53605a;
+        --svg-line: #53605a;
+        --nvidia-green: #76B900;
+        --svg-blue: #1565C0;
+        --svg-red: #c62828;
+        --svg-amber: #f9a825;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --svg-bg: #101512;
+          --svg-panel: #18201b;
+          --svg-panel-muted: #202a24;
+          --svg-border: #50605a;
+          --svg-text: #f3f7f2;
+          --svg-muted: #b9c8b7;
+          --svg-line: #cbd8c9;
+          --nvidia-green: #8bd80f;
+          --svg-blue: #6eb6ff;
+          --svg-red: #ff8a80;
+          --svg-amber: #ffd166;
+        }
+      }
+
+      .svg-bg { fill: var(--svg-bg); }
+      .panel { fill: var(--svg-panel); }
+      .panel-muted { fill: var(--svg-panel-muted); }
+      .text { fill: var(--svg-text); }
+      .muted { fill: var(--svg-muted); }
+      .line-stroke { stroke: var(--svg-line); }
+      .line-fill { fill: var(--svg-line); }
+      .green-stroke { stroke: var(--nvidia-green); }
+      .green-fill { fill: var(--nvidia-green); }
+      .blue-stroke { stroke: var(--svg-blue); }
+      .blue-fill { fill: var(--svg-blue); }
+      .red-stroke { stroke: var(--svg-red); }
+      .red-fill { fill: var(--svg-red); }
+      .amber-stroke { stroke: var(--svg-amber); }
+      .amber-fill { fill: var(--svg-amber); }
+    </style>
     <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#555"/>
+      <polygon points="0 0, 10 3.5, 0 7" class="line-fill"/>
     </marker>
     <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#76B900"/>
+      <polygon points="0 0, 10 3.5, 0 7" class="green-fill"/>
     </marker>
   </defs>
 
   <!-- Background -->
-  <rect width="980" height="680" fill="#fafafa"/>
+  <rect width="980" height="680" class="svg-bg"/>
 
   <!-- ===== CONTROL PLANE ===== -->
-  <rect x="200" y="20" width="740" height="175" rx="8" fill="#f0f7e6" stroke="#76B900" stroke-width="2"/>
-  <text x="570" y="45" text-anchor="middle" font-size="13" font-weight="bold" fill="#3d6600">Control Plane</text>
-  <text x="570" y="60" text-anchor="middle" font-size="10" fill="#666">(partial — see manifest for full component list)</text>
+  <rect x="200" y="20" width="740" height="175" rx="8" class="panel-muted green-stroke" stroke-width="2"/>
+  <text x="570" y="45" text-anchor="middle" font-size="13" font-weight="bold" class="green-fill">Control Plane</text>
+  <text x="570" y="60" text-anchor="middle" font-size="10" class="muted">(partial — see manifest for full component list)</text>
 
   <!-- Control plane components -->
-  <rect x="220" y="70" width="130" height="50" rx="5" fill="#fff" stroke="#76B900" stroke-width="1.5"/>
-  <text x="285" y="91" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">NVCF API</text>
-  <text x="285" y="107" text-anchor="middle" font-size="10" fill="#555">function lifecycle</text>
+  <rect x="220" y="70" width="130" height="50" rx="5" class="panel green-stroke" stroke-width="1.5"/>
+  <text x="285" y="91" text-anchor="middle" font-size="11" font-weight="bold" class="text">NVCF API</text>
+  <text x="285" y="107" text-anchor="middle" font-size="10" class="muted">function lifecycle</text>
 
-  <rect x="370" y="70" width="130" height="50" rx="5" fill="#fff" stroke="#76B900" stroke-width="1.5"/>
-  <text x="435" y="91" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">Autoscaler</text>
-  <text x="435" y="107" text-anchor="middle" font-size="10" fill="#555">scale-up / scale-down</text>
+  <rect x="370" y="70" width="130" height="50" rx="5" class="panel green-stroke" stroke-width="1.5"/>
+  <text x="435" y="91" text-anchor="middle" font-size="11" font-weight="bold" class="text">Autoscaler</text>
+  <text x="435" y="107" text-anchor="middle" font-size="10" class="muted">scale-up / scale-down</text>
 
-  <rect x="520" y="70" width="130" height="50" rx="5" fill="#fff" stroke="#76B900" stroke-width="1.5"/>
-  <text x="585" y="91" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">Helm ReVal</text>
-  <text x="585" y="107" text-anchor="middle" font-size="10" fill="#555">chart validation</text>
+  <rect x="520" y="70" width="130" height="50" rx="5" class="panel green-stroke" stroke-width="1.5"/>
+  <text x="585" y="91" text-anchor="middle" font-size="11" font-weight="bold" class="text">Helm ReVal</text>
+  <text x="585" y="107" text-anchor="middle" font-size="10" class="muted">chart validation</text>
 
-  <rect x="670" y="70" width="100" height="50" rx="5" fill="#fff" stroke="#76B900" stroke-width="1.5"/>
-  <text x="720" y="91" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">OpenBao</text>
-  <text x="720" y="107" text-anchor="middle" font-size="10" fill="#555">secrets</text>
+  <rect x="670" y="70" width="100" height="50" rx="5" class="panel green-stroke" stroke-width="1.5"/>
+  <text x="720" y="91" text-anchor="middle" font-size="11" font-weight="bold" class="text">OpenBao</text>
+  <text x="720" y="107" text-anchor="middle" font-size="10" class="muted">secrets</text>
 
-  <rect x="785" y="70" width="100" height="50" rx="5" fill="#fff" stroke="#76B900" stroke-width="1.5"/>
-  <text x="835" y="91" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">Cassandra</text>
-  <text x="835" y="107" text-anchor="middle" font-size="10" fill="#555">persistent state</text>
+  <rect x="785" y="70" width="100" height="50" rx="5" class="panel green-stroke" stroke-width="1.5"/>
+  <text x="835" y="91" text-anchor="middle" font-size="11" font-weight="bold" class="text">Cassandra</text>
+  <text x="835" y="107" text-anchor="middle" font-size="10" class="muted">persistent state</text>
 
-  <text x="570" y="160" text-anchor="middle" font-size="10" fill="#888">+ additional services: SIS, ESS API, API Keys, notary-service, …</text>
+  <text x="570" y="160" text-anchor="middle" font-size="10" class="muted">+ additional services: SIS, ESS API, API Keys, notary-service, …</text>
 
   <!-- ===== CALLER ===== -->
-  <rect x="20" y="270" width="120" height="70" rx="8" fill="#fff8e1" stroke="#f9a825" stroke-width="2"/>
-  <text x="80" y="298" text-anchor="middle" font-size="12" font-weight="bold" fill="#5d4037">Caller</text>
-  <text x="80" y="316" text-anchor="middle" font-size="10" fill="#5d4037">curl / CLI</text>
+  <rect x="20" y="270" width="120" height="70" rx="8" class="panel-muted amber-stroke" stroke-width="2"/>
+  <text x="80" y="298" text-anchor="middle" font-size="12" font-weight="bold" class="amber-fill">Caller</text>
+  <text x="80" y="316" text-anchor="middle" font-size="10" class="amber-fill">curl / CLI</text>
 
   <!-- ===== INVOCATION PLANE ===== -->
-  <rect x="200" y="235" width="740" height="210" rx="8" fill="#e8f4fd" stroke="#1565C0" stroke-width="2"/>
-  <text x="570" y="260" text-anchor="middle" font-size="13" font-weight="bold" fill="#0d47a1">Invocation Plane</text>
+  <rect x="200" y="235" width="740" height="210" rx="8" class="panel-muted blue-stroke" stroke-width="2"/>
+  <text x="570" y="260" text-anchor="middle" font-size="13" font-weight="bold" class="blue-fill">Invocation Plane</text>
 
   <!-- Invocation components -->
-  <rect x="220" y="270" width="150" height="50" rx="5" fill="#fff" stroke="#1565C0" stroke-width="1.5"/>
-  <text x="295" y="291" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">Invocation Service</text>
-  <text x="295" y="307" text-anchor="middle" font-size="10" fill="#555">HTTP intake, NATS pub</text>
+  <rect x="220" y="270" width="150" height="50" rx="5" class="panel blue-stroke" stroke-width="1.5"/>
+  <text x="295" y="291" text-anchor="middle" font-size="11" font-weight="bold" class="text">Invocation Service</text>
+  <text x="295" y="307" text-anchor="middle" font-size="10" class="muted">HTTP intake, NATS pub</text>
 
-  <rect x="390" y="270" width="130" height="50" rx="5" fill="#fff" stroke="#1565C0" stroke-width="1.5"/>
-  <text x="455" y="291" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">gRPC Proxy</text>
-  <text x="455" y="307" text-anchor="middle" font-size="10" fill="#555">gRPC forwarding</text>
+  <rect x="390" y="270" width="130" height="50" rx="5" class="panel blue-stroke" stroke-width="1.5"/>
+  <text x="455" y="291" text-anchor="middle" font-size="11" font-weight="bold" class="text">gRPC Proxy</text>
+  <text x="455" y="307" text-anchor="middle" font-size="10" class="muted">gRPC forwarding</text>
 
-  <rect x="540" y="270" width="130" height="50" rx="5" fill="#fff" stroke="#1565C0" stroke-width="1.5"/>
-  <text x="605" y="291" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">RateLimiter</text>
-  <text x="605" y="307" text-anchor="middle" font-size="10" fill="#555">per-function limits</text>
+  <rect x="540" y="270" width="130" height="50" rx="5" class="panel blue-stroke" stroke-width="1.5"/>
+  <text x="605" y="291" text-anchor="middle" font-size="11" font-weight="bold" class="text">RateLimiter</text>
+  <text x="605" y="307" text-anchor="middle" font-size="10" class="muted">per-function limits</text>
 
-  <rect x="690" y="270" width="130" height="50" rx="5" fill="#fff" stroke="#1565C0" stroke-width="1.5"/>
-  <text x="755" y="291" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">LLM API Gateway</text>
-  <text x="755" y="307" text-anchor="middle" font-size="10" fill="#555">OpenAI-compatible</text>
+  <rect x="690" y="270" width="130" height="50" rx="5" class="panel blue-stroke" stroke-width="1.5"/>
+  <text x="755" y="291" text-anchor="middle" font-size="11" font-weight="bold" class="text">LLM API Gateway</text>
+  <text x="755" y="307" text-anchor="middle" font-size="10" class="muted">OpenAI-compatible</text>
 
-  <rect x="310" y="340" width="160" height="50" rx="5" fill="#fff" stroke="#1565C0" stroke-width="1.5"/>
-  <text x="390" y="361" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">NATS JetStream</text>
-  <text x="390" y="377" text-anchor="middle" font-size="10" fill="#555">Create.NVCA.*.{clusterID}.*.*</text>
+  <rect x="310" y="340" width="160" height="50" rx="5" class="panel blue-stroke" stroke-width="1.5"/>
+  <text x="390" y="361" text-anchor="middle" font-size="11" font-weight="bold" class="text">NATS JetStream</text>
+  <text x="390" y="377" text-anchor="middle" font-size="10" class="muted">Create.NVCA.*.{clusterID}.*.*</text>
 
-  <rect x="500" y="340" width="160" height="50" rx="5" fill="#fff" stroke="#1565C0" stroke-width="1.5"/>
-  <text x="580" y="361" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">NATS Auth Callout</text>
-  <text x="580" y="377" text-anchor="middle" font-size="10" fill="#555">NKey / OIDC / webhook</text>
+  <rect x="500" y="340" width="160" height="50" rx="5" class="panel blue-stroke" stroke-width="1.5"/>
+  <text x="580" y="361" text-anchor="middle" font-size="11" font-weight="bold" class="text">NATS Auth Callout</text>
+  <text x="580" y="377" text-anchor="middle" font-size="10" class="muted">NKey / OIDC / webhook</text>
 
   <!-- ===== GPU CLUSTER A ===== -->
-  <rect x="160" y="490" width="300" height="170" rx="8" fill="#fce4ec" stroke="#c62828" stroke-width="2"/>
-  <text x="310" y="515" text-anchor="middle" font-size="13" font-weight="bold" fill="#b71c1c">GPU Cluster A</text>
-  <text x="310" y="531" text-anchor="middle" font-size="10" fill="#888">(e.g. on-prem H100)</text>
+  <rect x="160" y="490" width="300" height="170" rx="8" class="panel-muted red-stroke" stroke-width="2"/>
+  <text x="310" y="515" text-anchor="middle" font-size="13" font-weight="bold" class="red-fill">GPU Cluster A</text>
+  <text x="310" y="531" text-anchor="middle" font-size="10" class="muted">(e.g. on-prem H100)</text>
 
-  <rect x="185" y="545" width="250" height="45" rx="5" fill="#fff" stroke="#c62828" stroke-width="1.5"/>
-  <text x="310" y="564" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">NVIDIA Cluster Agent (NVCA)</text>
-  <text x="310" y="580" text-anchor="middle" font-size="10" fill="#555">job dispatch · pod lifecycle</text>
+  <rect x="185" y="545" width="250" height="45" rx="5" class="panel red-stroke" stroke-width="1.5"/>
+  <text x="310" y="564" text-anchor="middle" font-size="11" font-weight="bold" class="text">NVIDIA Cluster Agent (NVCA)</text>
+  <text x="310" y="580" text-anchor="middle" font-size="10" class="muted">job dispatch · pod lifecycle</text>
 
-  <rect x="185" y="605" width="250" height="40" rx="5" fill="#fff" stroke="#c62828" stroke-width="1.5"/>
-  <text x="310" y="625" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">Function Pods</text>
-  <text x="310" y="640" text-anchor="middle" font-size="10" fill="#555">container or Helm chart</text>
+  <rect x="185" y="605" width="250" height="40" rx="5" class="panel red-stroke" stroke-width="1.5"/>
+  <text x="310" y="625" text-anchor="middle" font-size="11" font-weight="bold" class="text">Function Pods</text>
+  <text x="310" y="640" text-anchor="middle" font-size="10" class="muted">container or Helm chart</text>
 
   <!-- ===== GPU CLUSTER B ===== -->
-  <rect x="510" y="490" width="300" height="170" rx="8" fill="#fce4ec" stroke="#c62828" stroke-width="2"/>
-  <text x="660" y="515" text-anchor="middle" font-size="13" font-weight="bold" fill="#b71c1c">GPU Cluster B</text>
-  <text x="660" y="531" text-anchor="middle" font-size="10" fill="#888">(e.g. cloud H200)</text>
+  <rect x="510" y="490" width="300" height="170" rx="8" class="panel-muted red-stroke" stroke-width="2"/>
+  <text x="660" y="515" text-anchor="middle" font-size="13" font-weight="bold" class="red-fill">GPU Cluster B</text>
+  <text x="660" y="531" text-anchor="middle" font-size="10" class="muted">(e.g. cloud H200)</text>
 
-  <rect x="535" y="545" width="250" height="45" rx="5" fill="#fff" stroke="#c62828" stroke-width="1.5"/>
-  <text x="660" y="564" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">NVIDIA Cluster Agent (NVCA)</text>
-  <text x="660" y="580" text-anchor="middle" font-size="10" fill="#555">job dispatch · pod lifecycle</text>
+  <rect x="535" y="545" width="250" height="45" rx="5" class="panel red-stroke" stroke-width="1.5"/>
+  <text x="660" y="564" text-anchor="middle" font-size="11" font-weight="bold" class="text">NVIDIA Cluster Agent (NVCA)</text>
+  <text x="660" y="580" text-anchor="middle" font-size="10" class="muted">job dispatch · pod lifecycle</text>
 
-  <rect x="535" y="605" width="250" height="40" rx="5" fill="#fff" stroke="#c62828" stroke-width="1.5"/>
-  <text x="660" y="625" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">Function Pods</text>
-  <text x="660" y="640" text-anchor="middle" font-size="10" fill="#555">container or Helm chart</text>
+  <rect x="535" y="605" width="250" height="40" rx="5" class="panel red-stroke" stroke-width="1.5"/>
+  <text x="660" y="625" text-anchor="middle" font-size="11" font-weight="bold" class="text">Function Pods</text>
+  <text x="660" y="640" text-anchor="middle" font-size="10" class="muted">container or Helm chart</text>
 
   <!-- more clusters indicator -->
-  <text x="845" y="580" text-anchor="middle" font-size="20" fill="#999">· · ·</text>
+  <text x="845" y="580" text-anchor="middle" font-size="20" class="muted">· · ·</text>
 
   <!-- ===== ARROWS ===== -->
 
   <!-- Caller -> Invocation Plane -->
-  <line x1="140" y1="305" x2="198" y2="305" stroke="#555" stroke-width="1.8" marker-end="url(#arrow)" stroke-dasharray="5,3"/>
-  <text x="168" y="297" text-anchor="middle" font-size="9" fill="#555">HTTP/gRPC</text>
+  <line x1="140" y1="305" x2="198" y2="305" class="line-stroke" stroke-width="1.8" marker-end="url(#arrow)" stroke-dasharray="5,3"/>
+  <text x="168" y="297" text-anchor="middle" font-size="9" class="line-fill">HTTP/gRPC</text>
 
   <!-- Control Plane -> Invocation Plane (autoscale) -->
-  <line x1="420" y1="195" x2="420" y2="233" stroke="#76B900" stroke-width="1.8" marker-end="url(#arrow-green)"/>
-  <text x="460" y="220" font-size="9" fill="#76B900">autoscale decisions</text>
+  <line x1="420" y1="195" x2="420" y2="233" class="green-stroke" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+  <text x="460" y="220" font-size="9" class="green-fill">autoscale decisions</text>
 
   <!-- Invocation Plane -> GPU Clusters (job dispatch) -->
-  <line x1="390" y1="393" x2="350" y2="488" stroke="#555" stroke-width="1.8" marker-end="url(#arrow)"/>
-  <line x1="420" y1="393" x2="620" y2="488" stroke="#555" stroke-width="1.8" marker-end="url(#arrow)"/>
-  <text x="380" y="455" font-size="9" fill="#555">job dispatch</text>
+  <line x1="390" y1="393" x2="350" y2="488" class="line-stroke" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <line x1="420" y1="393" x2="620" y2="488" class="line-stroke" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="380" y="455" font-size="9" class="line-fill">job dispatch</text>
 
   <!-- GPU Clusters -> Control Plane (heartbeat) -->
-  <path d="M 310 490 Q 260 380 280 195" fill="none" stroke="#76B900" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrow-green)"/>
-  <text x="195" y="360" font-size="9" fill="#76B900" transform="rotate(-80 195 360)">heartbeat + registration</text>
+  <path d="M 310 490 Q 260 380 280 195" fill="none" class="green-stroke" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrow-green)"/>
+  <text x="195" y="360" font-size="9" class="green-fill" transform="rotate(-80 195 360)">heartbeat + registration</text>
 </svg>

@@ -36,6 +36,16 @@ rg --files docs/v*
 
 Use `docs/user/` for current customer docs and `docs/dev/` for developer workflows.
 
+### SVG Assets
+
+Documentation SVGs must work in both light and dark mode. Add SVG-local CSS with `color-scheme: light dark`, a `prefers-color-scheme: dark` media query, and shared variables for background, panel, muted panel, border, text, muted text, connector line, NVIDIA green, blue, red, and amber accents.
+
+Replace visible hard-coded fills and strokes with CSS variables. Keep transparent shapes, `fill="none"`, invisible strokes such as `stroke-opacity="0"`, embedded image data, dimensions, text, paths, and file references unchanged unless the user asks for a redraw.
+
+NVIDIA Cloud Functions glyphs inside green icon boxes must stay white in both modes. Use a stable icon foreground token, for example `--svg-icon-on-accent: #fff`, instead of tying those glyphs to `--svg-panel`.
+
+Before finishing SVG changes, render light and dark previews for every changed SVG and compare them together for consistent background tone, panel contrast, connector contrast, text readability, and accent brightness.
+
 When changing artifact versions, registry paths, manifest entries, image mirroring snippets, or generated install examples, update the catalog instead of hand-editing generated blocks:
 
 ```bash
