@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  ip_address: 0.0.0.0
+  port: '50051'
+  metrics:
+    enabled: true
+    exporters:
+    - exporter: prometheus
+      protocol: http
+      endpoint: http://0.0.0.0:41337
+    service_name: nvcf_invocation_service
+    meter_name: null
+    resource_attributes: null
+  tracing:
+    endpoint_ip: http://127.0.0.1
+    endpoint_port: 8282
+    headers:
+      lightstep-access-token: LIGHTSTEP_ACCESS_TOKEN # this is a standin value only; is set progammatically in server.rs
+      organization: default
+      stream-name: default
+    service_name: nvcf_invocation_service
+    tracing_envfilter_directive: server=trace,nvcf_invocation_service=trace,nvcf_invocation_service::nats=trace,nvcf_invocation_service::nvcf_api=trace,axum::rejection=trace,otel::tracing=trace,otel=debug,async_nats=debug,aws_config=warn,info
+    logging_envfilter_directive: server=trace,nvcf_invocation_service=trace,otel::tracing=trace,tower_http=debug,aws_config=warn,info
+    logging_nonblocking_output: true
+  envfilter_directive: server=trace,nvcf_invocation_service=trace,axum::rejection=trace,otel::tracing=trace,otel=debug,async_nats=debug,aws_config=warn,info
+  tonic:
+    initial_connection_window_size: 65535
+    initial_stream_window_size: 65535
+    max_decoding_message_size: 4194304
+    request_timeout: 30
+nvcf_api_address: http://api.nvcf.svc.cluster.local:9090
+nats_properties:
+  nats_address: nats://nats.nats-system.svc.cluster.local:4222
+  region: us-west-2
+  other_regions: us-east-1
+  replicas: 3
+s3_properties:
+  provisioned_region: us-west-2
+  results_bucket: invocation-results
+  assets_bucket: invocation-assets
+  enable_large_response_url: false # disabled because we don't have aws creds locally. should be enabled in real deployments.
+regional_nvcf_api_grpc_address: http://api.nvcf.svc.cluster.local:9090
+oauth2_base_url: https://oauth2.example.com
+secrets_path: vault/secrets.json
+secrets_watcher_interval_seconds: 60
+rate_limit_address: http://api.ratelimiter.svc.cluster.local:7777
+rate_limit_enabled: false

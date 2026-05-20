@@ -10,7 +10,11 @@ _*/
 
 tools/target
 
-settings.yaml
+# Note: crates/server/resources/settings.yaml is the committed dev-default
+# (referenced via embed_data in crates/server/BUILD.bazel as the only file
+# the public OSS build needs). Do NOT gitignore it: the umbrella's OSS
+# sync drops gitignored files from the NVIDIA/nvcf mirror, breaking the
+# GHA Bazel matrix with `glob pattern 'resources/*.yaml' didn't match`.
 settings.toml
 
 crates/server/src/handlers/grpc/entry_point.rs
