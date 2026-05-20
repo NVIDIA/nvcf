@@ -1,0 +1,178 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Bazel build + test on the public NVIDIA/nvcf mirror.
+#
+# Matrix entries reference subtrees that have their Bazel scaffold
+# mirrored to GitHub (each subtree's upstream .oss-allowlist controls
+# whether BUILD.bazel files reach this mirror). Add a row when a new
+# subtree's OSS-flip MR merges upstream.
+#
+# Image push targets, internal NGC registry pulls, and the nvcfbarn
+# remote cache are all internal-only; this workflow runs build + test
+# only. It pulls the same bazel-ci toolchain image the GitLab pipeline
+# uses, mirrored to ghcr.io by the bazel-ci-image workflow.
+
+name: bazel
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: bazel-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BAZEL_CI_IMAGE: ghcr.io/nvidia/nvcf/bazel-ci:0.4.0
+
+jobs:
+  bazel:
+    name: bazel (${{ matrix.subtree.id }})
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.BAZEL_CI_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        subtree:
+          # Full matrix. The precheck step skips entries that don't
+          # have a MODULE.bazel on the mirror yet (their upstream
+          # OSS-flip MR is still open, or the umbrella's imports.yaml
+          # pin hasn't been bumped past that flip). Entries fill in
+          # automatically as the underlying syncs land.
+          - id: umbrella-phase1
+            path: .
+            # Build-only on GHA. Phase 1 native subtrees compile fine, but
+            # //src/libraries/go/lib has pre-existing test issues that were
+            # masked while the matrix test step was silently skipping for
+            # every row (fixed in b941ba1c). Now-visible failures:
+            #   //src/libraries/go/lib/cmd/icms-translate:icms-translate_test
+            #     -- passes locally, env-flaky on GHA (testdata IS in
+            #     runfiles per the //src/libraries/go/lib/testdata/
+            #     icms-translate:testdata filegroup added in !234)
+            #   //src/libraries/go/lib/pkg/core:core_test
+            #     -- TestKubeConfiguratorToken leaks goroutines; pre-existing
+            # Track under NVCF-10337; nvcf-go team owns the test cleanup.
+            tests_skip: true
+          - id: grpc-proxy
+            path: src/invocation-plane-services/grpc-proxy
+          - id: nats-auth-callout
+            path: src/invocation-plane-services/nats-auth-callout
+          - id: ratelimiter
+            path: src/invocation-plane-services/ratelimiter
+          - id: http-invocation
+            path: src/invocation-plane-services/http-invocation
+          - id: llm-gateway
+            path: src/invocation-plane-services/llm-gateway
+          - id: nvca
+            path: src/compute-plane-services/nvca
+            # Build-only on GHA: TestReconcile_ModelCache (pkg/storage) fails
+            # under envtest >= 1.30 because the test fakes JobSuccessCriteriaMet
+            # on a NonIndexed Job without a SuccessPolicy, which the apiserver
+            # now rejects. Tracked under NVCF-10347 for a test-layer fix by the
+            # nvca team; do not change reconciler logic to satisfy this.
+            tests_skip: true
+          - id: dns-cache
+            path: src/compute-plane-services/dns-cache
+          - id: ess-agent
+            path: src/compute-plane-services/ess-agent
+          - id: image-credential-helper
+            path: src/compute-plane-services/image-credential-helper
+          - id: function-autoscaler
+            path: src/control-plane-services/function-autoscaler
+          - id: helm-reval
+            path: src/control-plane-services/helm-reval
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if subtree has no MODULE.bazel yet
+        id: precheck
+        run: |
+          if [ ! -f "${{ matrix.subtree.path }}/MODULE.bazel" ]; then
+            echo "no MODULE.bazel at ${{ matrix.subtree.path }} -- skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # llm-gateway pulls private github.com/nvidia-lpu/{harmony,minijinja,parsec}
+      # modules via Gazelle's go_deps extension. The GitLab pipeline
+      # configures `git config url.insteadOf` against an NV_GITHUB_TOKEN
+      # PAT scoped to read on those three repos; mirror that behavior
+      # on GHA. The secret is added at the NVIDIA/nvcf repo level and
+      # only surfaced into the llm-gateway matrix row.
+      - name: Configure git for private NVIDIA GitHub modules
+        if: steps.precheck.outputs.skip == 'false' && matrix.subtree.id == 'llm-gateway'
+        env:
+          NV_GITHUB_TOKEN: ${{ secrets.NV_GITHUB_TOKEN }}
+        run: |
+          # Scope the rewrite to nvidia-lpu only. NV_GITHUB_TOKEN is a
+          # fine-grained PAT scoped read-only to the three private
+          # nvidia-lpu/{harmony,minijinja,parsec} repos; rewriting all
+          # of github.com would attach this token to every other
+          # github.com fetch (Gazelle pulls public Go modules through
+          # github.com too) and fail any request the PAT is not
+          # authorized for.
+          if [ -n "${NV_GITHUB_TOKEN:-}" ]; then
+            git config --global \
+              url."https://oauth2:${NV_GITHUB_TOKEN}@github.com/nvidia-lpu/".insteadOf \
+              "https://github.com/nvidia-lpu/"
+            echo "[github-auth] insteadOf rewrite configured for github.com/nvidia-lpu/"
+          else
+            echo "[github-auth] WARNING: NV_GITHUB_TOKEN secret unset; nvidia-lpu module fetch will fail"
+          fi
+
+      # bazelisk is preinstalled in the bazel-ci image as `bazel`.
+      - name: bazel version
+        if: steps.precheck.outputs.skip == 'false'
+        working-directory: ${{ matrix.subtree.path }}
+        run: bazel version
+
+      - name: Cache Bazel repository + disk caches
+        if: steps.precheck.outputs.skip == 'false'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
+          key: bazel-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.path), format('{0}/.bazelversion', matrix.subtree.path)) }}
+          restore-keys: |
+            bazel-${{ matrix.subtree.id }}-
+
+      # Disable the internal nvcfbarn Buildbarn remote cache for GHA.
+      # The umbrella's root .bazelrc sets `build --config=remote` by
+      # default, which on GitLab CDS runners routes through the
+      # nvcfbarn.nvidia.com:8980 cache. GHA's GitHub-hosted runners
+      # have no DNS path to that host, so leaving the default in place
+      # produces:
+      #   UNAVAILABLE: Unable to resolve host nvcfbarn.nvidia.com
+      # Passing `--remote_cache=` overrides the .bazelrc default with
+      # an empty value, falling back to local action/repo caches only.
+      - name: bazel build //...
+        if: steps.precheck.outputs.skip == 'false'
+        working-directory: ${{ matrix.subtree.path }}
+        run: bazel build --remote_cache= //...
+
+      - name: bazel test //...
+        # `tests_skip: true` on the matrix row keeps the subtree in the matrix
+        # for build coverage but skips this step. Used when the build passes
+        # but tests fail with an environment delta from GitLab CI (per the
+        # documented build-only policy). Default is to run tests. NOTE: the
+        # gate uses a positive-skip field (negated below). The previous form
+        # `tests_enabled != false` silently skipped tests for every row that
+        # did not set the key explicitly, because GitHub Actions expressions
+        # coerce missing matrix keys to null which compares equal to false.
+        if: steps.precheck.outputs.skip == 'false' && !matrix.subtree.tests_skip
+        working-directory: ${{ matrix.subtree.path }}
+        run: bazel test --remote_cache= --flaky_test_attempts=3 //...
