@@ -89,6 +89,26 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # llm-gateway pulls private github.com/nvidia-lpu/{harmony,minijinja,parsec}
+      # modules via Gazelle's go_deps extension. The GitLab pipeline
+      # configures `git config url.insteadOf` against an NV_GITHUB_TOKEN
+      # PAT scoped to read on those three repos; mirror that behavior
+      # on GHA. The secret is added at the NVIDIA/nvcf repo level and
+      # only surfaced into the llm-gateway matrix row.
+      - name: Configure git for private NVIDIA GitHub modules
+        if: steps.precheck.outputs.skip == 'false' && matrix.subtree.id == 'llm-gateway'
+        env:
+          NV_GITHUB_TOKEN: ${{ secrets.NV_GITHUB_TOKEN }}
+        run: |
+          if [ -n "${NV_GITHUB_TOKEN:-}" ]; then
+            git config --global \
+              url."https://oauth2:${NV_GITHUB_TOKEN}@github.com/".insteadOf \
+              "https://github.com/"
+            echo "[github-auth] insteadOf rewrite configured for github.com"
+          else
+            echo "[github-auth] WARNING: NV_GITHUB_TOKEN secret unset; nvidia-lpu module fetch will fail"
+          fi
+
       # bazelisk is preinstalled in the bazel-ci image as `bazel`.
       - name: bazel version
         if: steps.precheck.outputs.skip == 'false'
