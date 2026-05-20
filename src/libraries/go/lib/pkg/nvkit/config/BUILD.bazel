@@ -37,6 +37,7 @@ go_test(
         "config_extra_test.go",
         "config_test.go",
     ],
+    data = ["example-config.yaml"],
     embed = [":config"],
     deps = [
         "@com_github_spf13_cobra//:cobra",

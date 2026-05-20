@@ -30,6 +30,7 @@ go_library(
 go_test(
     name = "auth_test",
     srcs = ["auth_token_fetcher_test.go"],
+    data = glob(["test/**"]),
     embed = [":auth"],
     deps = [
         "//src/libraries/go/lib/pkg/core",

@@ -62,6 +62,7 @@ go_test(
         "kubeconfigurator_test.go",
         "ticker_test.go",
     ],
+    data = glob(["test/**"]),
     embed = [":core"],
     deps = [
         "//src/libraries/go/lib/pkg/version",
