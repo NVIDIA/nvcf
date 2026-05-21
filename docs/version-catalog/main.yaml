@@ -12,11 +12,11 @@ registries:
     namespace: 0833294136851237/nvcf-ncp-staging
 stack:
   name: nvcf-self-managed-stack
-  version: 0.6.0-rc.35
+  version: 0.6.0-rc.36
   registry: staging
   gitlab_project_id: 182049
   package_name: ncp-deploy
-  artifacts_file: artifacts-0.6.0-rc.35.txt
+  artifacts_file: artifacts-0.6.0-rc.36.txt
 artifacts:
   - name: admin-token-issuer-proxy
     type: image
@@ -69,7 +69,7 @@ artifacts:
   - name: helm-nvcf-llm-api-gateway
     type: chart
     registry: staging
-    version: 1.1.1
+    version: 1.2.0
   - name: helm-nvcf-llm-request-router
     type: chart
     registry: staging

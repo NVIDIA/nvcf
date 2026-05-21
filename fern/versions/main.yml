@@ -145,6 +145,12 @@ navigation:
             path: ../../docs/user/metrics/init-container/metrics.md
           - page: Invocation Service
             path: ../../docs/user/metrics/invocation-service/metrics.md
+          - page: LLM API Gateway
+            path: ../../docs/user/metrics/llm-api-gateway/metrics.md
+          - page: LLM Function Invocation Metrics Report
+            path: ../../docs/user/metrics/llm-function-invocation-path.md
+          - page: LLM Request Router
+            path: ../../docs/user/metrics/llm-request-router/metrics.md
           - page: NVCF API
             path: ../../docs/user/metrics/nvcf-api/metrics.md
           - page: SIS/Spot

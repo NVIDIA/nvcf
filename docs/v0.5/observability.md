@@ -171,8 +171,9 @@ Configure your log collector to:
 Enable distributed tracing by setting Helm values under
 `global.observability.tracing`. The control-plane exports traces via OTLP
 to your own OTLP-compatible collector. Set `collectorEndpoint`,
-`collectorPort`, and `collectorProtocol` to match your collector's
-address and protocol.
+`collectorPort`, and `collectorProtocol` to match your collector's address.
+`collectorProtocol` is the endpoint URI scheme expected by the stack, not the
+OTLP transport.
 
 **Helm overrides example:**
 
@@ -195,9 +196,9 @@ global:
   such as `<service>.<namespace>.svc.cluster.local` when the collector runs
   in-cluster.
 - **collectorPort**: Port on which the collector accepts OTLP traffic (e.g.,
-  4317 for HTTP, 4318 for gRPC depending on your collector setup).
-- **collectorProtocol**: OTLP protocol: `http` or `grpc`. Must match how
-  your collector is configured.
+  4317 for gRPC, 4318 for HTTP depending on your collector setup).
+- **collectorProtocol**: URI scheme used to build the collector endpoint
+  (`http` or `https`). This value does not select the OTLP transport.
 
 Ensure your collector is deployed and reachable from the NVCF control-plane
 namespace, and that it forwards traces to your backend (Jaeger, Tempo, Zipkin,
