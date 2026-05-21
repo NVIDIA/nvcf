@@ -18,8 +18,16 @@ set -euo pipefail
 
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+
+# Only treat tracked-but-modified files as "dirty". Excluding untracked
+# files matters in CI: the .bazel-ci-base before_script writes
+# .tls/ca.pem and the Bazel build writes .bazel-cache/ into
+# $CI_PROJECT_DIR. Both are untracked and would otherwise force a bogus
+# `-dirty` suffix into every CI-published image tag. Local dev still
+# flags a real dirty build (modified tracked source files) the same as
+# before.
 DIRTY=""
-if [ "$COMMIT" != "unknown" ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+if [ "$COMMIT" != "unknown" ] && [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
     DIRTY="-dirty"
 fi
 

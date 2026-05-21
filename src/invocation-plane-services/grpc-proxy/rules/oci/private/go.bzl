@@ -15,7 +15,7 @@
 
 "OCI image rules for Go binaries."
 
-load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "strip_prefix")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("//rules/oci/private:common.bzl", "DEFAULT_BASE", "create_oci_image")
 
@@ -45,6 +45,7 @@ def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, 
             srcs = [binary],
             prefix = pkg_dir,
             renames = {binary: new_name},
+            attributes = pkg_attributes(mode = "0755"),
             visibility = ["//visibility:private"],
         )
         pkg_tar(
