@@ -99,6 +99,119 @@ func TestRenderPipelineGeneratesSubprojectJobs(t *testing.T) {
 	}
 }
 
+func TestRenderPipelineHonorsPerCheckImageOverride(t *testing.T) {
+	cfg := configFile{
+		Version:     1,
+		DefaultTags: []string{"eks"},
+		Profiles: map[string]profile{
+			"go-library": {
+				Stage: "validate",
+				Image: "golang:1.26-bookworm",
+				Checks: []check{
+					{ID: "license", Type: "shell", Command: "./scripts/ci_check_license"},
+					{
+						ID:      "lint",
+						Type:    "shell",
+						Image:   "golangci/golangci-lint:v2.3.0",
+						Command: "golangci-lint run",
+					},
+				},
+			},
+		},
+		Subprojects: []subproject{
+			{ID: "nvcf-go", Path: "src/libraries/go/lib", Profile: "go-library"},
+		},
+	}
+
+	rendered, err := renderPipeline(cfg, "tools/ci/subproject-validations.yaml")
+	if err != nil {
+		t.Fatalf("renderPipeline failed: %v", err)
+	}
+
+	licenseSection := extractJobBlock(t, rendered, "nvcf-go-license")
+	if !strings.Contains(licenseSection, "image: golang:1.26-bookworm") {
+		t.Fatalf("license job should use the profile image, got:\n%s", licenseSection)
+	}
+
+	lintSection := extractJobBlock(t, rendered, "nvcf-go-lint")
+	if !strings.Contains(lintSection, "image: golangci/golangci-lint:v2.3.0") {
+		t.Fatalf("lint job should use the per-check image override, got:\n%s", lintSection)
+	}
+	if strings.Contains(lintSection, "image: golang:1.26-bookworm") {
+		t.Fatalf("lint job should not inherit the profile image when overridden, got:\n%s", lintSection)
+	}
+}
+
+func TestRenderPipelineSkipsWorkspaceSetupWhenChecked(t *testing.T) {
+	cfg := configFile{
+		Version:     1,
+		DefaultTags: []string{"eks"},
+		Profiles: map[string]profile{
+			"go-library": {
+				Stage: "validate",
+				Image: "golang:1.26-bookworm",
+				Variables: map[string]string{
+					"GOWORK": "$CI_PROJECT_DIR/go.work",
+				},
+				Checks: []check{
+					{ID: "vendor", Type: "go-vendor"},
+					{
+						ID:                 "lint",
+						Type:               "shell",
+						Image:              "golangci/golangci-lint:v2.3.0",
+						SkipWorkspaceSetup: true,
+						Command:            "golangci-lint run",
+					},
+				},
+			},
+		},
+		Subprojects: []subproject{
+			{ID: "nvcf-go", Path: "src/libraries/go/lib", Profile: "go-library"},
+		},
+	}
+
+	rendered, err := renderPipeline(cfg, "tools/ci/subproject-validations.yaml")
+	if err != nil {
+		t.Fatalf("renderPipeline failed: %v", err)
+	}
+
+	vendorSection := extractJobBlock(t, rendered, "nvcf-go-vendor")
+	if !strings.Contains(vendorSection, "./tools/scripts/update-go-work") {
+		t.Fatalf("vendor job should keep workspace setup (profile sets GOWORK), got:\n%s", vendorSection)
+	}
+
+	lintSection := extractJobBlock(t, rendered, "nvcf-go-lint")
+	if strings.Contains(lintSection, "./tools/scripts/update-go-work") {
+		t.Fatalf("lint job opted out via skip_workspace_setup; setup script must not appear, got:\n%s", lintSection)
+	}
+	if !strings.Contains(lintSection, "golangci-lint run") {
+		t.Fatalf("lint job should still emit the check command, got:\n%s", lintSection)
+	}
+}
+
+func extractJobBlock(t *testing.T, rendered, jobName string) string {
+	t.Helper()
+	marker := "\n" + jobName + ":\n"
+	idx := strings.Index(rendered, marker)
+	if idx < 0 {
+		t.Fatalf("job %q not found in:\n%s", jobName, rendered)
+	}
+	rest := rendered[idx+1:]
+	// A job block ends at the next top-level key (line starting with a
+	// non-whitespace character) or at end of file.
+	end := len(rest)
+	for i := 0; i < len(rest); i++ {
+		if rest[i] != '\n' {
+			continue
+		}
+		if i+1 < len(rest) && rest[i+1] != ' ' && rest[i+1] != '\n' && rest[i+1] != '#' {
+			end = i
+			break
+		}
+	}
+	return rest[:end]
+}
+
 func TestRepositoryCITriggersNVCFCLIChildPipeline(t *testing.T) {
 	rootCI := readRepoFile(t, ".gitlab-ci.yml")
 	cliCI := readRepoFile(t, "src/clis/nvcf-cli/.gitlab-ci.yml")
