@@ -60,6 +60,7 @@ type LaunchSpecification struct {
 	TerminationGracePeriodDuration string                        `json:"terminationGracePeriodDuration"`
 	ResultHandlingStrategy         common.ResultHandlingStrategy `json:"resultHandlingStrategy"`
 	ICMSEnvironment                string                        `json:"icmsEnvironment"`
+	SpotEnvironment                string                        `json:"spotEnvironment"`
 	// Telemetry configuration metadata.
 	Telemetries *common.TelemetriesLaunchSpecification `json:"telemetries,omitempty"`
 

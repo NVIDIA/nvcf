@@ -28,8 +28,9 @@ const (
 	InstanceTypeNameEnvVar   = "INSTANCE_TYPE_NAME"
 	InstanceTypeValueEnvVar  = "INSTANCE_TYPE_VALUE"
 
-	ICMSEnvironmentEnv = "ICMS_ENVIRONMENT"
-	GPUNameEnv         = "GPU_NAME"
+	ICMSEnvironmentEnv  = "ICMS_ENVIRONMENT"
+	SpotEnvironmentEnv  = "SPOT_ENVIRONMENT"
+	GPUNameEnv          = "GPU_NAME"
 	GPUCountEnv        = "ATTACHED_GPU_COUNT"
 
 	CloudProviderEnv = "NVCF_CLOUD_PROVIDER"

@@ -78,6 +78,7 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 	}
 
 	allEnvSet[common.ICMSEnvironmentEnv] = launchSpec.ICMSEnvironment
+	allEnvSet[common.SpotEnvironmentEnv] = launchSpec.SpotEnvironment
 	allEnvSet[common.CloudProviderEnvDep] = launchSpec.CloudProvider //nolint:staticcheck // SA1019: deprecated env var for backward compatibility
 	allEnvSet[common.CloudProviderEnv] = launchSpec.CloudProvider
 	allEnvSet[common.GPUNameEnv] = t.GPUType
