@@ -164,6 +164,56 @@ subprojects:
             ci_var: NGC_DEVOPS_API_KEY
       slack_channel: C08S6KLCEJH
       sonarqube_project_key: GPUSW_DGXC_nvcf-rate-limiter_nvcf_rate_limiter
+  # http-invocation is a native Bazel-built subtree. Publishes to
+  # nvcr.io/0544956542906249/nvcf-dev/nvcf-invocation-service (legacy
+  # vault key `nvcf-invocation-service`) plus a new ncp-dev tenant
+  # push under nvcr.io/0651155215864979/ncp-dev/nvcf-invocation-service
+  # (NGC_DEVOPS_API_KEY CI variable). Anchor tag in the umbrella is
+  # `nvcf-invocation-service-v0.5.8` (matches upstream's last
+  # pre-cutover release).
+  - id: http-invocation
+    path: src/invocation-plane-services/http-invocation
+    change_paths:
+      - src/invocation-plane-services/http-invocation/**/*
+    release:
+      service_name: nvcf-invocation-service
+      image_push_targets:
+        - name: nvcf_dev
+          bazel_target: //nvidia-internal:image_push_nvcf_dev
+          auth:
+            type: vault
+            vault_key: nvcf-invocation-service
+        - name: ncp_dev
+          bazel_target: //nvidia-internal:image_push_ncp_dev
+          auth:
+            type: ci_var
+            ci_var: NGC_DEVOPS_API_KEY
+      slack_channel: C08S6KLCEJH
+  # function-autoscaler is a native Bazel-built subtree. Publishes to
+  # legacy nvcr.io/ema5hzr4ziav/nvcf_autoscaling (vault key
+  # rs-autoscaler) plus a new ncp-dev tenant push under
+  # nvcr.io/0651155215864979/ncp-dev/nvcf-function-autoscaler
+  # (NGC_DEVOPS_API_KEY CI variable). Anchor tag in the umbrella is
+  # `nvcf-function-autoscaler-v1.13.6` (matches upstream's last
+  # pre-cutover release).
+  - id: function-autoscaler
+    path: src/control-plane-services/function-autoscaler
+    change_paths:
+      - src/control-plane-services/function-autoscaler/**/*
+    release:
+      service_name: nvcf-function-autoscaler
+      image_push_targets:
+        - name: nvcf_autoscaling
+          bazel_target: //nvidia-internal:image_push_nvcf_autoscaling
+          auth:
+            type: vault
+            vault_key: rs-autoscaler
+        - name: ncp_dev
+          bazel_target: //nvidia-internal:image_push_ncp_dev
+          auth:
+            type: ci_var
+            ci_var: NGC_DEVOPS_API_KEY
+      slack_channel: C08S6KLCEJH
   # nats-auth-callout is a native Bazel-built subtree (imports.yaml
   # authoritative_source: native). Single image-push target to
   # nvcr.io/0544956542906249 (nvcf-internal) via the shared

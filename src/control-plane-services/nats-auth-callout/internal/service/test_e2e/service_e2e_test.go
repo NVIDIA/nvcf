@@ -86,7 +86,7 @@ func setupCommonTestInfrastructure(t *testing.T) *TestSetup {
 	}
 
 	// Start embedded NATS server with auth callout using generated public key
-	natsServer := runNATSServerWithAuthCallout(authServiceLoginPublicKey, signingKeyPublic)
+	natsServer := runNATSServerWithAuthCallout(t, authServiceLoginPublicKey, signingKeyPublic)
 	t.Cleanup(natsServer.Shutdown)
 
 	return &TestSetup{
@@ -123,10 +123,12 @@ func (setup *TestSetup) createBaseConfig() *config.ServiceConfig {
 }
 
 // runNATSServerWithAuthCallout starts an embedded NATS server with auth callout configuration using test utilities
-func runNATSServerWithAuthCallout(authServiceLoginPublicKey string, issuerPublicKey string) *server.Server {
-	// Create a temporary config file for auth callout
-	tempDir := os.TempDir()
-	configPath := filepath.Join(tempDir, "nats_auth_callout.conf")
+func runNATSServerWithAuthCallout(t *testing.T, authServiceLoginPublicKey string, issuerPublicKey string) *server.Server {
+	t.Helper()
+
+	// Use t.TempDir() so the directory is unique per test, owned by the test process,
+	// and automatically removed when the test ends -- avoiding predictable, world-writable paths.
+	configPath := filepath.Join(t.TempDir(), "nats_auth_callout.conf")
 
 	configContent := fmt.Sprintf(`
 accounts {
@@ -149,7 +151,7 @@ authorization {
 }
 `, authServiceLoginPublicKey, issuerPublicKey, authServiceLoginPublicKey)
 
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
 		panic(fmt.Sprintf("Failed to create NATS config: %v", err))
 	}
 

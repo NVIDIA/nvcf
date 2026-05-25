@@ -451,15 +451,28 @@ semantic-release-{{ .ID }}:
     SLACK_CHANNEL_ID: {{ yamlValue .SlackChannel }}
   script:
     - |
-      SLACK_MESSAGE=":rocket: ${SERVICE_NAME:-{{ .ServiceName }}} release pipeline complete | tag: $(git describe --tags --match='{{ .ServiceName }}-v*' --abbrev=0 2>/dev/null || echo unknown) | sha: ${CI_COMMIT_SHORT_SHA} | <${CI_PIPELINE_URL}|pipeline ${CI_PIPELINE_ID}>"
+      # Prefer CI_COMMIT_TAG on tag pipelines so the message carries the
+      # real semver (the legacy bug printed "tag: unknown" because git
+      # describe runs against a shallow CI clone where the tag is not
+      # reachable). Strip the service-name prefix so the message shows
+      # just the version (e.g. "1.13.0" not "nvcf-ratelimiter-v1.13.0").
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        TAG_DISPLAY="${CI_COMMIT_TAG#{{ .ServiceName }}-v}"
+      else
+        TAG_DISPLAY=$(git describe --tags --match='{{ .ServiceName }}-v*' --abbrev=0 2>/dev/null | sed "s|^{{ .ServiceName }}-v||" || echo unknown)
+      fi
+      SLACK_MESSAGE=":rocket: ${SERVICE_NAME:-{{ .ServiceName }}} release pipeline complete | tag: ${TAG_DISPLAY} | sha: ${CI_COMMIT_SHORT_SHA} | <${CI_PIPELINE_URL}|pipeline ${CI_PIPELINE_ID}>"
       printf '{"channel_id":"%s","message":"%s"}\n' "${SLACK_CHANNEL_ID}" "${SLACK_MESSAGE}" > /tmp/slack.json
       curl -sSf -X POST 'https://backstage-helper.service.odp.nvidia.com/notify_channel?dry_run=false' \
         -H 'accept: application/json' \
         -H 'Content-Type: application/json' \
         -d @/tmp/slack.json
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      changes: *{{ .RulesAnchor }}
+    # Fire only on tag pipelines. The default-branch pipeline that
+    # triggered semantic-release will create the tag, which spawns a
+    # second (tag-ref) pipeline; this job runs there. Firing on both
+    # would post duplicate Slack messages (observed on
+    # nvcf-ratelimiter-v1.13.0 release).
     - if: $CI_COMMIT_TAG =~ /^{{ .ServiceName }}-v/
 {{- end }}
 {{- if .SonarqubeProjectKey }}
