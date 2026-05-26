@@ -36,6 +36,19 @@ bazel_dep(name = "rules_pkg", version = "1.2.0")
 bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
 bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
 
+# NVCF central NVCR image-push destinations catalog. The umbrella's
+# `//nvidia-internal/rules/oci` tree publishes a Bazel module with
+# the shared NVCR_DESTINATIONS map + nvcr_image_pushes macro;
+# depending on it via bazel_dep + local_path_override lets every
+# service load from a single source of truth without duplicating the
+# catalog. See nvidia-internal/BUILD.bazel for the load call. Lives
+# under nvidia-internal/ so the catalog stays off the OSS mirror.
+bazel_dep(name = "nvcf_nvcr_destinations", version = "0.0.0")
+local_path_override(
+    module_name = "nvcf_nvcr_destinations",
+    path = "../../../nvidia-internal/rules/oci",
+)
+
 # rules_pkg's `pkg_tar` runs through a Python builder, which pulls in
 # rules_python's hermetic interpreter. CI runs as root in the bazel-ci
 # container, and rules_python rejects root-user setup by default
