@@ -90,11 +90,17 @@ filegroup(
 #   //src/clis/nvcf-cli:image            host-arch image (for `bazel build`)
 #   //src/clis/nvcf-cli:image_index      multi-arch index (amd64 + arm64)
 #   //src/clis/nvcf-cli:image_load       loads host-arch image into local docker
-#   //src/clis/nvcf-cli:image_push       pushes index to project registry
+#
+# No `registry` is set, so go_oci_image does NOT emit a push target.
+# nvcf-cli is shipped as native binaries (via the `dist` aggregate
+# below), not as a container image, and the public BUILD.bazel should
+# not encode any private registry coordinates. If a private CLI image
+# push is ever needed, declare the push target under a sibling
+# nvidia-internal/BUILD.bazel so the registry value stays off the OSS
+# mirror.
 go_oci_image(
     name = "image",
     binary = ":nvcf-cli",
-    registry = "github.com/NVIDIA:5005/nvcf/nvcf/nvcf-cli",
     tags = ["nvcf-cli"],
     visibility = ["//visibility:public"],
 )

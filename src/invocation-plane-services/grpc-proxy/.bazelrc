@@ -16,10 +16,10 @@
 # ============================================================================
 # Bazel configuration for nvcf-grpc-proxy.
 #
-# Standalone Bazel scaffold for this upstream repo. Files are also picked up
-# when the service is consumed as a synthetic-import subtree of the NVCF
-# umbrella (github.com/NVIDIA/nvcf/nvcf); see that repo's BAZEL.md
-# and docs/bazel-rollout.md for the umbrella-side wiring.
+# Bazel scaffold for the grpc-proxy subtree. Files are picked up by both
+# the per-service workspace (this directory's MODULE.bazel) and the
+# umbrella's release pipeline; see ../../../BAZEL.md and
+# ../../../docs/bazel-rollout.md for the umbrella-side wiring.
 # ============================================================================
 
 build --compilation_mode=fastbuild
