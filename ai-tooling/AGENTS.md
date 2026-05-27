@@ -172,7 +172,6 @@ Before committing changes, verify:
 
 | Skill | Purpose | Domain |
 |-------|---------|--------|
-| `bazel-gitlab-child-pipelines` | Add per-service Bazel GitLab child pipelines | build-systems |
 | `bazel-go-gazelle` | Wire Go modules into Bazel with rules_go and Gazelle | build-systems |
 | `bazel-java-maven` | Wire Java and Spring Boot services into Bazel with Maven artifacts | build-systems |
 | `bazel-monorepo-bootstrap` | Bootstrap Bazel in an existing polyglot monorepo | build-systems |

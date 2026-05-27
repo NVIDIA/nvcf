@@ -4,7 +4,7 @@ Quick reference for NVCF (NVIDIA Cloud Functions) in this repository.
 
 ## Repo Layout
 
-This repo is an umbrella layout: upstream services appear as ordinary directories (synthetic imports), arranged under `src/`, `deploy/`, `infra/`, and `migrations/` according to `imports.yaml`. Goal: over time, land and maintain code here natively; synthetic imports are a bridge while sources still live in separate GitLab projects. Tooling lives under `tools/` and `tests/`.
+This repo is an umbrella layout: upstream services appear as ordinary directories (synthetic imports), arranged under `src/`, `deploy/`, `infra/`, and `migrations/` according to `imports.yaml`. Goal: over time, land and maintain code here natively; synthetic imports are a bridge while sources still live in separate upstream projects. Tooling lives under `tools/` and `tests/`.
 
 Use `python3`, not `python`, when Python is needed. Use the nearest nested `AGENTS.md` for subtree-specific guidance.
 
@@ -117,7 +117,6 @@ Tool-specific hook config files, such as `.cursor/hooks.json`, `.codex/hooks.jso
 
 | Skill | Location | Purpose |
 |-------|----------|---------|
-| `bazel-gitlab-child-pipelines` | `ai-tooling/dev/skills/` | Add per-service Bazel GitLab child pipelines |
 | `bazel-go-gazelle` | `ai-tooling/dev/skills/` | Wire Go modules into Bazel with rules_go and Gazelle |
 | `bazel-java-maven` | `ai-tooling/dev/skills/` | Wire Java and Spring Boot services into Bazel with Maven artifacts |
 | `bazel-monorepo-bootstrap` | `ai-tooling/dev/skills/` | Bootstrap Bazel in an existing polyglot monorepo |

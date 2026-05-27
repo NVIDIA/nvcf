@@ -6,7 +6,6 @@ Public agent skills for users and developers working with NVIDIA Cloud Functions
 
 | Skill | Description |
 |-------|-------------|
-| [bazel-gitlab-child-pipelines](dev/skills/bazel-gitlab-child-pipelines/SKILL.md) | Add per-service Bazel GitLab child pipelines |
 | [bazel-go-gazelle](dev/skills/bazel-go-gazelle/SKILL.md) | Wire Go modules into Bazel with rules_go and Gazelle |
 | [bazel-java-maven](dev/skills/bazel-java-maven/SKILL.md) | Wire Java and Spring Boot services into Bazel with Maven artifacts |
 | [bazel-monorepo-bootstrap](dev/skills/bazel-monorepo-bootstrap/SKILL.md) | Bootstrap Bazel in an existing polyglot monorepo |
