@@ -6,12 +6,12 @@ This guide explains how NVCF self-hosted deployments route traffic through the K
 
 The NVCF self-hosted deployment uses the [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) for ingress traffic management. This provides:
 
-- **Hostname-based routing** for HTTP services (API Keys, NVCF API, Invocation)
-- **Port-based routing** for gRPC services
-- **Single load balancer** for all NVCF services
-- **Cross-namespace routing** via ReferenceGrants
+- Hostname-based routing for HTTP services (API Keys, NVCF API, Invocation)
+- Port-based routing for gRPC services
+- Single load balancer for all NVCF services
+- Cross-namespace routing via ReferenceGrants
 
-The Gateway API is a **Kubernetes standard** with multiple implementations. The
+The Gateway API is a Kubernetes standard with multiple implementations. The
 examples on this page use Envoy Gateway, but you can use any Gateway
 API-compliant controller that supports the requirements below.
 
@@ -207,12 +207,12 @@ and ports accordingly.
 
 ## Gateway API Implementations
 
-The `nvcf-gateway-routes` chart creates standard Kubernetes Gateway API resources (`HTTPRoute`, `TCPRoute`) that work with **any** Gateway API-compliant controller. You are not locked into a specific implementation.
+The `nvcf-gateway-routes` chart creates standard Kubernetes Gateway API resources (`HTTPRoute`, `TCPRoute`) that work with any Gateway API-compliant controller. You are not locked into a specific implementation.
 
 Popular implementations include [Envoy Gateway](https://gateway.envoyproxy.io/) (used in our examples), [Istio](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api/), [Traefik](https://doc.traefik.io/traefik/routing/providers/kubernetes-gateway/), [Kong](https://developer.konghq.com/kubernetes-ingress-controller/gateway-api/), [Contour](https://projectcontour.io/docs/main/guides/gateway-api/), and cloud-native options like GKE Gateway Controller.
 
 <Note>
-**There is no service mesh requirement**: Envoy Gateway is **not** a service mesh—it's simply a Gateway API controller. You don't need service mesh features like mTLS between pods for NVCF to function. If you already have Istio or another service mesh, you can use its Gateway API support instead.
+There is no service mesh requirement. Envoy Gateway is not a service mesh. It is a Gateway API controller. You don't need service mesh features like mTLS between pods for NVCF to function. If you already have Istio or another service mesh, you can use its Gateway API support instead.
 
 </Note>
 
@@ -220,12 +220,12 @@ Popular implementations include [Envoy Gateway](https://gateway.envoyproxy.io/) 
 
 Any Gateway API implementation you choose must support:
 
-1. **HTTPRoute** - For HTTP/HTTPS routing with hostname matching
-2. **TCPRoute** - For gRPC routing (requires experimental Gateway API CRDs)
-3. **Cross-namespace routing** - Routes in one namespace referencing services in another
+1. `HTTPRoute` for HTTP/HTTPS routing with hostname matching
+2. `TCPRoute` for gRPC routing (requires experimental Gateway API CRDs)
+3. Cross-namespace routing for routes in one namespace referencing services in another
 
 <Warning>
-**TCPRoute is experimental**: Some Gateway API implementations may have limited or no TCPRoute support. Verify your chosen implementation supports TCPRoute before deploying. If it doesn't, gRPC invocations won't work through the gateway.
+TCPRoute is experimental. Some Gateway API implementations may have limited or no TCPRoute support. Verify your chosen implementation supports TCPRoute before deploying. If it doesn't, gRPC invocations won't work through the gateway.
 
 </Warning>
 
@@ -233,15 +233,15 @@ Any Gateway API implementation you choose must support:
 
 To use a different Gateway API implementation instead of Envoy Gateway:
 
-1. **Install your chosen controller** following its documentation
+1. Install your chosen controller following its documentation
 
-2. **Create namespaces** with `nvcf/platform=true` labels as shown in [Gateway quickstart](./gateway-routing.md#gateway-quickstart)
+2. Create namespaces with `nvcf/platform=true` labels as shown in [Gateway quickstart](./gateway-routing.md#gateway-quickstart)
 
-3. **Create a GatewayClass** for your controller
+3. Create a `GatewayClass` for your controller
 
-4. **Create a Gateway** with `http` (port 80) and `tcp` (port 10081) listeners
+4. Create a `Gateway` with `http` (port 80) and `tcp` (port 10081) listeners
 
-5. **Update your install configuration** to reference your Gateway:
+5. Update your install configuration to reference your Gateway:
 
    ```yaml
    ingress:
@@ -262,7 +262,7 @@ The `nvcf-gateway-routes` chart will create HTTPRoutes and TCPRoutes that attach
 
 ### Not Using Gateway API
 
-While technically possible to bypass the Gateway API entirely, this is **not recommended**:
+While technically possible to bypass the Gateway API entirely, this is not recommended:
 
 - The `nvcf-gateway-routes` chart specifically creates Gateway API resources
 - You would need to manually create and maintain all routing configuration
@@ -282,23 +282,24 @@ If you have a specific requirement that prevents using Gateway API, you would ne
 
 The gateway architecture consists of two layers:
 
-**User-configured**
+### User-configured resources
 
 These resources must be created manually before deploying the control plane:
 
-- **Namespaces** with `nvcf/platform=true` labels
-- **Gateway API controller** installation (Envoy Gateway, Istio, Traefik, etc.)
-- **GatewayClass** resource
-- **Gateway** resource with `http` (port 80) and `tcp` (port 10081) listeners
+- Namespaces with `nvcf/platform=true` labels
+- Gateway API controller installation (Envoy Gateway, Istio, Traefik, etc.)
+- `GatewayClass` resource
+- `Gateway` resource with `http` (port 80) and `tcp` (port 10081) listeners
 
-**Auto-Created by nvcf-gateway-routes**
+### Resources created by nvcf-gateway-routes
 
 When you deploy the control plane via helmfile, the `nvcf-gateway-routes` chart automatically creates:
 
-- **HTTPRoutes** for API Keys, NVCF API, and Invocation services
+- `HTTPRoutes` for API Keys, NVCF API, and Invocation services
 - Optional LLM invocation HTTPRoute when the `llmInvocation` route is enabled
-- **TCPRoute** for gRPC
-- **ReferenceGrants** for cross-namespace routing permissions
+- Optional Vanity Gateway HTTPRoute only when the stack package includes the addon and the `vanityGateway` route is enabled
+- `TCPRoute` for gRPC
+- `ReferenceGrants` for cross-namespace routing permissions
 
 These routes attach to the Gateway you prepared in [Gateway quickstart](./gateway-routing.md#gateway-quickstart).
 
@@ -310,6 +311,7 @@ These routes attach to the Gateway you prepared in [Gateway quickstart](./gatewa
 | NVCF API | `api.<domain>` | 80 | Function management (create, deploy, delete) |
 | Invocation | `invocation.<domain>`, `*.invocation.<domain>` | 80 | Function invocation (wildcard for dynamic routing) |
 | LLM Invocation | `llm.invocation.<domain>` | 80 | OpenAI-compatible LLM invocation routes such as `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings` |
+| Vanity Gateway | `vanity.<domain>` | 80 | Optional vanity host/path routing to `vanity-gateway.nvcf:8080`, only in stack packages that include the addon |
 | gRPC | N/A (TCP routing, no hostname matching) | 10081 | gRPC function invocations |
 
 <Note>
@@ -326,15 +328,40 @@ For request examples and invocation-specific behavior over these routes, see
 [Generic HTTP Function Invocation](./generic-http-function-invocation.md) and
 [gRPC Function Invocation](./grpc-function-invocation.md).
 
+### Vanity Gateway (Optional)
+
+Vanity Gateway is disabled by default. It is available only in stack packages
+that include the Vanity Gateway addon. If your extracted stack package does not
+contain a `vanity-gateway` release and `vanityGateway` route values, skip this
+section until you use a stack package that includes them.
+
+Enable it only when you need a customer-facing hostname or mapping layer in
+front of the standard NVCF service routes. In Helmfile-based stack packages that
+include the addon, set:
+
+```yaml
+addons:
+  vanityGateway:
+    enabled: true
+    mappingConfig: {}
+```
+
+By default, the route host is `vanity.<domain>` and the backend is
+`vanity-gateway.nvcf:8080`. Use `addons.vanityGateway.mappingConfig` for the
+host and path mappings required by your deployment. If you need custom vanity
+hostnames instead of `vanity.<domain>`, configure the route hostname overrides
+supported by your stack package, then create matching DNS records for those
+hosts.
+
 ### How Routing Works
 
 1. The Gateway's LoadBalancer service exposes ports 80 (HTTP) and 10081 (gRPC) externally.
 2. HTTP requests arrive at port 80. The Gateway inspects the `Host` header and matches it against HTTPRoute hostnames.
 3. The matching HTTPRoute forwards the request to the appropriate backend service (e.g., `api-keys` service on port 8080).
-4. gRPC requests arrive at port 10081. The TCPRoute forwards all traffic directly to the `grpc` service—no hostname matching required.
+4. gRPC requests arrive at port 10081. The TCPRoute forwards all traffic directly to the `grpc` service. No hostname matching is required.
 
 <Tip>
-**gRPC doesn't need Host headers** because it uses a dedicated TCP listener on port 10081. The gateway routes all traffic on that port directly to the gRPC service without hostname matching.
+gRPC doesn't need Host headers because it uses a dedicated TCP listener on port 10081. The gateway routes all traffic on that port directly to the gRPC service without hostname matching.
 
 </Tip>
 
@@ -363,7 +390,11 @@ kubectl get httproute -A -o jsonpath='{range .items[*]}{.metadata.name}: {.spec.
 # api-keys: api-keys.a1b2c3d4.us-west-2.elb.amazonaws.com
 # nvcf-api: api.a1b2c3d4.us-west-2.elb.amazonaws.com
 # invocation-service: *.invocation.a1b2c3d4.us-west-2.elb.amazonaws.com invocation.a1b2c3d4.us-west-2.elb.amazonaws.com
+# vanity-gateway: vanity.a1b2c3d4.us-west-2.elb.amazonaws.com  # only when enabled and present in the stack package
 ```
+
+If Vanity Gateway is disabled or your stack package does not include the addon,
+the `vanity-gateway` HTTPRoute is not expected.
 
 ### Verify gRPC TCPRoute
 
@@ -387,13 +418,16 @@ kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-
 curl -H "Host: api-keys.$GATEWAY_ADDR" http://$GATEWAY_ADDR/health
 curl -H "Host: api.$GATEWAY_ADDR" http://$GATEWAY_ADDR/health
 
+# Optional Vanity Gateway route, only if the addon is present and enabled
+curl -H "Host: vanity.$GATEWAY_ADDR" http://$GATEWAY_ADDR/health
+
 # Test gRPC endpoint (requires grpcurl)
 grpcurl -plaintext $GATEWAY_ADDR:10081 grpc.health.v1.Health/Check
 ```
 
 ## Development: Host Header Routing
 
-For **development and testing** when you don't have DNS configured, you can use Host header overrides to route requests through the gateway.
+For development and testing when you don't have DNS configured, you can use Host header overrides to route requests through the gateway.
 
 ### Why Host Headers Are Needed
 
@@ -402,7 +436,7 @@ The Envoy Gateway uses hostname-based routing to direct traffic to different bac
 Without the correct `Host` header, the gateway cannot match the request to an HTTPRoute and returns 404.
 
 <Warning>
-**Host header routing only works with plaintext HTTP traffic.** Without TLS/SNI spoofing support in your client, you cannot use HTTPS with this method. The TLS handshake occurs before the Host header is sent, so the server cannot route based on a custom Host header when using HTTPS. For encrypted traffic, use proper DNS records as described in [production-dns-https](./gateway-routing.md).
+Host header routing only works with plaintext HTTP traffic. Without TLS/SNI spoofing support in your client, you cannot use HTTPS with this method. The TLS handshake occurs before the Host header is sent, so the server cannot route based on a custom Host header when using HTTPS. For encrypted traffic, use proper DNS records as described in [production-dns-https](./gateway-routing.md).
 
 </Warning>
 
@@ -435,7 +469,7 @@ See [cli-configuration](./cli.md) for complete CLI configuration documentation.
 
 ## Production: DNS and HTTPS
 
-For **production deployments**, configure proper DNS and TLS to eliminate the need for Host header overrides.
+For production deployments, configure proper DNS and TLS to eliminate the need for Host header overrides.
 
 ### Benefits
 
@@ -453,11 +487,11 @@ Select a domain you control for your NVCF deployment:
 ```text
 # Example domain structure
 nvcf.example.com                    # Base domain
-├── api-keys.nvcf.example.com       # API Keys service
-├── api.nvcf.example.com            # NVCF API
-├── invocation.nvcf.example.com     # Invocation service
-├── *.invocation.nvcf.example.com   # Wildcard for function routing
-└── grpc.nvcf.example.com           # gRPC endpoint (optional, for documentation)
+|-- api-keys.nvcf.example.com       # API Keys service
+|-- api.nvcf.example.com            # NVCF API
+|-- invocation.nvcf.example.com     # Invocation service
+|-- *.invocation.nvcf.example.com   # Wildcard for function routing
+`-- grpc.nvcf.example.com           # gRPC endpoint (optional, for documentation)
 ```
 
 ### Step 2: Create DNS Records
@@ -466,13 +500,13 @@ Create DNS records pointing to your Gateway's load balancer address:
 
 ```text
 # A/CNAME records (replace with your load balancer address)
-api-keys.nvcf.example.com     → a1b2c3d4.us-west-2.elb.amazonaws.com
-api.nvcf.example.com          → a1b2c3d4.us-west-2.elb.amazonaws.com
-invocation.nvcf.example.com   → a1b2c3d4.us-west-2.elb.amazonaws.com
-*.invocation.nvcf.example.com → a1b2c3d4.us-west-2.elb.amazonaws.com
+api-keys.nvcf.example.com     -> a1b2c3d4.us-west-2.elb.amazonaws.com
+api.nvcf.example.com          -> a1b2c3d4.us-west-2.elb.amazonaws.com
+invocation.nvcf.example.com   -> a1b2c3d4.us-west-2.elb.amazonaws.com
+*.invocation.nvcf.example.com -> a1b2c3d4.us-west-2.elb.amazonaws.com
 ```
 
-**AWS Route 53 Example:**
+### AWS Route 53 example
 
 ```bash
 # Get your Gateway load balancer address
@@ -490,7 +524,7 @@ aws route53 change-resource-record-sets --hosted-zone-id YOUR_ZONE_ID --change-b
 ```
 
 <Tip>
-**Automate with external-dns**: The `nvcf-gateway-routes` chart supports `routeAnnotations` for automatic DNS record creation via [external-dns](https://github.com/kubernetes-sigs/external-dns). See the chart's README for configuration examples.
+Automate with external-dns. The `nvcf-gateway-routes` chart supports `routeAnnotations` for automatic DNS record creation via [external-dns](https://github.com/kubernetes-sigs/external-dns). See the chart's README for configuration examples.
 
 </Tip>
 
@@ -537,7 +571,7 @@ kubectl get httproute -A -o jsonpath='{range .items[*]}{.metadata.name}: {.spec.
 
 For TLS, you have two main options:
 
-**Option A: TLS at the Load Balancer (Recommended for AWS)**
+### Option A: TLS at the Load Balancer (recommended for AWS)
 
 Terminate TLS at the AWS NLB using ACM certificates:
 
@@ -549,7 +583,7 @@ Terminate TLS at the AWS NLB using ACM certificates:
 # This varies by cloud provider - consult your provider's documentation
 ```
 
-**Option B: TLS at the Gateway with cert-manager**
+### Option B: TLS at the Gateway with cert-manager
 
 Use cert-manager to automatically provision Let's Encrypt certificates:
 
@@ -613,19 +647,19 @@ api_keys_service_url: "https://api-keys.nvcf.example.com"
 
 If you receive 404 errors when accessing services:
 
-1. **Verify Host header matches HTTPRoute hostname**:
+1. Verify the Host header matches the HTTPRoute hostname:
 
    ```bash
    kubectl get httproute api-keys -n envoy-gateway -o jsonpath='{.spec.hostnames}'
    ```
 
-2. **Confirm the gateway is programmed**:
+2. Confirm the gateway is programmed:
 
    ```bash
    kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonpath='{.status.conditions}'
    ```
 
-3. **Check route attachment**:
+3. Check route attachment:
 
    ```bash
    kubectl describe httproute api-keys -n envoy-gateway | grep -A 5 "Parents"
@@ -635,19 +669,19 @@ If you receive 404 errors when accessing services:
 
 If routes show 0 attached in gateway status:
 
-1. **Verify namespace labels**:
+1. Verify namespace labels:
 
    ```bash
    kubectl get ns -l nvcf/platform=true
    ```
 
-2. **Check ReferenceGrants exist**:
+2. Check `ReferenceGrants` exist:
 
    ```bash
    kubectl get referencegrants -A
    ```
 
-3. **Review gateway listener configuration**:
+3. Review gateway listener configuration:
 
    ```bash
    kubectl get gateway nvcf-gateway -n envoy-gateway -o yaml | grep -A 20 listeners
@@ -657,19 +691,19 @@ If routes show 0 attached in gateway status:
 
 For gRPC connection problems:
 
-1. **Verify port 10081 is exposed**:
+1. Verify port 10081 is exposed:
 
    ```bash
    kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=nvcf-gateway
    ```
 
-2. **Test with grpcurl**:
+2. Test with `grpcurl`:
 
    ```bash
    grpcurl -plaintext $GATEWAY_ADDR:10081 list
    ```
 
-3. **Check TCPRoute status**:
+3. Check `TCPRoute` status:
 
    ```bash
    kubectl describe tcproute grpc -n envoy-gateway

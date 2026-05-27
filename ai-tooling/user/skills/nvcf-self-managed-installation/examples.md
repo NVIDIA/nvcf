@@ -6,9 +6,9 @@ Worked examples based on real deployment scenarios.
 
 The default Cassandra resource limits cause OOM on large instance types (e.g., `p5.48xlarge`).
 
-**Problem**: Cassandra pods restart with `OOMKilled`.
+Problem: Cassandra pods restart with `OOMKilled`.
 
-**Solution**: Override resources via helmfile release values block.
+Solution: Override resources via helmfile release values block.
 
 ### Step 1: Capture baseline
 
@@ -48,7 +48,7 @@ diff /tmp/cass-before.yaml /tmp/cass-after.yaml  # Confirm resources changed
 HELMFILE_ENV=<env> helmfile --selector name=cassandra sync
 ```
 
-**Note**: `resourcePreset` (a Bitnami feature) is not available in the NVCF cassandra wrapper chart. Use explicit `resources` instead.
+Note: `resourcePreset` (a Bitnami feature) is not available in the NVCF cassandra wrapper chart. Use explicit `resources` instead.
 
 ---
 
@@ -254,9 +254,10 @@ HELMFILE_ENV=<env> helmfile --selector name=cassandra sync
 | Selector | Releases |
 |----------|----------|
 | `release-group=dependencies` | nats, cassandra, openbao-server |
-| `release-group=services` | api-keys, sis, api, invocation-service, grpc-proxy, ess-api, notary-service, reval, optional llm-request-router and llm-api-gateway when `llm.enabled=true` |
+| `release-group=services` | api-keys, sis, api, invocation-service, grpc-proxy, ess-api, notary-service, reval, optional llm-request-router and llm-api-gateway when `llm.enabled=true`, optional vanity-gateway only in stack packages that include the addon and have `addons.vanityGateway.enabled=true` |
 | `name=llm-request-router` | Deploy just the LLM request router when `llm.enabled=true` |
 | `name=llm-api-gateway` | Deploy just the LLM API gateway when `llm.enabled=true` |
+| `name=vanity-gateway` | Deploy just Vanity Gateway only when the stack package includes that release and `addons.vanityGateway.enabled=true` |
 | `release-group=ingress` | ingress (gateway routes) |
 | `release-group=workers` | nvca-operator |
 | `name=<release>` | Any individual release by name |

@@ -6,7 +6,7 @@ This repository contains the Helm chart for deploying NVCF ingress routes via th
 
 The chart deploys `HTTPRoute`, `TCPRoute`, and `ReferenceGrant` resources that attach to an existing Gateway provisioned separately by the cluster operator (e.g. Envoy Gateway, Istio, Traefik, Kong). It also includes optional `PodMonitor` resources for scraping Envoy Gateway proxy metrics with Prometheus.
 
-The chart deploys routing configuration only. It does not include any container images. Backend services referenced by the routes (`api`, `nvct-api`, `api-keys`, `invocation`, `llm-api-gateway`, `sis`, `grpc`, `nats`) must already be deployed separately.
+The chart deploys routing configuration only. It does not include any container images. Backend services referenced by the routes (`api`, `nvct-api`, `api-keys`, `invocation`, `llm-api-gateway`, `vanity-gateway`, `sis`, `grpc`, `nats`) must already be deployed separately.
 
 ## Prerequisites
 
@@ -65,6 +65,8 @@ Important settings to review before deployment:
 
 The default values use `localhost` as the domain and assume backend services are named consistently with NVCF defaults. Override these for any shared or production environment.
 
+Enabled `HTTPRoute` entries must not share a resolved hostname because each `HTTPRoute` in this chart uses a root `PathPrefix /` match on the shared Gateway. Helm rendering fails if two enabled HTTPRoutes would claim the same hostname.
+
 ## Routes
 
 | Route | Kind | Default hostname | Backend |
@@ -75,6 +77,7 @@ The default values use `localhost` as the domain and assume backend services are
 | `invocation` | HTTPRoute | `*.invocation.<domain>` and `invocation.<domain>` | `invocation.nvcf:8080` |
 | `llmApiGateway` | HTTPRoute | `llm.<domain>` | `llm-api-gateway.nvcf:8080` |
 | `llmInvocation` | HTTPRoute (disabled by default) | `llm.invocation.<domain>` | `llm-api-gateway.nvcf:8080` |
+| `vanityGateway` | HTTPRoute (disabled by default) | `vanity.<domain>` | `vanity-gateway.nvcf:8080` |
 | `sis` | HTTPRoute | `sis.<domain>` | `api.sis:8080` |
 | `grpc` | TCPRoute | Not rendered | `grpc.nvcf:10081` |
 | `nats` | TCPRoute (disabled by default) | Not rendered | `nats.nats-system:4222` |

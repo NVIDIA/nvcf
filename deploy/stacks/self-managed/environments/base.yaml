@@ -149,6 +149,47 @@ addons:
   llm:
     enabled: false
 
+  # Vanity Gateway addon for optional vanity and OpenAI-compatible invocation routes.
+  # Disabled by default; enabling this deploys the vanity-gateway service and its
+  # Gateway API HTTPRoute without changing the default invocation or LLM routes.
+  vanityGateway:
+    enabled: false
+    replicaCount: 2
+    image:
+      # Optional image tag override. Leave empty to use the chart appVersion.
+      tag: ""
+      pullPolicy: IfNotPresent
+    config:
+      mappingPath: /etc/vanity-gateway/config/config.yaml
+      nvcfApiEndpoint: http://invocation.nvcf.svc.cluster.local:8080
+      # Empty by default because the Vanity Gateway chart does not create Vault
+      # Agent injection. Set this only when another component mounts the secrets
+      # file into the pod.
+      secretsPath: ""
+      privateModelNameRegexPattern: ""
+      awsRegion: ""
+      shadowMaxConcurrent: 256
+    mappingConfig:
+      v2config:
+        openai: {}
+        vanity: {}
+    serviceMonitor:
+      # Disabled by default for environments without Prometheus Operator.
+      enabled: false
+      interval: 60s
+      labels: {}
+    # Runtime overrides passed through to the Vanity Gateway chart.
+    service: {}
+    serviceAccount: {}
+    podAnnotations: {}
+    podLabels: {}
+    podSecurityContext: {}
+    securityContext: {}
+    resources: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+
 stateMetrics:
   enabled: false
   # Disable ServiceMonitor for environments without Prometheus Operator
@@ -170,6 +211,10 @@ ingress:
       invocation:
         routeAnnotations: {}
       llmInvocation:
+        routeAnnotations: {}
+      vanityGateway:
+        # Defaults to vanity.<global.domain>. Set a non-empty list to override.
+        hostnames: []
         routeAnnotations: {}
       grpc:
         routeAnnotations: {}

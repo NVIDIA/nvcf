@@ -121,7 +121,7 @@ releases:
 
   - name: reval
     chart: nvcf/helm-reval
-    version: 1.3.5
+    version: 1.3.6
     namespace: nvcf
     values:
       - ../global.yaml.gotmpl
@@ -165,10 +165,21 @@ releases:
     labels:
       release-group: services
 
+  - name: vanity-gateway
+    version: 0.1.0-nvcf-10204.1
+    namespace: nvcf
+    condition: addons.vanityGateway.enabled
+    inherit:
+      - template: service
+    needs:
+      - nvcf/invocation-service
+    labels:
+      release-group: services
+
   # --- Gateway API Ingress ---
   - name: ingress
     chart: nvcf/nvcf-gateway-routes
-    version: 1.12.0
+    version: 1.12.0-nvcf-10204.1
     needs:
       - nvcf/notary-service
       - api-keys/api-keys

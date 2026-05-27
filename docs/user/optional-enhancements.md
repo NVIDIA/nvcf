@@ -1,7 +1,8 @@
-# Optional GPU Cluster Enhancements
+# Optional Enhancements
 
-NVCF supports several optional components that can enhance your GPU cluster's
-performance and capabilities. Each component has its own installation and configuration guide:
+NVCF supports several optional components that can enhance your deployment's
+performance, routing, and GPU cluster capabilities. Each component has its own
+installation and configuration guide.
 
 ## Low-Latency Streaming
 
@@ -15,6 +16,21 @@ performance and capabilities. Each component has its own installation and config
 
 - [container-cache](./cluster-management/container-cache.md) - Accelerates container image pulls by caching layers locally
 - [gxcache](./cluster-management/gxcache.md) - Shader caching for simulation and rendering workloads
+
+## Vanity Gateway
+
+Vanity Gateway is an optional HTTP gateway service for deployments that need
+customer-facing hostnames or path mappings in front of the standard NVCF API and
+invocation routes. It is available only in stack packages that include the
+Vanity Gateway addon. Older packages do not contain the `vanity-gateway` release
+or route values.
+
+When the addon is present and enabled, it is deployed as the `vanity-gateway`
+service and exposed through the Gateway API route `vanity.<domain>` by default.
+Enable it only when you need a vanity routing layer. Standard API, API Keys,
+invocation, LLM invocation, and gRPC routes do not require it. See
+[Gateway Routing](./gateway-routing.md#vanity-gateway-optional) for routing and
+verification details.
 
 ## Physical Simulation Caches
 

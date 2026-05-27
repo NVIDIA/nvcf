@@ -867,9 +867,52 @@ HELMFILE_ENV=<environment-name> helmfile --selector release-group=workers sync
 
 If dependencies are corrupted or you prefer a clean slate, follow the complete [Uninstalling] steps, fix your configuration, then redeploy from Step 1.
 
+#### Enabling Vanity Gateway
+
+Vanity Gateway is optional and disabled by default. It is available only in
+stack packages that include the Vanity Gateway addon. If your extracted stack
+package does not contain a `vanity-gateway` release and `vanityGateway` route
+values, skip this section until you use a stack package that includes them.
+
+Enable it only when you need a customer-facing hostname or path mapping layer in
+front of the standard NVCF service routes.
+
+In stack packages that include the addon, set the value shape in your
+environment file:
+
+```yaml
+addons:
+  vanityGateway:
+    enabled: true
+    mappingConfig: {}
+```
+
+By default, the route host is `vanity.<domain>` and the backend is
+`vanity-gateway.nvcf:8080`. Put deployment-specific host and path mappings under
+`addons.vanityGateway.mappingConfig`. If your deployment needs custom vanity
+hosts, use the route hostname overrides supported by your stack package and
+create matching DNS records.
+
+After confirming your stack package includes the `vanity-gateway` release,
+preview and apply the service plus gateway routes:
+
+```bash
+HELMFILE_ENV=<environment-name> helmfile --selector name=vanity-gateway template
+HELMFILE_ENV=<environment-name> helmfile --selector name=vanity-gateway sync
+HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress sync
+```
+
+Verify only when the addon is present and enabled:
+
+```bash
+kubectl get deploy,svc -n nvcf -l app.kubernetes.io/name=vanity-gateway
+kubectl get httproute -A | grep -i vanity
+curl -H "Host: vanity.<domain>" "http://<gateway-address>/health"
+```
+
 #### Recovering from Gateway Address Changes
 
-If your Gateway or its underlying load balancer was deleted and recreated (e.g., due to a TCPRoute misconfiguration or infrastructure change), the external address will change. Services that depend on the `domain` value -- including Gateway API routes, SIS cluster registration, and API hostname resolution -- will break until the new address is propagated.
+If your Gateway or its underlying load balancer was deleted and recreated (e.g., due to a TCPRoute misconfiguration or infrastructure change), the external address will change. Services that depend on the `domain` value -- including Gateway API routes, SIS cluster registration, API hostname resolution, and the optional Vanity Gateway route -- will break until the new address is propagated.
 
 **1. Get the new Gateway address:**
 

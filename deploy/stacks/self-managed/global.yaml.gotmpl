@@ -312,6 +312,20 @@ api:
     NVCF_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
     NVCF_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
     NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: {{ $llmRouterClientImage | quote }}
+    NVCF_REGISTRIES_NGC_CONTAINER_REGISTRY_URL: "https://nvcr.io"
+    NVCF_REGISTRIES_NGC_BASE_URL: "https://api.ngc.nvidia.com"
+    NVCF_REGISTRIES_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
+    NVCF_REGISTRIES_NGC_OAUTH2_GROUP_SCOPE: "ngc"
+    NVCF_REGISTRIES_RECOGNIZED_CONTAINER_NGC_HOSTNAME: "nvcr.io"
+    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_HOSTNAME: "helm.ngc.nvidia.com"
+    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
+    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_OAUTH2_GROUP_SCOPE: "ngc"
+    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_HOSTNAME: "api.ngc.nvidia.com"
+    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
+    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_OAUTH2_GROUP_SCOPE: "ngc"
+    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_HOSTNAME: "api.ngc.nvidia.com"
+    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
+    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_GROUP_SCOPE: "ngc"
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
 
@@ -594,6 +608,85 @@ llmRequestRouter:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
+vanityGateway:
+  fullnameOverride: vanity-gateway
+  replicaCount: {{ dig "addons" "vanityGateway" "replicaCount" 2 .Values }}
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-ai-api-gateway-service
+    {{- if dig "addons" "vanityGateway" "image" "tag" "" .Values }}
+    tag: {{ dig "addons" "vanityGateway" "image" "tag" "" .Values | quote }}
+    {{- end }}
+    pullPolicy: {{ dig "addons" "vanityGateway" "image" "pullPolicy" "IfNotPresent" .Values }}
+  config:
+    mappingPath: {{ dig "addons" "vanityGateway" "config" "mappingPath" "/etc/vanity-gateway/config/config.yaml" .Values | quote }}
+    nvcfApiEndpoint: {{ dig "addons" "vanityGateway" "config" "nvcfApiEndpoint" "http://invocation.nvcf.svc.cluster.local:8080" .Values | quote }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    otelExporterOtlpEndpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+    {{- else }}
+    otelExporterOtlpEndpoint: ""
+    {{- end }}
+    secretsPath: {{ dig "addons" "vanityGateway" "config" "secretsPath" "" .Values | quote }}
+    privateModelNameRegexPattern: {{ dig "addons" "vanityGateway" "config" "privateModelNameRegexPattern" "" .Values | quote }}
+    awsRegion: {{ dig "addons" "vanityGateway" "config" "awsRegion" "" .Values | quote }}
+    shadowMaxConcurrent: {{ dig "addons" "vanityGateway" "config" "shadowMaxConcurrent" 256 .Values }}
+  mappingConfig:
+    {{ dig "addons" "vanityGateway" "mappingConfig" (dict "v2config" (dict "openai" (dict) "vanity" (dict))) .Values | toYaml | nindent 4 | trim }}
+  serviceMonitor:
+    enabled: {{ dig "addons" "vanityGateway" "serviceMonitor" "enabled" false .Values }}
+    interval: {{ dig "addons" "vanityGateway" "serviceMonitor" "interval" "60s" .Values | quote }}
+    labels:
+      {{ dig "addons" "vanityGateway" "serviceMonitor" "labels" dict .Values | toYaml | nindent 6 | trim }}
+  {{- with (dig "addons" "vanityGateway" "service" dict .Values) }}
+  service:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "serviceAccount" dict .Values) }}
+  serviceAccount:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "podAnnotations" dict .Values) }}
+  podAnnotations:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "podLabels" dict .Values) }}
+  podLabels:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "podSecurityContext" dict .Values) }}
+  podSecurityContext:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "securityContext" dict .Values) }}
+  securityContext:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "resources" dict .Values) }}
+  resources:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- else }}
+  {{- with (dig "addons" "vanityGateway" "nodeSelector" dict .Values) }}
+  nodeSelector:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "tolerations" (list) .Values) }}
+  tolerations:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "affinity" dict .Values) }}
+  affinity:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+
 nvcfGatewayRoutes:
   {{- $natsRouteEnabled := dig "ingress" "gatewayApi" "routes" "nats" "enabled" false .Values }}
   domain: "{{ .Values.global.domain }}"
@@ -631,6 +724,16 @@ nvcfGatewayRoutes:
         port: 8080
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "llmInvocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    vanityGateway:
+      enabled: {{ dig "addons" "vanityGateway" "enabled" false .Values }}
+      hostnames:
+        {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "hostnames" (list) .Values | default (list (printf "vanity.%s" .Values.global.domain)) | toYaml | nindent 8 | trim }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "name" "vanity-gateway" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "namespace" "nvcf" .Values }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "port" 8080 .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpc:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}

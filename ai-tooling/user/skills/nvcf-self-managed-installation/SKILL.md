@@ -79,17 +79,17 @@ Understanding value precedence prevents the most common configuration mistakes.
 
 ```
 environments/base.yaml          (defaults)
-    ↓ merged with
+    -> merged with
 environments/<env>.yaml         (your overrides)
-    ↓ consumed by
+    -> consumed by
 global.yaml.gotmpl              (Go template, constructs per-chart values)
-    ↓ consumed by
+    -> consumed by
 secrets/<env>-secrets.yaml      (sensitive values)
-    ↓ overridden by
+    -> overridden by
 release inline values: blocks   (highest precedence)
 ```
 
-**Critical**: `global.yaml.gotmpl` only passes through specific keys to each chart (image registries, node selectors, storage, replica counts). Setting an arbitrary chart value in the environment file will be silently ignored if `global.yaml.gotmpl` does not propagate it.
+Critical: `global.yaml.gotmpl` only passes through specific keys to each chart (image registries, node selectors, storage, replica counts). Setting an arbitrary chart value in the environment file will be silently ignored if `global.yaml.gotmpl` does not propagate it.
 
 To override arbitrary chart values, use a helmfile release `values:` block. See [Overriding Helm Chart Values](#overriding-helm-chart-values).
 
@@ -134,7 +134,7 @@ aws ecr get-login-password --region <region> | \
 
 Your environment file (`environments/<env>.yaml`) requires `global.domain` to be set to the external address of your Envoy Gateway or load balancer. How to obtain it depends on timing:
 
-**If Envoy Gateway is already installed** (recommended — install it before the NVCF stack):
+If Envoy Gateway is already installed (recommended, install it before the NVCF stack):
 
 ```bash
 GATEWAY_ADDRESS=$(kubectl get gateway -n envoy-gateway -o jsonpath='{.items[0].status.addresses[0].value}')
@@ -148,9 +148,9 @@ global:
   domain: "<GATEWAY_ADDRESS>"
 ```
 
-**If Envoy Gateway is not yet installed**: Use a placeholder value (e.g., `placeholder.local`), complete the `helmfile sync`, then update the domain once the gateway address is available and re-sync. See Example 4 in [examples.md](examples.md) for the update flow.
+If Envoy Gateway is not yet installed: Use a placeholder value (e.g., `placeholder.local`), complete the `helmfile sync`, then update the domain once the gateway address is available and re-sync. See Example 4 in [examples.md](examples.md) for the update flow.
 
-**On AWS EKS**: The gateway address is typically the DNS name of the AWS Network Load Balancer created by the Envoy Gateway controller (e.g., `k8s-envoygateway-xxxxxxxx.us-west-2.elb.amazonaws.com`).
+On AWS EKS: The gateway address is typically the DNS name of the AWS Network Load Balancer created by the Envoy Gateway controller (e.g., `k8s-envoygateway-xxxxxxxx.us-west-2.elb.amazonaws.com`).
 
 ### 4. Preview and deploy
 
@@ -166,7 +166,7 @@ Helmfile deploys in order with dependencies:
 | Phase | Selector | Services | Wait time |
 |-------|----------|----------|-----------|
 | 1 | `release-group=dependencies` | NATS, OpenBao, Cassandra | 5-10 min |
-| 2 | `release-group=services` | API, SIS, ESS, invocation, grpc-proxy, notary, api-keys, optional LLM gateway/router | 5-10 min |
+| 2 | `release-group=services` | API, SIS, ESS, invocation, grpc-proxy, notary, api-keys, optional LLM gateway/router, optional Vanity Gateway when the stack package includes the addon | 5-10 min |
 | 3 | `release-group=ingress` | Gateway routes | 1-2 min |
 | 4 | `release-group=observability` | Observability stack (if enabled) | 1-2 min |
 | 5 | `release-group=workers` | NVCA operator (opt-in, see below) | 1-2 min |
@@ -177,9 +177,55 @@ Monitor in a separate terminal:
 kubectl get pods -A -w
 ```
 
-### 6. Enable and validate the NVCA operator (opt-in)
+### 6. Enable Vanity Gateway (optional)
 
-The `nvca-operator` release is **disabled by default** (the helmfile defaults `nvcaOperator.enabled: false`, and the release carries `condition: nvcaOperator.enabled`). Phase 5 silently deploys nothing until you opt in. Chart: `nvcf/helm-nvca-operator` into namespace `nvca-operator`.
+Vanity Gateway is disabled by default and is only needed for customer-facing
+hostnames or path mappings in front of the standard NVCF API and invocation
+routes. It is available only in stack packages that include the Vanity Gateway
+addon. If the extracted stack package does not contain a `vanity-gateway`
+release and `vanityGateway` route values, skip these commands and use a newer
+stack package that includes them.
+
+If the stack package includes the addon, enable it in
+`environments/<env-name>.yaml`:
+
+```yaml
+addons:
+  vanityGateway:
+    enabled: true
+    mappingConfig: {}
+```
+
+The default route host is `vanity.<domain>` and the backend is
+`vanity-gateway.nvcf:8080`. Put deployment-specific host and path mappings under
+`addons.vanityGateway.mappingConfig`. If you need custom vanity hosts instead of
+`vanity.<domain>`, use the route hostname overrides supported by the stack
+package and create matching DNS records.
+
+After confirming the package includes the `vanity-gateway` release, preview and
+apply the service and route:
+
+```bash
+HELMFILE_ENV=<env-name> helmfile --selector name=vanity-gateway template
+HELMFILE_ENV=<env-name> helmfile --selector name=vanity-gateway sync
+HELMFILE_ENV=<env-name> helmfile --selector release-group=ingress sync
+```
+
+Verify the route only when the addon is present and enabled:
+
+```bash
+kubectl get deploy,svc -n nvcf -l app.kubernetes.io/name=vanity-gateway
+kubectl get httproute -A | grep -i vanity
+curl -H "Host: vanity.<domain>" "http://<gateway-address>/health"
+```
+
+Do not enable Vanity Gateway for standard API, API Keys, invocation, LLM
+invocation, or gRPC traffic. Those routes are provided by the base gateway
+routes.
+
+### 7. Enable and validate the NVCA operator (opt-in)
+
+The `nvca-operator` release is disabled by default (the helmfile defaults `nvcaOperator.enabled: false`, and the release carries `condition: nvcaOperator.enabled`). Phase 5 silently deploys nothing until you opt in. Chart: `nvcf/helm-nvca-operator` into namespace `nvca-operator`.
 
 Enable in `environments/<env-name>.yaml`, then apply just this release:
 
@@ -193,7 +239,7 @@ HELMFILE_ENV=<env-name> helmfile --selector name=nvca-operator template
 HELMFILE_ENV=<env-name> helmfile --selector name=nvca-operator sync
 ```
 
-Validate **only the operator Deployment itself** at this point:
+Validate only the operator Deployment itself at this point:
 
 ```bash
 kubectl rollout status deployment/nvca-operator -n nvca-operator --timeout=180s
@@ -204,11 +250,11 @@ kubectl get ns nvca-system nvcf-backend   # auto-created by the operator
 
 Operator-Deployment healthy state: `1/1 Ready`, no `CrashLoopBackOff`, no `no backend GPUs were found` in logs. If GPUs are missing, install the fake GPU operator per the section below and re-register.
 
-**Install is not complete yet.** Once the operator has created the `nvca-system` and `nvcf-backend` namespaces, workloads in those namespaces will fail with `ImagePullBackOff` (and, if Kyverno is used, admission denials) until the pull secrets and Kyverno policy are propagated to them. Follow [Post-helmfile-sync: handle nvca-system namespace](#post-helmfile-sync-handle-nvca-system-namespace) before treating the NVCA install as done. Only after pods in `nvca-system` and `nvcf-backend` reach `Running` should you consider the operator end-to-end healthy.
+Install is not complete yet. Once the operator has created the `nvca-system` and `nvcf-backend` namespaces, workloads in those namespaces will fail with `ImagePullBackOff` (and, if Kyverno is used, admission denials) until the pull secrets and Kyverno policy are propagated to them. Follow [Post-helmfile-sync: handle nvca-system namespace](#post-helmfile-sync-handle-nvca-system-namespace) before treating the NVCA install as done. Only after pods in `nvca-system` and `nvcf-backend` reach `Running` should you consider the operator end-to-end healthy.
 
 ## Clean Teardown
 
-**Scope**: Only destroy releases managed by this helmfile stack. The NVCF releases are: `nats`, `openbao-server`, `cassandra`, `api-keys`, `sis`, `api`, `invocation-service`, `grpc-proxy`, `ess-api`, `notary-service`, `admin-issuer-proxy`, `ingress`, `nvca-operator`. The NVCF namespaces are: `cassandra-system`, `nats-system`, `nvcf`, `api-keys`, `ess`, `sis`, `nvca-operator`, `vault-system`, plus operator-created `nvca-system` and `nvcf-backend`. Do **NOT** delete other helm releases or namespaces on the cluster.
+Scope: Only destroy releases managed by this helmfile stack. The NVCF releases are: `nats`, `openbao-server`, `cassandra`, `api-keys`, `sis`, `api`, `invocation-service`, `grpc-proxy`, `ess-api`, `notary-service`, optional `vanity-gateway`, `admin-issuer-proxy`, `ingress`, `nvca-operator`. The NVCF namespaces are: `cassandra-system`, `nats-system`, `nvcf`, `api-keys`, `ess`, `sis`, `nvca-operator`, `vault-system`, plus operator-created `nvca-system` and `nvcf-backend`. Do not delete other helm releases or namespaces on the cluster.
 
 ### Standard teardown
 
@@ -280,7 +326,7 @@ Edit the release in `helmfile.d/*.yaml.gotmpl` and add a `values:` block. In the
             memory: 4096Mi
 ```
 
-**YAML merge gotcha**: When a release uses `<<: *dependency` or `inherit`, specifying `values:` **replaces** the template's values list. You must re-include `global.yaml.gotmpl` and the secrets file.
+YAML merge gotcha: When a release uses `<<: *dependency` or `inherit`, specifying `values:` replaces the template's values list. You must re-include `global.yaml.gotmpl` and the secrets file.
 
 ### Preview and apply a single release
 
@@ -342,7 +388,7 @@ When deploying on clusters without real NVIDIA GPUs (load test clusters, dev/sta
 no backend GPUs were found. Ensure gpu-operator is installed and at least one node has GPU resources (nvidia.com/gpu)
 ```
 
-Install the RunAI fake-gpu-operator **before** running `helmfile sync` (or after, followed by a cluster re-registration). The fake GPU operator is **not** part of the helmfile stack -- it is a separate helm install.
+Install the RunAI fake-gpu-operator before running `helmfile sync` (or after, followed by a cluster re-registration). The fake GPU operator is not part of the helmfile stack -- it is a separate helm install.
 
 ### Prerequisites
 
@@ -368,7 +414,7 @@ helm upgrade -i gpu-operator fake-gpu-operator/fake-gpu-operator \
 
 ### Critical: topology.nodePools is a map, not an array
 
-The chart expects `topology.nodePools` as a **map** with named keys (e.g., `default`), not an array. Using `--set 'topology.nodePools[0].gpuCount=8'` will create a YAML array and cause the status-updater to fail with:
+The chart expects `topology.nodePools` as a map with named keys (e.g., `default`), not an array. Using `--set 'topology.nodePools[0].gpuCount=8'` will create a YAML array and cause the status-updater to fail with:
 
 ```
 yaml: unmarshal errors: cannot unmarshal !!seq into map[string]topology.NodePoolTopology
@@ -401,7 +447,7 @@ kubectl get nodes -o custom-columns="NAME:.metadata.name,GPU:.status.allocatable
 
 ### Post-helmfile-sync: handle nvca-system namespace
 
-The NVCA operator auto-creates `nvca-system` and `nvcf-backend` namespaces. These are **not** in the initial namespace list for pull secrets or Kyverno policy. After the first `helmfile sync`:
+The NVCA operator auto-creates `nvca-system` and `nvcf-backend` namespaces. These are not in the initial namespace list for pull secrets or Kyverno policy. After the first `helmfile sync`:
 
 1. Create pull secrets in operator-managed namespaces:
    ```bash
@@ -422,7 +468,7 @@ The NVCA operator auto-creates `nvca-system` and `nvcf-backend` namespaces. Thes
 
 ### Re-register the cluster after adding fake GPUs
 
-If the fake GPU operator was installed **after** the helmfile stack, the cluster bootstrap ran without GPU information. Re-register:
+If the fake GPU operator was installed after the helmfile stack, the cluster bootstrap ran without GPU information. Re-register:
 
 ```bash
 kubectl exec -n nvca-operator deploy/nvca-operator -c nvca-operator -- \
