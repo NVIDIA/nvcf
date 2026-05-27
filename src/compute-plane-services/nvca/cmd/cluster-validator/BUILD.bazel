@@ -20,20 +20,15 @@ go_binary(
     name = "cluster-validator",
     embed = [":cluster-validator_lib"],
     visibility = ["//visibility:public"],
-    x_defs = {
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
-    },
 )
 
-# Matches Dockerfile.cluster-validator: distroless/go base, binary at
-# /usr/bin/cluster-validator, ENTRYPOINT defaults to that path.
+# Distroless/go base, binary at /usr/bin/cluster-validator, ENTRYPOINT set to that path.
 go_oci_image(
     name = "image",
     base = "@distroless_go",
     binary = ":cluster-validator",
     binary_path = "/usr/bin/cluster-validator",
+    entrypoint = ["/usr/bin/cluster-validator"],
     extra_registries = {
         "devops": "nvcr.io/nv-ngc-devops/nvca-cluster-validator",
         "ncp_dev": "nvcr.io/0651155215864979/ncp-dev/nvca-cluster-validator",

@@ -22,7 +22,7 @@ go_library(
         "provider.go",
         "stargate.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/provider",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider",
     visibility = ["//visibility:public"],
     deps = [
         "//config",

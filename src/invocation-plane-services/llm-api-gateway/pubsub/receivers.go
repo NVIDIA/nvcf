@@ -23,7 +23,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/pool"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/pool"
 )
 
 type protoMessage[T any] interface {

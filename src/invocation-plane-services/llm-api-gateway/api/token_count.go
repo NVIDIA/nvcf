@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
 
 const (

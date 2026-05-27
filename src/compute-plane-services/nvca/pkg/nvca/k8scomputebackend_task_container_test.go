@@ -21,6 +21,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
+	"math"
 	"sort"
 	"testing"
 	"time"
@@ -293,6 +294,19 @@ func Test_applyContainerTaskCreationMessage(t *testing.T) {
 
 	podName1 := "0-" + req.Name + "-task"
 	podName2 := "1-" + req.Name + "-task"
+
+	staleReq := req.DeepCopy()
+	staleReq.Status = nvcav2beta1.ICMSRequestStatus{}
+	err = kb.applyContainerTaskCreationMessage(ctx, staleReq)
+	require.NoError(t, err)
+
+	updatedReq, err := k8sClients.BART.NvcaV2beta1().ICMSRequests(bc.requestsNamespace).Get(ctx, srName, metav1.GetOptions{})
+	require.NoError(t, err)
+	if assert.Len(t, updatedReq.Status.Instances, int(req.Spec.CreationMsgInfo.InstanceCount)) {
+		assert.Contains(t, updatedReq.Status.Instances, podName1)
+		assert.Contains(t, updatedReq.Status.Instances, podName2)
+	}
+
 	podList, err = k8sClients.K8s.CoreV1().Pods(bc.podInstanceNamespace).List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
 	if assert.Len(t, podList.Items, 2) {
@@ -834,6 +848,34 @@ func Test_reconcileContainerTaskPodState(t *testing.T) {
 			now:        baseTime.Add(16 * time.Minute),
 			expDeleted: true,
 			expGPS:     new(int64),
+		},
+		{
+			name: "unbounded max runtime duration does not overflow cleanup grace period",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(baseTime)},
+				Status: corev1.PodStatus{
+					StartTime: &metav1.Time{Time: baseTime},
+					Conditions: []corev1.PodCondition{
+						{
+							Type:   corev1.PodScheduled,
+							Status: corev1.ConditionTrue,
+						},
+					},
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:  "task",
+							State: corev1.ContainerState{},
+						},
+						{
+							Name:  common.UtilsContainerName,
+							State: corev1.ContainerState{},
+						},
+					},
+				},
+			},
+			maxRuntimeDuration: time.Duration(math.MaxInt64),
+			now:                baseTime.Add(10 * time.Second),
+			expDeleted:         false,
 		},
 		// NVCT would handle this case.
 		{

@@ -20,7 +20,7 @@ package util
 import (
 	"sync"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/must"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
 )
 
 type KeyLocks struct {

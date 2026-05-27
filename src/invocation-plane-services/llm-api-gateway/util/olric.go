@@ -27,8 +27,8 @@ import (
 	"github.com/olric-data/olric"
 	olricconfig "github.com/olric-data/olric/config"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/telemetry"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 // DefaultOlricShutdownTimeout is the fallback deadline used by ShutdownNode

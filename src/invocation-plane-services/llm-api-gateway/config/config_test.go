@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/servicetier"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 )
 
 func TestDefaultSetsExpectedDefaults(t *testing.T) {

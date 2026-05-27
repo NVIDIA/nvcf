@@ -87,13 +87,6 @@ lint-go:
 dotenv-dependencies-update:
 	./scripts/ci_dotenv_dependencies_update
 
-
-.PHONY: image-dev-local
-image-dev-local:
-	EGX_DOCKER_MULTI_ARCH_PLATFORMS=$(shell dpkg --print-architecture) nv_ci_build_multiarch_image \
-		-t nvcr.io/qtfpt1h0bieu/byocdev/nvca-operator:dev-local \
-		-f docker/Dockerfile.nvca-operator .
-
 .PHONY: chart-dev-local
 chart-dev-local:
 	nv_components build nvca-operator --verbose --fc-version "v0.0.0-dev-local" --charts --yes

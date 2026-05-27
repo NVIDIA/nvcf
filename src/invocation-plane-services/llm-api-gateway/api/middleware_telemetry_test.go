@@ -35,8 +35,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/telemetry"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 func TestNewContextMiddlewareRecordsTraceParentAndStatus(t *testing.T) {

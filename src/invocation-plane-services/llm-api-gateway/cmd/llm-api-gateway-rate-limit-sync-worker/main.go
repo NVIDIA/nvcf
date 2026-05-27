@@ -28,9 +28,9 @@ import (
 	echo "github.com/labstack/echo/v4"
 	zlog "github.com/rs/zerolog/log"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/ratelimitsync"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/telemetry"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimitsync"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const defaultWorkerServiceName = "llm-api-gateway-rate-limit-sync-worker"

@@ -18,7 +18,7 @@ limitations under the License.
 package requestctx
 
 import (
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/nvcf"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 )
 
 type RequestContext struct {

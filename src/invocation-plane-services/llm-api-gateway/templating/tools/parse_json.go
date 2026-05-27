@@ -27,9 +27,9 @@ import (
 	mapstructure "github.com/go-viper/mapstructure/v2"
 	zlog "github.com/rs/zerolog/log"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/encoding/json"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/pool"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/encoding/json"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/pool"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
 
 var (

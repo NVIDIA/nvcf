@@ -35,11 +35,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/ptr"
-	orionpubsub "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/pubsub"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/testdata"
-	oriontesting "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/testing"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	orionpubsub "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/pubsub"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/testdata"
+	oriontesting "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/testing"
 )
 
 type subscriber struct {

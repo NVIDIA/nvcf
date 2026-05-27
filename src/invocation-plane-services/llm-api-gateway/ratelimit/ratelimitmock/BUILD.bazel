@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "ratelimitmock",
     srcs = ["rate_limiter.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/ratelimit/ratelimitmock",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit/ratelimitmock",
     visibility = ["//visibility:public"],
     deps = [
         "//ratelimit",

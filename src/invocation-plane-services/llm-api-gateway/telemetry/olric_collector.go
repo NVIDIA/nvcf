@@ -25,7 +25,7 @@ import (
 	"github.com/olric-data/olric/stats"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/must"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/must"
 )
 
 // OlricStatsProvider is the subset of olric.EmbeddedClient that the collector

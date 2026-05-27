@@ -17,10 +17,7 @@
 
 Multi-binary Go service. Nine binaries under cmd/: nvca, nvca-operator,
 nvca-operator-cleanup, nvca-mirror, cluster-validator, discover-gpus,
-export-cluster-pubkeys, spiffe-token-fetcher, webhook-server. Five OCI
-images are produced today (Dockerfile.nvca, Dockerfile.nvca-operator,
-Dockerfile.cluster-validator, plus debug/tools variants); Bazel migration
-is image-by-image.
+export-cluster-pubkeys, spiffe-token-fetcher, webhook-server.
 
 Vendored dependencies live in vendor/ for legacy `go build -mod=vendor`
 flows. Bazel resolves deps via Gazelle's go_deps extension from go.mod
@@ -72,7 +69,7 @@ bazel_dep(name = "rules_go", version = "0.60.0")
 bazel_dep(name = "gazelle", version = "0.48.0")
 
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-go_sdk.download(version = "1.25.0")
+go_sdk.download(version = "1.25.10")
 
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")
@@ -195,29 +192,45 @@ register_toolchains(
 )
 
 # ============================================================================
-# OCI base image. urm.nvidia.com is JFrog Artifactory; its
-# WWW-Authenticate response advertises a realm URL that does not match
-# the scope the token is later checked against. rules_oci's downloader
-# can't sniff WWW-Authenticate at runtime, so we hand-write the working
-# challenge here. Reused verbatim from nvcf-grpc-proxy and the other
-# Phase B upstreams.
+# OCI base image.
 # ============================================================================
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 oci.pull(
     name = "distroless_go",
-    digest = "sha256:6be4473eca4e8a5fdf8d7103a4d35708f5538bb5f7a58f0d12a257bdf362334f",
-    image = "urm.nvidia.com/sw-gpu-ucs-hardened-docker/distroless/go",
+    digest = "sha256:2ae1c3f90de1735fefb2a951977b7e78aa1c691f345d58c87b0d6bb7eff4f4d5",
+    image = "nvcr.io/nvidia/distroless/go:v4.0.6",
     platforms = [
         "linux/amd64",
         "linux/arm64/v8",
     ],
-    www_authenticate_challenges = {
-        "urm.nvidia.com": "Bearer realm=\"https://urm.nvidia.com/artifactory/api/docker/null/v2/token\",service=\"urm.nvidia.com\",scope=\"repository:{repository}:pull\"",
-    },
 )
 use_repo(
     oci,
     "distroless_go",
     "distroless_go_linux_amd64",
     "distroless_go_linux_arm64_v8",
+)
+
+# ============================================================================
+# tini – tiny init for containers (PID 1 signal forwarding + zombie reaping).
+# One http_file per architecture; the OCI layer selects the right one via
+# select() on @platforms//cpu so multi-arch image builds get the matching
+# binary.
+# ============================================================================
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
+http_file(
+    name = "tini_static_amd64",
+    urls = ["https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-amd64"],
+    sha256 = "c5b0666b4cb676901f90dfcb37106783c5fe2077b04590973b885950611b30ee",
+    downloaded_file_path = "tini",
+    executable = True,
+)
+
+http_file(
+    name = "tini_static_arm64",
+    urls = ["https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-arm64"],
+    sha256 = "eae1d3aa50c48fb23b8cbdf4e369d0910dfc538566bfd09df89a774aa84a48b9",
+    downloaded_file_path = "tini",
+    executable = True,
 )

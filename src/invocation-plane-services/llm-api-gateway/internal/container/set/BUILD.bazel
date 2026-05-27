@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "set",
     srcs = ["set.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/container/set",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/container/set",
     visibility = ["//:__subpackages__"],
 )
 

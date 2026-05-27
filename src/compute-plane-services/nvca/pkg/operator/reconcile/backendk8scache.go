@@ -605,7 +605,7 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 					})
 
 					switch newCM.Name {
-					case nvcfCustomNetworkPoliciesConfigMapName, nvcfCustomAnnotationsConfigMapName:
+					case nvcfCustomNetworkPoliciesConfigMapName, nvcfCustomAnnotationsConfigMapName, nvcfBackendChartDefaultsConfigMapName:
 						log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
 						diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
 						log.WithField("diff", diff).Debugf("configmap data diff")
@@ -1046,7 +1046,10 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 	}
 
 	// Get effective config by merging ICMS and local configs for comparison
-	effectiveConfigForComparison := bc.mergeAgentConfigs(nbMerged)
+	effectiveConfigForComparison, err := bc.getEffectiveAgentConfig(ctx, nbMerged)
+	if err != nil {
+		return err
+	}
 
 	// Get effective network CIDRs - use spec values (from NGC) if available, otherwise fall back to Helm values
 	effectiveK8sNetworkCIDRs := bc.getEffectiveK8sNetworkCIDRs(nbMerged)
@@ -1113,7 +1116,10 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 		}
 
 		// Get effective config by merging ICMS and local configs
-		effectiveAgentConfig := bc.mergeAgentConfigs(nbMerged)
+		effectiveAgentConfig, err := bc.getEffectiveAgentConfig(ctx, nbMerged)
+		if err != nil {
+			return err
+		}
 
 		// updated status on successful sync completion
 		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {

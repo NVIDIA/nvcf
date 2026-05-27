@@ -25,7 +25,7 @@ import (
 	gcppubsub "cloud.google.com/go/pubsub/v2"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/telemetry"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 type Publisher interface {

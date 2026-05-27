@@ -3,15 +3,18 @@
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 
+MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+
 go_library(
     name = "webhook-server_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/webhook-server",
+    importpath = MODULE_PATH + "/cmd/webhook-server",
     visibility = ["//visibility:private"],
     deps = [
         "//pkg/nvca/errors",
         "//pkg/webhook",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
     ],
 )
 
@@ -19,4 +22,11 @@ go_binary(
     name = "webhook-server",
     embed = [":webhook-server_lib"],
     visibility = ["//visibility:public"],
+    # Mirrors ldflags.
+    x_defs = {
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
+        "github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version": "{STABLE_DRA_DRIVER_GPU_VERSION}",
+    },
 )

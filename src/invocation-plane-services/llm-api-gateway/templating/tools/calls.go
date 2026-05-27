@@ -24,10 +24,10 @@ import (
 	"text/template"
 	"unsafe"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/encoding/json"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/pool"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/encoding/json"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/pool"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
 
 const (

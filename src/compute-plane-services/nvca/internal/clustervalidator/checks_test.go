@@ -70,14 +70,85 @@ func TestCheckControlPlaneHealth_MixedPodPhases(t *testing.T) {
 }
 
 func TestCheckControlPlaneHealth_MultipleNotReadyNodes(t *testing.T) {
+	// NotReady worker nodes alone should NOT flip the cluster verdict —
+	// they emit a Warning but cluster readiness is unaffected. Only
+	// control-plane pod failures cause Critical.
 	client := fake.NewSimpleClientset(
 		makeNode("node-1", false, 0),
 		makeNode("node-2", false, 0),
 		makeNode("node-3", true, 0),
+		makePod("kube-apiserver-node-3", "kube-system", corev1.PodRunning),
+		makePod("kube-controller-manager-node-3", "kube-system", corev1.PodRunning),
+		makePod("kube-scheduler-node-3", "kube-system", corev1.PodRunning),
+		makePod("etcd-node-3", "kube-system", corev1.PodRunning),
+		makePod("coredns-node-3", "kube-system", corev1.PodRunning),
+		makePod("kube-proxy-node-3", "kube-system", corev1.PodRunning),
+	)
+	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
+	checkControlPlaneHealth(context.Background(), client, state)
+	assert.True(t, state.ControlPlaneHealthy,
+		"NotReady nodes alone should not mark Control Plane unhealthy")
+	assert.False(t, state.NodesAllReady,
+		"NodesAllReady should reflect that not all worker nodes are Ready")
+	assert.Equal(t, 2, state.NotReadyNodes,
+		"NotReadyNodes count should match the actual number of NotReady nodes")
+	assert.NotEmpty(t, state.Warnings,
+		"a Warning entry should be appended for surface in printSummary")
+	assert.Empty(t, state.Recommendations,
+		"no recommendations expected when only nodes are NotReady (no pod failures)")
+}
+
+func TestCheckControlPlaneHealth_PodsUnhealthyButNodesReady(t *testing.T) {
+	// Missing data-plane pods (coredns, kube-proxy) should still flip the
+	// verdict to Critical, even when all nodes are Ready.
+	client := fake.NewSimpleClientset(
+		makeNode("node-1", true, 0),
+		// no data-plane pods → podsHealthy = false
 	)
 	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true}
 	checkControlPlaneHealth(context.Background(), client, state)
-	assert.False(t, state.ControlPlaneHealthy)
+	assert.False(t, state.ControlPlaneHealthy,
+		"missing coredns/kube-proxy should mark cluster unhealthy")
+	assert.NotEmpty(t, state.Recommendations)
+}
+
+func TestCheckControlPlaneHealth_ManagedControlPlane(t *testing.T) {
+	// EKS-like cluster: control-plane pods (apiserver/etcd/scheduler/cm) are
+	// hidden because the cloud provider manages them, but coredns and
+	// kube-proxy run as visible workloads. /readyz isn't reachable from the
+	// fake client, so we fall back to ServerVersion which succeeds. Verdict
+	// must be healthy.
+	client := fake.NewSimpleClientset(
+		makeNode("ip-10-0-1-15", true, 0),
+		makeNode("ip-10-0-1-22", true, 0),
+		makePod("coredns-abc123", "kube-system", corev1.PodRunning),
+		makePod("coredns-xyz789", "kube-system", corev1.PodRunning),
+		makePod("kube-proxy-aaa", "kube-system", corev1.PodRunning),
+		makePod("kube-proxy-bbb", "kube-system", corev1.PodRunning),
+		// no apiserver / etcd / scheduler / controller-manager pods
+	)
+	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
+	checkControlPlaneHealth(context.Background(), client, state)
+	assert.True(t, state.ControlPlaneHealthy,
+		"managed control plane (apiserver/etc. hidden) should still be healthy "+
+			"when coredns/kube-proxy are running")
+	assert.True(t, state.NodesAllReady)
+	assert.Empty(t, state.Recommendations,
+		"no recommendations expected on a healthy managed cluster")
+}
+
+func TestCheckControlPlaneHealth_DataPlanePodMissingOnManaged(t *testing.T) {
+	// Even on a managed cluster (no apiserver pod visible), missing coredns
+	// is still Critical because workloads depend on it.
+	client := fake.NewSimpleClientset(
+		makeNode("ip-10-0-1-15", true, 0),
+		makePod("kube-proxy-aaa", "kube-system", corev1.PodRunning),
+		// no coredns
+	)
+	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
+	checkControlPlaneHealth(context.Background(), client, state)
+	assert.False(t, state.ControlPlaneHealthy,
+		"missing coredns should flip the verdict even on a managed cluster")
 	assert.NotEmpty(t, state.Recommendations)
 }
 
@@ -303,4 +374,95 @@ func gpuNodeHelper(name string, capacity, allocatable int64) *corev1.Node {
 			},
 		},
 	}
+}
+
+// ---------------------------------------------------------------------------
+// detectManagedClusterProvider
+// ---------------------------------------------------------------------------
+
+func nodeWithLabels(name string, labels map[string]string) *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+}
+
+func TestDetectManagedClusterProvider(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+		want   string
+	}{
+		{"EKS", map[string]string{"eks.amazonaws.com/nodegroup": "ng-1"}, "EKS"},
+		{"GKE", map[string]string{"cloud.google.com/gke-nodepool": "default"}, "GKE"},
+		{"AKS", map[string]string{"kubernetes.azure.com/agentpool": "agentpool"}, "AKS"},
+		{"self-hosted (no label)", map[string]string{"kubernetes.io/hostname": "node-1"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(nodeWithLabels("node-1", tt.labels))
+			got := detectManagedClusterProvider(context.Background(), client)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// isEmbeddedKubeProxyDistro / k3s-rke2 handling
+// ---------------------------------------------------------------------------
+
+func TestIsEmbeddedKubeProxyDistro(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		want    bool
+	}{
+		{"vanilla", "v1.30.2", false},
+		{"EKS", "v1.32.13-eks-bbe087e", false},
+		{"GKE", "v1.30.5-gke.1014001", false},
+		{"k3s", "v1.30.2+k3s2", true},
+		{"k3s with dot", "v1.30.2+k3s.1", true},
+		{"rke2", "v1.30.5+rke2r1", true},
+		{"k3s uppercase", "v1.30.2+K3S2", true},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isEmbeddedKubeProxyDistro(tt.version))
+		})
+	}
+}
+
+func TestCheckControlPlaneHealth_K3sSkipsKubeProxy(t *testing.T) {
+	// k3s/k3d cluster: coredns present, no kube-proxy pod (embedded in k3s
+	// server binary). Verdict must still be healthy.
+	client := fake.NewSimpleClientset(
+		makeNode("k3d-server-0", true, 0),
+		makePod("coredns-abc", "kube-system", corev1.PodRunning),
+	)
+	state := &ValidationState{
+		Log:                 testLog(),
+		ControlPlaneHealthy: true,
+		NodesAllReady:       true,
+		K8sVersion:          "v1.30.2+k3s2",
+	}
+	checkControlPlaneHealth(context.Background(), client, state)
+	assert.True(t, state.ControlPlaneHealthy,
+		"k3s clusters without a kube-proxy pod should still be healthy")
+	assert.Empty(t, state.Recommendations)
+}
+
+func TestCheckControlPlaneHealth_K3sCorednsStillRequired(t *testing.T) {
+	// On k3s/k3d, coredns still runs as a workload and is required. Missing
+	// coredns is still Critical even when kube-proxy is skipped.
+	client := fake.NewSimpleClientset(
+		makeNode("k3d-server-0", true, 0),
+		// no coredns
+	)
+	state := &ValidationState{
+		Log:                 testLog(),
+		ControlPlaneHealthy: true,
+		NodesAllReady:       true,
+		K8sVersion:          "v1.30.2+k3s2",
+	}
+	checkControlPlaneHealth(context.Background(), client, state)
+	assert.False(t, state.ControlPlaneHealthy,
+		"missing coredns on k3s should still mark cluster unhealthy")
 }

@@ -94,6 +94,7 @@ const (
 	nvcfCustomNetworkPolicyPrefix          = "nvcf-custom-"
 	nvcfBackendHelmManagedConfigMapName    = "nvcfbackend-helm-managed"
 	nvcfBackendSelfManagedConfigMapName    = "nvcfbackend-self-managed"
+	nvcfBackendChartDefaultsConfigMapName  = "nvcfbackend-chart-defaults"
 
 	//nolint:gosec // G101: This is a ConfigMap name, not a credential
 	nvcfCustomAnnotationsConfigMapName = "nvca-namespace-pod-annotations"
@@ -1582,6 +1583,84 @@ func (bc *BackendK8sCache) mergeAgentConfigs(nb *nvidiaiov1.NVCFBackend) nvidiai
 	return config
 }
 
+func (bc *BackendK8sCache) getEffectiveAgentConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (nvidiaiov1.AgentConfig, error) {
+	config := bc.mergeAgentConfigs(nb)
+
+	var configMapGetter func(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.ConfigMap, error)
+	if bc.clients != nil && bc.clients.K8s != nil {
+		namespace := bc.operatorNamespace
+		if namespace == "" {
+			namespace = NVCAOperatorNamespace
+		}
+		configMapGetter = bc.clients.K8s.CoreV1().ConfigMaps(namespace).Get
+	}
+
+	chartDefaults, found, err := bc.getChartDefaultAgentConfig(ctx, configMapGetter)
+	if err != nil {
+		log := core.GetLogger(ctx)
+		log.WithError(err).Warn("failed to read chart-default agent config, continuing without service OAuth defaults")
+	} else if found {
+		applyServiceOAuthDefaults(&config, chartDefaults)
+	}
+
+	return config, nil
+}
+
+func (bc *BackendK8sCache) getChartDefaultAgentConfig(
+	ctx context.Context,
+	configMapGetter func(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.ConfigMap, error),
+) (nvidiaiov1.AgentConfig, bool, error) {
+	if configMapGetter == nil {
+		return nvidiaiov1.AgentConfig{}, false, nil
+	}
+
+	cm, err := configMapGetter(ctx, nvcfBackendChartDefaultsConfigMapName, metav1.GetOptions{})
+	if k8serr.IsNotFound(err) {
+		return nvidiaiov1.AgentConfig{}, false, nil
+	}
+	if err != nil {
+		return nvidiaiov1.AgentConfig{}, false, fmt.Errorf("failed to read %s ConfigMap: %w", nvcfBackendChartDefaultsConfigMapName, err)
+	}
+
+	raw := strings.TrimSpace(cm.Data["cluster-dto.yaml"])
+	if raw == "" {
+		return nvidiaiov1.AgentConfig{}, false, nil
+	}
+
+	config, found, err := clustermgmt.AgentConfigFromClusterDTO(ctx, raw)
+	if err != nil {
+		return nvidiaiov1.AgentConfig{}, false, fmt.Errorf("failed to parse %s cluster-dto.yaml: %w", nvcfBackendChartDefaultsConfigMapName, err)
+	}
+	return config, found, nil
+}
+
+func applyServiceOAuthDefaults(config *nvidiaiov1.AgentConfig, defaults nvidiaiov1.AgentConfig) {
+	if config.HelmReValStageOAuthTokenURL == "" {
+		config.HelmReValStageOAuthTokenURL = defaults.HelmReValStageOAuthTokenURL
+	}
+	if config.HelmReValStageOAuthPublicKeysetEndpoint == "" {
+		config.HelmReValStageOAuthPublicKeysetEndpoint = defaults.HelmReValStageOAuthPublicKeysetEndpoint
+	}
+	if config.HelmReValProdOAuthTokenURL == "" {
+		config.HelmReValProdOAuthTokenURL = defaults.HelmReValProdOAuthTokenURL
+	}
+	if config.HelmReValProdOAuthPublicKeysetEndpoint == "" {
+		config.HelmReValProdOAuthPublicKeysetEndpoint = defaults.HelmReValProdOAuthPublicKeysetEndpoint
+	}
+	if config.FunctionDeploymentStagesStageOAuthTokenURL == "" {
+		config.FunctionDeploymentStagesStageOAuthTokenURL = defaults.FunctionDeploymentStagesStageOAuthTokenURL
+	}
+	if config.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint == "" {
+		config.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint = defaults.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint
+	}
+	if config.FunctionDeploymentStagesProdOAuthTokenURL == "" {
+		config.FunctionDeploymentStagesProdOAuthTokenURL = defaults.FunctionDeploymentStagesProdOAuthTokenURL
+	}
+	if config.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint == "" {
+		config.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint = defaults.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint
+	}
+}
+
 // getEffectiveK8sNetworkCIDRs returns the effective K8s network CIDRs to use.
 // It prefers values from the NVCFBackend spec (fetched from NGC API) over static Helm values.
 // This ensures that network policy changes from NGC are properly detected and trigger rollouts.
@@ -1610,7 +1689,11 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 
 	// Get effective config by merging ICMS and local configs
 	nb := original.DeepCopy()
-	nb.Spec.AgentConfig = bc.mergeAgentConfigs(original)
+	agentConfig, err := bc.getEffectiveAgentConfig(ctx, original)
+	if err != nil {
+		return err
+	}
+	nb.Spec.AgentConfig = agentConfig
 
 	volumes := []corev1.Volume{{
 		Name: agentConfigVolumeName,
@@ -2057,7 +2140,10 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 		// Note: getOAuthConfig() only returns config when OAuthConfig has a client ID.
 	}
 
-	effectiveConfig := bc.mergeAgentConfigs(nb)
+	effectiveConfig, err := bc.getEffectiveAgentConfig(ctx, nb)
+	if err != nil {
+		return cfg, err
+	}
 
 	var featureFlags []string
 	if ffs := bc.getNVCAFeatureFlags(nb); ffs != "" {

@@ -25,8 +25,8 @@ import (
 
 	zlog "github.com/rs/zerolog/log"
 
-	orionpubsub "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/pubsub"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/telemetry"
+	orionpubsub "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/pubsub"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const (

@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "testhelpers",
     srcs = ["tools.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/templating/testhelpers",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/templating/testhelpers",
     visibility = ["//visibility:public"],
     deps = [
         "//internal/ptr",

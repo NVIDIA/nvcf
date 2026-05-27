@@ -72,6 +72,13 @@ config_jwt_secret_mount_config "${VAULT_SECRET_BASE_PATH}/jwt" "${jwt_secret_mou
 
 #-------------------------------------------
 # Provision JWT Auth Role with policies
+#
+# Use merge_jwt_role_policies so this migration's canonical SIS policy set is
+# unioned with anything later migrations or addons (e.g. addons/llm) attached
+# in earlier Job runs. `bao write auth/jwt/role/...` is a full PUT — without
+# the merge, re-running this migration would stomp augmentations and only
+# the LLM addon's compensating read-modify-write would restore them.
 #-------------------------------------------
+VAULT_JWT_AUTH_ROLE_POLICIES=$(merge_jwt_role_policies "${SERVICE_ACCOUNT_NAME}" "${VAULT_JWT_AUTH_ROLE_POLICIES}")
 jwt_auth_role=$(generate_jwt_auth_role "${SERVICE_ACCOUNT_NAME}" "${SERVICE_ACCOUNT_NAMESPACE}" "$VAULT_JWT_AUTH_ROLE_POLICIES")
 create_auth_jwt_role "${SERVICE_ACCOUNT_NAME}" "${jwt_auth_role}"

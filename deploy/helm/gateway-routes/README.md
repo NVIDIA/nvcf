@@ -58,7 +58,7 @@ Important settings to review before deployment:
 - `nvcfGatewayRoutes.gateways.grpc.*` for the TCP Gateway name, namespace, and listener
 - `nvcfGatewayRoutes.gateways.nats.*` for the NATS TCP Gateway name, namespace, and listener
 - `nvcfGatewayRoutes.routes.<route>.enabled` to toggle individual routes
-- `nvcfGatewayRoutes.routes.<route>.hostnames` to override the templated hostnames
+- `nvcfGatewayRoutes.routes.<http-route>.hostnames` to override the templated HTTP route hostnames
 - `nvcfGatewayRoutes.routes.<route>.backend.{name,namespace,port}` to point a route at the correct backend service
 - `nvcfGatewayRoutes.routes.<route>.routeAnnotations` to add annotations consumed by external controllers (e.g. external-dns, cert-manager)
 - `nvcfGatewayRoutes.podMonitors.enabled` to opt in to Envoy Gateway proxy `PodMonitor` resources
@@ -76,7 +76,7 @@ The default values use `localhost` as the domain and assume backend services are
 | `llmApiGateway` | HTTPRoute | `llm.<domain>` | `llm-api-gateway.nvcf:8080` |
 | `llmInvocation` | HTTPRoute (disabled by default) | `llm.invocation.<domain>` | `llm-api-gateway.nvcf:8080` |
 | `sis` | HTTPRoute | `sis.<domain>` | `api.sis:8080` |
-| `grpc` | TCPRoute | `grpc.<domain>` | `grpc.nvcf:10081` |
+| `grpc` | TCPRoute | Not rendered | `grpc.nvcf:10081` |
 | `nats` | TCPRoute (disabled by default) | Not rendered | `nats.nats-system:4222` |
 
 Cross-namespace routing is supported via `ReferenceGrant` resources rendered into each backend namespace.
@@ -85,5 +85,5 @@ Cross-namespace routing is supported via `ReferenceGrant` resources rendered int
 
 - The chart assumes the Gateway is reachable at the resolved hostnames. DNS records and TLS termination are out of scope and must be configured in the surrounding infrastructure.
 - The `nats` TCPRoute is plain TCP and does not render hostnames. Configure DNS or TCP load balancer routing outside this chart.
-- The `grpc` TCPRoute does not enforce HTTP hostname matching at the Gateway layer; hostnames in values are documentation only.
+- The `grpc` TCPRoute does not enforce HTTP hostname matching at the Gateway layer. Configure DNS or TCP load balancer routing outside this chart.
 - Enabling the `nats` route requires a reachable TCP listener for NATS on the referenced Gateway. The HTTP Gateway address does not imply NATS reachability unless that same Gateway also has the NATS TCP listener configured.

@@ -30,8 +30,8 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/util"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/util"
 )
 
 // OlricClusterTestSuite spins up a real multi-node embedded Olric cluster so we

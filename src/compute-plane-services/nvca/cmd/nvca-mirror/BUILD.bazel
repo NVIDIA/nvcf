@@ -3,10 +3,12 @@
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 
+MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+
 go_library(
     name = "nvca-mirror_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvca-mirror",
+    importpath = MODULE_PATH + "/cmd/nvca-mirror",
     visibility = ["//visibility:private"],
     deps = [
         "//pkg/operator/mirror",
@@ -20,4 +22,10 @@ go_binary(
     name = "nvca-mirror",
     embed = [":nvca-mirror_lib"],
     visibility = ["//visibility:public"],
+    # Mirrors ldflags.
+    x_defs = {
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
+    },
 )

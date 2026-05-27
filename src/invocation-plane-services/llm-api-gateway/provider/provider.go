@@ -23,9 +23,9 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/ratelimit"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/requestctx"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 var ErrProxyNotSupported = errors.New("openai proxy endpoints are not supported by this provider")

@@ -175,7 +175,7 @@ Usage: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" .V
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
 {{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/byoc/cluster-validator
+stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator
 {{- else -}}
 nvcr.io/nvidia/nvcf-byoc/cluster-validator
 {{- end -}}

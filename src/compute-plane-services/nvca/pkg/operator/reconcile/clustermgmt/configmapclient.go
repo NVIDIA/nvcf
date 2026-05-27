@@ -108,3 +108,42 @@ func (c *ConfigMapClient) GetCluster(ctx context.Context, _ string) (*Cluster, e
 
 	return dest, nil
 }
+
+// AgentConfigFromClusterDTO parses agent-local chart defaults from a cluster DTO
+// payload. It intentionally returns only service OAuth defaults so callers can
+// use the result as a partial overlay without treating chart defaults as a full
+// cluster source.
+func AgentConfigFromClusterDTO(ctx context.Context, raw string) (nvidiaiov1.AgentConfig, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nvidiaiov1.AgentConfig{}, false, nil
+	}
+
+	var dto clusterDTO
+	if err := yaml.Unmarshal([]byte(raw), &dto); err != nil {
+		return nvidiaiov1.AgentConfig{}, false, fmt.Errorf("failed to convert cluster DTO to agent config: %w", err)
+	}
+
+	dest := &Cluster{NVCFBackend: &nvidiaiov1.NVCFBackend{}}
+	if err := withAgentConfigMapper()(ctx, nvidiaiov1.EnvType(""), &dto, dest); err != nil {
+		return nvidiaiov1.AgentConfig{}, false, err
+	}
+
+	config := dest.NVCFBackend.Spec.AgentConfig
+	if !hasAgentServiceOAuthDefaults(config) {
+		return nvidiaiov1.AgentConfig{}, false, nil
+	}
+
+	return config, true, nil
+}
+
+func hasAgentServiceOAuthDefaults(config nvidiaiov1.AgentConfig) bool {
+	return config.HelmReValStageOAuthTokenURL != "" ||
+		config.HelmReValStageOAuthPublicKeysetEndpoint != "" ||
+		config.HelmReValProdOAuthTokenURL != "" ||
+		config.HelmReValProdOAuthPublicKeysetEndpoint != "" ||
+		config.FunctionDeploymentStagesStageOAuthTokenURL != "" ||
+		config.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint != "" ||
+		config.FunctionDeploymentStagesProdOAuthTokenURL != "" ||
+		config.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint != ""
+}

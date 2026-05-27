@@ -29,8 +29,14 @@ import (
 
 // ValidationState captures the results of every validation check.
 type ValidationState struct {
-	Log                      *logrus.Entry
-	ControlPlaneHealthy      bool
+	Log                 *logrus.Entry
+	ControlPlaneHealthy bool
+	// NodesAllReady tracks whether all worker nodes are Ready. False means at
+	// least one NotReady node. Warning only — does not flip cluster readiness.
+	NodesAllReady bool
+	// NotReadyNodes is the count of NotReady nodes; populated when
+	// NodesAllReady is false. Used by printSummary to surface the count.
+	NotReadyNodes            int
 	WebhooksSupported        bool
 	NetworkPoliciesSupported bool
 	SMBCSIDriverOK           bool
@@ -80,11 +86,19 @@ func Run(ctx context.Context, client kubernetes.Interface, configNamespace, conf
 	state := &ValidationState{
 		Log:                 log,
 		ControlPlaneHealthy: true,
+		NodesAllReady:       true,
 	}
 
 	if err := checkPrerequisites(ctx, client, state); err != nil {
 		return err
 	}
+
+	// Reclaim orphan netpol-validation-* namespaces left behind by previous
+	// runs whose pod was SIGKILLed / OOMed / force-deleted (the deferred
+	// cleanup in checkNetworkPolicyEnforcement only fires on normal control
+	// flow). Runs unconditionally so orphans get reclaimed even if enforcement
+	// is currently disabled.
+	sweepOrphanTestNamespaces(ctx, log, client, orphanNamespaceTTL)
 
 	checkControlPlaneHealth(ctx, client, state)
 	checkWebhookSupport(ctx, client, state)
@@ -139,6 +153,10 @@ func printSummary(state *ValidationState) error {
 
 	checks := []check{
 		{state.ControlPlaneHealthy, "Control Plane: Healthy", "Control Plane: Unhealthy", true},
+		{state.NodesAllReady,
+			"Worker Nodes: All Ready",
+			fmt.Sprintf("Worker Nodes: %d NotReady (non-blocking)", state.NotReadyNodes),
+			false},
 		{state.WebhooksSupported, "Admission Webhooks: Mutating & Validating Supported", "Admission Webhooks: Not Supported", true},
 		{state.NetworkPoliciesSupported, "Network Policies: Supported", "Network Policies: Not Confirmed", false},
 		{state.SMBCSIDriverOK, "SMB CSI Driver: v1.16.0+ Installed", "SMB CSI Driver: Not Installed or Below v1.16.0", true},
@@ -194,11 +212,20 @@ func printSummary(state *ValidationState) error {
 	log.Infof("%s%s%s", colorBlue, separator, colorReset)
 	log.Info("")
 	if isReady {
-		log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorGreen, colorReset)
-		log.Infof("%s║                %s  Cluster is NVCF-Ready  %s                ║%s", colorGreen, iconCheck, iconCheck, colorReset)
-		log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorGreen, colorReset)
-		log.Info("")
-		printSuccess(log, "Your cluster meets all requirements for NVCF workloads")
+		hasWarnings := len(state.Warnings) > 0
+		if hasWarnings {
+			log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorYellow, colorReset)
+			log.Infof("%s║        %s  Cluster is NVCF-Ready (with warnings)  %s        ║%s", colorYellow, iconWarn, iconWarn, colorReset)
+			log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorYellow, colorReset)
+			log.Info("")
+			printWarning(log, "Your cluster meets all critical requirements; see warnings below for non-blocking issues.")
+		} else {
+			log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorGreen, colorReset)
+			log.Infof("%s║                %s  Cluster is NVCF-Ready  %s                ║%s", colorGreen, iconCheck, iconCheck, colorReset)
+			log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorGreen, colorReset)
+			log.Info("")
+			printSuccess(log, "Your cluster meets all requirements for NVCF workloads")
+		}
 		log.Info("")
 		log.Info("Validated Cluster:")
 		printInfo(log, fmt.Sprintf("  Kubernetes Version: %s", state.K8sVersion))

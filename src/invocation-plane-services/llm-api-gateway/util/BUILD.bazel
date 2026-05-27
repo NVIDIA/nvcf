@@ -22,7 +22,7 @@ go_library(
         "olric.go",
         "olric_k8s.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/util",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/util",
     visibility = ["//visibility:public"],
     deps = [
         "//config",

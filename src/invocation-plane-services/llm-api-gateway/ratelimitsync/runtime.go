@@ -25,10 +25,10 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/config"
-	orionpubsub "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/pubsub"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/ratelimit"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/util"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	orionpubsub "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/pubsub"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/util"
 )
 
 type PublisherRuntime struct {

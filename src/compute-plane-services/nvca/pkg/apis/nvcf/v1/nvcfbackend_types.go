@@ -425,6 +425,28 @@ type NVCFBackendSpec struct {
 	Overrides *NVCFBackendSpecT `json:"overrides,omitempty"`
 }
 
+// UnmarshalJSON implements custom deserialization for NVCFBackendSpec.
+// The embedded NVCFBackendSpecT has its own UnmarshalJSON which consumes the
+// full JSON data, preventing Go from populating the Overrides field. This
+// method explicitly handles both the inline fields and the Overrides pointer.
+func (spec *NVCFBackendSpec) UnmarshalJSON(data []byte) error {
+	// Unmarshal the inline NVCFBackendSpecT fields.
+	if err := json.Unmarshal(data, &spec.NVCFBackendSpecT); err != nil {
+		return err
+	}
+
+	// Unmarshal the Overrides field separately since the inline struct's
+	// custom UnmarshalJSON prevents Go from handling it automatically.
+	var raw struct {
+		Overrides *NVCFBackendSpecT `json:"overrides,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	spec.Overrides = raw.Overrides
+	return nil
+}
+
 // +k8s:openapi-gen=true
 type DeploymentConfig struct {
 	// PriorityClassName for pod preference during evictions

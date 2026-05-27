@@ -25,9 +25,9 @@ import (
 
 	echo "github.com/labstack/echo/v4"
 
-	openairesponses "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/api/adapters/openairesponses"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/requestctx"
+	openairesponses "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 func TestApplyResponsesSessionAffinityPrefersConversationOverHeader(t *testing.T) {

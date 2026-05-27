@@ -23,7 +23,7 @@ import (
 
 	zlog "github.com/rs/zerolog/log"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/pubsub"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/pubsub"
 )
 
 func PubSubConsumer(

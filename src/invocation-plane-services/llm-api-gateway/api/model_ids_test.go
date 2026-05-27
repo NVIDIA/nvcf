@@ -20,8 +20,8 @@ package api
 import (
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/nvcf"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/requestctx"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 func TestSetRoutingMethodForModelForwardsTrimmedAuthValue(t *testing.T) {

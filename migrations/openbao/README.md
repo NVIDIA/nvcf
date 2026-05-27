@@ -61,9 +61,11 @@ Environment variables consumed by the entrypoint:
 |---|---|---|
 | `BAO_SERVICE` | `openbao-server.vault-system.svc.cluster.local` | DNS name of the OpenBao Service |
 | `CORE_MIGRATIONS_ENABLED` | `true` | Run the numbered scripts under `migrations/` |
-| `ADDONS_LLS_ENABLED` | `false` | Run the LLS addon under `addons/lls/setup_lls.sh` |
+| `ADDONS_LLS_ENABLED` | `false` | Run the LLS addon under `addons/lls/setup_lls.sh` (fail-hard when enabled — see [addons/lls/README.md](addons/lls/README.md)) |
+| `ADDONS_LLM_ENABLED` | `false` | Run the LLM addon under `addons/llm/setup_llm.sh` (fail-hard when enabled — see [addons/llm/README.md](addons/llm/README.md)) |
 | `DEFAULT_CASSANDRA_PASSWORD` | `ch@ng3m3` (override required) | See above |
 | `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` | `""` | Image pull secret name passed to the NVCF API sidecar mount |
+| `MIGRATIONS_ALLOW_FAILURES` | `false` | Emergency rollback only. When `true`, the entrypoint exits 0 even if core migrations or opted-in addons failed. Default behavior fails the Job non-zero so a misconfigured deployment blocks the Helm hook Job instead of silently leaving OpenBao in a partial state. |
 
 ### Example Kubernetes Job
 

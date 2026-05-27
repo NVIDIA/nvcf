@@ -26,10 +26,10 @@ import (
 
 	"github.com/kaptinlin/jsonrepair"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/container/set"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/encoding/json"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/container/set"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/encoding/json"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
 
 // docs: https://huggingface.co/moonshotai/Kimi-K2-Instruct/blob/main/docs/tool_call_guidance.md#manually-parsing-tool-calls

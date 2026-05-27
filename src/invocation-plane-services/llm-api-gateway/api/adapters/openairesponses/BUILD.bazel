@@ -26,7 +26,7 @@ go_library(
         "tools.go",
         "types.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/api/adapters/openairesponses",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses",
     visibility = ["//visibility:public"],
     deps = [
         "//internal/ptr",

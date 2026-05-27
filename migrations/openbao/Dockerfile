@@ -5,7 +5,7 @@ ARG TARGETARCH
 ARG KUBECTL_VERSION
 
 # Install openssl, uuidgen, helm, and kubectl if KUBECTL_VERSION is set to a specific version or latest stable version
-RUN apk add --no-cache openssl uuidgen helm && \
+RUN apk add --no-cache openssl uuidgen helm curl bash jq && \
     if [ -n "$KUBECTL_VERSION" ]; then \
         curl -Lo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl"; \
     else \

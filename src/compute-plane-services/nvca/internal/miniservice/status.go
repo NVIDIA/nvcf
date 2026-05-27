@@ -432,7 +432,8 @@ func (r *Reconciler) doTerminalTaskStatus(
 	}
 	// An extra 5 minutes is added to max runtime duration to ensure utils has time to send
 	// a heartbeat with EXCEEDED_MAX_RUNTIME_DURATION.
-	isMaxRuntimeExceeded := nvcak8sutil.HasTaskPodExceededTimeout(utilsPod, mqd, mrd+nvcak8sutil.TaskCleanupExtraGracePeriod, r.now())
+	maxRuntimeDurationWithCleanup := nvcak8sutil.AddTaskCleanupGracePeriod(mrd)
+	isMaxRuntimeExceeded := nvcak8sutil.HasTaskPodExceededTimeout(utilsPod, mqd, maxRuntimeDurationWithCleanup, r.now())
 	var (
 		reason, message string
 		res             reconcile.Result

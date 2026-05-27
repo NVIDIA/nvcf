@@ -22,7 +22,7 @@ go_library(
         "llm_gateway_grpc.pb.go",
         "pb.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/nvcf/pb",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf/pb",
     visibility = ["//visibility:public"],
     deps = [
         "@org_golang_google_grpc//:grpc",

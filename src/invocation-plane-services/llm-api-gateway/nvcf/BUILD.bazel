@@ -21,7 +21,7 @@ go_library(
         "client.go",
         "types.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/nvcf",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf",
     visibility = ["//visibility:public"],
     deps = [
         "//nvcf/pb",

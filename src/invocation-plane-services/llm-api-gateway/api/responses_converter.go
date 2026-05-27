@@ -20,11 +20,11 @@ package api
 import (
 	"maps"
 
-	openairesponses "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/api/adapters/openairesponses"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/servicetier"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/mcp"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/models"
+	openairesponses "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/mcp"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
 
 func ConvertToChatCompletionRequest(req *openairesponses.CreateRequest) *models.ChatCompletionRequest {

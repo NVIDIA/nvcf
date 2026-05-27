@@ -28,9 +28,9 @@ import (
 
 	echo "github.com/labstack/echo/v4"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/ratelimit"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/requestctx"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 type LimitResolver interface {
@@ -96,11 +96,14 @@ func (r CallerLimitResolver) ResolveLimits(
 	}
 
 	baseLimit := ratelimit.ResourceLimit{
-		SubjectKey:        "routing_key:" + reqCtx.RoutingKey,
-		SubjectRepr:       "routing key `" + reqCtx.RoutingKey + "`",
-		Level:             ratelimit.LevelFunction,
-		TokensPerMinute:   parsedTokenLimits.tokensPerMinute,
-		TokensPerDay:      parsedTokenLimits.tokensPerDay,
+		SubjectKey:      "routing_key:" + reqCtx.RoutingKey,
+		SubjectRepr:     "routing key `" + reqCtx.RoutingKey + "`",
+		Level:           ratelimit.LevelFunction,
+		TokensPerSecond: parsedTokenLimits.tokensPerSecond,
+		TokensPerMinute: parsedTokenLimits.tokensPerMinute,
+		TokensPerHour:   parsedTokenLimits.tokensPerHour,
+		TokensPerDay:    parsedTokenLimits.tokensPerDay,
+		TokensPerWeek:   parsedTokenLimits.tokensPerWeek,
 	}
 
 	switch {
@@ -118,12 +121,15 @@ func (r CallerLimitResolver) ResolveLimits(
 }
 
 type parsedTokenRateLimit struct {
+	tokensPerSecond int64
 	tokensPerMinute int64
+	tokensPerHour   int64
 	tokensPerDay    int64
+	tokensPerWeek   int64
 }
 
 func (p parsedTokenRateLimit) empty() bool {
-	return p.tokensPerMinute == 0 && p.tokensPerDay == 0
+	return p == parsedTokenRateLimit{}
 }
 
 func parseTokenRateLimit(raw string) (parsedTokenRateLimit, error) {
@@ -132,9 +138,12 @@ func parseTokenRateLimit(raw string) (parsedTokenRateLimit, error) {
 	}
 
 	var (
-		parsed                parsedTokenRateLimit
-		sawTokensPerMinute    bool
-		sawTokensPerDay       bool
+		parsed             parsedTokenRateLimit
+		sawTokensPerSecond bool
+		sawTokensPerMinute bool
+		sawTokensPerHour   bool
+		sawTokensPerDay    bool
+		sawTokensPerWeek   bool
 	)
 	for _, fragment := range strings.Split(raw, ",") {
 		fragment = strings.TrimSpace(fragment)
@@ -142,32 +151,52 @@ func parseTokenRateLimit(raw string) (parsedTokenRateLimit, error) {
 			return parsedTokenRateLimit{}, fmt.Errorf("empty token rate limit fragment")
 		}
 
-		valuePart, levelPart, ok := strings.Cut(fragment, "-")
-		if !ok {
+		separator := strings.LastIndex(fragment, "-")
+		if separator <= 0 || separator == len(fragment)-1 {
 			return parsedTokenRateLimit{}, fmt.Errorf("invalid token rate limit fragment %q", fragment)
 		}
+		valuePart := fragment[:separator]
+		levelPart := fragment[separator+1:]
 
 		value, err := strconv.ParseInt(strings.TrimSpace(valuePart), 10, 64)
 		if err != nil {
 			return parsedTokenRateLimit{}, fmt.Errorf("invalid token rate limit value %q", valuePart)
 		}
-		if value < 0 {
-			return parsedTokenRateLimit{}, fmt.Errorf("token rate limit must be non-negative")
+		if value <= 0 {
+			return parsedTokenRateLimit{}, fmt.Errorf("token rate limit must be positive")
 		}
 
-		switch strings.ToUpper(strings.TrimSpace(levelPart)) {
+		switch strings.TrimSpace(levelPart) {
+		case "S":
+			if sawTokensPerSecond {
+				return parsedTokenRateLimit{}, fmt.Errorf("duplicate second token rate limit")
+			}
+			sawTokensPerSecond = true
+			parsed.tokensPerSecond = value
 		case "M":
 			if sawTokensPerMinute {
 				return parsedTokenRateLimit{}, fmt.Errorf("duplicate minute token rate limit")
 			}
 			sawTokensPerMinute = true
 			parsed.tokensPerMinute = value
+		case "H":
+			if sawTokensPerHour {
+				return parsedTokenRateLimit{}, fmt.Errorf("duplicate hour token rate limit")
+			}
+			sawTokensPerHour = true
+			parsed.tokensPerHour = value
 		case "D":
 			if sawTokensPerDay {
 				return parsedTokenRateLimit{}, fmt.Errorf("duplicate day token rate limit")
 			}
 			sawTokensPerDay = true
 			parsed.tokensPerDay = value
+		case "W":
+			if sawTokensPerWeek {
+				return parsedTokenRateLimit{}, fmt.Errorf("duplicate week token rate limit")
+			}
+			sawTokensPerWeek = true
+			parsed.tokensPerWeek = value
 		default:
 			return parsedTokenRateLimit{}, fmt.Errorf("unsupported token rate limit level %q", levelPart)
 		}
@@ -664,8 +693,11 @@ func chooseTokenStats(
 	results map[ratelimit.LimitDimension]*ratelimit.RateLimitResult,
 ) (int64, int64, time.Duration, bool) {
 	for _, dim := range []ratelimit.LimitDimension{
+		ratelimit.TokensPerSecond,
 		ratelimit.TokensPerMinute,
+		ratelimit.TokensPerHour,
 		ratelimit.TokensPerDay,
+		ratelimit.TokensPerWeek,
 	} {
 		if result := results[dim]; result != nil {
 			return result.LimitValue(), result.RemainingValue(), result.ResetAfter(), true

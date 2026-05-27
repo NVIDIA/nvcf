@@ -406,14 +406,13 @@ def test_worker_http():
 ### Building with Bazel
 
 This repo carries the same Bazel toolchain conventions as the NVCF
-umbrella (`github.com/NVIDIA/nvcf/nvcf`). The umbrella ships a
-one-shot installer that drops Bazelisk into `~/.local/bin` and prints
-exactly what to install for Go + OCI + cross-compile toolchains; reuse
-it instead of duplicating the setup here:
+monorepo. The root setup script drops Bazelisk into `~/.local/bin`
+and prints exactly what to install for Go + OCI + cross-compile
+toolchains; reuse it instead of duplicating the setup here:
 
 ```bash
-# From a checkout of the umbrella repo (or via curl if you don't have it):
-curl -fsSL https://github.com/NVIDIA/nvcf/nvcf/-/raw/main/setup.sh | bash
+# From this service checkout inside the monorepo:
+../../../setup.sh
 
 # Pinned Bazel version is read from this repo's .bazelversion (8.6.0).
 bazel version
@@ -454,8 +453,8 @@ CI runs the Bazel lane as the single source of truth for build, test,
 and image publication. The included `nvcf-golang-ci-pipeline.yml`
 template's Go-build / Go-test / docker-build / docker-push jobs are
 explicitly disabled in `.gitlab-ci.yml`. See the rollout tracker at
-`github.com/NVIDIA/nvcf/nvcf/-/blob/main/docs/dev/bazel-rollout.md`
-for the broader Phase B context.
+[docs/dev/bazel-rollout.md](../../../docs/dev/bazel-rollout.md) for
+the broader Phase B context.
 
 ### Environment Setup
 

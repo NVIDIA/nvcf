@@ -31,7 +31,7 @@ go_library(
         "sync_events.go",
         "synchronizer.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/ratelimit",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit",
     visibility = ["//visibility:public"],
     deps = [
         "//pubsub",

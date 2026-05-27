@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Push Bazel-built multi-arch images to the byocdev, devops, and ncp-dev registries.
+# Push Bazel-built multi-arch images to the byocdev, GitLab, devops, and ncp-dev registries.
 
 set -euo pipefail
 
@@ -30,6 +30,11 @@ byocdev_targets=(
   "//cmd/tools:image_push"
 )
 
+gitlab_targets=(
+  "//cmd/nvca:image_push_gitlab"
+  "//cmd/nvca-operator:image_push_gitlab"
+)
+
 devops_targets=(
   "//cmd/nvca:image_push_devops"
   "//cmd/nvca:image_push_ncp_dev"
@@ -43,6 +48,11 @@ devops_targets=(
 
 export DOCKER_CONFIG="${HOME}/.docker-byocdev"
 for target in "${byocdev_targets[@]}"; do
+  bazel_run "${target}"
+done
+
+export DOCKER_CONFIG="${HOME}/.docker-gitlab"
+for target in "${gitlab_targets[@]}"; do
   bazel_run "${target}"
 done
 

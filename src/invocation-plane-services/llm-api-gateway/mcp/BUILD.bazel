@@ -21,7 +21,7 @@ go_library(
         "approval.go",
         "utils.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/mcp",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/mcp",
     visibility = ["//visibility:public"],
     deps = ["//internal/ptr"],
 )

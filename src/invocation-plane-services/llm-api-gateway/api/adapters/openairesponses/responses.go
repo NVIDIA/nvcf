@@ -27,7 +27,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/ptr"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
 )
 
 // UnmarshalError represents JSON unmarshaling errors with field context

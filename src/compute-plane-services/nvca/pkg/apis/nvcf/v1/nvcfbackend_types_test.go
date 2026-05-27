@@ -436,6 +436,40 @@ func TestNVCFBackendSpecT_UnmarshalOAuthConfigFallback(t *testing.T) {
 	assert.Equal(t, "https://example.test/token", spec.OAuthConfig.TokenURL)
 }
 
+func TestNVCFBackend_UnmarshalSpecOverrides(t *testing.T) {
+	raw := []byte(`{
+		"apiVersion": "nvcf.nvidia.io/v1",
+		"kind": "NVCFBackend",
+		"metadata": {
+			"name": "test-backend"
+		},
+		"spec": {
+			"version": "2.51.0",
+			"nvcaImageConfig": {
+				"repository": "stg.nvcr.io/nvidia/byoc/nvca",
+				"tag": "2.51.0",
+				"pullPolicy": "IfNotPresent"
+			},
+			"overrides": {
+				"version": "3.0.0-drc.15",
+				"nvcaImageConfig": {
+					"repository": "stg.nvcr.io/nvidia/byoc/nvca",
+					"tag": "3.0.0-drc.15",
+					"pullPolicy": "IfNotPresent"
+				}
+			}
+		}
+	}`)
+
+	var backend NVCFBackend
+	assert.NoError(t, json.Unmarshal(raw, &backend))
+	assert.Equal(t, "2.51.0", backend.Spec.Version)
+	if assert.NotNil(t, backend.Spec.Overrides) {
+		assert.Equal(t, "3.0.0-drc.15", backend.Spec.Overrides.Version)
+		assert.Equal(t, "3.0.0-drc.15", backend.Spec.Overrides.NVCAImageConfig.Tag)
+	}
+}
+
 func TestNVCFBackend_UnmarshalStatusFields(t *testing.T) {
 	raw := []byte(`{
 		"apiVersion": "nvcf.nvidia.io/v1",

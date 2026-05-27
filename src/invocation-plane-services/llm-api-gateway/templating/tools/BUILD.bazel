@@ -38,7 +38,7 @@ go_library(
         "embed/parallel_call_schema.json",
         "embed/single_call_schema.json",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/templating/tools",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/templating/tools",
     visibility = ["//visibility:public"],
     deps = [
         "//internal/container/set",

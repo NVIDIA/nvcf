@@ -231,6 +231,47 @@ EOF
 }
 
 ##
+# Merge a set of policies into an existing JWT auth role's policy list,
+# preserving anything attached by other migrations. Use this everywhere a
+# migration may add policies to a role that other migrations also write to:
+# `bao write auth/jwt/role/<name>` is a full PUT, so a naive write would
+# silently overwrite policies the current caller doesn't know about.
+#
+# Returns the merged comma-separated policy list, suitable for feeding into
+# generate_jwt_auth_role. Each policy from the supplied set is added only if
+# not already present (exact, case-sensitive match). If the role doesn't
+# exist yet, the supplied policies are returned unchanged so the caller can
+# create the role with them.
+#
+# Usage:
+#   merged=$(merge_jwt_role_policies <role_name> <policies_csv>)
+#
+function merge_jwt_role_policies() {
+    local role_name=$1
+    local new_policies_csv=$2
+
+    local existing
+    existing=$(bao read -format=json "auth/jwt/role/${role_name}" 2>/dev/null \
+        | jq -r '.data.token_policies // [] | join(",")' 2>/dev/null) || existing=""
+
+    if [ -z "${existing}" ]; then
+        echo "${new_policies_csv}"
+        return 0
+    fi
+
+    local merged="${existing}"
+    local IFS=,
+    local policy
+    for policy in ${new_policies_csv}; do
+        case ",${merged}," in
+            *",${policy},"*) : ;;
+            *) merged="${merged},${policy}" ;;
+        esac
+    done
+    echo "${merged}"
+}
+
+##
 # Write secrets KV to a path
 #
 # @param mount_path The mount path of the secrets KV

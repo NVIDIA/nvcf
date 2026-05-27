@@ -47,7 +47,7 @@ Check these files first when they exist in your local workspace:
 ## Working Rules
 
 - Read this repo's top-level `README*`, `go.mod`, `Dockerfile`, and workflow/task files before making assumptions about language or tooling.
-- **Go module:** `github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway`; **entrypoints:** `cmd/llm-api-gateway/main.go` and `cmd/llm-api-gateway-rate-limit-sync-worker/main.go`.
+- **Go module:** `github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway`; **entrypoints:** `cmd/llm-api-gateway/main.go` and `cmd/llm-api-gateway-rate-limit-sync-worker/main.go`.
 - Search for existing patterns with `rg` before adding new structure.
 - `github.com/olric-data/olric` is redirected via `replace` in `go.mod` to a fork at [`github.com/max007-008/olric`](https://github.com/max007-008/olric), branch `cas`. The fork is `olric-data/olric@v0.7.3` plus a `CompareAndSwap` primitive that the rate limiter depends on (see `internal/dmap/atomic.go` and `atomic_handlers.go` in the fork). The fork keeps upstream's module path (`github.com/olric-data/olric`) so the `replace` is a drop-in: no import sites in this repo need to change. To pick up new commits on the fork, run `go get github.com/max007-008/olric@cas && go mod tidy` (this re-resolves the pseudo-version in `go.mod`). Because the replace targets a remote repo rather than a local tree, teammates don't need any local clone. If the CAS work is ever upstreamed into `olric-data/olric`, drop the `replace` line and bump the `require` version. This arrangement is explicitly marked `TEMPORARY` in `go.mod`.
 - Do not hand-edit generated `*.pb.go`, `*_grpc.pb.go`, or generated mocks; change `.proto` files or source interfaces and regenerate with the owning generator command. New hand-authored files should use the same SPDX Apache-2.0 header style as the rest of the tree.
@@ -68,5 +68,5 @@ Check these files first when they exist in your local workspace:
 ## Current Naming
 
 - GitLab repo: `nvcf/llm-api-gateway`
-- Go module: `github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway`
+- Go module: `github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway`
 - Runtime service name: `llm-api-gateway`

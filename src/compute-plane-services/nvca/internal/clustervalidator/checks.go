@@ -64,57 +64,113 @@ func checkPrerequisites(ctx context.Context, client kubernetes.Interface, state 
 	return nil
 }
 
-// checkControlPlaneHealth checks API server readiness, critical kube-system
-// pods, and node status.
+// checkControlPlaneHealth verifies cluster health using three signals:
+//  1. /readyz — canonical API-server health (works on every distribution).
+//  2. Data-plane pods (coredns, kube-proxy) — Critical when missing; these
+//     run as workloads on every distribution and affect cluster networking.
+//  3. Control-plane pods (kube-apiserver, etcd, scheduler, controller-manager)
+//     — informational only. Visible on self-hosted, hidden on managed K8s
+//     (EKS, GKE, AKS) where the cloud provider runs them. /readyz already
+//     covers their health.
+//
+// NotReady worker nodes are Warning only (non-blocking).
 func checkControlPlaneHealth(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
 	log := state.Log
 	printHeader(log, "Kubernetes Control Plane Health")
-	allHealthy := true
+	podsHealthy := true   // Critical — flips cluster verdict
+	nodesAllReady := true // Warning only — does not flip cluster verdict
 
-	if _, err := client.Discovery().ServerVersion(); err == nil {
-		printSuccess(log, "API Server is ready")
+	// ── 1. Canonical control plane health: /readyz ──
+	// Use ServerVersion as the primary reachability gate (works with fake
+	// clients in unit tests). Then attempt /readyz for a richer signal on
+	// real clusters and distinguish three cases: (a) /readyz reports ready,
+	// (b) /readyz reports not-ready, (c) /readyz not reachable (e.g. fake
+	// client) — fall back to ServerVersion only.
+	if _, verr := client.Discovery().ServerVersion(); verr == nil {
+		reached, ready := probeReadyz(ctx, client)
+		switch {
+		case reached && ready:
+			printSuccess(log, "API server /readyz reports healthy")
+		case reached && !ready:
+			printError(log, "API server /readyz reports not ready")
+			podsHealthy = false
+		default: // !reached — fall back to ServerVersion-only
+			printSuccess(log, "API server is reachable (ServerVersion OK; /readyz unavailable)")
+		}
 	} else {
-		printError(log, "API Server is not ready")
-		allHealthy = false
-	}
-	log.Info("")
-	log.Info("Control Plane Pods (kube-system):")
-	criticalPods := []string{
-		"kube-apiserver",
-		"kube-controller-manager",
-		"kube-scheduler",
-		"etcd",
-		"coredns",
-		"kube-proxy",
+		printError(log, "API server is not ready")
+		podsHealthy = false
 	}
 
+	// ── 2. Data-plane pods — Critical if missing on any distribution ──
+	// k3s and rke2 embed kube-proxy in the server binary rather than running
+	// it as a DaemonSet pod, so skip the kube-proxy pod check on those
+	// distributions. coredns still runs as a workload on k3s/rke2 and is
+	// required regardless.
+	log.Info("")
+	log.Info("Cluster Service Pods (kube-system):")
+	dataPlanePods := []string{"coredns", "kube-proxy"}
+	if isEmbeddedKubeProxyDistro(state.K8sVersion) {
+		dataPlanePods = []string{"coredns"}
+		printInfo(log, "Detected k3s/rke2 — skipping kube-proxy pod check (embedded in server binary)")
+	}
 	pods, err := client.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		printError(log, fmt.Sprintf("Failed to list kube-system pods: %v", err))
-		allHealthy = false
+		podsHealthy = false
 	} else {
-		for _, prefix := range criticalPods {
-			count := 0
-			for i := range pods.Items {
-				p := &pods.Items[i]
-				if strings.HasPrefix(p.Name, prefix) && p.Status.Phase == corev1.PodRunning {
-					count++
-				}
-			}
+		for _, prefix := range dataPlanePods {
+			count := countRunningPods(pods.Items, prefix)
 			if count > 0 {
 				printSuccess(log, fmt.Sprintf("  %s: %d instance(s) running", prefix, count))
 			} else {
 				printWarning(log, fmt.Sprintf("  %s: Not found or not running", prefix))
-				allHealthy = false
+				podsHealthy = false
+			}
+		}
+
+		// ── 3. Control-plane pods — diagnostic only ──
+		log.Info("")
+		log.Info("Control Plane Pods (kube-system) [diagnostic only]:")
+		controlPlanePods := []string{
+			"kube-apiserver", "kube-controller-manager", "kube-scheduler", "etcd",
+		}
+		allHidden := true
+		for _, prefix := range controlPlanePods {
+			count := countRunningPods(pods.Items, prefix)
+			if count > 0 {
+				printSuccess(log, fmt.Sprintf("  %s: %d instance(s) running", prefix, count))
+				allHidden = false
+			} else {
+				printInfo(log, fmt.Sprintf("  %s: not visible (managed by cloud provider?)", prefix))
+			}
+		}
+		// Only claim "managed control plane" when we have a positive signal
+		// from a cloud-provider node label. Otherwise (all four pods missing
+		// AND no managed-cluster label), the cluster is likely self-hosted
+		// with a broken control plane — don't mislead the operator.
+		if allHidden {
+			if provider := detectManagedClusterProvider(ctx, client); provider != "" {
+				printInfo(log, fmt.Sprintf(
+					"Detected managed control plane (%s) — control plane components are "+
+						"managed by the cloud provider; API health is determined via /readyz above.",
+					provider))
+			} else {
+				printInfo(log,
+					"Control plane pods not visible — could be a managed control plane (no "+
+						"recognised cloud-provider node label found) or a self-hosted cluster with "+
+						"a degraded control plane. See /readyz result above for actual API health.")
 			}
 		}
 	}
+
+	// ── 4. Node status ──
 	log.Info("")
 	log.Info("Node Status:")
 	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		printError(log, fmt.Sprintf("Failed to list nodes: %v", err))
-		allHealthy = false
+		podsHealthy = false
 	} else if len(nodes.Items) > 0 {
 		ready, notReady := 0, 0
 		for i := range nodes.Items {
@@ -134,19 +190,101 @@ func checkControlPlaneHealth(ctx context.Context, client kubernetes.Interface, s
 		}
 		printInfo(log, fmt.Sprintf("  Ready nodes: %d", ready))
 		if notReady > 0 {
-			printWarning(log, fmt.Sprintf("  NotReady nodes: %d", notReady))
-			allHealthy = false
+			printWarning(log, fmt.Sprintf(
+				"  NotReady nodes: %d (warning only — does not block readiness)", notReady))
+			nodesAllReady = false
+			state.NodesAllReady = false
+			state.NotReadyNodes = notReady
+			state.Warnings = append(state.Warnings, fmt.Sprintf(
+				"Worker Nodes: %d NotReady (non-blocking; routine ops can proceed). "+
+					"Run `kubectl get nodes` to identify the affected node(s).", notReady))
 		}
 	}
+
+	// ── 5. Verdict ──
 	log.Info("")
-	if allHealthy {
+	switch {
+	case podsHealthy && nodesAllReady:
 		printSuccess(log, "Control plane is healthy")
-	} else {
-		printWarning(log, "Some control plane components may need attention")
+	case podsHealthy && !nodesAllReady:
+		printWarning(log, "Control plane API & services healthy; some worker nodes are NotReady (non-blocking)")
+	default: // !podsHealthy
+		printError(log, "Some control plane components may need attention")
 		state.ControlPlaneHealthy = false
 		state.Recommendations = append(state.Recommendations,
-			"Fix control plane issues: Check node status and kube-system pods")
+			"Fix control plane issues: check /readyz, coredns, kube-proxy, and node status")
 	}
+}
+
+// isEmbeddedKubeProxyDistro returns true when the cluster's API-server
+// version string identifies a distribution that embeds kube-proxy in the
+// server binary instead of running it as a DaemonSet pod (k3s, k3d, rke2).
+// On those distributions, the kube-proxy "pod missing" check is a false
+// negative — the same code runs inside the server binary.
+func isEmbeddedKubeProxyDistro(version string) bool {
+	v := strings.ToLower(version)
+	return strings.Contains(v, "+k3s") || strings.Contains(v, "+rke2")
+}
+
+// detectManagedClusterProvider scans node labels for well-known
+// cloud-provider markers and returns a short provider name (EKS / GKE /
+// AKS) when the cluster is positively identified as managed Kubernetes.
+// Returns "" when nodes can't be listed or no managed-cluster label is
+// found.
+func detectManagedClusterProvider(ctx context.Context, client kubernetes.Interface) string {
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 5})
+	if err != nil {
+		return ""
+	}
+	for i := range nodes.Items {
+		labels := nodes.Items[i].Labels
+		switch {
+		case labels["eks.amazonaws.com/nodegroup"] != "":
+			return "EKS"
+		case labels["cloud.google.com/gke-nodepool"] != "":
+			return "GKE"
+		case labels["kubernetes.azure.com/agentpool"] != "":
+			return "AKS"
+		}
+	}
+	return ""
+}
+
+// probeReadyz performs GET /readyz on the API server and returns:
+//   - reached=true, ready=true:  /readyz responded with body "ok"
+//   - reached=true, ready=false: /readyz responded with a non-"ok" body
+//     (uncommon — Kubernetes usually signals unreadiness via HTTP 5xx,
+//     which surfaces as an error and is treated as reached=false)
+//   - reached=false, ready=false: any error, nil RESTClient, or panic
+//     (fake clients may not implement RESTClient correctly)
+func probeReadyz(ctx context.Context, client kubernetes.Interface) (reached, ready bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			reached, ready = false, false
+		}
+	}()
+	rc := client.Discovery().RESTClient()
+	if rc == nil {
+		return false, false
+	}
+	raw, err := rc.Get().AbsPath("/readyz").DoRaw(ctx)
+	if err != nil {
+		return false, false
+	}
+	return true, strings.TrimSpace(string(raw)) == "ok"
+}
+
+// countRunningPods returns the number of Running pods whose name starts with
+// the given prefix.
+func countRunningPods(pods []corev1.Pod, prefix string) int {
+	n := 0
+	for i := range pods {
+		p := &pods[i]
+		if strings.HasPrefix(p.Name, prefix) && p.Status.Phase == corev1.PodRunning {
+			n++
+		}
+	}
+	return n
 }
 
 // checkWebhookSupport verifies that admission webhook APIs are available.

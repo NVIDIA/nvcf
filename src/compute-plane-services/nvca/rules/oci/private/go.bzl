@@ -15,11 +15,11 @@
 
 "OCI image rules for Go binaries."
 
-load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "pkg_attributes", "strip_prefix")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("//rules/oci/private:common.bzl", "DEFAULT_BASE", "create_oci_image")
 
-def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, registry, extra_registries, tags):
+def _go_oci_image_impl(name, visibility, binary, base, entrypoint, cmd, binary_path, registry, extra_registries, tags):
     layer_name = name + "_layer"
 
     # Place the binary at `binary_path` in the layer tarball. By default
@@ -45,6 +45,7 @@ def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, 
             srcs = [binary],
             prefix = pkg_dir,
             renames = {binary: new_name},
+            attributes = pkg_attributes(mode = "0755"),
             visibility = ["//visibility:private"],
         )
         pkg_tar(
@@ -52,7 +53,6 @@ def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, 
             srcs = [":" + files_name],
             visibility = ["//visibility:private"],
         )
-        default_entry = [binary_path]
     else:
         pkg_tar(
             name = layer_name,
@@ -61,15 +61,13 @@ def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, 
             strip_prefix = strip_prefix.from_pkg(""),
             visibility = ["//visibility:private"],
         )
-        default_entry = ["/" + native.package_relative_label(binary).name]
-
-    entry = entrypoint if entrypoint else default_entry
 
     create_oci_image(
         name = name,
         tars = [layer_name],
         base = base,
-        entrypoint = entry,
+        entrypoint = entrypoint,
+        cmd = cmd,
         visibility = visibility,
         registry = registry,
         extra_registries = extra_registries,
@@ -96,8 +94,11 @@ go_oci_image = macro(
             configurable = False,
         ),
         "entrypoint": attr.string_list(
-            doc = "Container entrypoint. Defaults to [binary_path] if set, " +
-                  "otherwise [/{binary_name}].",
+            doc = "Container entrypoint, if any.",
+            configurable = False,
+        ),
+        "cmd": attr.string_list(
+            doc = "Container cmd, if any.",
             configurable = False,
         ),
         "registry": attr.string(
@@ -117,14 +118,13 @@ go_oci_image = macro(
     },
 )
 
-def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint, registry, extra_registries, tags):
+def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint, cmd, registry, extra_registries, tags):
     """Pack multiple go_binary targets into a single OCI image layer.
 
     Used for images that bundle several binaries (eg nvca-operator's image
     ships nvca-operator + nvca-mirror + nvca-operator-cleanup at distinct
     paths under /usr/bin/). Each binary is placed at the path declared as
-    its dict value; the first binary in the dict becomes the default
-    entrypoint unless `entrypoint` is supplied.
+    its dict value.
     """
 
     # Build one pkg_files target per binary, then merge them into a single
@@ -142,6 +142,7 @@ def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint
             srcs = [bin_label],
             prefix = pkg_dir,
             renames = {bin_label: new_name},
+            attributes = pkg_attributes(mode = "0755"),
             visibility = ["//visibility:private"],
         )
         files_targets.append(":" + files_name)
@@ -155,13 +156,12 @@ def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint
         visibility = ["//visibility:private"],
     )
 
-    entry = entrypoint if entrypoint else [first_path]
-
     create_oci_image(
         name = name,
         tars = [layer_name],
         base = base,
-        entrypoint = entry,
+        entrypoint = entrypoint,
+        cmd = cmd,
         visibility = visibility,
         registry = registry,
         extra_registries = extra_registries,
@@ -188,7 +188,11 @@ go_oci_multi_binary_image = macro(
             configurable = False,
         ),
         "entrypoint": attr.string_list(
-            doc = "Container entrypoint. Defaults to [first_binary_path].",
+            doc = "Container entrypoint, if any.",
+            configurable = False,
+        ),
+        "cmd": attr.string_list(
+            doc = "Container cmd, if any.",
             configurable = False,
         ),
         "registry": attr.string(

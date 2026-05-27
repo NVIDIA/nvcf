@@ -27,7 +27,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/telemetry"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 // limiterMode is the state-transition mode used inside leakyBucket. It is an

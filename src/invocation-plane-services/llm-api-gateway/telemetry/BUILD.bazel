@@ -24,7 +24,7 @@ go_library(
         "runtime.go",
         "telemetry.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/telemetry",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry",
     visibility = ["//visibility:public"],
     deps = [
         "//internal/must",

@@ -4926,6 +4926,212 @@ func TestNewAgentConfigIncludesServiceOAuthEndpoints(t *testing.T) {
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
 }
 
+func TestGetChartDefaultAgentConfig(t *testing.T) {
+	ctx := newTestContext()
+
+	t.Run("parses service oauth endpoints", func(t *testing.T) {
+		clients := mockKubeClientsForIntegrationTests()
+		bc := &BackendK8sCache{
+			clients:           clients,
+			operatorNamespace: NVCAOperatorNamespace,
+		}
+		_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, chartDefaultsConfigMap(chartDefaultsClusterDTO()), metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		cfg, found, err := bc.getChartDefaultAgentConfig(ctx, clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "https://chart-stage-reval-oauth.example.test/token", cfg.HelmReValStageOAuthTokenURL)
+		assert.Equal(t, "https://chart-stage-reval-oauth.example.test/.well-known/jwks.json", cfg.HelmReValStageOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-prod-reval-oauth.example.test/token", cfg.HelmReValProdOAuthTokenURL)
+		assert.Equal(t, "https://chart-prod-reval-oauth.example.test/.well-known/jwks.json", cfg.HelmReValProdOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/token", cfg.FunctionDeploymentStagesStageOAuthTokenURL)
+		assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/.well-known/jwks.json", cfg.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/token", cfg.FunctionDeploymentStagesProdOAuthTokenURL)
+		assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/.well-known/jwks.json", cfg.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
+	})
+
+	t.Run("missing configmap is non fatal", func(t *testing.T) {
+		bc := &BackendK8sCache{
+			clients:           mockKubeClientsForIntegrationTests(),
+			operatorNamespace: NVCAOperatorNamespace,
+		}
+
+		cfg, found, err := bc.getChartDefaultAgentConfig(ctx, bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, cfg.HelmReValStageOAuthTokenURL)
+	})
+
+	t.Run("empty cluster dto is treated as no defaults", func(t *testing.T) {
+		clients := mockKubeClientsForIntegrationTests()
+		bc := &BackendK8sCache{
+			clients:           clients,
+			operatorNamespace: NVCAOperatorNamespace,
+		}
+		_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, chartDefaultsConfigMap(""), metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		cfg, found, err := bc.getChartDefaultAgentConfig(ctx, clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, cfg.HelmReValStageOAuthTokenURL)
+	})
+
+	t.Run("empty endpoint values are treated as no defaults", func(t *testing.T) {
+		clients := mockKubeClientsForIntegrationTests()
+		bc := &BackendK8sCache{
+			clients:           clients,
+			operatorNamespace: NVCAOperatorNamespace,
+		}
+		_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, chartDefaultsConfigMap(`agent:
+  helmReValStageOAuthTokenURL: ""
+  helmReValStageOAuthPublicKeysetEndpoint: ""
+  helmReValProdOAuthTokenURL: ""
+  helmReValProdOAuthPublicKeysetEndpoint: ""
+  functionDeploymentStagesStageOAuthTokenURL: ""
+  functionDeploymentStagesStageOAuthPublicKeysetEndpoint: ""
+  functionDeploymentStagesProdOAuthTokenURL: ""
+  functionDeploymentStagesProdOAuthPublicKeysetEndpoint: ""
+`), metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		cfg, found, err := bc.getChartDefaultAgentConfig(ctx, clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, cfg.HelmReValStageOAuthTokenURL)
+	})
+
+	t.Run("nil getter is treated as no defaults", func(t *testing.T) {
+		bc := &BackendK8sCache{}
+
+		cfg, found, err := bc.getChartDefaultAgentConfig(ctx, nil)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, cfg.HelmReValStageOAuthTokenURL)
+	})
+}
+
+func TestNewAgentConfigFallsBackToChartDefaultServiceOAuthForNGCManaged(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		operatorNamespace: NVCAOperatorNamespace,
+		envType:           nvidiaiov1.EnvTypeStage,
+	}
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, chartDefaultsConfigMap(chartDefaultsClusterDTO()), metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	cfg, err := bc.newAgentConfig(ctx, ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{}))
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://chart-stage-reval-oauth.example.test/token", cfg.Agent.HelmReValStageOAuthTokenURL)
+	assert.Equal(t, "https://chart-stage-reval-oauth.example.test/.well-known/jwks.json", cfg.Agent.HelmReValStageOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://chart-prod-reval-oauth.example.test/token", cfg.Agent.HelmReValProdOAuthTokenURL)
+	assert.Equal(t, "https://chart-prod-reval-oauth.example.test/.well-known/jwks.json", cfg.Agent.HelmReValProdOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/token", cfg.Agent.FunctionDeploymentStagesStageOAuthTokenURL)
+	assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/token", cfg.Agent.FunctionDeploymentStagesProdOAuthTokenURL)
+	assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
+}
+
+func TestNewAgentConfigMissingChartDefaultsIsNonFatal(t *testing.T) {
+	ctx := newTestContext()
+	bc := &BackendK8sCache{
+		clients:           mockKubeClientsForIntegrationTests(),
+		operatorNamespace: NVCAOperatorNamespace,
+		envType:           nvidiaiov1.EnvTypeStage,
+	}
+
+	cfg, err := bc.newAgentConfig(ctx, ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{}))
+	require.NoError(t, err)
+
+	assert.Empty(t, cfg.Agent.HelmReValStageOAuthTokenURL)
+	assert.Empty(t, cfg.Agent.HelmReValStageOAuthPublicKeysetEndpoint)
+	assert.Empty(t, cfg.Agent.FunctionDeploymentStagesProdOAuthTokenURL)
+	assert.Empty(t, cfg.Agent.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
+}
+
+func TestNewAgentConfigPreservesNGCServiceOAuthOverChartDefaults(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		operatorNamespace: NVCAOperatorNamespace,
+		envType:           nvidiaiov1.EnvTypeStage,
+	}
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, chartDefaultsConfigMap(chartDefaultsClusterDTO()), metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	cfg, err := bc.newAgentConfig(ctx, ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{
+		HelmReValStageOAuthTokenURL:                            "https://ngc-stage-reval-oauth.example.test/token",
+		HelmReValStageOAuthPublicKeysetEndpoint:                "https://ngc-stage-reval-oauth.example.test/.well-known/jwks.json",
+		HelmReValProdOAuthTokenURL:                             "https://ngc-prod-reval-oauth.example.test/token",
+		HelmReValProdOAuthPublicKeysetEndpoint:                 "https://ngc-prod-reval-oauth.example.test/.well-known/jwks.json",
+		FunctionDeploymentStagesStageOAuthTokenURL:             "https://ngc-stage-fnds-oauth.example.test/token",
+		FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://ngc-stage-fnds-oauth.example.test/.well-known/jwks.json",
+		FunctionDeploymentStagesProdOAuthTokenURL:              "https://ngc-prod-fnds-oauth.example.test/token",
+		FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint:  "https://ngc-prod-fnds-oauth.example.test/.well-known/jwks.json",
+	}))
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://ngc-stage-reval-oauth.example.test/token", cfg.Agent.HelmReValStageOAuthTokenURL)
+	assert.Equal(t, "https://ngc-stage-reval-oauth.example.test/.well-known/jwks.json", cfg.Agent.HelmReValStageOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://ngc-prod-reval-oauth.example.test/token", cfg.Agent.HelmReValProdOAuthTokenURL)
+	assert.Equal(t, "https://ngc-prod-reval-oauth.example.test/.well-known/jwks.json", cfg.Agent.HelmReValProdOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://ngc-stage-fnds-oauth.example.test/token", cfg.Agent.FunctionDeploymentStagesStageOAuthTokenURL)
+	assert.Equal(t, "https://ngc-stage-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://ngc-prod-fnds-oauth.example.test/token", cfg.Agent.FunctionDeploymentStagesProdOAuthTokenURL)
+	assert.Equal(t, "https://ngc-prod-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
+}
+
+func chartDefaultsConfigMap(clusterDTO string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nvcfBackendChartDefaultsConfigMapName,
+			Namespace: NVCAOperatorNamespace,
+		},
+		Data: map[string]string{
+			"cluster-dto.yaml": clusterDTO,
+		},
+	}
+}
+
+func chartDefaultsClusterDTO() string {
+	return `agent:
+  helmReValStageOAuthTokenURL: "https://chart-stage-reval-oauth.example.test/token"
+  helmReValStageOAuthPublicKeysetEndpoint: "https://chart-stage-reval-oauth.example.test/.well-known/jwks.json"
+  helmReValProdOAuthTokenURL: "https://chart-prod-reval-oauth.example.test/token"
+  helmReValProdOAuthPublicKeysetEndpoint: "https://chart-prod-reval-oauth.example.test/.well-known/jwks.json"
+  functionDeploymentStagesStageOAuthTokenURL: "https://chart-stage-fnds-oauth.example.test/token"
+  functionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://chart-stage-fnds-oauth.example.test/.well-known/jwks.json"
+  functionDeploymentStagesProdOAuthTokenURL: "https://chart-prod-fnds-oauth.example.test/token"
+  functionDeploymentStagesProdOAuthPublicKeysetEndpoint: "https://chart-prod-fnds-oauth.example.test/.well-known/jwks.json"
+`
+}
+
+func ngcManagedBackendWithAgentConfig(agentConfig nvidiaiov1.AgentConfig) *nvidiaiov1.NVCFBackend {
+	return &nvidiaiov1.NVCFBackend{
+		Spec: nvidiaiov1.NVCFBackendSpec{
+			NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+				AccountConfig: nvidiaiov1.AccountConfig{NCAID: "ncaid1"},
+				ClusterConfig: nvidiaiov1.ClusterConfig{
+					ClusterID:        "cluster-id",
+					ClusterName:      "cluster-name",
+					ClusterGroupName: "cluster-group",
+					CloudProvider:    "ON-PREM",
+				},
+				ClusterSource: nvcaoptypes.ClusterSourceNGCManaged,
+				ICMSConfig: nvidiaiov1.ICMSConfig{
+					ICMSServiceURL: "https://icms.example.test",
+				},
+				AgentConfig: agentConfig,
+			},
+		},
+	}
+}
+
 func TestGetEffectiveOTelCollectorConfig(t *testing.T) {
 	tests := []struct {
 		name       string

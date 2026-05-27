@@ -3,10 +3,12 @@
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
+MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+
 go_library(
     name = "export-cluster-pubkeys_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/export-cluster-pubkeys",
+    importpath = MODULE_PATH + "/cmd/export-cluster-pubkeys",
     visibility = ["//visibility:private"],
     deps = [
         "//cmd/internal",
@@ -23,6 +25,12 @@ go_binary(
     name = "export-cluster-pubkeys",
     embed = [":export-cluster-pubkeys_lib"],
     visibility = ["//visibility:public"],
+    # Mirrors ldflags.
+    x_defs = {
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
+    },
 )
 
 go_test(

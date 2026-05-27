@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+tmp_dir="$(mktemp -d)"
+
+cleanup() {
+  rm -rf "${tmp_dir}"
+}
+trap cleanup EXIT
+
+calls_file="${tmp_dir}/bazel-calls"
+fake_bin="${tmp_dir}/bin"
+mkdir -p "${fake_bin}"
+
+cat >"${fake_bin}/bazel" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\t%s\n' "${DOCKER_CONFIG:-}" "$*" >>"${BAZEL_CALLS_FILE}"
+SH
+chmod +x "${fake_bin}/bazel"
+
+PATH="${fake_bin}:${PATH}" \
+HOME="${tmp_dir}/home" \
+BAZEL_CALLS_FILE="${calls_file}" \
+"${repo_root}/scripts/ci_bazel_image_push"
+
+assert_call() {
+  local docker_config="$1"
+  local target="$2"
+
+  if ! grep -Fq "${docker_config}"$'\t'"run --stamp ${target}" "${calls_file}"; then
+    echo "expected ${target} to run with DOCKER_CONFIG=${docker_config}" >&2
+    echo "actual calls:" >&2
+    cat "${calls_file}" >&2
+    exit 1
+  fi
+}
+
+assert_call "${tmp_dir}/home/.docker-byocdev" "//cmd/nvca:image_push"
+assert_call "${tmp_dir}/home/.docker-byocdev" "//cmd/nvca-operator:image_push"
+assert_call "${tmp_dir}/home/.docker-devops" "//cmd/nvca:image_push_devops"
+assert_call "${tmp_dir}/home/.docker-devops" "//cmd/nvca-operator:image_push_ncp_dev"
+assert_call "${tmp_dir}/home/.docker-gitlab" "//cmd/nvca:image_push_gitlab"
+assert_call "${tmp_dir}/home/.docker-gitlab" "//cmd/nvca-operator:image_push_gitlab"
+
+echo "ci_bazel_image_push routes image pushes to the expected registry credential scopes"

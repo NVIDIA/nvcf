@@ -59,9 +59,22 @@ write_token_config() {
   local docker_config_dir="$2"
   local auth
 
-  auth="$(printf '$oauthtoken:%s' "${token}" | base64 -w0)"
+  auth="$(printf '$oauthtoken:%s' "${token}" | base64 | tr -d '\n')"
   mkdir -p "${docker_config_dir}"
   printf '{"auths":{"nvcr.io":{"auth":"%s"}}}\n' "${auth}" >"${docker_config_dir}/config.json"
+  chmod 600 "${docker_config_dir}/config.json"
+}
+
+write_basic_config() {
+  local registry="$1"
+  local username="$2"
+  local password="$3"
+  local docker_config_dir="$4"
+  local auth
+
+  auth="$(printf '%s:%s' "${username}" "${password}" | base64 | tr -d '\n')"
+  mkdir -p "${docker_config_dir}"
+  jq -nc --arg registry "${registry}" --arg auth "${auth}" '{auths: {($registry): {auth: $auth}}}' >"${docker_config_dir}/config.json"
   chmod 600 "${docker_config_dir}/config.json"
 }
 
@@ -89,3 +102,9 @@ else
   echo "NGC_DEVOPS_API_KEY or NGC_DEVOPS_DOCKERCONFIG_SECRET must be set for devops/ncp-dev pushes" >&2
   exit 1
 fi
+
+write_basic_config \
+  "${CI_REGISTRY:?CI_REGISTRY must be set for GitLab image pushes}" \
+  "${CI_REGISTRY_USER:?CI_REGISTRY_USER must be set for GitLab image pushes}" \
+  "${CI_REGISTRY_PASSWORD:?CI_REGISTRY_PASSWORD must be set for GitLab image pushes}" \
+  "${HOME}/.docker-gitlab"

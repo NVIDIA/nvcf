@@ -21,7 +21,7 @@ go_library(
         "doc.go",
         "reranking.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/templating/prompt",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/templating/prompt",
     visibility = ["//visibility:public"],
 )
 

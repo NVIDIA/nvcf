@@ -26,14 +26,16 @@ DEFAULT_PLATFORMS = [
     "//platforms:linux_x86_64",
 ]
 
-COMMON_LAYERS = []
+COMMON_LAYERS = ["//rules/oci:tini_layer"]
 
 def create_oci_image(
         name,
         tars,
         base,
         entrypoint,
+        cmd,
         visibility,
+        user = "65532:65532",
         registry = None,
         extra_registries = None,
         tags = None):
@@ -55,6 +57,8 @@ def create_oci_image(
         base = base,
         tars = tars + COMMON_LAYERS,
         entrypoint = entrypoint,
+        cmd = cmd,
+        user = user,
         visibility = ["//visibility:private"],
         tags = all_tags,
     )

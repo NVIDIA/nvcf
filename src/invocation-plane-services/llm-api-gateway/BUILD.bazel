@@ -4,7 +4,7 @@
 load("@gazelle//:def.bzl", "gazelle")
 load("//rules/oci:defs.bzl", "go_oci_image")
 
-# gazelle:prefix github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway
+# gazelle:prefix github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway
 # gazelle:proto disable_global
 # gazelle:go_naming_convention import_alias
 

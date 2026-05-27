@@ -27,13 +27,13 @@ import (
 
 	echo "github.com/labstack/echo/v4"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/internal/ptr"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/models"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/nvcf"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/provider"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/ratelimit"
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/requestctx"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
 func rateLimitConfig() *config.Config {
@@ -580,14 +580,80 @@ func TestParseTokenRateLimit(t *testing.T) {
 			want: parsedTokenRateLimit{tokensPerMinute: 9000, tokensPerDay: 100000},
 		},
 		{
+			name: "second only",
+			raw:  "100-S",
+			want: parsedTokenRateLimit{tokensPerSecond: 100},
+		},
+		{
+			name: "hour only",
+			raw:  "25000-H",
+			want: parsedTokenRateLimit{tokensPerHour: 25000},
+		},
+		{
+			name: "week only",
+			raw:  "500000-W",
+			want: parsedTokenRateLimit{tokensPerWeek: 500000},
+		},
+		{
+			name: "combined all levels",
+			raw:  "100-S,9000-M,25000-H,100000-D,500000-W",
+			want: parsedTokenRateLimit{
+				tokensPerSecond: 100,
+				tokensPerMinute: 9000,
+				tokensPerHour:   25000,
+				tokensPerDay:    100000,
+				tokensPerWeek:   500000,
+			},
+		},
+		{
 			name:    "invalid fragment",
 			raw:     "9000",
 			wantErr: `invalid token rate limit fragment "9000"`,
 		},
 		{
+			name:    "unknown level",
+			raw:     "9000-X",
+			wantErr: `unsupported token rate limit level "X"`,
+		},
+		{
+			name:    "lowercase level",
+			raw:     "100-s",
+			wantErr: `unsupported token rate limit level "s"`,
+		},
+		{
+			name:    "zero value",
+			raw:     "0-S",
+			wantErr: "token rate limit must be positive",
+		},
+		{
+			name:    "negative value",
+			raw:     "-1-S",
+			wantErr: "token rate limit must be positive",
+		},
+		{
 			name:    "duplicate minute level",
 			raw:     "9000-M,1000-M",
 			wantErr: "duplicate minute token rate limit",
+		},
+		{
+			name:    "duplicate second level",
+			raw:     "100-S,200-S",
+			wantErr: "duplicate second token rate limit",
+		},
+		{
+			name:    "duplicate hour level",
+			raw:     "25000-H,50000-H",
+			wantErr: "duplicate hour token rate limit",
+		},
+		{
+			name:    "duplicate day level",
+			raw:     "100000-D,200000-D",
+			wantErr: "duplicate day token rate limit",
+		},
+		{
+			name:    "duplicate week level",
+			raw:     "500000-W,600000-W",
+			wantErr: "duplicate week token rate limit",
 		},
 	}
 
@@ -610,6 +676,118 @@ func TestParseTokenRateLimit(t *testing.T) {
 				t.Fatalf("parsed token rate limit = %#v, want %#v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeChatRequestParsesSingleTokenRateLimitUnits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		raw       string
+		keySuffix string
+	}{
+		{name: "second", raw: "100-S", keySuffix: ":tokens_second"},
+		{name: "minute", raw: "9000-M", keySuffix: ":tokens_minute"},
+		{name: "hour", raw: "25000-H", keySuffix: ":tokens_hour"},
+		{name: "day", raw: "100000-D", keySuffix: ":tokens_day"},
+		{name: "week", raw: "500000-W", keySuffix: ":tokens_week"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			limiter := &recordingRateLimiter{}
+			cfg := rateLimitConfig()
+			handlers := NewHandlers(cfg, nil, limiter)
+			gc, _ := newRateLimitGatewayContext()
+			gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
+				RequestID:  "req-123",
+				OrgID:      "nca-456",
+				RoutingKey: "fn-chat",
+				Model:      "company-name/model-name",
+				ModelSpecs: map[string]nvcf.ModelSpec{
+					"company-name/model-name": {
+						TokenRateLimit: tc.raw,
+					},
+				},
+			})
+
+			request := &models.ChatCompletionRequest{
+				Model: "fn-chat/company-name/model-name",
+				Messages: &[]models.ChatMessage{
+					{
+						Role:    models.ChatCompletionRoleUser,
+						Content: models.SingleTextContent("hello world"),
+					},
+				},
+				MaxCompletionTokens: ptr.To(uint32(12)),
+			}
+
+			normalized, err := handlers.normalizeChatRequest(gc, request)
+			if err != nil {
+				t.Fatalf("normalize chat request: %v", err)
+			}
+			if normalized.AdmissionPlan == nil {
+				t.Fatal("admission plan was not set")
+			}
+			if !hasRateLimitKeySuffix(limiter.Calls(), tc.keySuffix) {
+				t.Fatalf("missing rate limit call with suffix %q", tc.keySuffix)
+			}
+		})
+	}
+}
+
+func TestNormalizeChatRequestParsesCombinedTokenRateLimitUnits(t *testing.T) {
+	t.Parallel()
+
+	limiter := &recordingRateLimiter{}
+	cfg := rateLimitConfig()
+	handlers := NewHandlers(cfg, nil, limiter)
+	gc, _ := newRateLimitGatewayContext()
+	gc.store.Set(contextKeyRequestContext, &requestctx.RequestContext{
+		RequestID:  "req-123",
+		OrgID:      "nca-456",
+		RoutingKey: "fn-chat",
+		Model:      "company-name/model-name",
+		ModelSpecs: map[string]nvcf.ModelSpec{
+			"company-name/model-name": {
+				TokenRateLimit: "100-S,9000-M,25000-H,100000-D,500000-W",
+			},
+		},
+	})
+
+	request := &models.ChatCompletionRequest{
+		Model: "fn-chat/company-name/model-name",
+		Messages: &[]models.ChatMessage{
+			{
+				Role:    models.ChatCompletionRoleUser,
+				Content: models.SingleTextContent("hello world"),
+			},
+		},
+		MaxCompletionTokens: ptr.To(uint32(12)),
+	}
+
+	normalized, err := handlers.normalizeChatRequest(gc, request)
+	if err != nil {
+		t.Fatalf("normalize chat request: %v", err)
+	}
+	if normalized.AdmissionPlan == nil {
+		t.Fatal("admission plan was not set")
+	}
+
+	for _, suffix := range []string{
+		":tokens_second",
+		":tokens_minute",
+		":tokens_hour",
+		":tokens_day",
+		":tokens_week",
+	} {
+		if !hasRateLimitKeySuffix(limiter.Calls(), suffix) {
+			t.Fatalf("missing rate limit call with suffix %q", suffix)
+		}
 	}
 }
 

@@ -23,7 +23,7 @@ import (
 	olricconfig "github.com/olric-data/olric/config"
 	"github.com/stretchr/testify/require"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 )
 
 // TestConfigureDiscovery_StaticTakesPrecedence locks in that when Peers is

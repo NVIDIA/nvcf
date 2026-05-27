@@ -16,40 +16,56 @@
 
 set -euo pipefail
 
-COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-DIRTY=""
-if [ "$COMMIT" != "unknown" ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-    DIRTY="-dirty"
-fi
+# K8s GPU DRA driver version.
+DRA_DRIVER_GPU_VERSION="v25.8.0"
 
 normalize_version() {
     local version="$1"
     printf '%s\n' "${version#v}"
 }
 
-# CI overrides for VERSION and BUILD_USER. Release jobs should use the
-# normalized versioning artifact; MR jobs get an MR-scoped pre-release tag.
-if [ -n "${NVCF_VERSION:-}" ]; then
-    VERSION="$(normalize_version "${NVCF_VERSION}")"
-elif [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
-    VERSION="mr-${CI_MERGE_REQUEST_IID}"
-elif [ -n "${EGX_VERSION:-}" ]; then
-    VERSION="$(normalize_version "${EGX_VERSION}")"
+# Use CI environment variables when running in CI.
+if [ "${CI:-}" = "true" ]; then
+    COMMIT="$CI_COMMIT_SHORT_SHA"
+    if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        VERSION="$(normalize_version "${CI_COMMIT_TAG}")"
+    else
+        VERSION="mr.${CI_MERGE_REQUEST_IID:-"0"}-${COMMIT}"
+    fi
+    BUILD_USER="ci"
 else
-    VERSION="mr-${COMMIT}"
+    COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+    if [ -n "${NVCF_VERSION:-}" ]; then
+        VERSION="$(normalize_version "${NVCF_VERSION}")"
+    elif [ -n "${EGX_VERSION:-}" ]; then
+        VERSION="$(normalize_version "${EGX_VERSION}")"
+    else
+        VERSION="dev-${COMMIT}"
+    fi
+
+    BUILD_USER="${NVCF_BUILD_USER:-$(whoami 2>/dev/null || echo 'unknown')}"
 fi
 
-BUILD_USER="${NVCF_BUILD_USER:-$(whoami 2>/dev/null || echo 'unknown')}"
-BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-GO_VERSION="${NVCF_GO_VERSION:-bazel-rules_go}"
+DIRTY=""
+if [ "$COMMIT" != "unknown" ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    DIRTY="-dirty"
+fi
 
-echo "STABLE_VERSION ${VERSION}"
+if command -v go >/dev/null 2>&1; then
+    GO_VERSION="$(go list -m -f '{{.GoVersion}}' || echo "bazel-rules_go")"
+else
+    GO_VERSION="bazel-rules_go"
+fi
+
+BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+echo "STABLE_VERSION ${VERSION}${DIRTY}"
 echo "STABLE_GIT_COMMIT ${COMMIT}${DIRTY}"
-echo "STABLE_GIT_BRANCH ${BRANCH}"
 echo "STABLE_BUILD_USER ${BUILD_USER}"
 echo "STABLE_GO_VERSION ${GO_VERSION}"
-echo "STABLE_OCI_TAG ${VERSION}-${COMMIT}${DIRTY}"
+echo "STABLE_OCI_TAG ${VERSION}${DIRTY}"
+echo "STABLE_DRA_DRIVER_GPU_VERSION ${DRA_DRIVER_GPU_VERSION}"
 
 # Volatile keys (no STABLE_ prefix). Bazel injects them into stamped
 # binaries the same way as STABLE_* keys, but their value changes do

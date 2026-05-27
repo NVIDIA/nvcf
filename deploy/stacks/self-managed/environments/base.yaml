@@ -40,6 +40,17 @@ global:
 
   nodeSelectors:
     enabled: false
+    # Uncomment if you have a single node pool for all system workloads.
+    #
+    # all:
+    #   key: nvcf.nvidia.com/workload
+    #   value: system
+    # vault: null
+    # cassandra: null
+    # controlplane: null
+    # worker: null
+
+    # Set these if you have dedicated node pools for each system workload type.
     vault:
       key: nvcf.nvidia.com/workload
       value: vault
@@ -49,6 +60,36 @@ global:
     controlplane:
       key: nvcf.nvidia.com/workload
       value: control-plane
+    # Uncomment if you have a dedicated node pool for compute plane workers.
+    # If unset, controlplane or all node selectors are used.
+    #
+    # worker:
+    #   key: nvcf.nvidia.com/workload
+    #   value: worker
+
+  # Set this if you have custom node taints for system workloads.
+  tolerations:
+    enabled: false
+    # Set these if you have taints on the node pool for all system workloads.
+    # Example:
+    #
+    # all:
+    # - effect: NoSchedule
+    #   key: dedicated
+    #   operator: Equal
+    #   value: system-workload
+    # - effect: NoExecute
+    #   key: dedicated
+    #   operator: Equal
+    #   value: system-workload
+    #
+    all: []
+    # Set these if you have taints on dedicated node pools for each system workload type.
+    #
+    # vault: []
+    # cassandra: []
+    # controlplane: []
+    # worker: []
 
   storageClass: ""
   storageSize: "10Gi"

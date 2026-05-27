@@ -572,6 +572,35 @@ func Test_doTerminalTaskStatus(t *testing.T) {
 			expectedTerminalError:   true,
 		},
 		{
+			name:              "omitted max runtime duration enters backoff instead of timing out",
+			existingCondition: nil,
+			utilsPod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "utils",
+					CreationTimestamp: metav1.NewTime(baseTime),
+				},
+				Status: corev1.PodStatus{
+					StartTime: &metav1.Time{Time: baseTime},
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:  "utils",
+							State: corev1.ContainerState{},
+						},
+					},
+				},
+			},
+			statuses:                ObjectStatuses{{Status: statusFailed, TerminalBad: true, Reason: "ImagePullBackOff"}},
+			maxRuntimeDuration:      "",
+			maxQueuedDuration:       "PT1H",
+			currentTime:             baseTime.Add(10 * time.Second),
+			expectedPhase:           "",
+			expectedConditionType:   v1alpha1.MiniServiceConditionObjectsHealthy,
+			expectedConditionReason: v1alpha1.MiniServiceStatusReasonObjectsFailedWithinBackoffTimeout,
+			expectedRequeue:         true,
+			expectedError:           false,
+			expectedTerminalError:   false,
+		},
+		{
 			name:              "max queued exceeded - terminal",
 			existingCondition: nil,
 			utilsPod: &corev1.Pod{

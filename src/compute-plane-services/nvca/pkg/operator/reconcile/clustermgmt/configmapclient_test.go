@@ -85,6 +85,49 @@ func TestConfigMapClient_GetCluster_InvalidYAML(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to convert CR")
 }
 
+func TestAgentConfigFromClusterDTO(t *testing.T) {
+	t.Run("maps agent service oauth endpoints", func(t *testing.T) {
+		raw := `
+agent:
+  helmReValStageOAuthTokenURL: "https://chart-stage-reval-oauth.example.test/token"
+  helmReValStageOAuthPublicKeysetEndpoint: "https://chart-stage-reval-oauth.example.test/.well-known/jwks.json"
+  helmReValProdOAuthTokenURL: "https://chart-prod-reval-oauth.example.test/token"
+  helmReValProdOAuthPublicKeysetEndpoint: "https://chart-prod-reval-oauth.example.test/.well-known/jwks.json"
+  functionDeploymentStagesStageOAuthTokenURL: "https://chart-stage-fnds-oauth.example.test/token"
+  functionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://chart-stage-fnds-oauth.example.test/.well-known/jwks.json"
+  functionDeploymentStagesProdOAuthTokenURL: "https://chart-prod-fnds-oauth.example.test/token"
+  functionDeploymentStagesProdOAuthPublicKeysetEndpoint: "https://chart-prod-fnds-oauth.example.test/.well-known/jwks.json"
+`
+
+		cfg, found, err := AgentConfigFromClusterDTO(context.Background(), raw)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "https://chart-stage-reval-oauth.example.test/token", cfg.HelmReValStageOAuthTokenURL)
+		assert.Equal(t, "https://chart-stage-reval-oauth.example.test/.well-known/jwks.json", cfg.HelmReValStageOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-prod-reval-oauth.example.test/token", cfg.HelmReValProdOAuthTokenURL)
+		assert.Equal(t, "https://chart-prod-reval-oauth.example.test/.well-known/jwks.json", cfg.HelmReValProdOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/token", cfg.FunctionDeploymentStagesStageOAuthTokenURL)
+		assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/.well-known/jwks.json", cfg.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/token", cfg.FunctionDeploymentStagesProdOAuthTokenURL)
+		assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/.well-known/jwks.json", cfg.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
+	})
+
+	t.Run("empty service oauth endpoints are not defaults", func(t *testing.T) {
+		cfg, found, err := AgentConfigFromClusterDTO(context.Background(), `agent:
+  helmReValStageOAuthTokenURL: ""
+`)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, cfg.HelmReValStageOAuthTokenURL)
+	})
+
+	t.Run("invalid yaml returns an error", func(t *testing.T) {
+		_, found, err := AgentConfigFromClusterDTO(context.Background(), "agent: [")
+		require.Error(t, err)
+		assert.False(t, found)
+	})
+}
+
 func TestConfigMapClient_GetCluster_OTelCollectorConfig(t *testing.T) {
 	t.Run("maps OTel collector config when present in ConfigMap", func(t *testing.T) {
 		yamlWithOTel := `

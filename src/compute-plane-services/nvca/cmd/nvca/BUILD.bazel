@@ -2,17 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
-load("//rules/oci:defs.bzl", "go_oci_image")
+load("//rules/oci:defs.bzl", "go_oci_multi_binary_image")
+
+MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
 
 go_library(
     name = "nvca_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvca",
+    importpath = MODULE_PATH + "/cmd/nvca",
     visibility = ["//visibility:private"],
     deps = [
         "//pkg/nvca",
         "//pkg/nvca/errors",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
     ],
 )
 
@@ -20,45 +23,31 @@ go_binary(
     name = "nvca",
     embed = [":nvca_lib"],
     visibility = ["//visibility:public"],
-    # Mirrors the Dockerfile.nvca ldflags: -X version.Version,
-    # -X version.GitHash, -X version.ReleaseTag.
+    # Mirrors ldflags.
     x_defs = {
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
+        "github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version": "{STABLE_DRA_DRIVER_GPU_VERSION}",
     },
 )
 
-# Multi-arch OCI image for the nvca binary. Matches Dockerfile.nvca:
-# distroless/go base, binary at /usr/bin/app, image_push targets to
-# three nvcr.io registries (byocdev + nv-ngc-devops + ncp-dev). The
-# byocdev target matches the legacy nv_components push.imageRepoPrefix.
-#
-# The other binaries under cmd/ (nvca-operator + nvca-mirror +
-# nvca-operator-cleanup share an image per Dockerfile.nvca-operator;
-# cluster-validator has its own image; tools image bundles via
-# goreleaser) need separate go_oci_image targets. Scoped out of this
-# MR; the multi-binary nvca-operator image needs a custom layer
-# helper that this macro does not yet emit.
-go_oci_image(
+# Multi-binary OCI image: copies three binaries (nvca + webhook-server +
+# spiffe-token-fetcher) into a single image.
+go_oci_multi_binary_image(
     name = "image",
     base = "@distroless_go",
-    binary = ":nvca",
-    binary_path = "/usr/bin/app",
+    binaries = {
+        ":nvca": "/usr/bin/nvca",
+        "//cmd/webhook-server:webhook-server": "/usr/bin/webhook-server",
+        "//cmd/spiffe-token-fetcher:spiffe-token-fetcher": "/usr/bin/spiffe-token-fetcher",
+    },
     extra_registries = {
         "devops": "nvcr.io/nv-ngc-devops/nvca",
+        "gitlab": "github.com/NVIDIA:5005/egx/intelligent-infra/nvca/nvca",
         "ncp_dev": "nvcr.io/0651155215864979/ncp-dev/nvca",
     },
     registry = "nvcr.io/qtfpt1h0bieu/byocdev/nvca",
     tags = ["nvca"],
     visibility = ["//visibility:public"],
 )
-
-# Debug variant (nvca + webhook-server + the dlv debugger) is deferred.
-# Vendoring delve via go.mod pulled in ~310k lines of transitive deps
-# (cilium/ebpf, go.starlark.net, golang.org/x/telemetry, ...) for a
-# developer-only image. The follow-up plan is a custom base container
-# (e.g. nvcr.io/qtfpt1h0bieu/byocdev/distroless-with-dlv:vX.Y.Z) built and
-# published from the umbrella's tools/ directory alongside bazel-ci,
-# referenced here as an oci.pull and layered into a small
-# image_debug target. Tracked as a follow-up MR.

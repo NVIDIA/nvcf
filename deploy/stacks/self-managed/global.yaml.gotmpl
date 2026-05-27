@@ -1,3 +1,28 @@
+{{- define "nvcf.nodeSelector" -}}
+{{- if .selectors.enabled -}}
+{{- $ns := dig .type (dict) .selectors -}}
+{{- if or (not $ns) (not (kindIs "map" $ns)) (not (index $ns "key")) -}}
+{{- $ns = dig "all" (dict) .selectors -}}
+{{- end -}}
+{{- if and $ns (kindIs "map" $ns) (index $ns "key") -}}
+nodeSelector:
+  {{ $ns.key }}: {{ $ns.value }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "nvcf.tolerations" -}}
+{{- if .tolerations.enabled -}}
+{{- $tol := dig .type (list) .tolerations -}}
+{{- if not (and $tol (kindIs "slice" $tol)) -}}
+{{- $tol = dig "all" (list) .tolerations -}}
+{{- end -}}
+{{- if and $tol (kindIs "slice" $tol) -}}
+tolerations:
+{{ toYaml $tol }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 
 cassandra:
   global:
@@ -14,9 +39,11 @@ cassandra:
   replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "small" .Values }}
 
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.cassandra.key }}: {{ .Values.global.nodeSelectors.cassandra.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "cassandra" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "cassandra" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
   persistence:
     size: {{ .Values.global.storageSize | default "10Gi" }}
@@ -103,9 +130,11 @@ openbao:
     agentImage:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
-    {{- if .Values.global.nodeSelectors.enabled }}
-    nodeSelector:
-      {{ .Values.global.nodeSelectors.vault.key }}: {{ .Values.global.nodeSelectors.vault.value }}
+    {{- with include "nvcf.nodeSelector" (dict "type" "vault" "selectors" .Values.global.nodeSelectors) }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    {{- with include "nvcf.tolerations" (dict "type" "vault" "tolerations" .Values.global.tolerations) }}
+    {{- . | nindent 4 }}
     {{- end }}
     replicas: {{ .Values.openbao.injector.replicas }}
     podDisruptionBudget:
@@ -115,9 +144,11 @@ openbao:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
       tag: {{ $openbaoServerTag }}
-    {{- if .Values.global.nodeSelectors.enabled }}
-    nodeSelector:
-      {{ .Values.global.nodeSelectors.vault.key }}: {{ .Values.global.nodeSelectors.vault.value }}
+    {{- with include "nvcf.nodeSelector" (dict "type" "vault" "selectors" .Values.global.nodeSelectors) }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    {{- with include "nvcf.tolerations" (dict "type" "vault" "tolerations" .Values.global.tolerations) }}
+    {{- . | nindent 4 }}
     {{- end }}
 
     dataStorage:
@@ -181,12 +212,18 @@ nats:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
-  {{- if .Values.global.nodeSelectors.enabled }}
+  {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
+  {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
+  {{- if or $natsNs $natsTol }}
   podTemplate:
     merge:
       spec:
-        nodeSelector:
-          {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+        {{- with $natsNs }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        {{- with $natsTol }}
+        {{- . | nindent 8 }}
+        {{- end }}
   {{- end }}
 
   {{- if .Values.global.storageClass }}
@@ -206,9 +243,11 @@ apikeys:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-api-keys-service
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
 
 {{- $apiEnvOverrides := dig "api" "env" dict .Values }}
@@ -228,9 +267,11 @@ api:
     {{- with dig "api" "image" "tag" nil .Values }}
     tag: {{ . | quote }}
     {{- end }}
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
   accountBootstrap:
     image:
@@ -283,9 +324,11 @@ invocation:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-invocation-service
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
 
   env:
@@ -325,9 +368,11 @@ grpcproxy:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-grpc-proxy
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
 
   env:
@@ -347,6 +392,12 @@ ess:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/ess-api
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
 
   env:
     # Observability
@@ -364,9 +415,11 @@ notary:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/notary-service
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
 
   env:
@@ -385,9 +438,11 @@ sis:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/spot
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
 
   # LLS/TURN HMAC rotation configuration
@@ -417,9 +472,11 @@ adminIssuerProxy:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/admin-token-issuer-proxy
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
   gateway:
     enabled: true
@@ -438,9 +495,11 @@ stateMetrics:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-state-metrics-service
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
   # Disable ServiceMonitor for environments without Prometheus Operator
   serviceMonitor:
@@ -458,9 +517,11 @@ reval:
   securityContext:
     runAsNonRoot: true
     runAsUser: 65532
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
 
 llmApiGateway:
@@ -480,9 +541,11 @@ llmApiGateway:
     {{- with dig "addons" "llm" "gateway" "image" "pullPolicy" "" .Values }}
     pullPolicy: {{ . | quote }}
     {{- end }}
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
   {{- if dig "addons" "llm" "gateway" "auth" "grpcInsecure" false .Values }}
   config:
@@ -510,9 +573,11 @@ llmRequestRouter:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/stargate
-  {{- if .Values.global.nodeSelectors.enabled }}
-  nodeSelector:
-    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
   {{- end }}
   metrics:
     enabled: {{ dig "addons" "llm" "requestRouter" "metrics" "enabled" true .Values }}
@@ -524,6 +589,10 @@ llmRequestRouter:
       {{- if .Values.global.observability.tracing.enabled }}
       endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
       {{- end }}
+  {{- with dig "addons" "llm" "requestRouter" "loadBalancer" dict .Values }}
+  loadBalancer:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 nvcfGatewayRoutes:
   {{- $natsRouteEnabled := dig "ingress" "gatewayApi" "routes" "nats" "enabled" false .Values }}

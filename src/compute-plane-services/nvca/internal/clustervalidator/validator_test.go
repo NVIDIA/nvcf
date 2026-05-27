@@ -110,15 +110,28 @@ func TestCheckControlPlaneHealth(t *testing.T) {
 		assert.True(t, state.ControlPlaneHealthy)
 	})
 
-	t.Run("not-ready node", func(t *testing.T) {
+	t.Run("not-ready node alone is non-blocking", func(t *testing.T) {
+		// NotReady worker nodes emit a Warning but do not flip the cluster
+		// verdict. Only control-plane pod failures cause Critical.
 		client := fake.NewSimpleClientset(
 			makeNode("node-1", true, 0),
 			makeNode("node-2", false, 0),
+			makePod("kube-apiserver-node-1", "kube-system", corev1.PodRunning),
+			makePod("kube-controller-manager-node-1", "kube-system", corev1.PodRunning),
+			makePod("kube-scheduler-node-1", "kube-system", corev1.PodRunning),
+			makePod("etcd-node-1", "kube-system", corev1.PodRunning),
+			makePod("coredns-abc123", "kube-system", corev1.PodRunning),
+			makePod("kube-proxy-xyz789", "kube-system", corev1.PodRunning),
 		)
-		state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true}
+		state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
 		checkControlPlaneHealth(ctx, client, state)
-		assert.False(t, state.ControlPlaneHealthy)
-		assert.NotEmpty(t, state.Recommendations)
+		assert.True(t, state.ControlPlaneHealthy,
+			"NotReady nodes alone should not flip the verdict")
+		assert.False(t, state.NodesAllReady, "NodesAllReady should be false when a node is NotReady")
+		assert.Equal(t, 1, state.NotReadyNodes)
+		assert.NotEmpty(t, state.Warnings, "Warning entry should be added")
+		assert.Empty(t, state.Recommendations,
+			"no recommendations expected when only nodes are NotReady")
 	})
 }
 

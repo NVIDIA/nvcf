@@ -743,8 +743,7 @@ func schema_pkg_apis_nvcf_v1_NVCFBackend(ref common.ReferenceCallback) common.Op
 					},
 					"spec": {
 						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpec"),
+							Ref: ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpec"),
 						},
 					},
 					"status": {

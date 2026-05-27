@@ -25,10 +25,13 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/telemetry"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-const day = 24 * time.Hour
+const (
+	day  = 24 * time.Hour
+	week = 7 * day
+)
 
 type LimitDimension string
 
@@ -44,8 +47,11 @@ const (
 const (
 	RequestsPerMinute     LimitDimension = "requests_minute"
 	RequestsPerDay        LimitDimension = "requests_day"
+	TokensPerSecond       LimitDimension = "tokens_second"
 	TokensPerMinute       LimitDimension = "tokens_minute"
+	TokensPerHour         LimitDimension = "tokens_hour"
 	TokensPerDay          LimitDimension = "tokens_day"
+	TokensPerWeek         LimitDimension = "tokens_week"
 	InputTokensPerMinute  LimitDimension = "input_tokens_minute"
 	OutputTokensPerMinute LimitDimension = "output_tokens_minute"
 )
@@ -53,8 +59,11 @@ const (
 var allLimitDimensions = []LimitDimension{
 	RequestsPerMinute,
 	RequestsPerDay,
+	TokensPerSecond,
 	TokensPerMinute,
+	TokensPerHour,
 	TokensPerDay,
+	TokensPerWeek,
 	InputTokensPerMinute,
 	OutputTokensPerMinute,
 }
@@ -66,8 +75,11 @@ type ResourceLimit struct {
 
 	RequestsPerMinute     int64
 	RequestsPerDay        int64
+	TokensPerSecond       int64
 	TokensPerMinute       int64
+	TokensPerHour         int64
 	TokensPerDay          int64
+	TokensPerWeek         int64
 	InputTokensPerMinute  int64
 	OutputTokensPerMinute int64
 }
@@ -80,8 +92,11 @@ type OrgLimit struct {
 
 	RequestsPerMinute     int64
 	RequestsPerDay        int64
+	TokensPerSecond       int64
 	TokensPerMinute       int64
+	TokensPerHour         int64
 	TokensPerDay          int64
+	TokensPerWeek         int64
 	InputTokensPerMinute  int64
 	OutputTokensPerMinute int64
 }
@@ -95,8 +110,11 @@ type ProjectLimit struct {
 
 	RequestsPerMinute     int64
 	RequestsPerDay        int64
+	TokensPerSecond       int64
 	TokensPerMinute       int64
+	TokensPerHour         int64
 	TokensPerDay          int64
+	TokensPerWeek         int64
 	InputTokensPerMinute  int64
 	OutputTokensPerMinute int64
 }
@@ -110,19 +128,17 @@ type APIKeyLimit struct {
 
 	RequestsPerMinute     int64
 	RequestsPerDay        int64
+	TokensPerSecond       int64
 	TokensPerMinute       int64
+	TokensPerHour         int64
 	TokensPerDay          int64
+	TokensPerWeek         int64
 	InputTokensPerMinute  int64
 	OutputTokensPerMinute int64
 }
 
 func (r ResourceLimit) Empty() bool {
-	return r.RequestsPerMinute == 0 &&
-		r.RequestsPerDay == 0 &&
-		r.TokensPerMinute == 0 &&
-		r.TokensPerDay == 0 &&
-		r.InputTokensPerMinute == 0 &&
-		r.OutputTokensPerMinute == 0
+	return r == ResourceLimit{}
 }
 
 type ResourceRequest struct {
@@ -204,14 +220,26 @@ func doResourceLimit(
 				units = resourceRequest.Requests
 				limit = resourceLimit.RequestsPerDay
 				period = day
+			case TokensPerSecond:
+				units = resourceRequest.InputTokens + resourceRequest.OutputTokens
+				limit = resourceLimit.TokensPerSecond
+				period = time.Second
 			case TokensPerMinute:
 				units = resourceRequest.InputTokens + resourceRequest.OutputTokens
 				limit = resourceLimit.TokensPerMinute
 				period = time.Minute
+			case TokensPerHour:
+				units = resourceRequest.InputTokens + resourceRequest.OutputTokens
+				limit = resourceLimit.TokensPerHour
+				period = time.Hour
 			case TokensPerDay:
 				units = resourceRequest.InputTokens + resourceRequest.OutputTokens
 				limit = resourceLimit.TokensPerDay
 				period = day
+			case TokensPerWeek:
+				units = resourceRequest.InputTokens + resourceRequest.OutputTokens
+				limit = resourceLimit.TokensPerWeek
+				period = week
 			case InputTokensPerMinute:
 				units = resourceRequest.InputTokens
 				limit = resourceLimit.InputTokensPerMinute
@@ -292,8 +320,11 @@ func ResourceLimitFromOrgLimit(orgLimit OrgLimit) ResourceLimit {
 		Level:                 LevelOrg,
 		RequestsPerMinute:     orgLimit.RequestsPerMinute,
 		RequestsPerDay:        orgLimit.RequestsPerDay,
+		TokensPerSecond:       orgLimit.TokensPerSecond,
 		TokensPerMinute:       orgLimit.TokensPerMinute,
+		TokensPerHour:         orgLimit.TokensPerHour,
 		TokensPerDay:          orgLimit.TokensPerDay,
+		TokensPerWeek:         orgLimit.TokensPerWeek,
 		InputTokensPerMinute:  orgLimit.InputTokensPerMinute,
 		OutputTokensPerMinute: orgLimit.OutputTokensPerMinute,
 	}
@@ -344,8 +375,11 @@ func ResourceLimitFromProjectLimit(projectLimit ProjectLimit) ResourceLimit {
 		Level:                 LevelProject,
 		RequestsPerMinute:     projectLimit.RequestsPerMinute,
 		RequestsPerDay:        projectLimit.RequestsPerDay,
+		TokensPerSecond:       projectLimit.TokensPerSecond,
 		TokensPerMinute:       projectLimit.TokensPerMinute,
+		TokensPerHour:         projectLimit.TokensPerHour,
 		TokensPerDay:          projectLimit.TokensPerDay,
+		TokensPerWeek:         projectLimit.TokensPerWeek,
 		InputTokensPerMinute:  projectLimit.InputTokensPerMinute,
 		OutputTokensPerMinute: projectLimit.OutputTokensPerMinute,
 	}
@@ -378,8 +412,11 @@ func ResourceLimitFromAPIKeyLimit(apiKeyLimit APIKeyLimit) ResourceLimit {
 		Level:                 LevelAPIKey,
 		RequestsPerMinute:     apiKeyLimit.RequestsPerMinute,
 		RequestsPerDay:        apiKeyLimit.RequestsPerDay,
+		TokensPerSecond:       apiKeyLimit.TokensPerSecond,
 		TokensPerMinute:       apiKeyLimit.TokensPerMinute,
+		TokensPerHour:         apiKeyLimit.TokensPerHour,
 		TokensPerDay:          apiKeyLimit.TokensPerDay,
+		TokensPerWeek:         apiKeyLimit.TokensPerWeek,
 		InputTokensPerMinute:  apiKeyLimit.InputTokensPerMinute,
 		OutputTokensPerMinute: apiKeyLimit.OutputTokensPerMinute,
 	}

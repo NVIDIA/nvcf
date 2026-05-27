@@ -33,7 +33,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	llmgatewaypb "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/nvcf/pb"
+	llmgatewaypb "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf/pb"
 )
 
 const (

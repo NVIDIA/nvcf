@@ -30,7 +30,7 @@ import (
 	"github.com/nats-io/nats.go"
 	zlog "github.com/rs/zerolog/log"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/telemetry"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const defaultNATSAckWait = 30 * time.Second

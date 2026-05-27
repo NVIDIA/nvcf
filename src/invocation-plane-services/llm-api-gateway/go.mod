@@ -1,4 +1,4 @@
-module github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway
+module github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway
 
 go 1.25.6
 

@@ -38,7 +38,7 @@ go_library(
         "session_affinity.go",
         "token_count.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-api-gateway/api",
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api",
     visibility = ["//visibility:public"],
     deps = [
         "//api/adapters/openairesponses",
@@ -87,7 +87,6 @@ go_test(
         "rate_limit_accounting_test.go",
         "responses_handler_test.go",
         "session_affinity_test.go",
-        "token_count_test.go",
     ],
     embed = [":api"],
     deps = [

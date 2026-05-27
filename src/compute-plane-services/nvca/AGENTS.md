@@ -27,8 +27,6 @@ go test ./internal/miniservice/... \
 - `internal/gc/` - Garbage collection cleaners
 - `internal/metrics/` - Prometheus metrics
 - `deployments/nvca-operator/` - Operator Helm chart
-- `docker/Dockerfile.nvca` - NVCA agent container image
-- `docker/Dockerfile.nvca-operator` - Operator container image
 - `test/` - E2E and integration tests
 
 ## Dev Environment Tips

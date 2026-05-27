@@ -3,10 +3,12 @@
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
+MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+
 go_library(
     name = "nvca-operator-cleanup_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvca-operator-cleanup",
+    importpath = MODULE_PATH + "/cmd/nvca-operator-cleanup",
     visibility = ["//visibility:private"],
     deps = [
         "//pkg/client/clientset/versioned",
@@ -25,6 +27,12 @@ go_binary(
     name = "nvca-operator-cleanup",
     embed = [":nvca-operator-cleanup_lib"],
     visibility = ["//visibility:public"],
+    # Mirrors ldflags.
+    x_defs = {
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
+    },
 )
 
 go_test(
