@@ -572,6 +572,60 @@ kubectl delete job -n cassandra-system cassandra-migrations
 HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra apply
 ```
 
+## Streaming Issues
+
+### WebRTC Streaming Fails After Function Shows Active
+
+**Symptom:**
+
+- A streaming function deploys and shows ACTIVE
+- WebRTC clients fail to connect with `NVST_R_GENERIC_ERROR`
+- No errors in the function pod logs
+
+**Root Cause:**
+
+UDP traffic on the Kubernetes NodePort range (30000-32767) is blocked by a
+cloud-provider network security rule. The function health checks pass over
+TCP, so the function appears healthy, but the UDP media path is unreachable.
+
+On Azure (AKS), AKS attaches a second NSG to node NICs in the managed
+resource group (`MC_<resource-group>_<cluster>_<region>`). Even if the subnet NSG
+allows UDP, the NIC NSG blocks it by default.
+
+**Diagnosis:**
+
+1. Confirm the function is ACTIVE and pods are running:
+
+   ```bash
+   kubectl get pods -n nvcf-backend -l nvcf-function-name=<function-name>
+   ```
+
+2. On Azure, check whether the NIC NSG has a UDP allow rule:
+
+   ```bash
+   MC_RG="MC_${RESOURCE_GROUP}_${CLUSTER_NAME}_${LOCATION}"
+   for NIC_NSG in $(az network nsg list -g "$MC_RG" --query "[].name" -o tsv); do
+     echo "=== $NIC_NSG ==="
+     az network nsg rule list -g "$MC_RG" --nsg-name "$NIC_NSG" \
+       --query "[?protocol=='Udp']" -o table
+   done
+   ```
+
+   If any NSG is missing a UDP rule, add it to all of them:
+
+   ```bash
+   for NIC_NSG in $(az network nsg list -g "$MC_RG" --query "[].name" -o tsv); do
+     az network nsg rule create -g "$MC_RG" --nsg-name "$NIC_NSG" \
+       -n allow-udp-nodeports-webrtc --priority 510 \
+       --direction Inbound --access Allow --protocol Udp \
+       --source-address-prefix Internet --source-port-range "*" \
+       --destination-address-prefix "*" --destination-port-range "30000-32767"
+   done
+   ```
+
+See [Cloud Provider Network Requirements](./streaming-functions.md#cloud-provider-network-requirements)
+for the full CSP networking checklist.
+
 ## Getting Help
 
 When requesting support, provide:
