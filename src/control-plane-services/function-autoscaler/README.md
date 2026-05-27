@@ -1,6 +1,8 @@
 # NVCF Autoscaler
 
-A high-performance, distributed autoscaling service for NVIDIA Cloud Functions (NVCF) built in Rust. This service periodically monitors function invocation and usage patterns and horizontally scales NVCF functions.
+The Function Autoscaler's documentation is available [here](https://docs.nvidia.com/nvcf/function-autoscaling-overview).
+
+The NVCF Function Autoscaler is a distributed Rust service that monitors function utilization and uses it to determine the ideal instance count per function on the NVCF control plane. It runs as a horizontally scaled deployment on the same Kubernetes cluster as the rest of the control plane.
 
 ## Build with Bazel
 
@@ -269,7 +271,7 @@ The service automatically handles:
    - Verify SSL certificates are properly configured
    - Check network connectivity to Cassandra cluster
    - Validate credentials in secrets file
-   - Create `/etc/app/config` directory if it does not exist
+   - Create `/etc/server/config` directory if it does not exist
 
 2. **TSDB Query Failures**:
    - Confirm TSDB endpoint accessibility
