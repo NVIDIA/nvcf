@@ -19,6 +19,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -55,6 +56,84 @@ func TestCreateConfigParsesLLMConfigFromJSON(t *testing.T) {
 	}
 	if got := stringValue(model.LLMConfig.TokenRateLimit); got != "1000-M" {
 		t.Fatalf("tokenRateLimit = %q, want 1000-M", got)
+	}
+}
+
+func TestCreateConfigModelLLMConfigRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	original := CreateConfig{
+		Name: "llm-smoke",
+		Models: []ArtifactConfig{{
+			Name: "dummy-model",
+			LLMConfig: &LLMConfigInput{
+				URIs:           []string{"/v1/chat/completions", "/v1/responses", "/v1/embeddings"},
+				RoutingMethod:  optionalString("round_robin"),
+				TokenRateLimit: optionalString("1000-M"),
+			},
+		}},
+	}
+
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal create config: %v", err)
+	}
+
+	body := string(encoded)
+	for _, want := range []string{
+		`"llmConfig":`,
+		`"uris":["/v1/chat/completions","/v1/responses","/v1/embeddings"]`,
+		`"routingMethod":"round_robin"`,
+		`"tokenRateLimit":"1000-M"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("encoded payload %s missing %s", body, want)
+		}
+	}
+
+	var decoded CreateConfig
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal create config: %v", err)
+	}
+
+	if len(decoded.Models) != 1 {
+		t.Fatalf("models length = %d, want 1", len(decoded.Models))
+	}
+	got := decoded.Models[0]
+	if got.Name != "dummy-model" {
+		t.Fatalf("name = %q, want dummy-model", got.Name)
+	}
+	if got.LLMConfig == nil {
+		t.Fatal("llmConfig is nil after round-trip")
+	}
+	assertStringSlice(t, got.LLMConfig.URIs, original.Models[0].LLMConfig.URIs)
+	if rm := stringValue(got.LLMConfig.RoutingMethod); rm != "round_robin" {
+		t.Fatalf("routingMethod = %q, want round_robin", rm)
+	}
+	if trl := stringValue(got.LLMConfig.TokenRateLimit); trl != "1000-M" {
+		t.Fatalf("tokenRateLimit = %q, want 1000-M", trl)
+	}
+}
+
+func TestCreateConfigModelLLMConfigOmittedWhenNil(t *testing.T) {
+	t.Parallel()
+
+	config := CreateConfig{
+		Name: "non-llm-function",
+		Models: []ArtifactConfig{{
+			Name:    "plain-model",
+			Version: "1",
+			URI:     "registry/model:1",
+		}},
+	}
+
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal create config: %v", err)
+	}
+
+	if strings.Contains(string(encoded), `"llmConfig"`) {
+		t.Fatalf("encoded payload %s should omit llmConfig when nil", string(encoded))
 	}
 }
 
