@@ -45,6 +45,14 @@ spec:
                   - key: "nvca.nvcf.nvidia.io/spot-instance-type"
                     operator: In
                     values: [pod_spec, helm_chart, miniservice]
+          - resources:
+              kinds: ["Pod"]
+              operations: ["CREATE"]
+              namespaceSelector:
+                matchExpressions:
+                  - key: "nvca.nvcf.nvidia.io/workload-instance-type"
+                    operator: In
+                    values: [pod_spec, helm_chart, miniservice]
       mutate:
         patchStrategicMerge:
           spec:
@@ -72,6 +80,14 @@ spec:
               namespaceSelector:
                 matchExpressions:
                   - key: "nvca.nvcf.nvidia.io/spot-instance-type"
+                    operator: In
+                    values: [pod_spec, helm_chart, miniservice]
+          - resources:
+              kinds: ["Pod"]
+              operations: ["CREATE"]
+              namespaceSelector:
+                matchExpressions:
+                  - key: "nvca.nvcf.nvidia.io/workload-instance-type"
                     operator: In
                     values: [pod_spec, helm_chart, miniservice]
       mutate:
@@ -212,6 +228,14 @@ spec:
               namespaceSelector:
                 matchExpressions:
                   - key: "nvca.nvcf.nvidia.io/spot-instance-type"
+                    operator: In
+                    values: [pod_spec, helm_chart, miniservice]
+          - resources:
+              kinds: ["Pod"]
+              operations: ["CREATE"]
+              namespaceSelector:
+                matchExpressions:
+                  - key: "nvca.nvcf.nvidia.io/workload-instance-type"
                     operator: In
                     values: [pod_spec, helm_chart, miniservice]
       mutate:
@@ -357,6 +381,14 @@ spec:
               namespaceSelector:
                 matchExpressions:
                   - key: "nvca.nvcf.nvidia.io/spot-instance-type"
+                    operator: In
+                    values: [pod_spec, helm_chart, miniservice]
+          - resources:
+              kinds: ["Pod"]
+              operations: ["CREATE"]
+              namespaceSelector:
+                matchExpressions:
+                  - key: "nvca.nvcf.nvidia.io/workload-instance-type"
                     operator: In
                     values: [pod_spec, helm_chart, miniservice]
       mutate:
