@@ -184,6 +184,70 @@ func TestParseLLMModelStringRejectsInvalidRoutingMethod(t *testing.T) {
 	}
 }
 
+func TestValidateLLMTokenRateLimit(t *testing.T) {
+	t.Parallel()
+
+	valid := []string{
+		"",
+		"100-S",
+		"9000-M",
+		"25000-H",
+		"100000-D",
+		"500000-W",
+		"100-S,9000-M,25000-H,100000-D,500000-W",
+	}
+	for _, value := range valid {
+		value := value
+		t.Run("valid_"+value, func(t *testing.T) {
+			t.Parallel()
+
+			if err := validateLLMTokenRateLimit(value); err != nil {
+				t.Fatalf("validate tokenRateLimit %q: %v", value, err)
+			}
+		})
+	}
+
+	invalid := []string{
+		"100-A",
+		"100",
+		"0-S",
+		"-1-S",
+		"100-s",
+		"100-S,200-S",
+		"100-S,",
+		",100-S",
+	}
+	for _, value := range invalid {
+		value := value
+		t.Run("invalid_"+value, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateLLMTokenRateLimit(value)
+			assertTokenRateLimitError(t, err)
+		})
+	}
+}
+
+func TestParseLLMModelStringRejectsInvalidTokenRateLimit(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseLLMModelString("name=dummy-model,uris=/v1/chat/completions,tokenRateLimit=100-A")
+	assertTokenRateLimitError(t, err)
+}
+
+func TestArtifactConfigToClientRejectsInvalidTokenRateLimit(t *testing.T) {
+	t.Parallel()
+
+	_, err := artifactConfigToClientArtifact(ArtifactConfig{
+		Name: "dummy-model",
+		LLMConfig: &LLMConfigInput{
+			URIs:           []string{"/v1/chat/completions"},
+			TokenRateLimit: optionalString("100-A"),
+		},
+	})
+	assertTokenRateLimitError(t, err)
+}
+
 func TestLoadCreateConfigAppendsLLMModelFlag(t *testing.T) {
 	originalFlags := createFlags
 	t.Cleanup(func() {
@@ -372,6 +436,25 @@ func TestParseLLMModelUpdateStringRejectsInvalidRoutingMethod(t *testing.T) {
 	}
 }
 
+func TestParseLLMModelUpdateStringRejectsInvalidTokenRateLimit(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseLLMModelUpdateString("name=dummy-model,tokenRateLimit=100-A")
+	assertTokenRateLimitError(t, err)
+}
+
+func TestModelUpdateConfigToClientRejectsInvalidTokenRateLimit(t *testing.T) {
+	t.Parallel()
+
+	_, err := modelUpdateConfigToClient(ModelUpdateConfig{
+		ModelName: "dummy-model",
+		LLMConfig: &LLMConfigUpdateInput{
+			TokenRateLimit: optionalString("100-A"),
+		},
+	})
+	assertTokenRateLimitError(t, err)
+}
+
 func TestLoadUpdateConfigAppendsLLMModelUpdateFlag(t *testing.T) {
 	t.Parallel()
 
@@ -462,6 +545,17 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func assertTokenRateLimitError(t *testing.T, err error) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected tokenRateLimit validation error")
+	}
+	if !strings.Contains(err.Error(), "invalid tokenRateLimit") {
+		t.Fatalf("err = %v, want invalid tokenRateLimit", err)
+	}
 }
 
 func assertStringSlice(t *testing.T, got []string, want []string) {
