@@ -13,8 +13,9 @@ kubectl get pods -n nats-system -n vault-system -n cassandra-system
 
 </Info>
 
-Install the services in the order shown below. Services with dependencies are noted —
-wait for the dependency to be healthy before installing the dependent service.
+Install the services in the order shown below. Services with dependencies are
+noted. Wait for the dependency to be healthy before installing the dependent
+service.
 
 ## API Keys
 

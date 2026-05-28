@@ -17,6 +17,23 @@ For gRPC functions, see [gRPC Function Invocation](./grpc-function-invocation.md
 For HTTP examples on this page, see [HTTP Invocation](#http-invocation) and
 [HTTP Streaming](#http-streaming).
 
+## Invocation Path
+
+HTTP invocation enters through the public invocation endpoint and is handled by
+Invocation Service. The worker request path delivers the request to the
+selected customer function and returns the response through Invocation Service.
+
+![HTTP invocation path](images/nvcf-http-invocation-path.svg)
+
+### Multi-Cluster View
+
+In a global deployment, DNS or a custom front door selects a regional HTTP
+invocation endpoint. Each region keeps its own Invocation Service, NATS worker
+request path, and customer HTTP function placement. The cross-cluster line shows
+the NATS chatter that supports regional request-path state when configured.
+
+![HTTP multi-cluster invocation path](images/nvcf-http-multicluster-invocation.svg)
+
 ## HTTP Invocation
 
 HTTP invocation uses the invocation route exposed by your gateway. In self-hosted
@@ -84,6 +101,78 @@ server.
 
 Size multipart and binary requests against your gateway, load balancer, and
 function container limits.
+
+## Long-Running HTTP Invocation
+
+Cloud Functions supports long-running inference over HTTP/2 for synchronous HTTP
+invocations. Use this mode when a function can take longer than a typical idle
+connection window to produce a response.
+
+The client must keep the HTTP/2 connection healthy while it waits. Configure the
+client to send HTTP/2 PING frames during idle response periods. Cloud Functions
+does not send those client-side PING frames for you, and enabling HTTP/2 alone
+is not enough if the client library does not send PING frames while it waits.
+
+Long-running HTTP/2 invocation uses the same request payload, function hostname,
+and `Authorization` header as other HTTP invocations. Set the client request
+timeout higher than the expected inference duration and test with the same client
+runtime used in production.
+
+HTTP/2 PING frames are connection-level frames. They are not HTTP headers, JSON
+fields, or request body data.
+
+### Go Clients
+
+Go clients can configure HTTP/2 keepalive behavior with
+`golang.org/x/net/http2`. Set `ReadIdleTimeout` to the maximum idle period before
+the client sends a health-check PING frame. Set `PingTimeout` to the time the
+client waits for the PING acknowledgement before it closes the connection.
+
+```go
+base := &http.Transport{
+	TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	},
+}
+
+h2, err := http2.ConfigureTransports(base)
+if err != nil {
+	return err
+}
+
+h2.ReadIdleTimeout = 30 * time.Second
+h2.PingTimeout = 10 * time.Second
+
+client := &http.Client{
+	Transport: base,
+	Timeout:   30 * time.Minute,
+}
+```
+
+Choose timeout values that match your workload and network path. A shorter
+`ReadIdleTimeout` sends PING frames more often. A very short interval can add
+unnecessary connection traffic.
+
+### Python Clients
+
+Python clients that use `httpx`, including clients built on the OpenAI Python
+SDK, can enable HTTP/2, but the standard `httpx` transport does not expose
+HTTP/2 PING keepalive settings.
+
+For long-running invocations that can stay idle while the function runs, use a
+Python transport that can send HTTP/2 PING frames or contact NVIDIA Support for
+the recommended Python workaround. Increasing the request timeout without
+HTTP/2 PING support can still leave the connection vulnerable to idle connection
+closures.
+
+### curl
+
+The `curl` command line can help verify basic HTTP connectivity, but do not use
+it as the only validation tool for long-running idle invocations. It does not
+provide a practical way to send HTTP/2 PING frames while waiting for a response.
+
+Use a production client library that can configure HTTP/2 PING behavior when you
+validate long-running inference.
 
 ## HTTP Streaming
 

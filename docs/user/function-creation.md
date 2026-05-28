@@ -26,6 +26,8 @@ routing metadata under `models[].llmConfig`.
 
 For the full request path, supported endpoints, native proxy behavior, and session stickiness details, see [LLM Gateway](./llm-gateway.md).
 
+![LLM invocation path](images/nvcf-llm-invocation-path.svg)
+
 LLM requests must already be OpenAI-compatible when they reach the gateway. NVCF does not render Hugging Face chat templates or tokenize prompts for the function.
 
 ```json

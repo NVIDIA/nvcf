@@ -24,6 +24,8 @@ Requests must already be OpenAI-compatible when they reach the LLM invocation ro
 
 The LLM Gateway path has these runtime components:
 
+![LLM invocation path](images/nvcf-llm-invocation-path.svg)
+
 1. Client sends an OpenAI-compatible request to `llm.invocation.<domain>`.
 2. LLM API Gateway extracts the routing key from the `model` field, validates authorization, applies request and token rate limits, and validates endpoint-specific request fields.
 3. LLM API Gateway forwards the request to LLM request router with routing metadata such as request ID, routing key, model name, routing method, token estimate, and cache affinity key when present.
@@ -32,6 +34,17 @@ The LLM Gateway path has these runtime components:
 6. The user container handles the OpenAI-compatible route and returns the response through the same path.
 
 The function container must expose the declared OpenAI-compatible paths on its inference port. Use `inferenceUrl: "/"` for LLM functions unless the container needs a different base path.
+
+### Multi-Cluster View
+
+In a global deployment, DNS or a custom front door selects a regional
+`llm.invocation.<domain>` endpoint. The LLM Gateway can use NATS for
+cross-cluster usage-state chatter. LLM worker request streams still use the
+request router and worker gateway path, not NATS worker streams. The
+worker-gateway arrows show that routers can target local or remote worker
+gateways when those workers are registered into the router mesh.
+
+![LLM multi-cluster invocation path](images/nvcf-llm-multicluster-invocation.svg)
 
 ## Function Configuration
 

@@ -8,12 +8,25 @@ In self-hosted deployments, the gRPC route is exposed on the Gateway TCP
 listener. See [Gateway Routing](./gateway-routing.md) for listener and DNS
 configuration.
 
+## Invocation Path
+
+![gRPC invocation path](images/nvcf-grpc-invocation-path.svg)
+
 ```bash
 export GRPC_GATEWAY_ADDR=<grpc-gateway-address>
 export FUNCTION_ID=<function-id>
 export FUNCTION_VERSION_ID=<function-version-id>
 export API_KEY=<api-key>
 ```
+
+### Multi-Cluster View
+
+In a global deployment, DNS selects a regional public gRPC endpoint. Each region
+keeps its own gRPC Proxy, NVCF API and NATS stateful request path, worker CONNECT
+registration, and customer gRPC service placement. The cross-cluster line shows
+NATS chatter for regional stateful request-path coordination when configured.
+
+![gRPC multi-cluster invocation path](images/nvcf-grpc-multicluster-invocation.svg)
 
 ## Metadata
 

@@ -324,9 +324,12 @@ When the LLM invocation route is enabled, send OpenAI-compatible requests to sup
 
 </Tip>
 
-For request examples and invocation-specific behavior over these routes, see
-[Generic HTTP Function Invocation](./generic-http-function-invocation.md) and
-[gRPC Function Invocation](./grpc-function-invocation.md).
+### Invocation Path Diagrams
+
+For local and multi-cluster invocation-path diagrams, see
+[Generic HTTP Function Invocation](./generic-http-function-invocation.md),
+[gRPC Function Invocation](./grpc-function-invocation.md), and
+[LLM Gateway](./llm-gateway.md).
 
 ### Vanity Gateway (Optional)
 
