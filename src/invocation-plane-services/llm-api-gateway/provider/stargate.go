@@ -28,6 +28,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -120,35 +121,39 @@ func (p *StargateProvider) Complete(
 	reqCtx *requestctx.RequestContext,
 	request *NormalizedRequest,
 ) (*models.ChatCompletionResponse, error) {
-	outbound, err := p.newOutboundRequest(reqCtx, request, false)
+	outbound, err := p.newOutboundRequest(reqCtx, request, true)
 	if err != nil {
 		return nil, err
 	}
 
 	requestCtx, cancel := p.requestContext(ctx)
-	defer cancel()
-
 	start := time.Now()
 	resp, err := p.client.Do(outbound.WithContext(requestCtx))
 	if err != nil {
+		cancel()
 		p.recordUpstreamRequest(ctx, reqCtx, start, 0, err)
 		return nil, err
 	}
-	defer resp.Body.Close()
 
 	if err := checkHTTPError(resp); err != nil {
+		cancel()
+		resp.Body.Close()
 		p.recordUpstreamRequest(ctx, reqCtx, start, resp.StatusCode, err)
 		return nil, err
 	}
 
-	var response models.ChatCompletionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+	events := make(chan StreamEvent, 8)
+	go p.readStream(requestCtx, cancel, resp.Body, events)
+
+	response, err := aggregateChatCompletionStream(events)
+	if err != nil {
+		cancel()
 		p.recordUpstreamRequest(ctx, reqCtx, start, resp.StatusCode, err)
-		return nil, fmt.Errorf("decode stargate completion response: %w", err)
+		return nil, err
 	}
 
 	p.recordUpstreamRequest(ctx, reqCtx, start, resp.StatusCode, nil)
-	return &response, nil
+	return response, nil
 }
 
 func (p *StargateProvider) Stream(
@@ -410,6 +415,16 @@ func outboundChatRequest(
 ) *models.ChatCompletionRequest {
 	outbound := *request.ChatRequest
 	outbound.Stream = ptr.To(stream)
+	if stream && !ptr.Deref(request.ChatRequest.Stream) {
+		// Complete uses upstream streaming internally, including when the client omitted stream.
+		// Request usage chunks so token finalization can use the aggregated response usage.
+		streamOptions := models.ChatCompletionStreamOptions{}
+		if request.ChatRequest.StreamOptions != nil {
+			streamOptions = *request.ChatRequest.StreamOptions
+		}
+		streamOptions.IncludeUsage = ptr.To(true)
+		outbound.StreamOptions = &streamOptions
+	}
 	if !outbound.ServiceTier.IsValid() {
 		outbound.ServiceTier = servicetier.Auto
 	}
@@ -442,6 +457,190 @@ func checkHTTPError(resp *http.Response) error {
 	}
 
 	return echo.NewHTTPError(resp.StatusCode, message)
+}
+
+type chatCompletionChoiceAccumulator struct {
+	index        uint32
+	role         string
+	content      strings.Builder
+	reasoning    strings.Builder
+	finishReason string
+	functionCall *models.ChatCompletionFunctionCall
+	toolCalls    map[uint32]*chatCompletionToolCallAccumulator
+}
+
+type chatCompletionToolCallAccumulator struct {
+	id        string
+	typ       string
+	name      string
+	arguments strings.Builder
+}
+
+func aggregateChatCompletionStream(events <-chan StreamEvent) (*models.ChatCompletionResponse, error) {
+	response := &models.ChatCompletionResponse{
+		Object:  models.ObjectChatCompletion,
+		Choices: []models.ChatCompletionChoice{},
+	}
+	choices := map[uint32]*chatCompletionChoiceAccumulator{}
+	var choiceIndexes []uint32
+	seenChunk := false
+
+	for event := range events {
+		if event.Err != nil {
+			return nil, event.Err
+		}
+		if event.Chunk == nil {
+			continue
+		}
+
+		chunk := event.Chunk
+		if !seenChunk {
+			response.ID = chunk.ID
+			response.CreatedAt = chunk.CreatedAt
+			response.Model = chunk.Model
+			response.SystemFingerprint = chunk.SystemFingerprint
+			response.ServiceTier = chunk.ServiceTier
+			seenChunk = true
+		}
+		if chunk.Usage != nil {
+			response.Usage = *chunk.Usage
+		}
+
+		for _, choice := range chunk.Choices {
+			acc, ok := choices[choice.Index]
+			if !ok {
+				acc = &chatCompletionChoiceAccumulator{
+					index:     choice.Index,
+					toolCalls: map[uint32]*chatCompletionToolCallAccumulator{},
+				}
+				choices[choice.Index] = acc
+				choiceIndexes = append(choiceIndexes, choice.Index)
+			}
+			acc.merge(choice)
+		}
+	}
+
+	if !seenChunk {
+		return nil, errors.New("stargate stream ended without chat completion chunks")
+	}
+	if len(choiceIndexes) == 0 {
+		return nil, errors.New("stargate stream ended without chat completion choices")
+	}
+
+	sort.Slice(choiceIndexes, func(i, j int) bool {
+		return choiceIndexes[i] < choiceIndexes[j]
+	})
+	for _, index := range choiceIndexes {
+		response.Choices = append(response.Choices, choices[index].buildChoice())
+	}
+
+	return response, nil
+}
+
+func (a *chatCompletionChoiceAccumulator) merge(choice models.ChatCompletionChunkChoice) {
+	if choice.Delta.Role != nil && *choice.Delta.Role != "" {
+		a.role = *choice.Delta.Role
+	}
+	if choice.Delta.Content != nil {
+		a.content.WriteString(*choice.Delta.Content)
+	}
+	if choice.Delta.Reasoning != nil {
+		a.reasoning.WriteString(*choice.Delta.Reasoning)
+	}
+	if choice.FinishReason != nil {
+		a.finishReason = *choice.FinishReason
+	}
+	if choice.Delta.FunctionCall != nil {
+		a.mergeFunctionCall(*choice.Delta.FunctionCall)
+	}
+	if choice.Delta.ToolCalls == nil {
+		return
+	}
+	for _, toolCall := range *choice.Delta.ToolCalls {
+		a.mergeToolCall(toolCall)
+	}
+}
+
+func (a *chatCompletionChoiceAccumulator) mergeFunctionCall(functionCall models.ChatCompletionFunctionCall) {
+	if a.functionCall == nil {
+		a.functionCall = &models.ChatCompletionFunctionCall{}
+	}
+	if a.functionCall.Name == "" && functionCall.Name != "" {
+		a.functionCall.Name = functionCall.Name
+	}
+	a.functionCall.Arguments += functionCall.Arguments
+}
+
+func (a *chatCompletionChoiceAccumulator) mergeToolCall(toolCall models.ChatCompletionToolCallChunk) {
+	acc, ok := a.toolCalls[toolCall.Index]
+	if !ok {
+		acc = &chatCompletionToolCallAccumulator{}
+		a.toolCalls[toolCall.Index] = acc
+	}
+	if acc.id == "" && toolCall.ID != "" {
+		acc.id = toolCall.ID
+	}
+	if acc.typ == "" && toolCall.Type != "" {
+		acc.typ = toolCall.Type
+	}
+	if acc.name == "" && toolCall.Function.Name != "" {
+		acc.name = toolCall.Function.Name
+	}
+	acc.arguments.WriteString(toolCall.Function.Arguments)
+}
+
+func (a *chatCompletionChoiceAccumulator) buildChoice() models.ChatCompletionChoice {
+	role := a.role
+	if role == "" {
+		role = models.ChatCompletionRoleAssistant
+	}
+
+	message := models.ChatCompletionMessage{
+		Role: role,
+	}
+	if a.content.Len() > 0 {
+		message.Content = ptr.To(a.content.String())
+	}
+	if a.reasoning.Len() > 0 {
+		message.Reasoning = ptr.To(a.reasoning.String())
+	}
+	if a.functionCall != nil {
+		message.FunctionCall = a.functionCall
+	}
+	if len(a.toolCalls) > 0 {
+		message.ToolCalls = ptr.To(a.buildToolCalls())
+	}
+
+	return models.ChatCompletionChoice{
+		Index:        a.index,
+		Message:      message,
+		FinishReason: a.finishReason,
+	}
+}
+
+func (a *chatCompletionChoiceAccumulator) buildToolCalls() []models.ChatCompletionToolCall {
+	indexes := make([]uint32, 0, len(a.toolCalls))
+	for index := range a.toolCalls {
+		indexes = append(indexes, index)
+	}
+	sort.Slice(indexes, func(i, j int) bool {
+		return indexes[i] < indexes[j]
+	})
+
+	toolCalls := make([]models.ChatCompletionToolCall, 0, len(indexes))
+	for _, index := range indexes {
+		toolCall := a.toolCalls[index]
+		toolCalls = append(toolCalls, models.ChatCompletionToolCall{
+			ID:   toolCall.id,
+			Type: toolCall.typ,
+			Function: models.ChatCompletionFunctionCall{
+				Name:      toolCall.name,
+				Arguments: toolCall.arguments.String(),
+			},
+		})
+	}
+
+	return toolCalls
 }
 
 func (p *StargateProvider) readStream(
@@ -480,6 +679,10 @@ func (p *StargateProvider) readStream(
 
 		select {
 		case <-ctx.Done():
+			select {
+			case events <- StreamEvent{Err: ctx.Err()}:
+			default:
+			}
 			return false
 		case events <- StreamEvent{Chunk: &chunk}:
 			return true
@@ -506,7 +709,17 @@ func (p *StargateProvider) readStream(
 		_ = emit()
 	}
 
-	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(ctx.Err(), context.Canceled) {
+	if err := scanner.Err(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			select {
+			case events <- StreamEvent{Err: ctxErr}:
+			default:
+			}
+			return
+		}
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		events <- StreamEvent{
 			Err: fmt.Errorf("read stargate stream: %w", err),
 		}

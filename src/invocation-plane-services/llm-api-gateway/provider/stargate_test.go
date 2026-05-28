@@ -20,6 +20,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -83,7 +85,7 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 		require.Equal(t, http.MethodPost, r.Method)
 		require.Equal(t, stargateChatCompletionsPath, r.URL.Path)
 		require.Equal(t, contentTypeJSON, r.Header.Get(headerContentType))
-		require.Equal(t, contentTypeJSON, r.Header.Get(headerAccept))
+		require.Equal(t, contentTypeSSE, r.Header.Get(headerAccept))
 		require.Equal(t, "Bearer secret-token", r.Header.Get(headerAuthorization))
 		require.Equal(t, "req-123", r.Header.Get(headerRequestID))
 		require.Equal(t, "us-west1", r.Header.Get(headerTargetRegion))
@@ -98,7 +100,10 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 		var payload models.ChatCompletionRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
 		require.NotNil(t, payload.Stream)
-		require.False(t, ptr.Deref(payload.Stream))
+		require.True(t, ptr.Deref(payload.Stream))
+		require.NotNil(t, payload.StreamOptions)
+		require.NotNil(t, payload.StreamOptions.IncludeUsage)
+		require.True(t, ptr.Deref(payload.StreamOptions.IncludeUsage))
 		require.NotNil(t, payload.Messages)
 		require.Len(t, *payload.Messages, 1)
 		require.Equal(t, models.ChatCompletionRoleUser, (*payload.Messages)[0].Role)
@@ -109,31 +114,47 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 		require.Len(t, *payload.Tools, 1)
 		require.Nil(t, payload.Functions)
 
-		responseBody, err := json.Marshal(&models.ChatCompletionResponse{
-			ID:          "chatcmpl-test",
-			Object:      models.ObjectChatCompletion,
-			CreatedAt:   123,
-			Model:       "upstream-model",
-			ServiceTier: servicetier.Auto,
-			Choices: []models.ChatCompletionChoice{
-				{
-					Index: 0,
-					Message: models.ChatCompletionMessage{
-						Role:    models.ChatCompletionRoleAssistant,
-						Content: ptr.To("hello from stargate"),
+		responseBody := sseChatBody(t,
+			models.ChatCompletionChunk{
+				ID:          "chatcmpl-test",
+				Object:      models.ObjectChatCompletionChunk,
+				CreatedAt:   123,
+				Model:       "upstream-model",
+				ServiceTier: servicetier.Auto,
+				Choices: []models.ChatCompletionChunkChoice{
+					{
+						Index: 0,
+						Delta: models.ChatCompletionChunkDelta{
+							Role:    ptr.To(models.ChatCompletionRoleAssistant),
+							Content: ptr.To("hello "),
+						},
 					},
-					FinishReason: models.FinishReasonStop,
 				},
 			},
-		})
-		require.NoError(t, err)
+			models.ChatCompletionChunk{
+				ID:          "chatcmpl-test",
+				Object:      models.ObjectChatCompletionChunk,
+				CreatedAt:   123,
+				Model:       "upstream-model",
+				ServiceTier: servicetier.Auto,
+				Choices: []models.ChatCompletionChunkChoice{
+					{
+						Index: 0,
+						Delta: models.ChatCompletionChunkDelta{
+							Content: ptr.To("from stargate"),
+						},
+						FinishReason: ptr.To(models.FinishReasonStop),
+					},
+				},
+			},
+		)
 
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header: http.Header{
-				headerContentType: []string{contentTypeJSON},
+				headerContentType: []string{contentTypeSSE},
 			},
-			Body:    io.NopCloser(strings.NewReader(string(responseBody))),
+			Body:    io.NopCloser(strings.NewReader(responseBody)),
 			Request: r,
 		}, nil
 	})}
@@ -141,9 +162,448 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 	response, err := provider.Complete(context.Background(), reqCtx, request)
 	require.NoError(t, err)
 	require.Equal(t, "chatcmpl-test", response.ID)
+	require.Equal(t, models.ObjectChatCompletion, response.Object)
 	require.Equal(t, "upstream-model", response.Model)
 	require.Len(t, response.Choices, 1)
+	require.Equal(t, models.ChatCompletionRoleAssistant, response.Choices[0].Message.Role)
 	require.Equal(t, "hello from stargate", ptr.Deref(response.Choices[0].Message.Content))
+	require.Equal(t, models.FinishReasonStop, response.Choices[0].FinishReason)
+}
+
+func TestStargateProviderCompleteAggregatesUsageFromStream(t *testing.T) {
+	t.Parallel()
+
+	request := &NormalizedRequest{
+		ChatRequest: &models.ChatCompletionRequest{
+			Model: "usage-model",
+			Messages: &[]models.ChatMessage{
+				{
+					Role:    models.ChatCompletionRoleUser,
+					Content: models.SingleTextContent("usage please"),
+				},
+			},
+		},
+	}
+	reqCtx := &requestctx.RequestContext{
+		RequestID:  "req-usage",
+		RoutingKey: "fn-usage",
+		Model:      "usage-model",
+	}
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Helper()
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				headerContentType: []string{contentTypeSSE},
+			},
+			Body: io.NopCloser(strings.NewReader(sseChatBody(t,
+				models.ChatCompletionChunk{
+					ID:        "chatcmpl-usage",
+					Object:    models.ObjectChatCompletionChunk,
+					CreatedAt: 123,
+					Model:     "usage-model",
+					Choices: []models.ChatCompletionChunkChoice{
+						{
+							Index: 0,
+							Delta: models.ChatCompletionChunkDelta{
+								Role:    ptr.To(models.ChatCompletionRoleAssistant),
+								Content: ptr.To("done"),
+							},
+							FinishReason: ptr.To(models.FinishReasonStop),
+						},
+					},
+				},
+				models.ChatCompletionChunk{
+					ID:        "chatcmpl-usage",
+					Object:    models.ObjectChatCompletionChunk,
+					CreatedAt: 123,
+					Model:     "usage-model",
+					Usage: &models.ChatCompletionUsage{
+						PromptTokens:     2,
+						CompletionTokens: 3,
+						TotalTokens:      5,
+					},
+				},
+			))),
+			Request: r,
+		}, nil
+	})}
+
+	response, err := provider.Complete(context.Background(), reqCtx, request)
+	require.NoError(t, err)
+	require.Equal(t, uint32(2), response.Usage.PromptTokens)
+	require.Equal(t, uint32(3), response.Usage.CompletionTokens)
+	require.Equal(t, uint32(5), response.Usage.TotalTokens)
+}
+
+func TestStargateProviderCompleteAggregatesStreamingToolCalls(t *testing.T) {
+	t.Parallel()
+
+	request := &NormalizedRequest{
+		ChatRequest: &models.ChatCompletionRequest{
+			Model: "tool-model",
+			Messages: &[]models.ChatMessage{
+				{
+					Role:    models.ChatCompletionRoleUser,
+					Content: models.SingleTextContent("call a tool"),
+				},
+			},
+		},
+	}
+	reqCtx := &requestctx.RequestContext{
+		RequestID:  "req-tool",
+		RoutingKey: "fn-tool",
+		Model:      "tool-model",
+	}
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Helper()
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				headerContentType: []string{contentTypeSSE},
+			},
+			Body: io.NopCloser(strings.NewReader(sseChatBody(t,
+				models.ChatCompletionChunk{
+					ID:        "chatcmpl-tool",
+					Object:    models.ObjectChatCompletionChunk,
+					CreatedAt: 123,
+					Model:     "tool-model",
+					Choices: []models.ChatCompletionChunkChoice{
+						{
+							Index: 0,
+							Delta: models.ChatCompletionChunkDelta{
+								Role: ptr.To(models.ChatCompletionRoleAssistant),
+								ToolCalls: &[]models.ChatCompletionToolCallChunk{
+									{
+										ID:    "call-1",
+										Type:  models.ToolTypeFunction,
+										Index: 0,
+										Function: models.ChatCompletionFunctionCall{
+											Name:      "lookup_weather",
+											Arguments: `{"city":`,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				models.ChatCompletionChunk{
+					ID:        "chatcmpl-tool",
+					Object:    models.ObjectChatCompletionChunk,
+					CreatedAt: 123,
+					Model:     "tool-model",
+					Choices: []models.ChatCompletionChunkChoice{
+						{
+							Index: 0,
+							Delta: models.ChatCompletionChunkDelta{
+								ToolCalls: &[]models.ChatCompletionToolCallChunk{
+									{
+										Index: 0,
+										Function: models.ChatCompletionFunctionCall{
+											Arguments: `"Berlin"}`,
+										},
+									},
+								},
+							},
+							FinishReason: ptr.To(models.FinishReasonToolCalls),
+						},
+					},
+				},
+			))),
+			Request: r,
+		}, nil
+	})}
+
+	response, err := provider.Complete(context.Background(), reqCtx, request)
+	require.NoError(t, err)
+	require.Len(t, response.Choices, 1)
+	require.Equal(t, models.FinishReasonToolCalls, response.Choices[0].FinishReason)
+	require.Equal(t, models.ChatCompletionRoleAssistant, response.Choices[0].Message.Role)
+	require.Nil(t, response.Choices[0].Message.Content)
+	require.NotNil(t, response.Choices[0].Message.ToolCalls)
+	require.Len(t, *response.Choices[0].Message.ToolCalls, 1)
+	toolCall := (*response.Choices[0].Message.ToolCalls)[0]
+	require.Equal(t, "call-1", toolCall.ID)
+	require.Equal(t, models.ToolTypeFunction, toolCall.Type)
+	require.Equal(t, "lookup_weather", toolCall.Function.Name)
+	require.Equal(t, `{"city":"Berlin"}`, toolCall.Function.Arguments)
+}
+
+func TestStargateProviderCompleteAggregatesMultipleChoicesAndReasoning(t *testing.T) {
+	t.Parallel()
+
+	request := &NormalizedRequest{
+		ChatRequest: &models.ChatCompletionRequest{
+			Model: "choice-model",
+			Messages: &[]models.ChatMessage{
+				{
+					Role:    models.ChatCompletionRoleUser,
+					Content: models.SingleTextContent("choices"),
+				},
+			},
+		},
+	}
+	reqCtx := &requestctx.RequestContext{
+		RequestID:  "req-choice",
+		RoutingKey: "fn-choice",
+		Model:      "choice-model",
+	}
+	fingerprint := "fp-first"
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Helper()
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				headerContentType: []string{contentTypeSSE},
+			},
+			Body: io.NopCloser(strings.NewReader(sseChatBody(t,
+				models.ChatCompletionChunk{
+					ID:                "chatcmpl-choice",
+					Object:            models.ObjectChatCompletionChunk,
+					CreatedAt:         123,
+					Model:             "choice-model",
+					SystemFingerprint: ptr.To(fingerprint),
+					ServiceTier:       servicetier.Auto,
+					Choices: []models.ChatCompletionChunkChoice{
+						{
+							Index: 1,
+							Delta: models.ChatCompletionChunkDelta{
+								Content: ptr.To("second "),
+							},
+						},
+						{
+							Index: 0,
+							Delta: models.ChatCompletionChunkDelta{
+								Content:   ptr.To("first "),
+								Reasoning: ptr.To("think "),
+							},
+						},
+					},
+				},
+				models.ChatCompletionChunk{
+					ID:        "chatcmpl-choice",
+					Object:    models.ObjectChatCompletionChunk,
+					CreatedAt: 123,
+					Model:     "choice-model",
+					Choices: []models.ChatCompletionChunkChoice{
+						{
+							Index: 1,
+							Delta: models.ChatCompletionChunkDelta{
+								Content: ptr.To("choice"),
+							},
+							FinishReason: ptr.To(models.FinishReasonLength),
+						},
+						{
+							Index: 0,
+							Delta: models.ChatCompletionChunkDelta{
+								Content:   ptr.To("choice"),
+								Reasoning: ptr.To("done"),
+							},
+							FinishReason: ptr.To(models.FinishReasonStop),
+						},
+					},
+				},
+			))),
+			Request: r,
+		}, nil
+	})}
+
+	response, err := provider.Complete(context.Background(), reqCtx, request)
+	require.NoError(t, err)
+	require.Equal(t, "chatcmpl-choice", response.ID)
+	require.Equal(t, int64(123), response.CreatedAt)
+	require.Equal(t, "choice-model", response.Model)
+	require.Equal(t, fingerprint, ptr.Deref(response.SystemFingerprint))
+	require.Equal(t, servicetier.Auto, response.ServiceTier)
+	require.Len(t, response.Choices, 2)
+	require.Equal(t, uint32(0), response.Choices[0].Index)
+	require.Equal(t, models.ChatCompletionRoleAssistant, response.Choices[0].Message.Role)
+	require.Equal(t, "first choice", ptr.Deref(response.Choices[0].Message.Content))
+	require.Equal(t, "think done", ptr.Deref(response.Choices[0].Message.Reasoning))
+	require.Equal(t, models.FinishReasonStop, response.Choices[0].FinishReason)
+	require.Equal(t, uint32(1), response.Choices[1].Index)
+	require.Equal(t, "second choice", ptr.Deref(response.Choices[1].Message.Content))
+	require.Equal(t, models.FinishReasonLength, response.Choices[1].FinishReason)
+}
+
+func TestStargateProviderCompletePropagatesStreamingHTTPError(t *testing.T) {
+	t.Parallel()
+
+	request := &NormalizedRequest{
+		ChatRequest: &models.ChatCompletionRequest{
+			Model: "error-model",
+			Messages: &[]models.ChatMessage{
+				{
+					Role:    models.ChatCompletionRoleUser,
+					Content: models.SingleTextContent("fail"),
+				},
+			},
+		},
+	}
+	reqCtx := &requestctx.RequestContext{
+		RequestID:  "req-error",
+		RoutingKey: "fn-error",
+		Model:      "error-model",
+	}
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Helper()
+
+		require.Equal(t, contentTypeSSE, r.Header.Get(headerAccept))
+
+		var payload models.ChatCompletionRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		require.NotNil(t, payload.Stream)
+		require.True(t, ptr.Deref(payload.Stream))
+
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header: http.Header{
+				headerContentType: []string{contentTypeJSON},
+			},
+			Body:    io.NopCloser(strings.NewReader(`{"error":{"message":"stream denied"}}`)),
+			Request: r,
+		}, nil
+	})}
+
+	response, err := provider.Complete(context.Background(), reqCtx, request)
+	require.Error(t, err)
+	require.Nil(t, response)
+	require.Contains(t, err.Error(), "stream denied")
+}
+
+func TestStargateProviderCompletePropagatesMalformedStreamChunk(t *testing.T) {
+	t.Parallel()
+
+	request := &NormalizedRequest{
+		ChatRequest: &models.ChatCompletionRequest{
+			Model: "malformed-model",
+			Messages: &[]models.ChatMessage{
+				{
+					Role:    models.ChatCompletionRoleUser,
+					Content: models.SingleTextContent("malformed"),
+				},
+			},
+		},
+	}
+	reqCtx := &requestctx.RequestContext{
+		RequestID:  "req-malformed",
+		RoutingKey: "fn-malformed",
+		Model:      "malformed-model",
+	}
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Helper()
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				headerContentType: []string{contentTypeSSE},
+			},
+			Body:    io.NopCloser(strings.NewReader("data: {\n\n")),
+			Request: r,
+		}, nil
+	})}
+
+	response, err := provider.Complete(context.Background(), reqCtx, request)
+	require.Error(t, err)
+	require.Nil(t, response)
+	require.Contains(t, err.Error(), "decode stargate stream chunk")
+}
+
+func TestStargateProviderCompletePropagatesStreamContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	request := &NormalizedRequest{
+		ChatRequest: &models.ChatCompletionRequest{
+			Model: "cancel-model",
+			Messages: &[]models.ChatMessage{
+				{
+					Role:    models.ChatCompletionRoleUser,
+					Content: models.SingleTextContent("cancel"),
+				},
+			},
+		},
+	}
+	reqCtx := &requestctx.RequestContext{
+		RequestID:  "req-cancel",
+		RoutingKey: "fn-cancel",
+		Model:      "cancel-model",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Helper()
+		cancel()
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				headerContentType: []string{contentTypeSSE},
+			},
+			Body:    contextReadCloser{ctx: r.Context()},
+			Request: r,
+		}, nil
+	})}
+
+	response, err := provider.Complete(ctx, reqCtx, request)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, context.Canceled), "err = %v", err)
+	require.Nil(t, response)
+}
+
+func TestStargateProviderReadStreamDoesNotBlockOnFullEventChannelAfterCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	events := make(chan StreamEvent, 1)
+	events <- StreamEvent{Chunk: &models.ChatCompletionChunk{}}
+	body := io.NopCloser(strings.NewReader(sseChatBody(t, models.ChatCompletionChunk{
+		ID:        "chatcmpl-cancel",
+		Object:    models.ObjectChatCompletionChunk,
+		CreatedAt: 123,
+		Model:     "cancel-model",
+		Choices: []models.ChatCompletionChunkChoice{
+			{
+				Index: 0,
+				Delta: models.ChatCompletionChunkDelta{
+					Content: ptr.To("hello"),
+				},
+			},
+		},
+	})))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		(&StargateProvider{}).readStream(ctx, func() {}, body, events)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("readStream blocked sending cancellation error to a full events channel")
+	}
 }
 
 func TestStargateProviderCompletePropagatesTraceContext(t *testing.T) {
@@ -161,8 +621,23 @@ func TestStargateProviderCompletePropagatesTraceContext(t *testing.T) {
 	var traceparent string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		traceparent = r.Header.Get("traceparent")
-		w.Header().Set(headerContentType, contentTypeJSON)
-		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","created":123,"model":"upstream-model","choices":[]}`))
+		w.Header().Set(headerContentType, contentTypeSSE)
+		_, _ = w.Write([]byte(sseChatBody(t, models.ChatCompletionChunk{
+			ID:        "chatcmpl-test",
+			Object:    models.ObjectChatCompletionChunk,
+			CreatedAt: 123,
+			Model:     "upstream-model",
+			Choices: []models.ChatCompletionChunkChoice{
+				{
+					Index: 0,
+					Delta: models.ChatCompletionChunkDelta{
+						Role:    ptr.To(models.ChatCompletionRoleAssistant),
+						Content: ptr.To("ok"),
+					},
+					FinishReason: ptr.To(models.FinishReasonStop),
+				},
+			},
+		})))
 	}))
 	t.Cleanup(server.Close)
 
@@ -344,6 +819,35 @@ func TestStargateProviderProxyForwardsRoutingMethod(t *testing.T) {
 	defer response.Body.Close()
 
 	require.Equal(t, http.StatusOK, response.StatusCode)
+}
+
+func sseChatBody(t *testing.T, chunks ...models.ChatCompletionChunk) string {
+	t.Helper()
+
+	var body strings.Builder
+	for _, chunk := range chunks {
+		payload, err := json.Marshal(chunk)
+		require.NoError(t, err)
+		_, err = fmt.Fprintf(&body, "data: %s\n\n", payload)
+		require.NoError(t, err)
+	}
+
+	_, err := fmt.Fprint(&body, "data: [DONE]\n\n")
+	require.NoError(t, err)
+	return body.String()
+}
+
+type contextReadCloser struct {
+	ctx context.Context
+}
+
+func (r contextReadCloser) Read(_ []byte) (int, error) {
+	<-r.ctx.Done()
+	return 0, r.ctx.Err()
+}
+
+func (r contextReadCloser) Close() error {
+	return nil
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

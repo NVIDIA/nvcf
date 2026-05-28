@@ -19,6 +19,7 @@ package api
 
 import (
 	"encoding/json"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,6 +101,75 @@ func TestOpenAIChatCompletionsServesRequests(t *testing.T) {
 	}
 	if response.Model != "fn-alpha/company-name/model-name" {
 		t.Fatalf("model = %q, want fn-alpha/company-name/model-name", response.Model)
+	}
+}
+
+func TestOpenAIChatCompletionsStreamFalseReturnsJSON(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	e := echo.New()
+	e.Use(NewContextMiddleware(cfg))
+	RegisterRoutes(
+		e,
+		NewHandlers(
+			cfg,
+			&stubResponsesProvider{
+				completeResponse: &models.ChatCompletionResponse{
+					ID:        "chatcmpl-routes",
+					Object:    models.ObjectChatCompletion,
+					CreatedAt: 123,
+					Model:     "company-name/model-name",
+					Choices: []models.ChatCompletionChoice{
+						{
+							Index: 0,
+							Message: models.ChatCompletionMessage{
+								Role:    models.ChatCompletionRoleAssistant,
+								Content: ptr.To("hello"),
+							},
+							FinishReason: models.FinishReasonStop,
+						},
+					},
+				},
+			},
+			nil,
+			nil,
+		),
+	)
+
+	body := `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	mediaType, _, err := mime.ParseMediaType(rec.Header().Get(echo.HeaderContentType))
+	if err != nil {
+		t.Fatalf("parse content-type: %v", err)
+	}
+	if mediaType != echo.MIMEApplicationJSON {
+		t.Fatalf("content-type = %q, want JSON", mediaType)
+	}
+	if strings.HasPrefix(rec.Body.String(), "data:") {
+		t.Fatalf("response body leaked SSE framing: %q", rec.Body.String())
+	}
+
+	var response models.ChatCompletionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if response.Object != models.ObjectChatCompletion {
+		t.Fatalf("object = %q, want %q", response.Object, models.ObjectChatCompletion)
+	}
+	if response.Choices[0].Message.Role != models.ChatCompletionRoleAssistant {
+		t.Fatalf("role = %q, want assistant", response.Choices[0].Message.Role)
+	}
+	if got := ptr.Deref(response.Choices[0].Message.Content); got != "hello" {
+		t.Fatalf("content = %q, want hello", got)
 	}
 }
 
