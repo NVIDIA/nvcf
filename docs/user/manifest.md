@@ -105,7 +105,7 @@ Services that manage the NVCF platform including API gateway, deployment orchest
 | Image | llm-api-gateway | `nvcr.io/0833294136851237/nvcf-ncp-staging/llm-api-gateway:0.6.1` |
 | Image | llm-request-router | `nvcr.io/0833294136851237/nvcf-ncp-staging/stargate:0.4.0` |
 | Chart (OCI) | helm-nvcf-llm-api-gateway | `nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvcf-llm-api-gateway:1.2.0` |
-| Chart (OCI) | helm-nvcf-llm-request-router | `nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvcf-llm-request-router:1.6.1` |
+| Chart (OCI) | helm-nvcf-llm-request-router | `nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvcf-llm-request-router:1.6.2` |
 
 #### GPU Workload Components
 
@@ -224,7 +224,7 @@ Helmfile and CLI resources for deployment.
 
 | Type | Component Name | Full Path |
 | --- | --- | --- |
-| Resource | nvcf-self-managed-stack | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:0.6.0-rc.52` |
+| Resource | nvcf-self-managed-stack | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:0.6.0-rc.53` |
 | Resource | nvcf-cli | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-cli:0.0.30` |
 
 {/* docs-version-sync:END manifest-artifact-registry-paths */}
