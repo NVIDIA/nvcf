@@ -63,54 +63,58 @@ function enable_auth_mount() {
 ##
 # Configure the global JWT auth method
 #
-# This function reads the issuer and JWKS URL from environment variables
-# set by the issuer_discovery.sh script and configures the auth/jwt/config endpoint.
+# This function reads the issuer and optional JWKS URL from environment variables
+# set by issuer_discovery.sh and configures the auth/jwt/config endpoint.
 #
 function configure_auth_jwt() {
     log_step "Configuring JWT/OIDC auth method"
 
-    local args=()
-    if [[ -n "${OPENBAO_JWT_JWKS_URL}" ]]; then
-        args+=("jwks_url=${OPENBAO_JWT_JWKS_URL}")
+    if [[ -z "${OPENBAO_JWT_ISSUER:-}" ]]; then
+        log_error "OPENBAO_JWT_ISSUER is not set; cannot configure JWT auth."
+        return 1
     fi
 
-    if [[ -n "${OPENBAO_JWT_ISSUER}" ]]; then
-        # The bound_issuer tells OpenBao to validate the 'iss' claim in the JWT.
-        args+=("bound_issuer=${OPENBAO_JWT_ISSUER}")
-    fi
-
-    # For the default k8s issuer, OpenBao can discover the settings.
-    # For a custom issuer, we must provide at least the jwks_url or oidc_discovery_url.
-    # The issuer_discovery script ensures OPENBAO_JWT_ISSUER is always set.
-    if [[ "${OPENBAO_JWT_ISSUER}" == "https://kubernetes.default.svc.cluster.local" ]]; then
-        log_info "Using default Kubernetes service account issuer. No extra configuration needed."
-        # For the default K8s issuer, we rely on the TokenReview API and the mounted public key,
-        # which is more robust than OIDC discovery within the cluster as it avoids
-        # networking issues from the OpenBao server pod.
+    if [[ -n "${OPENBAO_JWT_JWKS_URL:-}" ]]; then
+        log_info "Configuring with ServiceAccount issuer and anonymously reachable JWKS URL: ${OPENBAO_JWT_ISSUER}"
+        log_step "Writing JWT config with args: jwks_url=${OPENBAO_JWT_JWKS_URL} bound_issuer=${OPENBAO_JWT_ISSUER}"
+        if ! output=$(bao write auth/jwt/config \
+            jwks_url="${OPENBAO_JWT_JWKS_URL}" \
+            bound_issuer="${OPENBAO_JWT_ISSUER}" \
+            2>&1); then
+            log_error "Error configuring JWT auth with JWKS URL: $output"
+            return 1
+        fi
+    else
+        # When the provider's JWKS endpoint is not anonymously reachable by OpenBao,
+        # validate service account tokens with the public signing key mounted by the chart.
         local pub_key=""
         if [[ -f /secrets/jwt/cluster_jwt.pem ]]; then
-            pub_key=$(cat /secrets/jwt/cluster_jwt.pem | base64 -d)
+            if ! pub_key=$(base64 -d < /secrets/jwt/cluster_jwt.pem 2>/dev/null); then
+                log_error "Failed to decode JWT public key at /secrets/jwt/cluster_jwt.pem"
+                return 1
+            fi
         fi
 
+        if [[ -z "${pub_key}" ]]; then
+            log_error "JWT public key not found or empty at /secrets/jwt/cluster_jwt.pem"
+            return 1
+        fi
+
+        if [[ ! -f "${K8S_SA_TOKEN_PATH}" ]]; then
+            log_error "ServiceAccount token not found at ${K8S_SA_TOKEN_PATH}"
+            return 1
+        fi
+
+        log_info "Configuring with ServiceAccount issuer and mounted public key: ${OPENBAO_JWT_ISSUER}"
         log_step "Writing JWT config with args: kubernetes_service_account_token_reviewer_jwt=<redacted> bound_issuer=${OPENBAO_JWT_ISSUER} jwt_validation_pubkeys=<redacted>"
         if ! output=$(bao write auth/jwt/config \
             kubernetes_service_account_token_reviewer_jwt="$(cat "${K8S_SA_TOKEN_PATH}")" \
             bound_issuer="${OPENBAO_JWT_ISSUER}" \
             jwt_validation_pubkeys="${pub_key}" \
             2>&1); then
-            log_error "Error configuring default Kubernetes JWT auth: $output"
+            log_error "Error configuring JWT auth with mounted public key: $output"
             return 1
         fi
-    elif [[ ${#args[@]} -gt 0 ]]; then
-        log_info "Configuring with custom issuer: ${OPENBAO_JWT_ISSUER}"
-        log_step "Writing JWT config with args: ${args[*]}"
-        if ! output=$(bao write auth/jwt/config "${args[@]}" 2>&1); then
-            log_error "Error configuring JWT auth with custom issuer: $output"
-            return 1
-        fi
-    else
-        log_warn "JWT auth configuration skipped: no custom issuer details found."
-        return 0
     fi
 
     log_success "JWT/OIDC auth method configured successfully."
