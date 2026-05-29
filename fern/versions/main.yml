@@ -243,8 +243,19 @@ navigation:
     contents:
       - page: Architecture Overview
         path: ../../docs/dev/architecture.md
-      - page: Local Development
-        path: ../../docs/user/local-development.md
+      - section: Local Development
+        skip-slug: true
+        contents:
+          - page: Local Development
+            path: ../../docs/user/local-development.md
+          - page: Single-cluster (CLI)
+            path: ../../docs/user/local-development/single-cluster-cli.md
+          - page: Single-cluster (Helmfile)
+            path: ../../docs/user/local-development/single-cluster-helmfile.md
+          - page: Multi-cluster (CLI)
+            path: ../../docs/user/local-development/multi-cluster-cli.md
+          - page: Multi-cluster (Helmfile)
+            path: ../../docs/user/local-development/multi-cluster-helmfile.md
       - page: Fake GPU Operator
         path: ../../docs/user/fake-gpu-operator.md
       - page: Release Process
