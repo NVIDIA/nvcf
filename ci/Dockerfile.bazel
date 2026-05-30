@@ -29,8 +29,13 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
     ca-certificates \
     jq unzip \
     libssl-dev \
+    capnproto \
   && rm -rf /var/lib/apt/lists/* \
   && update-alternatives --install /usr/bin/ld ld /usr/bin/ld.lld 100
+# capnproto provides the system `capnp` schema compiler. The stargate
+# subtree's `crates/protocol/build.rs` invokes `capnpc::CompilerCommand`
+# at build time, which spawns the host `capnp` binary. The upstream
+# stargate Dockerfile installs the same package.
 # libssl-dev provides the system openssl headers + libs at
 # /usr/include/openssl/*.h and /usr/lib/x86_64-linux-gnu/libssl.so.
 # Rust Phase B services (rs-autoscaler !113 first; future Rust services

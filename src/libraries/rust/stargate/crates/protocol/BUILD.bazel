@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+# build.rs invokes `capnpc::CompilerCommand::new().file("quic.capnp")`,
+# which spawns the host `capnp` binary. The bazel-ci image installs
+# capnproto via apt (see ci/Dockerfile.bazel); cargo_build_script
+# inherits PATH, so the binary is found there. Switching to a fully
+# hermetic capnp toolchain is a follow-up.
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    data = glob(["*.capnp"]),
+    deps = all_crate_deps(build = True),
+)
+
+rust_library(
+    name = "stargate-protocol",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "stargate_protocol",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":build_script"] + all_crate_deps(normal = True),
+)

@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+# build.rs uses tonic-build + prost-build to compile proto/*.proto.
+# Override the bundled protoc with the hermetic @protobuf//:protoc that
+# the bzlmod protoc extension fetches.
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    build_script_env = {
+        "PROTOC": "$(execpath @protobuf//:protoc)",
+        # cargo_build_script runs from _main/crates/proto/, so the
+        # well-known-type include dir resolves via three parent hops
+        # (matches the nvcf-invocation-service pattern).
+        "PROTOC_WKT_DIR": "../../../protobuf+/src",
+    },
+    data = glob(["proto/**/*.proto"]) + [
+        "@protobuf//:well_known_type_protos",
+    ],
+    tools = [
+        "@protobuf//:protoc",
+    ],
+    deps = all_crate_deps(build = True),
+)
+
+rust_library(
+    name = "stargate-proto",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "stargate_proto",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":build_script"] + all_crate_deps(normal = True),
+)

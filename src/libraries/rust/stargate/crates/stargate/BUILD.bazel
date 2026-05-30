@@ -1,0 +1,165 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//rules/oci:defs.bzl", "rust_oci_image")
+
+# Workspace-local Cargo deps that have to be expressed as Bazel
+# labels (all_crate_deps only resolves third-party crate_universe
+# deps; `workspace = true` references against own-workspace members
+# are not in that set).
+_WORKSPACE_DEPS = [
+    "//crates/proto:stargate-proto",
+    "//crates/protocol:stargate-protocol",
+    "//crates/stargate-auth:stargate-auth",
+    "//crates/stargate-telemetry:stargate-telemetry",
+    "//crates/stargate-tls:stargate-tls",
+]
+
+# The main `stargate` library used by the binary plus the in-crate
+# probes under src/bin/. Exclude src/main.rs and src/bin/* so they get
+# their own rust_binary targets.
+rust_library(
+    name = "stargate_lib",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = [
+            "src/main.rs",
+            "src/bin/**",
+        ],
+    ),
+    aliases = aliases(),
+    crate_name = "stargate",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "stargate",
+    srcs = ["src/main.rs"],
+    aliases = aliases(),
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":stargate_lib"] + _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+# Extra in-crate binaries from src/bin/*.rs. The webtransport L7 proxy
+# ships inside the stargate runtime image; the two probe binaries are
+# internal-only and only built for completeness.
+rust_binary(
+    name = "stargate-webtransport-l7-proxy",
+    srcs = ["src/bin/stargate-webtransport-l7-proxy.rs"],
+    aliases = aliases(),
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":stargate_lib"] + _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "stargate-list-models-probe",
+    srcs = ["src/bin/stargate-list-models-probe.rs"],
+    aliases = aliases(),
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":stargate_lib"] + _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "stargate-watch-stargates-probe",
+    srcs = ["src/bin/stargate-watch-stargates-probe.rs"],
+    aliases = aliases(),
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":stargate_lib"] + _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "stargate_test",
+    crate = ":stargate_lib",
+    # The load_balancer suite's `bundled_benchmark_lb_configs_parse`
+    # test reads the workspace's `benches/` directory via
+    # `env!("CARGO_MANIFEST_DIR")/../../benches`. `CARGO_MANIFEST_DIR`
+    # resolves to the source path in Bazel's sandbox, not the runfiles
+    # tree where `data` files land, so just adding the filegroup is
+    # not enough -- the test still panics. Skip it in Bazel (Cargo
+    # `cargo test` keeps running it). A follow-up can re-enable it
+    # via the `runfiles` crate + a separate env-var pointing at the
+    # data-staged path.
+    args = [
+        "--skip",
+        "load_balancer::tests::bundled_benchmark_lb_configs_parse",
+    ],
+    data = ["//:benches"],
+    # Test target needs the workspace-local deps in addition to the
+    # third-party dev deps. `pylon-lib` is a dev-dependency only here.
+    deps = _WORKSPACE_DEPS + [
+        "//crates/pylon-lib:pylon-lib",
+    ] + all_crate_deps(normal_dev = True),
+)
+
+# Multi-arch OCI image. distroless/cc base. Bundles the main stargate
+# binary plus stargate-webtransport-l7-proxy at /usr/local/bin/ so the
+# image matches the upstream Dockerfile's stargate-runtime stage.
+#
+# Both binaries must land in the image with mode 0755 or the container
+# fails at startup with "permission denied". rules_pkg's pkg_tar/pkg_files
+# default to 0644 if not told otherwise; the rust_oci_image macro applies
+# 0755 for the main entrypoint binary, and the extra_bins_layer below
+# applies 0755 for the webtransport proxy.
+pkg_files(
+    name = "extra_bins_files",
+    srcs = [":stargate-webtransport-l7-proxy"],
+    prefix = "/usr/local/bin",
+    attributes = pkg_attributes(mode = "0755"),
+    visibility = ["//visibility:private"],
+)
+
+pkg_tar(
+    name = "extra_bins_layer",
+    srcs = [":extra_bins_files"],
+    visibility = ["//visibility:private"],
+)
+
+rust_oci_image(
+    name = "image",
+    base = "@distroless_cc",
+    binary = ":stargate",
+    binary_path = "/usr/local/bin/stargate",
+    tags = ["stargate"],
+    visibility = ["//visibility:public"],
+    extra_layers = [":extra_bins_layer"],
+)
+
+# Entrypoint exec-bit guards. Inspect the assembled image layers and
+# fail if /usr/local/bin/stargate or the bundled webtransport proxy
+# is missing the executable bits. Same pattern as byoo-otel-collector
+# and helm-reval; required by NVCF MR feedback memory
+# feedback_image_entrypoint_exec_bit.
+sh_test(
+    name = "image_entrypoint_mode_test",
+    srcs = ["//tools/ci:image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :image_layer)",
+        "/usr/local/bin/stargate",
+    ],
+    data = [":image_layer"],
+)
+
+sh_test(
+    name = "image_extra_bins_mode_test",
+    srcs = ["//tools/ci:image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :extra_bins_layer)",
+        "/usr/local/bin/stargate-webtransport-l7-proxy",
+    ],
+    data = [":extra_bins_layer"],
+)
