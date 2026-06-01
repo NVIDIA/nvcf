@@ -17,7 +17,7 @@ this shared auto-versioning machinery.
 | 2. Open MR | Pre-merge gates run: per-service Bazel build, image-push build-only, license, sonarqube, etc. | MR pipeline |
 | 3. Merge to main | Default-branch pipeline runs: `compute-next-release-version-<svc>` -> `<svc>-bazel` -> `<svc>-image-push` -> (if helm) `helm-package-<svc>` + `helm-push-<svc>-*` -> `semantic-release-<svc>` -> `<svc>-slack-notify` | Default-branch pipeline |
 | 4. Tag created | `semantic-release-<svc>` creates the git tag `<service-name>-v<X.Y.Z>` and a GitLab Release | End of step 3 |
-| 5. Tag pipeline | A new pipeline runs against the tag ref. Same publish jobs re-run; NGC pushes are idempotent (helm-push-ngc defaults to `ngc-duplicate: skip`) | Tag pipeline |
+| 5. Tag pipeline | A new pipeline runs against the tag ref. Same publish jobs re-run. NGC chart pushes are NOT idempotent (helm-registry rejects republishing the same version); the cds-component swallows the failure when `ngc-duplicate: skip` is set. OCI image pushes overwrite the tag pointer if the org allows it; some orgs reject. See "Known shortcomings and follow-ups" below. | Tag pipeline |
 
 No human `git tag` step. Steps 3-5 are automatic once the MR merges.
 
@@ -52,6 +52,32 @@ chore + docs + ci so internal-only refactors still get a fresh image
 and chart that match the latest commit. If you do not want a commit
 to trigger a release, use a commit subject that does not match any
 of these types (e.g. `wip:` or no type at all).
+
+### Path scoping (how monorepo commits filter per service)
+
+The umbrella holds many services in one repo, so the commit analyzer
+needs to know which commits are "for" each service. That filtering
+comes from `semantic-release-monorepo` (loaded via
+`"extends": "semantic-release-monorepo"` in the generated
+`.releaserc.json`).
+
+Two pieces of the wiring make path scoping work:
+
+1. The generator's `compute-next-release-version-<svc>` script runs
+   `cd "$SUBTREE"` before writing `package.json` and the
+   `.releaserc.json`. That places the npm package root inside the
+   service subtree.
+2. `semantic-release-monorepo` infers the package directory from the
+   `package.json` location, then runs `git log --follow -- <path>`
+   under that subtree to enumerate the commits the analyzer sees.
+
+Commits that don't touch files under the subtree are ignored when
+computing the next version. A `fix(grpc-proxy): ...` commit cannot
+release nvcf-unbound, and vice versa. Cross-subtree changes (e.g. an
+edit in `tools/ci/` plus an edit in `src/<svc>/`) appear in every
+service whose `change_paths` overlap with the diff -- which is why
+the umbrella generator config restricts most service `change_paths`
+to the service's own subtree.
 
 The version stamps every release artifact in lockstep:
 
@@ -88,11 +114,22 @@ web pipelines.
 
 ### `<svc>-image-push` (stage: Prerequisites)
 
-Runs `bazel build :image_push_*` on MR pipelines (validates the auth
-scope and the base image fetch end-to-end without pushing) and
-`bazel run :image_push_*` on default-branch and tag pipelines. The
-`docker_auth_path` scoping in `tools/ci/subproject-validations.yaml`
-keeps the push token off the public base-image pull (NVCF-10337).
+On MR pipelines: runs `bazel build :image_push_*`. This invokes
+Bazel's analyze + assemble graph (which fetches the base image and
+exercises the docker auth setup) but does NOT execute the
+`oci_push` action. Nothing is published to NGC from MR pipelines.
+
+On default-branch and tag pipelines: runs `bazel run :image_push_*`.
+This executes the `oci_push` action and publishes to NGC.
+
+The build-not-push split is what catches docker-auth-scope bugs and
+base-image-availability bugs in MR review, instead of post-merge on
+main (the original NVCF-10337 scenario). The `docker_auth_path`
+scoping in `tools/ci/subproject-validations.yaml` keeps the push
+token off the public base-image pull.
+
+To be unambiguous: an MR opening today does NOT push an image
+anywhere. Only merges to main (or tag pushes) publish.
 
 ### `helm-package-<svc>` (stage: publish)
 
@@ -106,9 +143,11 @@ semver from `compute-next-release-version-<svc>` regardless of what
 
 Optional, one job per entry in `release.helm.push_targets`. Wraps
 `cds/cds-components/helm-push-ngc@0.16.6` to push the packaged chart
-to the named NGC org. Default `ngc-duplicate: skip` makes re-pushing
-the same version a no-op, so the tag pipeline's duplicate publish
-is safe.
+to the named NGC org. Default `ngc-duplicate: skip` causes the
+cds-component to swallow NGC's "version already exists" rejection
+on re-push, so the tag pipeline's duplicate publish exits 0 without
+actually replacing the chart. See "Known shortcomings and follow-ups"
+below for the registry-layer truth.
 
 ### `semantic-release-<svc>` (stage: publish)
 
@@ -136,7 +175,7 @@ pipelines.
 A developer opens an MR with a commit
 `fix(nvcf-unbound): handle empty A record edge case`.
 
-**MR pipeline** runs:
+MR pipeline runs:
 
 - `nvcf-unbound-bazel`: builds and tests
 - `compute-next-release-version-nvcf-unbound`: dry-run says the next
@@ -147,7 +186,7 @@ A developer opens an MR with a commit
 
 The MR gets reviewed and merged.
 
-**Default-branch pipeline** (commit on main) runs:
+Default-branch pipeline (commit on main) runs:
 
 1. `compute-next-release-version-nvcf-unbound` recomputes
    `NEXT_VERSION=0.7.19`
@@ -162,10 +201,23 @@ The MR gets reviewed and merged.
    `nvcf-unbound-v0.7.19` and a matching GitLab Release
 7. `nvcf-unbound-slack-notify` posts to `#nv-nvcf-cicd`
 
-**Tag pipeline** (triggered by step 6) runs jobs 1-5 again. NGC
-pushes for image and helm are no-ops (the version already exists
-from the default-branch pipeline). `semantic-release-nvcf-unbound`
-does not re-run (it has no rule for tag pipelines).
+Tag pipeline (triggered by step 6) runs jobs 1-5 again. The
+re-pushes are NOT clean idempotent operations:
+
+- Helm: NGC's helm registry rejects republishing the same chart
+  version. The `helm-push-ngc` cds-component swallows that
+  rejection because the umbrella sets `ngc-duplicate: skip`
+  (default). Result: the second helm-push exits 0 without
+  publishing. If an admin had set `ngc-duplicate: overwrite`, the
+  re-push would actually overwrite; `fail` would fail the job.
+- OCI image: `oci_push` will attempt to move the tag pointer to
+  the new manifest. Most NGC orgs accept this overwrite; some
+  reject. We rely on the org being permissive. The first push (on
+  the default-branch pipeline) is the canonical one.
+
+`semantic-release-nvcf-unbound` does not re-run on the tag pipeline
+(its rule scopes to default-branch only); only the publish jobs
+re-fire.
 
 ## Adding a new service to the release pipeline
 
@@ -242,22 +294,91 @@ CI job verifies the file is in sync.
 Mirror an existing entry (e.g. `nats-auth-callout-bazel`). Sets
 `SUBTREE` and the `changes:` filter.
 
-### 4. Push an anchor tag at main HEAD
+### 4. Push the anchor: tag AND `refs/notes/semantic-release`
 
-If the service had previous releases from its upstream repo, push an
-anchor tag matching the last upstream version so `semantic-release`
-picks up from a recognized starting point:
+If the service had previous releases from its upstream repo, anchor
+the upstream's last version into the umbrella's history so
+`semantic-release` picks up from a recognized starting point.
+
+Two refs are required, not one: the version tag AND a note on
+the same commit under `refs/notes/semantic-release`. semantic-release
+locates the previous release by matching the tag prefix, but it
+also reads `refs/notes/semantic-release` to know which commits have
+been "released" already. With only the tag (no note), the
+`release-notes-generator` plugin can misbehave: empty changelogs,
+duplicate release entries, or in the worst case a re-publish of
+commits already shipped under the old prefix. The nvcf-unbound
+1.0.0 regression in May 2026 was caused in part by a missing
+anchor; we then pushed only the tag and the next bump still went
+sideways for a different reason.
+
+The full anchor procedure for a service whose last upstream
+release was `<last-upstream-version>`:
 
 ```bash
-git tag -a <service-name>-v<last-upstream-version> -m "anchor: <svc> cutover continuity"
+# 1. The version tag (matches the umbrella's tagFormat:
+#    <service-name>-v<X.Y.Z>). Push BEFORE the cutover MR merges, so
+#    the post-merge default-branch pipeline sees a recognized
+#    predecessor instead of defaulting to 1.0.0.
+git tag -a <service-name>-v<last-upstream-version> \
+  -m "anchor: <svc> cutover continuity"
+
+# 2. Fetch the existing notes ref BEFORE adding to it. `git fetch`
+#    does not pull `refs/notes/*` by default, so the local copy is
+#    empty/stale; without this step the next push gets rejected as
+#    non-fast-forward and the natural --force "fix" would wipe out
+#    every other service's release notes. The `|| true` covers the
+#    case where origin has no notes ref yet (genuinely first release
+#    in the repo).
+git fetch origin '+refs/notes/semantic-release:refs/notes/semantic-release' || true
+
+# 3. The semantic-release note. The note body needs to be a JSON
+#    document semantic-release wrote on the original release; an
+#    abbreviated stub is enough for the lookup to succeed.
+#
+#    Do NOT use `git notes add -f` here. In this monorepo the anchor
+#    commit can already carry a different service's note (multiple
+#    services frequently anchor at the same main HEAD). `-f` would
+#    silently overwrite it, which causes that other service's next
+#    release-notes-generator run to lose its "already released"
+#    marker -- exactly the bug this section exists to prevent.
+#    Check whether a note already exists and merge by hand if so.
+TAG_SHA=$(git rev-parse <service-name>-v<last-upstream-version>^{commit})
+if git notes --ref=refs/notes/semantic-release show "${TAG_SHA}" \
+     > /dev/null 2>&1; then
+  echo "ERROR: a semantic-release note already exists on ${TAG_SHA}" >&2
+  echo "(likely another service has already anchored at this commit)." >&2
+  echo "Inspect with: git notes --ref=refs/notes/semantic-release show ${TAG_SHA}" >&2
+  echo "Then merge manually instead of using -f." >&2
+  exit 1
+fi
+git notes --ref=refs/notes/semantic-release add -m \
+  '{"channels":[null],"name":"v<last-upstream-version>","gitHead":"'"${TAG_SHA}"'","gitTag":"<service-name>-v<last-upstream-version>"}' \
+  "${TAG_SHA}"
+
+# 4. Push both refs (ci.skip on the tag so it doesn't fire a publish
+#    pipeline; the existing artifacts at that version stay
+#    untouched). The notes push must be a fast-forward; do NOT
+#    --force, that would clobber every other service's release notes.
 git push origin <service-name>-v<last-upstream-version> -o ci.skip
+git push origin refs/notes/semantic-release
 ```
 
-The `-o ci.skip` prevents the anchor tag from firing a publish
-pipeline; the existing artifacts at that version stay untouched.
+If the service is genuinely new (no prior releases), skip the
+anchor entirely. The first release will be `1.0.0`
+(semantic-release default).
 
-If the service is genuinely new (no prior releases), skip this step.
-The first release will be `1.0.0` (semantic-release default).
+#### Why both refs
+
+- The tag lets `semantic-release-monorepo`'s tag-prefix lookup find
+  the predecessor version.
+- The note lets `release-notes-generator` know which commits have
+  already been published, so the next changelog only contains
+  commits since the anchor.
+
+Without the note, the next changelog will include every commit in
+git history (because semantic-release sees no record of a prior
+release), and the release object will reference all of them.
 
 ### What the first release after cutover looks like
 
@@ -323,6 +444,60 @@ push destination's full path (e.g.
 scope, `rules_oci` applies the scoped push token to every nvcr.io
 URL it pulls during the build, including the public distroless
 base, and 403s. Fixed in NVCF-10337 / !294.
+
+## Known shortcomings and follow-ups
+
+Items the current shape works around or punts; tracked here so the
+next contributor can either improve them or know why we live with
+them.
+
+### Vault-fetched personal token instead of `CI_JOB_TOKEN`
+
+`compute-next-release-version-<svc>` and `semantic-release-<svc>`
+both fetch a token from `kv/gitlab/semantic-release/gl-token` via
+the vault-reader template. That token has broader scope than ideal
+and the secret has to live in vault.
+
+`CI_JOB_TOKEN` is the more secure default (auto-scoped, ephemeral),
+but it doesn't work with `@semantic-release/gitlab` because the
+plugin needs API permissions (create release objects, push tags,
+write notes) that `CI_JOB_TOKEN` lacks on protected branches
+without explicit project allow-list config.
+
+The standard workaround is to drop `@semantic-release/gitlab`
+entirely: use `semantic-release` only to compute the next version,
+then create the GitLab release object via the official `release-cli`
+(which accepts `CI_JOB_TOKEN`) in a follow-up job. This would
+eliminate the vault dependency for releases. Not done yet; happy to
+take a patch.
+
+### NGC chart pushes are not actually idempotent
+
+NGC's helm registry rejects republishing the same chart version
+(immutability). The umbrella's `helm-push-ngc` jobs default to
+`ngc-duplicate: skip`, which means the cds-component silently
+swallows the rejection on re-push attempts. Net behavior: the
+second push exits 0 and nothing changes, which looks idempotent
+from the pipeline's perspective but isn't truly idempotent at the
+registry layer.
+
+This matters when:
+- A release-worthy commit gets re-published by accident (the tag
+  pipeline re-fires after the default-branch one). The second push
+  is a no-op via skip.
+- An attempt to overwrite a published chart on the same version
+  requires changing `ngc-duplicate: overwrite` on the component
+  call AND manual coordination with NGC owners. Not supported by
+  the current generator output.
+
+### OCI image re-push semantics depend on the org
+
+`oci_push` will attempt to move the tag pointer on a re-push.
+Different NGC orgs configure registry immutability differently;
+some accept overwrites, some reject. The umbrella relies on the
+target orgs being permissive. The first push (default-branch
+pipeline) is the canonical one; tag-pipeline re-push is best-effort
+and we accept its outcome silently.
 
 ## Related references
 

@@ -125,7 +125,7 @@ The ESS (Enterprise Secrets Service) API distributes secrets to NVCF services vi
 
 | **Chart** | `helm-nvcf-ess-api` |
 | --- | --- |
-| **Version** | `1.5.3` |
+| **Version** | `1.6.0` |
 | **Namespace** | `ess` |
 | **Depends on** | Infrastructure only |
 
@@ -151,7 +151,7 @@ ess:
 ```bash
 helm upgrade --install ess-api \
   oci://${REGISTRY}/${REPOSITORY}/helm-nvcf-ess-api \
-  --version 1.5.3 \
+  --version 1.6.0 \
   --namespace ess \
   --wait --timeout 10m \
   -f ess-api-values.yaml
