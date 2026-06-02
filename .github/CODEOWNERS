@@ -15,6 +15,10 @@
 # Helm charts (deploy/helm/* tracks per-chart upstream repos).
 /deploy/helm/                                           @jmcnamee
 
+# Cassandra and OpenBao infrastructure charts.
+/deploy/helm/cassandra/                                 @mikeyrcamp @nvjmcnamee @kferris-nvidia @along-2017 @vrv3814 @gausharma @bvernon-nv
+/deploy/helm/openbao/                                   @mikeyrcamp @nvjmcnamee @kferris-nvidia @along-2017 @vrv3814 @gausharma @bvernon-nv
+
 # Control-plane application charts.
 /deploy/helm/admin-token-issuer-proxy/                  @jmcnamee @NVIDIA/nvcf-control-plane-dev
 /deploy/helm/api-keys-colocated/                        @jmcnamee @NVIDIA/nvcf-control-plane-dev
@@ -24,6 +28,10 @@
 
 # Self-managed stack (upstream: nvcf-self-managed-stack).
 /deploy/stacks/                                         @jmcnamee
+
+# Cassandra and OpenBao migrations.
+/migrations/cassandra/                                  @mikeyrcamp @nvjmcnamee @kferris-nvidia @along-2017 @vrv3814 @gausharma @bvernon-nv
+/migrations/openbao/                                    @mikeyrcamp @nvjmcnamee @kferris-nvidia @along-2017 @vrv3814 @gausharma @bvernon-nv
 
 # Compute-plane service: nvca agent and operator (upstream: nvca).
 /src/compute-plane-services/nvca/                       @NVIDIA/nvca-dev
