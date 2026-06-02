@@ -199,10 +199,8 @@ Three layers, in priority order from fastest to slowest:
 2. **Local repository cache** under `~/.cache/bazel/`. External module
    downloads (Go modules, OCI base images, Zig toolchain). Survives
    `bazel clean`.
-3. **Remote cache (Buildbarn)** at `grpc://nvcfbarn.nvidia.com:8980`
-   (browser at `http://nvcfbarn.nvidia.com:7984`). Opt-in via
-   `--config=remote`. Wired into the per-CLI CI jobs and the umbrella
-   `bazel-smoke` / `bazel-image-push` jobs.
+3. **Remote cache**. Enabled by default via `.bazelrc` as a read-only cache;
+   CI layers on `--config=remote-write` after probing the cache endpoint.
 
 `bazel clean` purges local build outputs but keeps the repo cache.
 `bazel clean --expunge` purges everything (rare; recovers from corrupted
@@ -212,87 +210,91 @@ In CI (`bazel-smoke` job in root `.gitlab-ci.yml`) both local caches are
 persisted to `${CI_PROJECT_DIR}/.bazel-cache` and registered in GitLab's
 `cache:` keyed on `MODULE.bazel.lock`, so the second pipeline run is fast.
 
-### Remote cache (Buildbarn)
+### Remote cache
 
-The repo defines a `--config=remote` profile in `.bazelrc`:
+The repo enables the read-only `--config=remote` profile by default in
+`.bazelrc`. The behaviorally important lines are:
 
 ```
-build:remote --remote_cache=grpc://nvcfbarn.nvidia.com:8980
-build:remote --remote_upload_local_results=true
-build:remote --remote_timeout=300
-build:remote --remote_max_connections=10
-build:remote --remote_download_outputs=toplevel
+build --config=remote
+build:remote --remote_cache=grpc://<remote-cache-endpoint>
+build:remote --remote_upload_local_results=false
+build:remote --remote_cache_compression
+build:remote --remote_timeout=120
+build:remote --remote_retries=5
+build:remote --remote_max_connections=50
 build:remote --remote_local_fallback
+build:remote-write --config=remote
+build:remote-write --remote_upload_local_results=true
 ```
 
 When invoked:
 
 - Bazel checks the remote action cache before executing each compile/test.
-  Cache hit -> the action's outputs are downloaded (or skipped, if not a
-  top-level output) and the action is not re-executed.
-- Cache miss -> action runs locally, then the result is uploaded so the
-  next user (or the next CI run) hits cache. `--remote_upload_local_results`
-  controls this; on by default for the `remote` config so CI populates the
-  cache for everyone.
-- `--remote_download_outputs=toplevel` skips downloading intermediate
-  outputs the build does not need locally; only the final binaries / test
-  results we explicitly request are fetched. Big bandwidth saver for CI;
-  transparent to correctness.
-- If the cache is unreachable (off VPN, firewall, server down), Bazel
-  falls back to local execution and prints a warning. Builds do not fail
-  due to cache outages.
+  Cache hit -> the action's outputs are downloaded and the action is not
+  re-executed.
+- Cache miss -> action runs locally. Local developer builds do not upload
+  results by default, which avoids cache poisoning from non-hermetic local
+  environments. CI uses `--config=remote-write` to populate the cache.
+- Per-action remote cache failures are covered by `--remote_local_fallback`,
+  so Bazel continues locally and prints a warning for those failures.
+- The initial remote Capabilities RPC is not covered by
+  `--remote_local_fallback`. If the cache endpoint cannot be resolved or the
+  cache frontend is fully unreachable, Bazel can fail before local execution
+  starts.
 
-Local opt-in:
+Local opt-out / override:
 
 ```bash
-# One-shot.
-bazel build --config=remote //src/clis/nvcf-cli:nvcf-cli
+# One-shot local-only build.
+bazel build --remote_cache= //src/clis/nvcf-cli:nvcf-cli
 
-# Persist for your local checkout.
-echo 'build --config=remote' >> user.bazelrc
+# Persistent local-only override.
+echo 'build --remote_cache=' >> ~/.bazelrc.user
+
+# Workspace-local override, useful for one checkout only.
+echo 'build --remote_cache=' >> user.bazelrc
 ```
 
-`user.bazelrc` is in `.gitignore`-conventions territory; it lets you set
-personal defaults without polluting the shared `.bazelrc`.
+Do not use `--noremote_cache`; `--remote_cache` is a string flag, not a
+boolean flag, so Bazel rejects the `no` prefix. `user.bazelrc` is in
+`.gitignore`-conventions territory; it lets you set personal defaults
+without polluting the shared `.bazelrc`.
 
 CI scope: the per-CLI Bazel jobs (`go-test`, `go-build`,
-`verify-agent-skill-manifest` in `tools/ci/nvcf-cli.yml`) pass
-`--config=remote`. The umbrella `bazel-smoke` and the manual
-`bazel-image-push` jobs also use it. Future service pipelines opt in
-the same way.
+`verify-agent-skill-manifest` in `tools/ci/nvcf-cli.yml`) and umbrella
+jobs inherit the default read-only cache. CI jobs add `--config=remote-write`
+only after their preflight probe confirms that the remote cache is reachable.
 
 ### Lifecycle and ownership
 
-- **Host**: nvcfbarn.nvidia.com is on a 6-month VM lease (provisioned
-  late Q1 2026, scheduled review by Q3 2026).
+- **Host**: managed by the NVCF team and reviewed on the team's normal
+  infrastructure cadence.
 - **Provisioning**: managed by the NVCF team through the internal
-  bazel-remote-cache automation (`scripts/provision.sh`). Re-runnable;
-  bb-deployments docker stack.
+  remote-cache automation.
 - **Storage**: starts modest; expansion happens out-of-band as cache
-  size grows. If you observe high cache-miss rates after large
-  ingestion windows, check `bb-browser` at
-  http://nvcfbarn.nvidia.com:7984 for eviction patterns.
+  size grows. If you observe high cache-miss rates after large ingestion
+  windows, check the cache browser for eviction patterns.
 - **Failure mode**: builds with `--config=remote --remote_local_fallback`
   degrade to local execution on action errors but hard-fail on initial
   Capabilities RPC failure (e.g., backend storage shards down).
   CI guards against this in two layers (see `.bazel-remote-probe` in
   `.gitlab-ci.yml` and `.bazel-cli` in `tools/ci/nvcf-cli.yml`):
   1. Each Bazel job's `before_script` does a 5-second TCP probe of
-     `nvcfbarn.nvidia.com:8980`. If it fails, `--config=remote` is
+     the remote-cache endpoint. If it fails, `--config=remote` is
      dropped for that run and the job continues with local cache only,
      instead of hanging Bazel on the Capabilities RPC.
   2. A CI/CD variable `NVCF_BAZEL_REMOTE` (default `1`) can be set to
      `0` in GitLab project settings to force local-only across all
-     Bazel jobs without a code push. Useful when nvcfbarn is degraded
+     Bazel jobs without a code push. Useful when the remote cache is degraded
      in a way the TCP probe can't detect (port open, gRPC wedged).
 - **End of lease**: either renew, migrate to longer-term host, or roll
   back to local-only caching. The per-service opt-in pattern means
   the rollback footprint is small.
 
-Inspecting cache hits/misses: open the build's invocation in
-`http://nvcfbarn.nvidia.com:7984` (set Bazel's
-`--bes_results_url=http://nvcfbarn.nvidia.com:7984/invocation/`
-locally if you want clickable links per build).
+Inspecting cache hits/misses: open the build's invocation in the cache browser
+(set Bazel's `--bes_results_url` locally if you want clickable links per
+build).
 
 ## CI
 
@@ -307,11 +309,11 @@ Two Bazel-aware jobs in the root `.gitlab-ci.yml`:
   //src/clis/nvcf-cli:image_index` and `bazel mod graph`. It does not
   rebuild `//src/clis/nvcf-cli/...` because the per-CLI child pipeline
   (`nvcf-cli-ci` -> `go-test`/`go-build`) already covers that against
-  the same Buildbarn cache. Adding CLI targets back here just burns
+  the same remote cache. Adding CLI targets back here just burns
   bandwidth and runner time without improving signal.
 - `bazel-image-push` (manual): runs `bazel run --stamp --config=remote
   //src/clis/nvcf-cli:image_push`. With the remote cache warm from the
-  per-CLI build, the image layers come straight out of Buildbarn.
+  per-CLI build, the image layers come straight out of the remote cache.
 
 Per-service jobs in `tools/ci/nvcf-cli.yml` (`go-test`, `go-build`)
 were rewritten to use Bazel; the legacy `Makefile` was deleted. Downstream
@@ -414,6 +416,11 @@ maintainers; centralising it would couple unrelated release decisions.
 
 - `unknown repo '...' requested` during build: usually means `MODULE.bazel`
   needs a `use_repo` entry. Run `bazel mod tidy` and rebuild.
+- `Failed to query remote execution capabilities` or
+  `UNAVAILABLE: Unable to resolve host` during build: your environment may not
+  be able to reach the configured remote cache. Re-run the command with
+  `--remote_cache=` or add `build --remote_cache=` to `~/.bazelrc.user` for a
+  persistent local-only override.
 - `compilepkg: missing strict dependencies`: the BUILD file under-declares
   its `deps`. Run `bazel run //:gazelle` to regenerate, or hand-add the
   missing target to `deps`.

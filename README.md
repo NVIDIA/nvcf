@@ -121,9 +121,23 @@ bazel test  //src/clis/nvcf-cli/...
 bazel build //src/clis/nvcf-cli:dist
 ```
 
-Builds read from the team Buildbarn cache at `nvcfbarn.nvidia.com` by default
-and do not upload local results. To seed the cache from a dev box (corp
-network or VPN required), add `--config=remote-write`:
+Builds read from the configured remote cache by default and do not upload local
+results. If you are off the network path that can reach that cache and Bazel
+fails before local execution starts, disable the remote cache for that build:
+
+```bash
+bazel build --remote_cache= //src/clis/nvcf-cli:nvcf-cli
+```
+
+To make the local-only path persistent, add the override to your user Bazel
+config:
+
+```bash
+echo 'build --remote_cache=' >> ~/.bazelrc.user
+```
+
+To seed the cache from a dev box (corp network or VPN required), add
+`--config=remote-write`:
 
 ```bash
 bazel build --config=remote-write //src/clis/nvcf-cli/...

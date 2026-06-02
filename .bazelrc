@@ -31,14 +31,14 @@ build --incompatible_strict_action_env
 common --enable_platform_specific_config
 
 # Remote cache on by default for every developer. Pulls hits from the
-# team Buildbarn (read-only), falls back to local execution on any
+# configured remote cache (read-only), falls back to local execution on any
 # per-action remote failure (--remote_local_fallback below). Caveat:
 # the initial GetCapabilities RPC is NOT covered by
 # --remote_local_fallback, so if the cache is fully unreachable
 # (offline laptop, VPN down, cache outage) the build hard-fails on
 # the first cache call. Two ways to opt out:
 #   - one invocation:  bazel build --remote_cache= //some:target
-#   - persistently:    echo 'build --noremote_cache' >> ~/.bazelrc.user
+#   - persistently:    echo 'build --remote_cache=' >> ~/.bazelrc.user
 # (.bazelrc.user is try-imported at the bottom of this file, so
 # anything you put there overrides this default.)
 # CI sets --config=remote-write via .gitlab-ci.yml before_script after a
@@ -71,11 +71,11 @@ build --@rules_go//go/config:pure
 build:ci --jobs=32
 build:ci --stamp
 
-# ---- Remote cache profile (Buildbarn) ----
+# ---- Remote cache profile ----
 # Two configs:
 #
 #   --config=remote        Read-only. Default for everyone (devs + ad-hoc
-#                          builds). Pulls hits from nvcfbarn but does
+#                          builds). Pulls hits from the remote cache but does
 #                          not upload local results. This avoids cache
 #                          poisoning from non-hermetic local environments
 #                          (a dev with a modified toolchain or unreviewed
@@ -88,27 +88,24 @@ build:ci --stamp
 #                          ONLY CI should use this; the per-job CI
 #                          before_script in .gitlab-ci.yml exports
 #                          BAZEL_REMOTE_FLAGS=--config=remote-write
-#                          when the TCP probe to Buildbarn succeeds.
+#                          when the cache probe succeeds.
 #
-# Endpoint: grpc://nvcfbarn.nvidia.com:8980  (browser: http://nvcfbarn.nvidia.com:7984)
-# nvcfbarn is the team cache: 10 GbE, 1 TB CAS volume on /build-cache,
-# pinned image digests via versions.env. CI writes through to it on
-# every default-branch and MR build, so its hit rate climbs as commits
-# land. If you are on VPN and see slow / wedging cold builds against
-# nvcfbarn, your in-flight RPCs may be losing the VPN race; either run
-# locally (--remote_cache=) or point at a closer cache via
-# ~/.bazelrc.user (see try-import at the top of this file).
+# The endpoint below is the team read-only cache. CI writes through to it on
+# every default-branch and MR build, so its hit rate climbs as commits land.
+# If you are on VPN and see slow / wedging cold builds, your in-flight RPCs
+# may be losing the VPN race; either run locally (--remote_cache=) or point at
+# a closer cache via ~/.bazelrc.user (see try-import at the top of this file).
 build:remote --remote_cache=grpc://nvcfbarn.nvidia.com:8980
 build:remote --remote_upload_local_results=false
 
 # zstd compression for cache blobs. Cuts upload bandwidth ~5-10x for
 # Go object files and cross-compiled binaries (the bulk of our cache
-# traffic), and reduces server-side flow-control pressure. nvcfbarn
-# (bb-storage) advertises ZSTD; clients without compression
-# transparently fall back to uncompressed.
+# traffic), and reduces server-side flow-control pressure. The cache backend
+# advertises ZSTD; clients without compression transparently fall back to
+# uncompressed.
 build:remote --remote_cache_compression
 # Server-side enforcement so Bazel does not silently downgrade if the
-# server advertises compression unavailable. Buildbarn always supports
+# server advertises compression unavailable. The team cache supports
 # this; the flag is here to fail fast if a misconfigured replacement
 # server gets dropped in.
 build:remote --experimental_remote_cache_compression_threshold=100
@@ -152,7 +149,7 @@ build:remote --remote_timeout=120
 # stream hit.
 build:remote --remote_retries=5
 
-# Client gRPC keepalive PINGs at 30s. nvcfbarn's bb-storage frontend
+# Client gRPC keepalive PINGs at 30s. The remote-cache frontend
 # (bazel-remote-cache/config/common.libsonnet) is configured with
 # keepaliveEnforcementPolicy.minTime=10s, so 30s is well inside what
 # the server accepts and does NOT trigger ENHANCE_YOUR_CALM/GOAWAY.
@@ -164,7 +161,7 @@ build:remote --remote_retries=5
 # "for tool" runs ~10min on a cold runner) leave the gRPC channel
 # idle. Without client PINGs, intermediate stateful equipment (k8s
 # pod NAT on the runner, IT firewall between the runner subnet and
-# nvcfbarn) silently drops the conntrack entry; the next remote-cache
+# the cache) silently drops the conntrack entry; the next remote-cache
 # RPC redials and fails GetCapabilities with "Network closed for
 # unknown reason", which --remote_local_fallback does NOT cover, so
 # the build hard-fails. Server-side keepalives alone cannot rescue
@@ -174,8 +171,8 @@ build:remote --remote_retries=5
 build:remote --grpc_keepalive_time=30s
 build:remote --grpc_keepalive_timeout=20s
 
-# Concurrent gRPC streams to Buildbarn. We were at 10 while debugging
-# Buildbarn instability; with compression in place each stream is much
+# Concurrent gRPC streams to the remote cache. We were at 10 while debugging
+# cache instability; with compression in place each stream is much
 # smaller, so 50 is comfortably below the frontend's default 100-stream
 # cap and lets parallel reads keep up with bazel --jobs settings.
 build:remote --remote_max_connections=50
@@ -190,7 +187,7 @@ build:remote --remote_max_connections=50
 # instead of a hard failure. Re-add this flag on build:ci only once
 # we have evidence the cache is reliable enough to trust under load.
 
-# Soft-fail: if Buildbarn is unreachable or misbehaving (transient
+# Soft-fail: if the remote cache is unreachable or misbehaving (transient
 # network, individual action timeout), fall back to local execution
 # rather than abort the whole build. Prints a warning so cache outages
 # are still visible. Note: this only covers remote *action* failures,

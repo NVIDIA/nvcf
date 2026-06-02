@@ -53,6 +53,13 @@ cd nvcf
 bazel build //src/clis/nvcf-cli:nvcf-cli
 ```
 
+The monorepo reads from the configured remote cache by default. If you are off
+the network path that can reach that cache and Bazel fails before local
+execution starts, disable the remote cache for this build:
+```bash
+bazel build --remote_cache= //src/clis/nvcf-cli:nvcf-cli
+```
+
 The binary is at `bazel-bin/src/clis/nvcf-cli/nvcf-cli_/nvcf-cli`.
 
 3. (Optional) Install globally by copying it onto your `PATH`:
