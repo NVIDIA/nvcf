@@ -671,14 +671,29 @@
                     "description": "URL of the SIS/ICMS service for self-managed clusters. Required when ngcConfig.clusterSource is \"self-managed\".",
                     "default": ""
                 },
+                "icmsServiceHostHeaderOverride": {
+                    "type": "string",
+                    "description": "Optional Host header override for selfManaged.icmsServiceURL.",
+                    "default": ""
+                },
                 "revalServiceURL": {
                     "type": "string",
                     "description": "URL of the ReVal service for self-managed clusters. Required when ngcConfig.clusterSource is \"self-managed\".",
                     "default": ""
                 },
+                "revalServiceHostHeaderOverride": {
+                    "type": "string",
+                    "description": "Optional Host header override for selfManaged.revalServiceURL.",
+                    "default": ""
+                },
                 "natsURL": {
                     "type": "string",
                     "description": "URL of the NATS service for self-managed clusters. Required when ngcConfig.clusterSource is \"self-managed\".",
+                    "default": ""
+                },
+                "natsHostOverride": {
+                    "type": "string",
+                    "description": "Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.",
                     "default": ""
                 }
             }

@@ -133,7 +133,13 @@ func startControllerManagerForAgent(
 		cmnhttp.WithAppVersionUserAgent(types.AppName),
 		cmnhttp.WithRequestHeader(types.HeaderNVClusterID, a.ClusterID),
 	)
-	rvClient := mscontroller.NewReValClient(a.HelmReValServiceURL, tf, hrHTTPClient, metrics)
+	rvClient := mscontroller.NewReValClient(
+		a.HelmReValServiceURL,
+		tf,
+		hrHTTPClient,
+		metrics,
+		mscontroller.WithReValHostHeaderOverride(a.HelmReValServiceHostHeaderOverride),
+	)
 	if err := mscontroller.BuildController(ctx, a.Config, mgr, rvClient,
 		a.backendk8scache.nfClient,
 		a.backendk8scache.regITCache,

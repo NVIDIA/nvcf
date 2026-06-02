@@ -78,6 +78,11 @@ func (in *AgentConfig) DeepCopyInto(out *AgentConfig) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.NATSHostOverride != nil {
+		in, out := &in.NATSHostOverride, &out.NATSHostOverride
+		*out = new(string)
+		**out = **in
+	}
 	in.DeploymentConfig.DeepCopyInto(&out.DeploymentConfig)
 	out.NVCFWorkerConfig = in.NVCFWorkerConfig
 	return

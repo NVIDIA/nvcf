@@ -28,6 +28,13 @@ import (
 
 const defaultConnectTimeout = 10 * time.Second
 
+// Reachability protocol identifiers as written in the user's ConfigMap.
+const (
+	protocolHTTPS  = "https"
+	protocolTCP    = "tcp"
+	protocolTCPTLS = "tcp+tls"
+)
+
 // Endpoint describes a service endpoint to check connectivity against.
 type Endpoint struct {
 	// URL is set for HTTPS endpoints.
@@ -50,11 +57,11 @@ func (e Endpoint) DisplayAddr() string {
 // TestEndpoint checks connectivity to the endpoint based on its protocol.
 func TestEndpoint(ep Endpoint) bool {
 	switch ep.Protocol {
-	case "https":
+	case protocolHTTPS:
 		return testHTTPS(ep.URL)
-	case "tcp":
+	case protocolTCP:
 		return testTCP(ep.Host, ep.Port, false)
-	case "tcp+tls":
+	case protocolTCPTLS:
 		return testTCP(ep.Host, ep.Port, true)
 	default:
 		return false

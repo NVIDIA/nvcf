@@ -237,6 +237,7 @@ func TestGetCluster_StageDefaultsAndGPUB64(t *testing.T) {
 		OAuthClientID: uuid.NewString(),
 	}
 	dto.ICMSConfig.TokenURL = "https://stage-oauth.example.test/token"
+	dto.ICMSConfig.ICMSServiceHostHeaderOverride = "sis.gateway.example.test"
 	sisClusterResp.Store(dto)
 
 	cluster, err := client.GetCluster(ctx, dto.ID)
@@ -245,6 +246,7 @@ func TestGetCluster_StageDefaultsAndGPUB64(t *testing.T) {
 	nb := cluster.NVCFBackend
 	// Stage defaults
 	assert.Equal(t, "https://stg.spot.gdn.nvidia.com", nb.Spec.ICMSConfig.ICMSServiceURL)
+	assert.Equal(t, "sis.gateway.example.test", nb.Spec.ICMSConfig.ICMSServiceHostHeaderOverride)
 	assert.Equal(t, "https://stage-oauth.example.test/token", nb.Spec.ICMSConfig.TokenURL)
 	assert.Equal(t, "https://stg.vault.nvidia.com:443", nb.Spec.VaultConfig.Address)
 
@@ -705,6 +707,7 @@ func TestWithAgentConfigMapper(t *testing.T) {
 					Effect:   corev1.TaintEffectNoSchedule,
 				}},
 				NATSURL:                                                "nats://nats.localhost:14222",
+				NATSHostOverride:                                       "nats.gateway.example.test",
 				HelmReValStageOAuthTokenURL:                            "https://stage-reval-oauth.example.test/token",
 				HelmReValStageOAuthPublicKeysetEndpoint:                "https://stage-reval-oauth.example.test/.well-known/jwks.json",
 				HelmReValProdOAuthTokenURL:                             "https://prod-reval-oauth.example.test/token",
@@ -741,6 +744,8 @@ func TestWithAgentConfigMapper(t *testing.T) {
 		}}, dest.NVCFBackend.Spec.AgentConfig.DeploymentConfig.Tolerations)
 		require.NotNil(t, dest.NVCFBackend.Spec.AgentConfig.NATSURL)
 		assert.Equal(t, "nats://nats.localhost:14222", *dest.NVCFBackend.Spec.AgentConfig.NATSURL)
+		require.NotNil(t, dest.NVCFBackend.Spec.AgentConfig.NATSHostOverride)
+		assert.Equal(t, "nats.gateway.example.test", *dest.NVCFBackend.Spec.AgentConfig.NATSHostOverride)
 		assert.Equal(t, "https://stage-reval-oauth.example.test/token", dest.NVCFBackend.Spec.AgentConfig.HelmReValStageOAuthTokenURL)
 		assert.Equal(t, "https://stage-reval-oauth.example.test/.well-known/jwks.json", dest.NVCFBackend.Spec.AgentConfig.HelmReValStageOAuthPublicKeysetEndpoint)
 		assert.Equal(t, "https://prod-reval-oauth.example.test/token", dest.NVCFBackend.Spec.AgentConfig.HelmReValProdOAuthTokenURL)

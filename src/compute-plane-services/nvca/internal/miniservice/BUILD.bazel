@@ -121,6 +121,7 @@ go_test(
         "mutate_test.go",
         "prereqs_test.go",
         "reconcile_test.go",
+        "reval_client_test.go",
         "revision_test.go",
         "status_karta_test.go",
         "status_test.go",

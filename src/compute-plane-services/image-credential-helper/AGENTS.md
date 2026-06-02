@@ -123,7 +123,7 @@ make lint    # golangci-lint must pass
 2. Add tests for your changes
 3. Run `gofmt -w` on all modified Go files
 4. Run `make test && make lint`
-5. If dependencies changed, update the third-party licenses list in `NOTICE`
+5. If dependencies changed, update the root third-party license index in `NOTICE`
 6. Commit with conventional format
 7. Create PR to `main` branch
 8. Fill in PR template
@@ -145,23 +145,20 @@ make lint    # golangci-lint must pass
 
 ## NOTICE File Maintenance
 
-The `NOTICE` file contains attribution and a list of third-party licenses from vendored dependencies. The `LICENSE` file contains only the NVIDIA Apache 2.0 license for this project.
+The root `NOTICE` file contains attribution and third-party license paths from vendored dependencies. This subtree no longer keeps its own `NOTICE` file.
 
-**When to update:**
+When to update:
 - After running `make vendor-update`
-- After adding/removing/updating dependencies in `go.mod`
+- After adding, removing, or updating dependencies in `go.mod`
 
-**How to update:**
+How to update:
 ```bash
-# Generate the list of third-party licenses
-find vendor -name "LICENSE*" -type f | sort
-
-# Copy the output to the third-party licenses section in NOTICE file
+./tools/scripts/update-license
 ```
 
 ## Common Gotchas
 
-1. **Dependency changes = update vendor + NOTICE** - run `make vendor-update` after changing go.mod, then update the third-party licenses section in `NOTICE` file
+1. Dependency changes = update vendor + root NOTICE: run `make vendor-update` after changing go.mod, then run `./tools/scripts/update-license` from the repository root
 2. **ECR public vs private** - `public.ecr.aws` is treated as public (no auth needed)
 3. **Volcengine region extraction** - Region is parsed from the registry hostname
 4. **K8s secret naming** - Pull secrets follow pattern `workload-{id}-regcred-{index}` or `worker-{id}-regcred-{index}`

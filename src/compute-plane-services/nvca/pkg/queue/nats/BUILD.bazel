@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "client.go",
         "client_psat.go",
+        "host.go",
         "nats.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/nats",
@@ -34,6 +35,7 @@ go_test(
     srcs = [
         "client_psat_test.go",
         "client_test.go",
+        "host_test.go",
     ],
     embed = [":nats"],
     deps = [

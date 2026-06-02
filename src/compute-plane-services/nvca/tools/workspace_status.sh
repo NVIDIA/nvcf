@@ -24,12 +24,32 @@ normalize_version() {
     printf '%s\n' "${version#v}"
 }
 
-# Use CI environment variables when running in CI.
+# Use CI environment variables when running in CI. Tolerate GitLab
+# vs GitHub Actions: GitLab sets CI_COMMIT_SHORT_SHA / CI_COMMIT_TAG
+# / CI_MERGE_REQUEST_IID; GHA sets CI=true too but has none of those.
+# Fall back to git for the commit on the GHA path so the script does
+# not die with "CI_COMMIT_SHORT_SHA: unbound variable" when the
+# umbrella's public mirror runs `bazel build //...` from GHA.
+#
+# Version format is preserved by provider so downstream consumers
+# that pattern-match on `mr.` (OCI tag filters, artifact retention
+# rules, Helm chart version validators) keep working under GitLab:
+#   GitLab tag-pipeline:   <semver>             (unchanged)
+#   GitLab MR pipeline:    mr.<iid>-<sha>       (unchanged)
+#   GitLab branch-push:    mr.0-<sha>           (unchanged)
+#   GHA:                   ci-<sha>             (new -- previously crashed)
 if [ "${CI:-}" = "true" ]; then
-    COMMIT="$CI_COMMIT_SHORT_SHA"
+    COMMIT="${CI_COMMIT_SHORT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
     if [ -n "${CI_COMMIT_TAG:-}" ]; then
         VERSION="$(normalize_version "${CI_COMMIT_TAG}")"
+    elif [ -n "${GITHUB_ACTIONS:-}" ]; then
+        # GHA path: no MR IID, no semver tag, GitLab-style "mr."
+        # prefix would be misleading. ci-<sha> is enough to
+        # disambiguate cached artifacts; stamped binaries fall back
+        # cleanly on subsequent `bazel build`.
+        VERSION="ci-${COMMIT}"
     else
+        # GitLab MR or branch-push. Historical format preserved.
         VERSION="mr.${CI_MERGE_REQUEST_IID:-"0"}-${COMMIT}"
     fi
     BUILD_USER="ci"

@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
@@ -31,6 +32,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	cli "github.com/urfave/cli/v2"
+	yamlv3 "gopkg.in/yaml.v3"
 	"k8s.io/klog/v2"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -63,6 +65,28 @@ type cliAgent interface {
 	Start(ctx context.Context) error
 }
 
+type agentHostOverrides struct {
+	ICMSHostHeaderOverride             string `yaml:"icmsHostHeaderOverride"`
+	HelmReValServiceHostHeaderOverride string `yaml:"helmReValServiceHostHeaderOverride"`
+	NATSHostOverride                   string `yaml:"NATSHostOverride"`
+}
+
+func readAgentHostOverrides(configFile string) (agentHostOverrides, error) {
+	b, err := os.ReadFile(configFile)
+	if err != nil {
+		return agentHostOverrides{}, err
+	}
+
+	var cfg struct {
+		Agent agentHostOverrides `yaml:"agent"`
+	}
+	if err := yamlv3.Unmarshal(b, &cfg); err != nil {
+		return agentHostOverrides{}, err
+	}
+
+	return cfg.Agent, nil
+}
+
 // newCobraCommand creates a new command with initializer funcs to mock in tests.
 func newCobraCommand(
 	newAgent func(ctx context.Context, opts *AgentOptions) (cliAgent, error),
@@ -88,6 +112,10 @@ func newCobraCommand(
 			cfg, err := nvcaconfig.Init(configFile)
 			if err != nil {
 				return err
+			}
+			hostOverrides, err := readAgentHostOverrides(configFile)
+			if err != nil {
+				return fmt.Errorf("read agent host overrides: %w", err)
 			}
 
 			cfg = cfg.Complete()
@@ -136,6 +164,7 @@ func newCobraCommand(
 				},
 				IdentitySource:                          identitySource,
 				NATSURL:                                 cfg.Agent.NATSURL,
+				NATSHostOverride:                        hostOverrides.NATSHostOverride,
 				NCAId:                                   cfg.Cluster.NCAID,
 				ClusterName:                             cfg.Cluster.Name,
 				ClusterID:                               cfg.Cluster.ID,
@@ -145,6 +174,7 @@ func newCobraCommand(
 				ClusterAttributes:                       featureflag.GetEnabledAttributes(),
 				CloudProvider:                           cfg.Cluster.CloudProvider,
 				ICMSURL:                                 cfg.Agent.ICMSURL,
+				ICMSHostHeaderOverride:                  hostOverrides.ICMSHostHeaderOverride,
 				SystemNamespace:                         cfg.Agent.SystemNamespace,
 				RequestsNamespace:                       cfg.Agent.RequestsNamespace,
 				NamespaceLabels:                         cfg.Agent.NamespaceLabels,
@@ -165,6 +195,7 @@ func newCobraCommand(
 				HelmRepositoryPrefix:                    cfg.Agent.HelmRepositoryPrefix,
 				SyncAcknowledgeRequestInterval:          cfg.Agent.SyncAcknowledgeRequestInterval,
 				HelmReValServiceURL:                     cfg.Agent.HelmReValServiceURL,
+				HelmReValServiceHostHeaderOverride:      hostOverrides.HelmReValServiceHostHeaderOverride,
 				HelmReValStageOAuthTokenURL:             cfg.Agent.HelmReValStageOAuthTokenURL,
 				HelmReValStageOAuthPublicKeysetEndpoint: cfg.Agent.HelmReValStageOAuthPublicKeysetEndpoint,
 				HelmReValProdOAuthTokenURL:              cfg.Agent.HelmReValProdOAuthTokenURL,
@@ -306,6 +337,8 @@ func setDefaults(cfg *nvcaconfig.Config) error {
 		return err
 	}
 	cmdutil.SetEmptyValue(&cfg.Workload.DefaultStargateAddress, "llm-request-router.nvcf.svc.cluster.local:50071")
+	cmdutil.SetEmptyValue(&cfg.Authz.ClientID, os.Getenv(auth.ClientIDEnv))
+	cmdutil.SetEmptyValue(&cfg.Authz.ClientSecretKey, os.Getenv(auth.ClientSecretEnv))
 	return nil
 }
 

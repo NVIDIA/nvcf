@@ -301,10 +301,16 @@ selfManaged:
     imageTag: 0.143.2
   ## @param selfManaged.icmsServiceURL URL of the SIS/ICMS service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".
   icmsServiceURL: ""
+  ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.
+  icmsServiceHostHeaderOverride: ""
   ## @param selfManaged.revalServiceURL URL of the ReVal service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".
   revalServiceURL: ""
+  ## @param selfManaged.revalServiceHostHeaderOverride Optional Host header override for selfManaged.revalServiceURL.
+  revalServiceHostHeaderOverride: ""
   ## @param selfManaged.natsURL URL of the NATS service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".
   natsURL: ""
+  ## @param selfManaged.natsHostOverride Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.
+  natsHostOverride: ""
 
 ## @section Node Selector Configuration
 ## @param nodeSelector.key Node-selector Label key

@@ -18,6 +18,7 @@ limitations under the License.
 package clustervalidator
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -195,12 +196,19 @@ func TestCheckSMBCSIDriver(t *testing.T) {
 		assert.True(t, state.SMBCSIDriverOK)
 	})
 
-	t.Run("driver not installed", func(t *testing.T) {
+	t.Run("driver not installed is non-blocking warning", func(t *testing.T) {
+		// SMB CSI is required only when HelmSharedStorage FF is enabled.
+		// Its absence must not flip the cluster verdict — append to Warnings
+		// (non-blocking) instead of Recommendations (which would be
+		// surfaced as a Critical action item).
 		client := fake.NewSimpleClientset()
 		state := &ValidationState{Log: testLog()}
 		checkSMBCSIDriver(ctx, client, state)
 		assert.False(t, state.SMBCSIDriverOK)
-		assert.NotEmpty(t, state.Recommendations)
+		assert.Empty(t, state.Recommendations,
+			"missing SMB CSI must not add a hard Recommendation (it's feature-gated)")
+		assert.NotEmpty(t, state.Warnings,
+			"missing SMB CSI must surface as a Warning so the user sees it in the summary")
 	})
 }
 
@@ -366,6 +374,86 @@ func TestPrintSummary(t *testing.T) {
 		assert.Error(t, err)
 	})
 
+	t.Run("Worker Nodes row reads 'status unknown' on listing failure", func(t *testing.T) {
+		// When checkControlPlaneHealth's Nodes().List() errors, the state
+		// is left with NodesAllReady=false and NotReadyNodes=0 (zero value).
+		// The summary must say "status unknown", not the misleading
+		// "0 NotReady" — the operator was never able to count nodes.
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			ControlPlaneHealthy:      false, // listing failure also flips this
+			NodesAllReady:            false,
+			NotReadyNodes:            0,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			K8sVersion:               "v1.30.0",
+			TotalNodes:               "0",
+		}
+		_ = printSummary(state)
+		out := buf.String()
+		assert.Contains(t, out, "Worker Nodes: status unknown (node listing failed)",
+			"summary must reflect that nodes were never queried")
+		assert.NotContains(t, out, "Worker Nodes: 0 NotReady",
+			"the misleading zero-count message must not appear when listing failed")
+	})
+
+	t.Run("SMB CSI missing is non-blocking", func(t *testing.T) {
+		// Mirror of the GPU Operator scenario for the SMB CSI Driver:
+		// SMB CSI is feature-gated (HelmSharedStorage). Customers who don't
+		// use NVCA model caching shouldn't be blocked from installing the
+		// operator just because their cluster doesn't have SMB CSI.
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           false, // ← the scenario
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			Warnings: []string{
+				"SMB CSI Driver v1.16.0+ not installed. Required only when the " +
+					"HelmSharedStorage feature flag is enabled. Non-blocking.",
+			},
+			K8sVersion: "v1.33.0",
+			TotalNodes: "2",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err,
+			"missing SMB CSI must not block helm install for customers who don't use model caching")
+	})
+
+	t.Run("GPU Operator missing with GPUs available is non-blocking", func(t *testing.T) {
+		// Manual Instance Configuration: GPU Operator is not installed but
+		// GPUs are discoverable. All other critical checks pass. printSummary
+		// must NOT return an error — the cluster is NVCF-Ready (with warnings).
+		state := &ValidationState{
+			Log:                      testLog(),
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     false,
+			Warnings: []string{
+				"GPU Operator: not installed but GPUs are discoverable via alternative mechanism " +
+					"(e.g. Manual Instance Configuration). Non-blocking.",
+			},
+			K8sVersion: "v1.33.0",
+			TotalNodes: "2",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err,
+			"missing GPU Operator with available GPUs must not block helm install")
+	})
+
 	t.Run("no reachability config is excluded", func(t *testing.T) {
 		state := &ValidationState{
 			Log:                      testLog(),
@@ -420,6 +508,38 @@ func TestPrintSummary(t *testing.T) {
 		}
 		err := printSummary(state)
 		assert.Error(t, err, "critical endpoint failure must block readiness")
+	})
+
+	t.Run("reachability fail summary uses neutral 'one or more' wording", func(t *testing.T) {
+		// Summary must read correctly in both the "some endpoints failed"
+		// and "all endpoints failed" cases — the prior wording "Some
+		// Endpoints Not Reachable" was misleading when 100% of endpoints
+		// failed. Verify the neutral wording is in the printed output.
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		fail := false
+		critFail := false
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			ReachabilityOK:           &fail,
+			ReachabilityCriticalOK:   &critFail,
+			K8sVersion:               "v1.28.0",
+			TotalNodes:               "2",
+		}
+		_ = printSummary(state)
+		out := buf.String()
+		assert.Contains(t, out, "Endpoint Reachability: One or more endpoints not reachable",
+			"summary must use neutral wording that's correct for both 'some' and 'all' cases")
+		assert.NotContains(t, out, "Some Endpoints Not Reachable",
+			"old misleading wording must be replaced")
 	})
 
 	t.Run("reachability non-critical fail is warning", func(t *testing.T) {
@@ -578,6 +698,135 @@ func TestToEndpoint(t *testing.T) {
 	assert.Equal(t, "https", ep.Protocol)
 }
 
+// TestToEndpoint_HTTPSWithoutURLFallsBackToTCPTLS verifies that when the
+// user writes `protocol: https` with host+port and no url, the validator
+// probes successfully — the same host:port already works as
+// `protocol: tcp+tls`. The fix substitutes the probe protocol to tcp+tls
+// rather than calling testHTTPS("") which silently returned false.
+func TestToEndpoint_HTTPSWithoutURLFallsBackToTCPTLS(t *testing.T) {
+	tests := []struct {
+		name         string
+		in           ReachabilityEndpoint
+		wantProtocol string
+		wantHost     string
+		wantPort     int
+		wantURL      string
+	}{
+		{
+			name:         "https + host + port 443 + no url → tcp+tls",
+			in:           ReachabilityEndpoint{Host: "api.example.com", Port: 443, Protocol: "https"},
+			wantProtocol: "tcp+tls",
+			wantHost:     "api.example.com",
+			wantPort:     443,
+			wantURL:      "",
+		},
+		{
+			name:         "https + host + no port + no url → tcp+tls on 443",
+			in:           ReachabilityEndpoint{Host: "api.example.com", Protocol: "https"},
+			wantProtocol: "tcp+tls",
+			wantHost:     "api.example.com",
+			wantPort:     443,
+			wantURL:      "",
+		},
+		{
+			name:         "https + host + non-443 port + no url → tcp+tls on that port",
+			in:           ReachabilityEndpoint{Host: "api.example.com", Port: 8443, Protocol: "https"},
+			wantProtocol: "tcp+tls",
+			wantHost:     "api.example.com",
+			wantPort:     8443,
+			wantURL:      "",
+		},
+		{
+			name:         "https with explicit URL → no substitution",
+			in:           ReachabilityEndpoint{URL: "https://api.example.com", Host: "api.example.com", Port: 443, Protocol: "https"},
+			wantProtocol: "https",
+			wantHost:     "api.example.com",
+			wantPort:     443,
+			wantURL:      "https://api.example.com",
+		},
+		{
+			name:         "tcp protocol unchanged",
+			in:           ReachabilityEndpoint{Host: "api.example.com", Port: 443, Protocol: "tcp"},
+			wantProtocol: "tcp",
+			wantHost:     "api.example.com",
+			wantPort:     443,
+			wantURL:      "",
+		},
+		{
+			name:         "https + no host + no url → unchanged (caught by unprobableReason)",
+			in:           ReachabilityEndpoint{Port: 443, Protocol: "https"},
+			wantProtocol: "https",
+			wantHost:     "",
+			wantPort:     443,
+			wantURL:      "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toEndpoint(tt.in)
+			assert.Equal(t, tt.wantProtocol, got.Protocol)
+			assert.Equal(t, tt.wantHost, got.Host)
+			assert.Equal(t, tt.wantPort, got.Port)
+			assert.Equal(t, tt.wantURL, got.URL)
+		})
+	}
+}
+
+// TestUnprobableReason verifies the pre-flight diagnostic helper that
+// distinguishes "endpoint config insufficient" from "endpoint unreachable".
+// Before this helper, both produced the same silent "Not Reachable" line.
+func TestUnprobableReason(t *testing.T) {
+	tests := []struct {
+		name      string
+		ep        Endpoint
+		wantEmpty bool
+		wantSub   string
+	}{
+		{"https with URL is probable", Endpoint{URL: "https://example.com", Protocol: "https"}, true, ""},
+		{"https without URL or host is unprobable", Endpoint{Protocol: "https"}, false, "missing 'url'"},
+		{"tcp with host+port is probable", Endpoint{Host: "example.com", Port: 443, Protocol: "tcp"}, true, ""},
+		{"tcp without port is unprobable", Endpoint{Host: "example.com", Protocol: "tcp"}, false, "missing 'host' or 'port'"},
+		{"tcp+tls without host is unprobable", Endpoint{Port: 443, Protocol: "tcp+tls"}, false, "missing 'host' or 'port'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := unprobableReason(tt.ep)
+			if tt.wantEmpty {
+				assert.Empty(t, got)
+			} else {
+				assert.Contains(t, got, tt.wantSub)
+			}
+		})
+	}
+}
+
+// TestCheckConfigurableReachability_UnprobableEndpointSurfacesReason verifies
+// that an https endpoint configured with no url AND no host produces a
+// clear diagnostic log line, not a silent "Not Reachable" that would be
+// indistinguishable from a real connectivity failure.
+func TestCheckConfigurableReachability_UnprobableEndpointSurfacesReason(t *testing.T) {
+	buf := &bytes.Buffer{}
+	l := logrus.New()
+	l.SetOutput(buf)
+	state := &ValidationState{Log: logrus.NewEntry(l)}
+	cfg := &ReachabilityConfig{
+		Endpoints: []ReachabilityEndpoint{
+			{Name: "bad-https", Protocol: "https", Critical: true},
+		},
+	}
+	checkConfigurableReachability(state, cfg)
+
+	require.NotNil(t, state.ReachabilityOK)
+	assert.False(t, *state.ReachabilityOK)
+	require.NotNil(t, state.ReachabilityCriticalOK)
+	assert.False(t, *state.ReachabilityCriticalOK)
+	out := buf.String()
+	assert.Contains(t, out, "missing 'url' (or 'host') for https probe",
+		"misconfigured endpoint must surface the config gap, not a silent 'Not Reachable'")
+	assert.Contains(t, out, "treated as unreachable",
+		"output must make clear the result was driven by config, not connectivity")
+}
+
 func TestCheckConfigurableReachability_AllUnreachable(t *testing.T) {
 	state := &ValidationState{Log: testLog()}
 	cfg := &ReachabilityConfig{
@@ -602,7 +851,16 @@ func TestCheckConfigurableReachability_CriticalFail(t *testing.T) {
 	assert.False(t, *state.ReachabilityOK)
 	require.NotNil(t, state.ReachabilityCriticalOK)
 	assert.False(t, *state.ReachabilityCriticalOK)
-	assert.NotEmpty(t, state.Recommendations)
+	require.NotEmpty(t, state.Recommendations)
+	// The recommendation must cover all three root causes — config typo,
+	// wrong environment, and egress — not assert "egress is the problem".
+	rec := state.Recommendations[0]
+	assert.Contains(t, rec, "hostname",
+		"recommendation should mention hostname (DNS-typo / wrong-env root cause)")
+	assert.Contains(t, rec, "egress",
+		"recommendation should still mention egress as one possible cause")
+	assert.NotContains(t, rec, "Ensure network egress is allowed",
+		"old egress-only recommendation must be replaced")
 }
 
 func TestCheckConfigurableReachability_Unreachable(t *testing.T) {

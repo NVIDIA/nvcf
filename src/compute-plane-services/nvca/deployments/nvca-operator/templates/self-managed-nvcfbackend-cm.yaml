@@ -42,8 +42,14 @@ data:
       publicKeysetEndpoint: ""
       tokenURL: ""
       icmsServiceURL: {{ .Values.selfManaged.icmsServiceURL | quote }}
+      {{- with .Values.selfManaged.icmsServiceHostHeaderOverride }}
+      icmsServiceHostHeaderOverride: {{ . | quote }}
+      {{- end }}
     miniService:
       helmReValServiceURL: {{ .Values.selfManaged.revalServiceURL | quote }}
+      {{- with .Values.selfManaged.revalServiceHostHeaderOverride }}
+      helmReValServiceHostHeaderOverride: {{ . | quote }}
+      {{- end }}
     {{- with .Values.selfManaged.imageCredHelper }}
     imageCredentialHelper:
       imageConfig:
@@ -64,6 +70,9 @@ data:
     {{- end }}
     agent:
       natsURL: {{ .Values.selfManaged.natsURL | quote }}
+      {{- with .Values.selfManaged.natsHostOverride }}
+      natsHostOverride: {{ . | quote }}
+      {{- end }}
       helmReValStageOAuthTokenURL: {{ .Values.agent.serviceOAuth.helmReVal.stage.tokenURL | quote }}
       helmReValStageOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.helmReVal.stage.publicKeysetEndpoint | quote }}
       helmReValProdOAuthTokenURL: {{ .Values.agent.serviceOAuth.helmReVal.prod.tokenURL | quote }}

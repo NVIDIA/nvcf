@@ -38,6 +38,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/sirupsen/logrus"
+	yamlv3 "gopkg.in/yaml.v3"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -1246,7 +1247,7 @@ func (bc *BackendK8sCache) setupAgentConfigConfigMap(
 		return fmt.Errorf("get agent config to merge: %w", err)
 	}
 
-	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL)
+	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
 		return fmt.Errorf("encode config: %v", err)
 	}
@@ -1266,11 +1267,107 @@ func (bc *BackendK8sCache) setupAgentConfigConfigMap(
 	return bc.createOrUpdateConfigMap(ctx, s)
 }
 
-func encodeAgentConfig(cfg nvcaconfig.Config, mergeCfg nvcaconfig.Config, natsURL *string) ([]byte, error) {
+type agentHostOverrides struct {
+	ICMSHostHeaderOverride             string
+	HelmReValServiceHostHeaderOverride string
+	NATSHostOverride                   *string
+}
+
+func agentHostOverrideConfig(nb *nvidiaiov1.NVCFBackend, envType nvidiaiov1.EnvType) agentHostOverrides {
+	miniService := nb.Spec.ClusterConfig.MiniService.Complete(envType)
+	reValHost := miniService.HelmReValServiceHostHeaderOverride
+	if usesSelfHostedColocatedReVal(nb) {
+		reValHost = ""
+	}
+	return agentHostOverrides{
+		ICMSHostHeaderOverride:             nb.Spec.ICMSConfig.ICMSServiceHostHeaderOverride,
+		HelmReValServiceHostHeaderOverride: reValHost,
+		NATSHostOverride:                   nb.Spec.AgentConfig.NATSHostOverride,
+	}
+}
+
+func encodeAgentConfig(cfg nvcaconfig.Config, mergeCfg nvcaconfig.Config, natsURL *string, hostOverrides agentHostOverrides) ([]byte, error) {
 	if natsURL != nil && *natsURL != "" {
 		mergeCfg.Agent.NATSURL = *natsURL
 	}
-	return nvcaconfig.EncodeConfig(cfg, mergeCfg)
+
+	b, err := nvcaconfig.EncodeConfig(cfg, mergeCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return applyAgentHostOverrides(b, hostOverrides)
+}
+
+func applyAgentHostOverrides(data []byte, hostOverrides agentHostOverrides) ([]byte, error) {
+	if hostOverrides.ICMSHostHeaderOverride == "" &&
+		hostOverrides.HelmReValServiceHostHeaderOverride == "" &&
+		(hostOverrides.NATSHostOverride == nil || *hostOverrides.NATSHostOverride == "") {
+		return data, nil
+	}
+
+	var doc yamlv3.Node
+	if err := yamlv3.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+
+	root := &doc
+	if doc.Kind == yamlv3.DocumentNode && len(doc.Content) > 0 {
+		root = doc.Content[0]
+	}
+	if root.Kind != yamlv3.MappingNode {
+		return nil, fmt.Errorf("agent config root is not a mapping")
+	}
+
+	agent := getYAMLMappingValue(root, "agent")
+	if agent == nil {
+		agent = &yamlv3.Node{Kind: yamlv3.MappingNode}
+		root.Content = append(root.Content, yamlStringNode("agent"), agent)
+	}
+	if agent.Kind != yamlv3.MappingNode {
+		return nil, fmt.Errorf("agent config agent section is not a mapping")
+	}
+
+	setYAMLString(agent, "icmsHostHeaderOverride", hostOverrides.ICMSHostHeaderOverride)
+	setYAMLString(agent, "helmReValServiceHostHeaderOverride", hostOverrides.HelmReValServiceHostHeaderOverride)
+	if hostOverrides.NATSHostOverride != nil {
+		setYAMLString(agent, "NATSHostOverride", *hostOverrides.NATSHostOverride)
+	}
+
+	return yamlv3.Marshal(&doc)
+}
+
+func getYAMLMappingValue(node *yamlv3.Node, key string) *yamlv3.Node {
+	if node == nil || node.Kind != yamlv3.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func setYAMLString(node *yamlv3.Node, key, value string) {
+	if value == "" {
+		return
+	}
+	valueNode := yamlStringNode(value)
+	existing := getYAMLMappingValue(node, key)
+	if existing != nil {
+		*existing = *valueNode
+		return
+	}
+	node.Content = append(node.Content, yamlStringNode(key), valueNode)
+}
+
+func yamlStringNode(value string) *yamlv3.Node {
+	return &yamlv3.Node{
+		Kind:  yamlv3.ScalarNode,
+		Tag:   "!!str",
+		Value: value,
+	}
 }
 
 func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
@@ -2261,7 +2358,7 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 	cfg.Agent.HelmReValServiceURL = nb.Spec.ClusterConfig.MiniService.Complete(bc.envType).HelmReValServiceURL
 
 	// In self-hosted mode, default to the colocated ReVal service unless explicitly configured in the DTO.
-	if IsSelfHosted(nb) && (nb.Spec.ClusterConfig.MiniService == nil || nb.Spec.ClusterConfig.MiniService.HelmReValServiceURL == "") {
+	if usesSelfHostedColocatedReVal(nb) {
 		cfg.Agent.HelmReValServiceURL = "http://reval.nvcf.svc.cluster.local:8080"
 	}
 
@@ -2323,6 +2420,10 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 	}
 
 	return cfg, nil
+}
+
+func usesSelfHostedColocatedReVal(nb *nvidiaiov1.NVCFBackend) bool {
+	return IsSelfHosted(nb) && (nb.Spec.ClusterConfig.MiniService == nil || nb.Spec.ClusterConfig.MiniService.HelmReValServiceURL == "")
 }
 
 func (bc *BackendK8sCache) setupNVCAMutatingWebhookConfiguration(ctx context.Context,

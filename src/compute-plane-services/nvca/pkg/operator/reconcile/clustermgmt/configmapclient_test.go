@@ -221,6 +221,7 @@ clusterId: test-cluster-id
 clusterName: test-cluster
 miniService:
   helmReValServiceURL: "http://reval.nvcf.svc.cluster.local:8080"
+  helmReValServiceHostHeaderOverride: "reval.gateway.example.test"
 `
 		c := newConfigMapClient(nvidiaiov1.EnvTypeProd, dummyFetcher(yamlWithMiniService, nil), DefaultVaultOAuthClientMountPathTemplate)
 		cluster, err := c.GetCluster(context.Background(), "")
@@ -229,6 +230,7 @@ miniService:
 
 		require.NotNil(t, cluster.NVCFBackend.Spec.ClusterConfig.MiniService)
 		assert.Equal(t, "http://reval.nvcf.svc.cluster.local:8080", cluster.NVCFBackend.Spec.ClusterConfig.MiniService.HelmReValServiceURL)
+		assert.Equal(t, "reval.gateway.example.test", cluster.NVCFBackend.Spec.ClusterConfig.MiniService.HelmReValServiceHostHeaderOverride)
 	})
 
 	t.Run("leaves MiniService nil when not present in DTO", func(t *testing.T) {
@@ -289,6 +291,7 @@ clusterId: test-cluster-id
 clusterName: test-cluster
 agent:
   natsURL: "nats://nats.localhost:14222"
+  natsHostOverride: "nats.gateway.example.test"
 `
 
 	c := newConfigMapClient(nvidiaiov1.EnvTypeProd, dummyFetcher(yamlWithAgentNATSURL, nil), DefaultVaultOAuthClientMountPathTemplate)
@@ -298,4 +301,6 @@ agent:
 
 	require.NotNil(t, cluster.NVCFBackend.Spec.AgentConfig.NATSURL)
 	assert.Equal(t, "nats://nats.localhost:14222", *cluster.NVCFBackend.Spec.AgentConfig.NATSURL)
+	require.NotNil(t, cluster.NVCFBackend.Spec.AgentConfig.NATSHostOverride)
+	assert.Equal(t, "nats.gateway.example.test", *cluster.NVCFBackend.Spec.AgentConfig.NATSHostOverride)
 }

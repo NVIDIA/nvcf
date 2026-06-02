@@ -537,6 +537,12 @@ func schema_pkg_apis_nvcf_v1_ICMSConfig(ref common.ReferenceCallback) common.Ope
 							Format:  "",
 						},
 					},
+					"icmsServiceHostHeaderOverride": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
 					"awsEndpointURL": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
@@ -698,6 +704,12 @@ func schema_pkg_apis_nvcf_v1_MiniServiceConfig(ref common.ReferenceCallback) com
 							Default: "",
 							Type:    []string{"string"},
 							Format:  "",
+						},
+					},
+					"helmReValServiceHostHeaderOverride": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
 						},
 					},
 					"cacheDirSize": {

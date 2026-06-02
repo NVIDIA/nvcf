@@ -182,6 +182,7 @@ type AgentOptions struct {
 
 	// ICMSURL is the ICMS service URL.
 	ICMSURL                        string
+	ICMSHostHeaderOverride         string
 	CloudProvider                  string
 	KubeConfigPath                 string
 	NVCASvcAddress                 string
@@ -242,11 +243,13 @@ type AgentOptions struct {
 	HelmRepositoryPrefix string
 
 	// QueueManager options
-	EndpointURL string
-	NATSURL     string
+	EndpointURL      string
+	NATSURL          string
+	NATSHostOverride string
 
 	// ReVal service config
 	HelmReValServiceURL                     string
+	HelmReValServiceHostHeaderOverride      string
 	HelmReValStageOAuthTokenURL             string
 	HelmReValStageOAuthPublicKeysetEndpoint string
 	HelmReValProdOAuthTokenURL              string
@@ -406,6 +409,7 @@ func (o *AgentOptions) sanitizedString() string {
 	sanitized.ClusterDescription = o.ClusterDescription
 	sanitized.KubeConfigPath = o.KubeConfigPath
 	sanitized.ICMSURL = o.EffectiveICMSURL()
+	sanitized.ICMSHostHeaderOverride = o.ICMSHostHeaderOverride
 	sanitized.CloudProvider = o.CloudProvider
 	sanitized.SystemNamespace = o.SystemNamespace
 	sanitized.RequestsNamespace = o.RequestsNamespace
@@ -434,6 +438,7 @@ func (o *AgentOptions) sanitizedString() string {
 	sanitized.PSATTokenFilePath = o.PSATTokenFilePath
 	sanitized.EndpointURL = o.EndpointURL
 	sanitized.NATSURL = o.NATSURL
+	sanitized.NATSHostOverride = o.NATSHostOverride
 	sanitized.K8sVersion = o.K8sVersion
 	sanitized.GPUCapacity = o.GPUCapacity
 	sanitized.ComputeBackend = o.ComputeBackend
@@ -454,6 +459,7 @@ func (o *AgentOptions) sanitizedString() string {
 	sanitized.LowLatencyStreamingEnabled = o.LowLatencyStreamingEnabled
 	sanitized.HelmRepositoryPrefix = o.HelmRepositoryPrefix
 	sanitized.HelmReValServiceURL = o.HelmReValServiceURL
+	sanitized.HelmReValServiceHostHeaderOverride = o.HelmReValServiceHostHeaderOverride
 	sanitized.HelmReValStageOAuthTokenURL = o.HelmReValStageOAuthTokenURL
 	sanitized.HelmReValStageOAuthPublicKeysetEndpoint = o.HelmReValStageOAuthPublicKeysetEndpoint
 	sanitized.HelmReValProdOAuthTokenURL = o.HelmReValProdOAuthTokenURL
@@ -526,7 +532,7 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 	}
 
 	a.newKubeClients = defaultNewKubeClients
-	a.icmsClient = NewICMSClient(ctx, opts.ClusterID, opts.EffectiveICMSURL(), tokenFetcher, a.tracer)
+	a.icmsClient = NewICMSClientWithHostHeaderOverride(ctx, opts.ClusterID, opts.EffectiveICMSURL(), opts.ICMSHostHeaderOverride, tokenFetcher, a.tracer)
 	a.instStatusThreadPool = pool.New().WithMaxGoroutines(ICMSInstanceRequestStatusUpdatesMaxGoroutines)
 	a.ackThreadPool = pool.New().WithMaxGoroutines(ICMSRequestAckMaxGoroutines)
 	// initialize selfDestruct to false
@@ -1189,7 +1195,7 @@ func (a *Agent) Start(ctx context.Context) error {
 				log.WithError(ferr).Error("Failed to construct projected-token fetcher for NATS")
 				return fmt.Errorf("construct projected-token fetcher: %w", ferr)
 			}
-			queueClient, err = natsqueue.NewClientWithTokenFetcherURL(ctx, a.NATSURL, a.ClusterID, psatFetcher)
+			queueClient, err = natsqueue.NewClientWithTokenFetcherURLAndHostOverride(ctx, a.NATSURL, a.NATSHostOverride, a.ClusterID, psatFetcher)
 			if err != nil {
 				log.WithError(err).Error("Failed to create NATS queue client")
 				return fmt.Errorf("create NATS queue client: %w", err)
@@ -1230,7 +1236,7 @@ func (a *Agent) Start(ctx context.Context) error {
 			if a.natsSecretsFetcher == nil {
 				return fmt.Errorf("nats secrets fetcher not available")
 			}
-			queueClient, err = natsqueue.NewClientWithURL(ctx, a.NATSURL, a.ClusterID, a.natsSecretsFetcher)
+			queueClient, err = natsqueue.NewClientWithURLAndHostOverride(ctx, a.NATSURL, a.NATSHostOverride, a.ClusterID, a.natsSecretsFetcher)
 			if err != nil {
 				log.WithError(err).Error("Failed to create NATS queue client")
 				return fmt.Errorf("create NATS queue client: %w", err)

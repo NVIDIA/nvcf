@@ -233,8 +233,12 @@ func TestGetVaultConfigData_TemplateUsesOAuthClientMountPath(t *testing.T) {
 	configData := getVaultConfigData(nb)
 
 	// Template uses OAuthClientMountPath from VaultConfig
-	assert.Contains(t, configData["template.hcl"], "template-client-id")
-	assert.Contains(t, configData["template.hcl"], "nvidia/services/oauth/clients/template-client-id/kv/secret")
+	if assert.Contains(t, configData, "template.hcl") {
+		expected := `{{ with secret "nvidia/services/oauth/clients/template-client-id/kv/secret" }}
+OAUTH_CLIENT_SECRET_KEY={{ .Data.data.secret }}
+{{ end }}`
+		assert.Equal(t, expected, configData["template.hcl"])
+	}
 }
 
 func TestGetVaultConfigData_ConfigInitAndNonInit(t *testing.T) {

@@ -132,7 +132,9 @@ agent:
 		err := os.WriteFile(cfgFilePath, []byte(`
 agent:
   icmsURL: https://test.example.com
+  icmsHostHeaderOverride: sis.gateway.example.test
   helmReValServiceURL: http://reval.localhost:18080
+  helmReValServiceHostHeaderOverride: reval.gateway.example.test
   helmReValStageOAuthTokenURL: https://stage-reval-oauth.example.test/token
   helmReValStageOAuthPublicKeysetEndpoint: https://stage-reval-oauth.example.test/.well-known/jwks.json
   helmReValProdOAuthTokenURL: https://prod-reval-oauth.example.test/token
@@ -143,6 +145,7 @@ agent:
   functionDeploymentStagesProdOAuthTokenURL: https://prod-fnds-oauth.example.test/token
   functionDeploymentStagesProdOAuthPublicKeysetEndpoint: https://prod-fnds-oauth.example.test/.well-known/jwks.json
   NATSURL: nats://nats.localhost:14222
+  NATSHostOverride: nats.gateway.example.test
 `), 0600)
 		require.NoError(t, err)
 
@@ -163,7 +166,9 @@ agent:
 		require.NoError(t, err)
 		require.NotNil(t, gotOpts)
 		assert.Equal(t, "https://test.example.com", gotOpts.ICMSURL)
+		assert.Equal(t, "sis.gateway.example.test", gotOpts.ICMSHostHeaderOverride)
 		assert.Equal(t, "http://reval.localhost:18080", gotOpts.HelmReValServiceURL)
+		assert.Equal(t, "reval.gateway.example.test", gotOpts.HelmReValServiceHostHeaderOverride)
 		assert.Equal(t, "https://stage-reval-oauth.example.test/token", gotOpts.HelmReValStageOAuthTokenURL)
 		assert.Equal(t, "https://stage-reval-oauth.example.test/.well-known/jwks.json", gotOpts.HelmReValStageOAuthPublicKeysetEndpoint)
 		assert.Equal(t, "https://prod-reval-oauth.example.test/token", gotOpts.HelmReValProdOAuthTokenURL)
@@ -174,6 +179,7 @@ agent:
 		assert.Equal(t, "https://prod-fnds-oauth.example.test/token", gotOpts.FunctionDeploymentStagesProdOAuthTokenURL)
 		assert.Equal(t, "https://prod-fnds-oauth.example.test/.well-known/jwks.json", gotOpts.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
 		assert.Equal(t, "nats://nats.localhost:14222", gotOpts.NATSURL)
+		assert.Equal(t, "nats.gateway.example.test", gotOpts.NATSHostOverride)
 	})
 
 	// With populated config, should pass.

@@ -151,15 +151,32 @@ func printSummary(state *ValidationState) error {
 		Critical bool
 	}
 
+	// Distinguish "we listed nodes and found N not-ready" (NotReadyNodes>0)
+	// from "we couldn't list nodes at all" (NotReadyNodes==0 + !NodesAllReady).
+	// Successful listing always yields either NodesAllReady=true (pass) or
+	// NotReadyNodes>0 (genuine NotReady count); the zero case can only
+	// happen when checkControlPlaneHealth's Nodes().List() returned an
+	// error, so avoid the misleading "0 NotReady" summary row.
+	nodesFailMsg := fmt.Sprintf("Worker Nodes: %d NotReady (non-blocking)", state.NotReadyNodes)
+	if !state.NodesAllReady && state.NotReadyNodes == 0 {
+		nodesFailMsg = "Worker Nodes: status unknown (node listing failed)"
+	}
+
 	checks := []check{
 		{state.ControlPlaneHealthy, "Control Plane: Healthy", "Control Plane: Unhealthy", true},
 		{state.NodesAllReady,
 			"Worker Nodes: All Ready",
-			fmt.Sprintf("Worker Nodes: %d NotReady (non-blocking)", state.NotReadyNodes),
+			nodesFailMsg,
 			false},
 		{state.WebhooksSupported, "Admission Webhooks: Mutating & Validating Supported", "Admission Webhooks: Not Supported", true},
 		{state.NetworkPoliciesSupported, "Network Policies: Supported", "Network Policies: Not Confirmed", false},
-		{state.SMBCSIDriverOK, "SMB CSI Driver: v1.16.0+ Installed", "SMB CSI Driver: Not Installed or Below v1.16.0", true},
+		// SMB CSI Driver missing is non-blocking: it is required only when
+		// the HelmSharedStorage feature flag is enabled (NVCA model-cache).
+		// pkg/storage/smbcsidriver.go's runtime health check itself flags
+		// this at StatusLevelWarn, not StatusLevelError — block install
+		// only when the customer has explicitly opted in to a feature that
+		// needs SMB CSI, not for every operator install.
+		{state.SMBCSIDriverOK, "SMB CSI Driver: v1.16.0+ Installed", "SMB CSI Driver: Not Installed or Below v1.16.0", false},
 	}
 
 	if state.ReachabilityOK != nil {
@@ -168,14 +185,19 @@ func printSummary(state *ValidationState) error {
 		checks = append(checks, check{
 			*state.ReachabilityOK,
 			"Endpoint Reachability: All Endpoints Reachable",
-			"Endpoint Reachability: Some Endpoints Not Reachable",
+			"Endpoint Reachability: One or more endpoints not reachable",
 			isCritical,
 		})
 	}
 
 	checks = append(checks,
 		check{state.GPUAvailable, "GPU Resources: Available", "GPU Resources: Not Available", true},
-		check{state.GPUOperatorInstalled, "GPU Operator: Installed", "GPU Operator: Not Installed", true},
+		// GPU Operator missing is non-blocking: clusters registered with
+		// Manual Instance Configuration expose GPUs via an alternative
+		// mechanism (pre-labeled nodes, DaemonSet, etc.) and do not require
+		// GPU Operator. GPU Resources above is the load-bearing signal —
+		// if GPUs aren't usable that fails Critical separately.
+		check{state.GPUOperatorInstalled, "GPU Operator: Installed", "GPU Operator: Not Installed", false},
 	)
 
 	if state.ConfigurableNetPolOK != nil {

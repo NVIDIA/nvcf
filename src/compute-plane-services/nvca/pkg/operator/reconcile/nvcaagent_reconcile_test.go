@@ -2724,22 +2724,66 @@ func TestEncodeAgentConfig_ConfiguresSelfHostedControlPlaneEndpoints(t *testing.
 		},
 	}
 
-	data, err := encodeAgentConfig(cfg, nvcaconfig.Config{}, ptr.To("nats://nats.nats-system.svc.cluster.local:4222"))
+	data, err := encodeAgentConfig(
+		cfg,
+		nvcaconfig.Config{},
+		ptr.To("nats://nats.nats-system.svc.cluster.local:4222"),
+		agentHostOverrides{
+			ICMSHostHeaderOverride:             "sis.gateway.example.test",
+			HelmReValServiceHostHeaderOverride: "reval.gateway.example.test",
+			NATSHostOverride:                   ptr.To("nats.gateway.example.test"),
+		},
+	)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "NATSURL: nats://nats.nats-system.svc.cluster.local:4222")
+	assert.Contains(t, string(data), "NATSHostOverride: nats.gateway.example.test")
 	assert.NotContains(t, string(data), "natsURL:")
 
 	var got struct {
 		Agent struct {
-			ICMSURL             string `json:"icmsURL" yaml:"icmsURL"`
-			HelmReValServiceURL string `json:"helmReValServiceURL" yaml:"helmReValServiceURL"`
-			NATSURL             string `json:"NATSURL" yaml:"NATSURL"`
+			ICMSURL                            string `json:"icmsURL" yaml:"icmsURL"`
+			ICMSHostHeaderOverride             string `json:"icmsHostHeaderOverride" yaml:"icmsHostHeaderOverride"`
+			HelmReValServiceURL                string `json:"helmReValServiceURL" yaml:"helmReValServiceURL"`
+			HelmReValServiceHostHeaderOverride string `json:"helmReValServiceHostHeaderOverride" yaml:"helmReValServiceHostHeaderOverride"`
+			NATSURL                            string `json:"NATSURL" yaml:"NATSURL"`
+			NATSHostOverride                   string `json:"NATSHostOverride" yaml:"NATSHostOverride"`
 		} `json:"agent" yaml:"agent"`
 	}
 	require.NoError(t, yaml.Unmarshal(data, &got))
 	assert.Equal(t, "http://api.icms.svc.cluster.local:8080", got.Agent.ICMSURL)
+	assert.Equal(t, "sis.gateway.example.test", got.Agent.ICMSHostHeaderOverride)
 	assert.Equal(t, "http://reval.nvcf.svc.cluster.local:8080", got.Agent.HelmReValServiceURL)
+	assert.Equal(t, "reval.gateway.example.test", got.Agent.HelmReValServiceHostHeaderOverride)
 	assert.Equal(t, "nats://nats.nats-system.svc.cluster.local:4222", got.Agent.NATSURL)
+	assert.Equal(t, "nats.gateway.example.test", got.Agent.NATSHostOverride)
+}
+
+func TestAgentHostOverrideConfig_ClearsReValHostForSelfHostedColocatedService(t *testing.T) {
+	natsHostOverride := "nats.gateway.example.test"
+	nb := &nvidiaiov1.NVCFBackend{
+		Spec: nvidiaiov1.NVCFBackendSpec{
+			NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+				ClusterSource: nvidiaiov1.ClusterSourceSelfHosted,
+				ICMSConfig: nvidiaiov1.ICMSConfig{
+					ICMSServiceHostHeaderOverride: "sis.gateway.example.test",
+				},
+				ClusterConfig: nvidiaiov1.ClusterConfig{
+					MiniService: &nvidiaiov1.MiniServiceConfig{
+						HelmReValServiceHostHeaderOverride: "reval.gateway.example.test",
+					},
+				},
+				AgentConfig: nvidiaiov1.AgentConfig{
+					NATSHostOverride: &natsHostOverride,
+				},
+			},
+		},
+	}
+
+	got := agentHostOverrideConfig(nb, nvidiaiov1.EnvTypeStage)
+	assert.Equal(t, "sis.gateway.example.test", got.ICMSHostHeaderOverride)
+	assert.Empty(t, got.HelmReValServiceHostHeaderOverride)
+	require.NotNil(t, got.NATSHostOverride)
+	assert.Equal(t, "nats.gateway.example.test", *got.NATSHostOverride)
 }
 
 func TestSetupNVCADeployment_OTELConfig(t *testing.T) {

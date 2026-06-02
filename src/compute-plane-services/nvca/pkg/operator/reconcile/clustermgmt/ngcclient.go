@@ -275,8 +275,9 @@ func withRootNVCFBackendMapper() clusterMapper {
 
 		// ICMSConfig
 		dest.NVCFBackend.Spec.ICMSConfig = nvidiaiov1.ICMSConfig{
-			ICMSServiceURL: src.ICMSConfig.ICMSServiceURL,
-			TokenURL:       src.ICMSConfig.TokenURL,
+			ICMSServiceURL:                src.ICMSConfig.ICMSServiceURL,
+			ICMSServiceHostHeaderOverride: src.ICMSConfig.ICMSServiceHostHeaderOverride,
+			TokenURL:                      src.ICMSConfig.TokenURL,
 		}
 
 		clientID := src.getClientID()
@@ -457,11 +458,12 @@ func withSharedStorageImageMapper() clusterMapper {
 
 func withMiniServiceMapper() clusterMapper {
 	return func(_ context.Context, _ nvidiaiov1.EnvType, src *clusterDTO, dest *Cluster) error {
-		if src.MiniService != nil && src.MiniService.HelmReValServiceURL != "" {
+		if src.MiniService != nil && (src.MiniService.HelmReValServiceURL != "" || src.MiniService.HelmReValServiceHostHeaderOverride != "") {
 			if dest.NVCFBackend.Spec.ClusterConfig.MiniService == nil {
 				dest.NVCFBackend.Spec.ClusterConfig.MiniService = &nvidiaiov1.MiniServiceConfig{}
 			}
 			dest.NVCFBackend.Spec.ClusterConfig.MiniService.HelmReValServiceURL = src.MiniService.HelmReValServiceURL
+			dest.NVCFBackend.Spec.ClusterConfig.MiniService.HelmReValServiceHostHeaderOverride = src.MiniService.HelmReValServiceHostHeaderOverride
 		}
 		return nil
 	}
@@ -512,6 +514,9 @@ func withAgentConfigMapper() clusterMapper {
 			)
 			if src.Agent.NATSURL != "" {
 				dest.NVCFBackend.Spec.AgentConfig.NATSURL = ptr.To(src.Agent.NATSURL)
+			}
+			if src.Agent.NATSHostOverride != "" {
+				dest.NVCFBackend.Spec.AgentConfig.NATSHostOverride = ptr.To(src.Agent.NATSHostOverride)
 			}
 		}
 

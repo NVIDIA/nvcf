@@ -108,10 +108,11 @@ type ClusterConfig struct {
 
 // +k8s:openapi-gen=true
 type ICMSConfig struct {
-	ICMSServiceURL string `json:"icmsServiceURL"`
-	AWSEndpointURL string `json:"awsEndpointURL,omitempty"`
-	IsLocal        bool   `json:"isLocal,omitempty"`
-	TokenURL       string `json:"tokenURL"`
+	ICMSServiceURL                string `json:"icmsServiceURL"`
+	ICMSServiceHostHeaderOverride string `json:"icmsServiceHostHeaderOverride,omitempty"`
+	AWSEndpointURL                string `json:"awsEndpointURL,omitempty"`
+	IsLocal                       bool   `json:"isLocal,omitempty"`
+	TokenURL                      string `json:"tokenURL"`
 }
 
 // +k8s:openapi-gen=true
@@ -210,8 +211,9 @@ const (
 
 // +k8s:openapi-gen=true
 type MiniServiceConfig struct {
-	HelmReValServiceURL string             `json:"helmReValServiceURL"`
-	CacheDirSize        *resource.Quantity `json:"cacheDirSize"`
+	HelmReValServiceURL                string             `json:"helmReValServiceURL"`
+	HelmReValServiceHostHeaderOverride string             `json:"helmReValServiceHostHeaderOverride,omitempty"`
+	CacheDirSize                       *resource.Quantity `json:"cacheDirSize"`
 }
 
 const (
@@ -555,6 +557,7 @@ type AgentConfig struct {
 	ByooResources                                          *corev1.ResourceRequirements `json:"byooResources,omitempty"`
 	OTelCollectorConfig                                    *OTelCollectorConfig         `json:"otelCollectorConfig,omitempty"`
 	NATSURL                                                *string                      `json:"natsURL,omitempty"`
+	NATSHostOverride                                       *string                      `json:"natsHostOverride,omitempty"`
 	HelmReValStageOAuthTokenURL                            string                       `json:"helmReValStageOAuthTokenURL,omitempty"`
 	HelmReValStageOAuthPublicKeysetEndpoint                string                       `json:"helmReValStageOAuthPublicKeysetEndpoint,omitempty"`
 	HelmReValProdOAuthTokenURL                             string                       `json:"helmReValProdOAuthTokenURL,omitempty"`

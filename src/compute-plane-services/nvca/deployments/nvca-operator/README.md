@@ -135,8 +135,11 @@ used in DGX Cloud and other K8s Clusters to run NVCF Workloads.
 | `selfManaged.otelCollector.imageRepository`   | (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.               | `""`                                       |
 | `selfManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.143.2`                                  |
 | `selfManaged.icmsServiceURL`                  | URL of the SIS/ICMS service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".                                                                      | `""`                                      |
+| `selfManaged.icmsServiceHostHeaderOverride`                 | Optional Host header override for selfManaged.icmsServiceURL.                                                                                                                       | `""`                                      |
 | `selfManaged.revalServiceURL`                 | URL of the ReVal service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".                                                                         | `""`                                      |
+| `selfManaged.revalServiceHostHeaderOverride`                | Optional Host header override for selfManaged.revalServiceURL.                                                                                                                      | `""`                                      |
 | `selfManaged.natsURL`                         | URL of the NATS service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".                                                                          | `""`                                      |
+| `selfManaged.natsHostOverride`                        | Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.                                                                                            | `""`                                      |
 
 ### Node Selector Configuration
 

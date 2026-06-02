@@ -45,9 +45,20 @@ type tokenFetcher interface {
 
 type revalClient struct {
 	endpoint     string
+	host         string
 	tokenFetcher tokenFetcher
 	httpClient   *http.Client
 	metrics      *metrics.Metrics
+}
+
+// ReValClientOption configures a ReVal client.
+type ReValClientOption func(*revalClient)
+
+// WithReValHostHeaderOverride sets the HTTP Host header override for ReVal requests.
+func WithReValHostHeaderOverride(host string) ReValClientOption {
+	return func(c *revalClient) {
+		c.host = host
+	}
 }
 
 func NewReValClient(
@@ -55,13 +66,18 @@ func NewReValClient(
 	tf tokenFetcher,
 	httpClient *http.Client,
 	m *metrics.Metrics,
+	opts ...ReValClientOption,
 ) ReValClient {
-	return &revalClient{
+	c := &revalClient{
 		endpoint:     endpoint,
 		tokenFetcher: tf,
 		httpClient:   httpClient,
 		metrics:      m,
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 func (c *revalClient) Render(ctx context.Context, input HelmReValRenderInput) (HelmReValRenderOutput, error) {
@@ -101,6 +117,9 @@ func (c *revalClient) Render(ctx context.Context, input HelmReValRenderInput) (H
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if c.host != "" {
+		req.Host = c.host
+	}
 	// Add trace parent and state from context.
 	propagation.TraceContext{}.Inject(ctx, propagation.HeaderCarrier(req.Header))
 

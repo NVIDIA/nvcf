@@ -331,7 +331,7 @@ func (bc *BackendK8sCache) newAgentConfigChangedCheck(ctx context.Context, nb *n
 		return nil, err
 	}
 
-	genCfgData, err := encodeAgentConfig(genCfg, mergeCfg, nb.Spec.AgentConfig.NATSURL)
+	genCfgData, err := encodeAgentConfig(genCfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
 		return nil, fmt.Errorf("encode and merge generated config: %w", err)
 	}

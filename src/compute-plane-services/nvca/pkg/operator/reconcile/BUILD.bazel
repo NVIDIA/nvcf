@@ -75,6 +75,7 @@ go_library(
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_sirupsen_logrus//:logrus",
         "@com_github_urfave_cli_v2//:cli",
+        "@in_gopkg_yaml_v3//:yaml_v3",
         "@io_k8s_api//admissionregistration/v1:admissionregistration",
         "@io_k8s_api//apps/v1:apps",
         "@io_k8s_api//core/v1:core",

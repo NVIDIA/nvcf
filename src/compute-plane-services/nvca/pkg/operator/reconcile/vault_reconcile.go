@@ -22,6 +22,7 @@ import (
 	"fmt"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth"
 )
 
 const (
@@ -99,9 +100,9 @@ func getVaultConfigData(nb *nvidiaiov1.NVCFBackend) map[string]string {
 	vaultSecretPath := getOAuthClientMountPath(nb)
 
 	// Generate template with OAuth names (NVCA handles backwards compatibility)
-	temCfg := fmt.Sprintf("{{ with secret %q }}\n{{ %s }}\n{{ end }}",
+	temCfg := fmt.Sprintf("{{ with secret %q }}\n%s={{ %s }}\n{{ end }}",
 		vaultSecretPath,
-		secretDataPath)
+		auth.ClientSecretEnv, secretDataPath)
 
 	return map[string]string{
 		"config-init.hcl": cfgTplInit,

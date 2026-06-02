@@ -157,6 +157,50 @@ func setupTestICMSClient() (*ICMSClient, *mockTransport) {
 	return s, m
 }
 
+func TestICMSClientHostHeader(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		wantHost string
+	}{
+		{
+			name:     "uses URL host by default",
+			wantHost: "bare-elb.example.invalid",
+		},
+		{
+			name:     "uses configured host override",
+			host:     "sis.bare-elb.example.invalid",
+			wantHost: "sis.bare-elb.example.invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewICMSClientWithHostHeaderOverride(
+				t.Context(),
+				uuid.NewString(),
+				"http://bare-elb.example.invalid",
+				tt.host,
+				&mockTokenFetcher{token: "token"},
+				nil,
+			)
+			transport := newMockTransport()
+			transport.setBody(`{"clusterId":"test-cluster"}`)
+			client.client.Transport = transport
+
+			_, err := client.Register(t.Context(), &types.ICMSRegistrationRequest{})
+			require.NoError(t, err)
+			req := transport.getRequest()
+			require.NotNil(t, req)
+			gotHost := req.Host
+			if gotHost == "" {
+				gotHost = req.URL.Host
+			}
+			assert.Equal(t, tt.wantHost, gotHost)
+		})
+	}
+}
+
 func TestICMSRegister(t *testing.T) {
 	ctx := newTestContext()
 	s, m := setupTestICMSClient()
@@ -170,18 +214,18 @@ func TestICMSRegister(t *testing.T) {
 			"` + string(testGPUNameDefault) + `": {
 				"url": "http://192.168.65.2:4566/000000000000/q_gdn_icms_byoc_13e2b598-96cf-41b5-b419-8ea7f700d5d2.fifo",
 				"queueType": "FifoQueue",
-				"accessKeyId": "ASIAQAAAAAAAKQ563GZD",
-				"secretAccessKey": "VuwiYiuZ54FpjJNoKi4+xLmItKsuSkL4JM7Gibg/",
-				"sessionToken": "FQoGZXIvYXdzEBYaDWBDIgdpw+WFwbMJjzWlBUY8Tz8VkPa4m7GD6pF006Pu5J2q82CeF08FYzgBFK1KsfZbenSykRH01TifaKDnghJMtHIQMXo1cerGTbXeqyCpvsl42gRiFqmiR1Hwy5sVUhlqQ05ZnVYUGPoWGu6OpA/9jWQbKK3ITVTXMhrbTXl0AN/e05Gxk16zCnPwsO1FFFDbOkd6Y5g1raAgtGZmst/6NkBpxAjehzUFfZvhQOg1FGJUsYkg3Y11QQ39DB4Ytl1AZTqmB//jCJiTPfJXGF+7MuX3Ufb/yC66Q89ENx9jpL8/lC66hliPrQKC1BOOYLBYgopaFMHTuVcL/wA=",
+				"accessKeyId": "dummy-access-key-id",
+				"secretAccessKey": "dummy-secret-access-key",
+				"sessionToken": "dummy-session-token",
 				"expiresAt": "2023-05-31T05:26:04.433Z"
 			}
 		},
         "terminationQueue": {
             "url": "http://192.168.65.2:4566/000000000000/q_gdn_icms_byoc_oauth-stg-0CBtUXmR8i1HFNvm7t6I1M9VD2NBqpgETUolWrlSv68.fifo",
             "queueType": "FifoQueue",
-            "accessKeyId": "ASIAQAAAAAAAD6FWY6K6",
-            "secretAccessKey": "tlxkupYvYw5W5PkxOnZCP2GX8GqDk7i0w2tKN4oY",
-            "sessionToken": "FQoGZXIvYXdzEBYaDkZEjNzHSLiYWlztWai9L21wXsZxYP31GgDnQWVcVp1qC9rBSXiRJBUeO9s/91y0qOU3PWIzUTnhhpNDJK4xg+nlCjsjRqESYYIW3aM+OxmFAQrSFoSWLLI+bo2Q6gKXL1KuoLxa7RplsOu892ZbBLhaqX3XAkHUIoCH3+28gsqjXCjGwuReKR3XWREuDAj3Aa2jhUAZFdZMlhSC6WUApU2V/qSbWlQDmvgL0XQWhLWU1r6qaPrBZtFYc7Rkj8LeZmvmb9kJi3XEAfjiX7jb9ZdjI22ZtQXss018M062wVfRQD9ioyW3QI5hGh3SBQwfNaWlT8G5MzYV8Xb0SGs=",
+            "accessKeyId": "dummy-access-key-id",
+            "secretAccessKey": "dummy-secret-access-key",
+            "sessionToken": "dummy-session-token",
             "expiresAt": "2023-05-31T05:26:04.461Z"
         }
     }
@@ -211,17 +255,17 @@ func TestICMSGetCreds(t *testing.T) {
 	assert.NotNil(t, res)
 	assert.Len(t, res.CreationQueues, 1)
 	if assert.Contains(t, res.CreationQueues, testGPUNameDefault) {
-		assert.Equal(t, res.CreationQueues[testGPUNameDefault].AccessKey, "ASIAQAAAAAAAKQ563GZD")
+		assert.Equal(t, res.CreationQueues[testGPUNameDefault].AccessKey, "dummy-access-key-id")
 	}
-	assert.Equal(t, res.TerminationQueue.AccessKey, "ASIAQAAAAAAAD6FWY6K6")
+	assert.Equal(t, res.TerminationQueue.AccessKey, "dummy-access-key-id")
 
 	m.body = `{
     "credentials": {
  000/q_gdn_icms_byoc_oauth-stg-0CBtUXmR8i1HFNvm7t6I1M9VD2NBqpgETUolWrlSv68.fifo",
             "queueType": "FifoQueue",
-            "accessKeyId": "ASIAQAAAAAAAD6FWY6K6",
-            "secretAccessKey": "tlxkupYvYw5W5PkxOnZCP2GX8GqDk7i0w2tKN4oY",
-            "sessionToken": "FQoGZXIvYXdzEBYaDkZEjNzHSLiYWlztWai9L21wXsZxYP31GgDnQWVcVp1qC9rBSXiRJBUeO9s/91y0qOU3PWIzUTnhhpNDJK4xg+nlCjsjRqESYYIW3aM+OxmFAQrSFoSWLLI+bo2Q6gKXL1KuoLxa7RplsOu892ZbBLhaqX3XAkHUIoCH3+28gsqjXCjGwuReKR3XWREuDAj3Aa2jhUAZFdZMlhSC6WUApU2V/qSbWlQDmvgL0XQWhLWU1r6qaPrBZtFYc7Rkj8LeZmvmb9kJi3XEAfjiX7jb9ZdjI22ZtQXss018M062wVfRQD9ioyW3QI5hGh3SBQwfNaWlT8G5MzYV8Xb0SGs=",
+            "accessKeyId": "dummy-access-key-id",
+            "secretAccessKey": "dummy-secret-access-key",
+            "sessionToken": "dummy-session-token",
             "expiresAt": "2023-05-31T05:26:04.461Z"
         }
     }

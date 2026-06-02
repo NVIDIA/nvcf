@@ -11,10 +11,8 @@ The following third-party licenses are included in this repository:
     deploy/helm/container-cache/NOTICE
     deploy/helm/nats/NOTICE
     deploy/helm/openbao/NOTICE
-    src/clis/nvcf-cli/NOTICE
     src/compute-plane-services/byoo-otel-collector/NOTICE
     src/compute-plane-services/ess-agent/NOTICE
-    src/compute-plane-services/image-credential-helper/NOTICE
     src/compute-plane-services/image-credential-helper/vendor/dario.cat/mergo/LICENSE
     src/compute-plane-services/image-credential-helper/vendor/github.com/aws/aws-sdk-go-v2/config/LICENSE.txt
     src/compute-plane-services/image-credential-helper/vendor/github.com/aws/aws-sdk-go-v2/credentials/LICENSE.txt

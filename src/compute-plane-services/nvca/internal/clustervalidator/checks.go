@@ -19,12 +19,14 @@ package clustervalidator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
@@ -171,6 +173,10 @@ func checkControlPlaneHealth(ctx context.Context, client kubernetes.Interface, s
 	if err != nil {
 		printError(log, fmt.Sprintf("Failed to list nodes: %v", err))
 		podsHealthy = false
+		// Node readiness is unknown — reflect that in the summary row so
+		// it doesn't read "Worker Nodes: All Ready" when we never checked.
+		nodesAllReady = false
+		state.NodesAllReady = false
 	} else if len(nodes.Items) > 0 {
 		ready, notReady := 0, 0
 		for i := range nodes.Items {
@@ -251,12 +257,13 @@ func detectManagedClusterProvider(ctx context.Context, client kubernetes.Interfa
 }
 
 // probeReadyz performs GET /readyz on the API server and returns:
-//   - reached=true, ready=true:  /readyz responded with body "ok"
-//   - reached=true, ready=false: /readyz responded with a non-"ok" body
-//     (uncommon — Kubernetes usually signals unreadiness via HTTP 5xx,
-//     which surfaces as an error and is treated as reached=false)
-//   - reached=false, ready=false: any error, nil RESTClient, or panic
-//     (fake clients may not implement RESTClient correctly)
+//   - reached=true, ready=true:  /readyz responded 2xx with body "ok"
+//   - reached=true, ready=false: /readyz returned an HTTP 5xx (Kubernetes
+//     signals unreadiness via 503) OR a non-"ok" body. We reached the
+//     server; it explicitly told us it isn't ready.
+//   - reached=false, ready=false: transport error, nil RESTClient, or panic
+//     (fake clients may not implement RESTClient correctly). We could not
+//     determine readiness — caller should fall back to ServerVersion.
 func probeReadyz(ctx context.Context, client kubernetes.Interface) (reached, ready bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -269,6 +276,15 @@ func probeReadyz(ctx context.Context, client kubernetes.Interface) (reached, rea
 	}
 	raw, err := rc.Get().AbsPath("/readyz").DoRaw(ctx)
 	if err != nil {
+		// HTTP 5xx (typically 503 "shutting down" / "not yet ready") means
+		// we reached the API server and it explicitly reported not-ready.
+		// Any other error (DNS, TLS, connection refused, timeout) means we
+		// could not reach it — fall back to ServerVersion-only at the
+		// caller.
+		var se *apierrors.StatusError
+		if errors.As(err, &se) && se.ErrStatus.Code >= 500 && se.ErrStatus.Code < 600 {
+			return true, false
+		}
 		return false, false
 	}
 	return true, strings.TrimSpace(string(raw)) == "ok"
@@ -446,17 +462,26 @@ func checkSMBCSIDriver(ctx context.Context, client kubernetes.Interface, state *
 
 	_, err := client.StorageV1().CSIDrivers().Get(ctx, "smb.csi.k8s.io", metav1.GetOptions{})
 	if err != nil {
-		printError(log, "SMB CSI Driver is NOT installed")
-		printInfo(log, fmt.Sprintf("SMB CSI Driver v%s+ is required for persistent storage", requiredVersion))
-		printInfo(log, "To install SMB CSI Driver:")
-		log.Info("# Using Helm:")
+		// SMB CSI is required only when the HelmSharedStorage feature flag
+		// is enabled (model-cache backed by an in-cluster Samba server).
+		// Surface as a Warning rather than an Error so the operator install
+		// is not blocked for customers who do not use model caching. The
+		// runtime health check in pkg/storage/smbcsidriver.go raises the
+		// same condition at StatusLevelWarn — keep parity with that.
+		printWarning(log, "SMB CSI Driver is NOT installed (non-blocking)")
+		printInfo(log,
+			fmt.Sprintf("SMB CSI Driver v%s+ is required only when NVCA model caching "+
+				"(HelmSharedStorage feature flag) is enabled. Function-only workloads "+
+				"do not need it.", requiredVersion))
+		printInfo(log, "If you plan to enable model caching, install SMB CSI Driver via Helm:")
 		log.Info("helm repo add csi-driver-smb https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/master/charts")
 		log.Info("helm install csi-driver-smb csi-driver-smb/csi-driver-smb \\")
 		log.Info("  --namespace kube-system \\")
 		log.Infof("  --version v%s", requiredVersion)
 		printInfo(log, "For more information: https://github.com/kubernetes-csi/csi-driver-smb")
-		state.Recommendations = append(state.Recommendations,
-			fmt.Sprintf("Install SMB CSI Driver v%s or higher", requiredVersion))
+		state.Warnings = append(state.Warnings,
+			fmt.Sprintf("SMB CSI Driver v%s+ not installed. Required only when the "+
+				"HelmSharedStorage feature flag is enabled. Non-blocking.", requiredVersion))
 		return
 	}
 
@@ -637,20 +662,36 @@ func checkGPUOperator(ctx context.Context, client kubernetes.Interface, state *V
 	}
 
 	if !installed {
-		printError(log, "GPU Operator is NOT installed")
-		printInfo(log, "To install GPU Operator with default configuration:")
-		log.Info("# Add the NVIDIA Helm repository")
-		log.Info("helm repo add nvidia https://helm.ngc.nvidia.com/nvidia")
-		log.Info("helm repo update")
-		log.Info("# Install GPU Operator with default driver and MIG disabled")
-		log.Info("helm install gpu-operator nvidia/gpu-operator \\")
-		log.Info("  --namespace gpu-operator \\")
-		log.Info("  --create-namespace \\")
-		log.Info("  --set mig.strategy=none \\")
-		log.Info("  --set driver.enabled=true")
-		printInfo(log, "For more information, see: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/getting-started.html")
-		state.Recommendations = append(state.Recommendations,
-			"Install GPU Operator using the command above")
+		// If GPUs are already usable (node capacity exposes nvidia.com/gpu),
+		// GPU Operator is not required — the cluster is in Manual Instance
+		// Configuration mode (or some other alternative GPU-exposure path).
+		// Surface as a Warning instead of an Error and skip the install
+		// recommendation that would mislead the operator.
+		if state.GPUAvailable {
+			printWarning(log, "GPU Operator is NOT installed (GPUs discovered via alternative mechanism — non-blocking)")
+			printInfo(log,
+				"This is expected for clusters registered with Manual Instance Configuration "+
+					"or when GPU resources are exposed without GPU Operator. No action required.")
+			state.Warnings = append(state.Warnings,
+				"GPU Operator: not installed but GPUs are discoverable via alternative mechanism "+
+					"(e.g. Manual Instance Configuration). Non-blocking.")
+		} else {
+			printError(log, "GPU Operator is NOT installed")
+			printInfo(log, "To install GPU Operator with default configuration:")
+			log.Info("# Add the NVIDIA Helm repository")
+			log.Info("helm repo add nvidia https://helm.ngc.nvidia.com/nvidia")
+			log.Info("helm repo update")
+			log.Info("# Install GPU Operator with default driver and MIG disabled")
+			log.Info("helm install gpu-operator nvidia/gpu-operator \\")
+			log.Info("  --namespace gpu-operator \\")
+			log.Info("  --create-namespace \\")
+			log.Info("  --set mig.strategy=none \\")
+			log.Info("  --set driver.enabled=true")
+			printInfo(log, "For more information, see: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/getting-started.html")
+			state.Recommendations = append(state.Recommendations,
+				"Install GPU Operator using the command above, or register the cluster "+
+					"with Manual Instance Configuration if exposing GPUs by other means")
+		}
 	} else {
 		printSuccess(log, "GPU Operator is installed")
 		state.GPUOperatorInstalled = true
@@ -676,6 +717,29 @@ func checkConfigurableReachability(state *ValidationState, cfg *ReachabilityConf
 			hasCritical = true
 		}
 
+		// Surface the implicit https→tcp+tls fallback so the operator
+		// can see that the probe protocol differs from what they wrote.
+		if ep.Protocol == protocolHTTPS && ep.URL == "" && target.Protocol == protocolTCPTLS {
+			printInfo(log, fmt.Sprintf(
+				"  %s: https without 'url' — probing %s via tcp+tls", ep.Name, display))
+		}
+
+		// Pre-flight: surface a clear diagnostic when the endpoint config
+		// is missing fields required by its protocol, instead of letting
+		// it fall through to a silent "Not Reachable" that's
+		// indistinguishable from a real connectivity failure.
+		if reason := unprobableReason(target); reason != "" {
+			allOK = false
+			msg := fmt.Sprintf("  %s: %s — %s (treated as unreachable)", ep.Name, display, reason)
+			if ep.Critical {
+				allCriticalOK = false
+				printError(log, msg)
+			} else {
+				printWarning(log, msg)
+			}
+			continue
+		}
+
 		if TestEndpoint(target) {
 			printSuccess(log, fmt.Sprintf("  %s: %s - Reachable", ep.Name, display))
 		} else {
@@ -699,8 +763,15 @@ func checkConfigurableReachability(state *ValidationState, cfg *ReachabilityConf
 		printSuccess(log, "All endpoint reachability checks passed")
 	} else if !allCriticalOK {
 		printError(log, "Some critical endpoints are not reachable")
+		// Don't assume egress is the cause — DNS resolution failures (typo
+		// in hostname) and wrong-environment URLs (e.g. prod endpoint on a
+		// staging cluster) look identical to a real egress block here.
+		// Cover all three root causes in one actionable line.
 		state.Recommendations = append(state.Recommendations,
-			"Ensure network egress is allowed to all critical endpoints listed above")
+			"For each unreachable endpoint above, verify (1) the hostname and port "+
+				"are correct for this cluster's environment (no typos; correct "+
+				"staging vs. production URL), and (2) cluster egress permits "+
+				"traffic to it (NetworkPolicy, firewall, proxy).")
 	} else {
 		printWarning(log, "Some endpoints are not reachable (non-critical)")
 		state.Warnings = append(state.Warnings,
@@ -709,12 +780,45 @@ func checkConfigurableReachability(state *ValidationState, cfg *ReachabilityConf
 }
 
 func toEndpoint(ep ReachabilityEndpoint) Endpoint {
-	return Endpoint{
+	out := Endpoint{
 		URL:      ep.URL,
 		Host:     ep.Host,
 		Port:     ep.Port,
 		Protocol: ep.Protocol,
 	}
+	// HTTPS without an explicit URL: fall back to a TCP+TLS handshake
+	// against host:port. The chart schema permits omitting `url` when
+	// host is set, and tcp+tls is the equivalent probe — the same
+	// host:port already works as `protocol: tcp+tls`. Without this
+	// fallback, testHTTPS("") was being called and always returning
+	// false, producing a silent "Not Reachable" indistinguishable from
+	// a real connectivity failure.
+	if out.Protocol == protocolHTTPS && out.URL == "" && out.Host != "" {
+		if out.Port == 0 {
+			out.Port = 443
+		}
+		out.Protocol = protocolTCPTLS
+	}
+	return out
+}
+
+// unprobableReason returns a non-empty diagnostic when an endpoint cannot
+// be probed because required fields for its declared protocol are missing.
+// An empty return means the endpoint config is sufficient.
+func unprobableReason(ep Endpoint) string {
+	switch ep.Protocol {
+	case protocolHTTPS:
+		// toEndpoint() derives URL from host:port for https when host is
+		// set; reaching here means BOTH url and host are empty.
+		if ep.URL == "" {
+			return "missing 'url' (or 'host') for https probe"
+		}
+	case protocolTCP, protocolTCPTLS:
+		if ep.Host == "" || ep.Port == 0 {
+			return fmt.Sprintf("missing 'host' or 'port' for %s probe", ep.Protocol)
+		}
+	}
+	return ""
 }
 
 // versionGTE checks if semantic version v1 >= v2.

@@ -25,7 +25,6 @@
 .gitattributes
 .gitignore
 .nvcf-cli.yaml.template
-add-copyright.sh
 CONTRIBUTING.md
 LICENSE
 Makefile

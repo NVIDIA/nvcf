@@ -125,8 +125,9 @@ func (m CaseInsensitiveClusterConfigMap) MarshalJSON() ([]byte, error) {
 }
 
 type agentDTO struct {
-	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
-	NATSURL     string              `json:"natsURL,omitempty"`
+	Tolerations      []corev1.Toleration `json:"tolerations,omitempty"`
+	NATSURL          string              `json:"natsURL,omitempty"`
+	NATSHostOverride string              `json:"natsHostOverride,omitempty"`
 
 	HelmReValStageOAuthTokenURL             string `json:"helmReValStageOAuthTokenURL,omitempty"`
 	HelmReValStageOAuthPublicKeysetEndpoint string `json:"helmReValStageOAuthPublicKeysetEndpoint,omitempty"`
@@ -165,9 +166,10 @@ type clusterDTO struct {
 	GPUsB64 string            `json:"gpusB64"`
 
 	ICMSConfig struct {
-		PublicKeysetEndpoint string `json:"publicKeysetEndpoint"`
-		TokenURL             string `json:"tokenURL"`
-		ICMSServiceURL       string `json:"icmsServiceURL"`
+		PublicKeysetEndpoint          string `json:"publicKeysetEndpoint"`
+		TokenURL                      string `json:"tokenURL"`
+		ICMSServiceURL                string `json:"icmsServiceURL"`
+		ICMSServiceHostHeaderOverride string `json:"icmsServiceHostHeaderOverride,omitempty"`
 	} `json:"icmsConfig"`
 	VaultConfig struct {
 		Address string `json:"address"`
@@ -206,7 +208,8 @@ type clusterDTO struct {
 	} `json:"otelCollector,omitempty"`
 	// MiniService configures the MiniService (ReVal) settings.
 	MiniService *struct {
-		HelmReValServiceURL string `json:"helmReValServiceURL"`
+		HelmReValServiceURL                string `json:"helmReValServiceURL"`
+		HelmReValServiceHostHeaderOverride string `json:"helmReValServiceHostHeaderOverride,omitempty"`
 	} `json:"miniService,omitempty"`
 	// Agent configures NVCA agent-specific settings sourced from cluster DTO.
 	Agent *agentDTO `json:"agent,omitempty"`

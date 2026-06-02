@@ -19,6 +19,10 @@ package clustervalidator
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,9 +30,14 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // ---------------------------------------------------------------------------
@@ -310,6 +319,35 @@ func TestCheckGPUOperator_MixedPodPhases(t *testing.T) {
 	assert.True(t, state.GPUOperatorInstalled)
 }
 
+func TestCheckGPUOperator_NotInstalledWithGPUsAvailable(t *testing.T) {
+	// Manual Instance Configuration: GPUs are already discoverable on the
+	// node (e.g. nvidia.com/gpu in capacity) without GPU Operator. The
+	// validator must report this as a Warning rather than an Error and
+	// must NOT add the "Install GPU Operator" recommendation.
+	client := fake.NewSimpleClientset()
+	state := &ValidationState{Log: testLog(), GPUAvailable: true}
+	checkGPUOperator(context.Background(), client, state)
+	assert.False(t, state.GPUOperatorInstalled)
+	assert.Empty(t, state.Recommendations,
+		"should not recommend installing GPU Operator when GPUs are already discoverable")
+	assert.NotEmpty(t, state.Warnings,
+		"should append a Warning entry so the summary surfaces it under 'with warnings'")
+}
+
+func TestCheckGPUOperator_NotInstalledWithoutGPUs(t *testing.T) {
+	// When neither GPU Operator nor GPUs are present, keep the existing
+	// behavior: install recommendation surfaces. (The Critical verdict
+	// itself is driven by GPU Resources, not this check.)
+	client := fake.NewSimpleClientset()
+	state := &ValidationState{Log: testLog(), GPUAvailable: false}
+	checkGPUOperator(context.Background(), client, state)
+	assert.False(t, state.GPUOperatorInstalled)
+	assert.NotEmpty(t, state.Recommendations,
+		"should still recommend installing GPU Operator when no GPUs are visible")
+	assert.Empty(t, state.Warnings,
+		"no manual-mode warning when there's no alternative GPU mechanism")
+}
+
 // ---------------------------------------------------------------------------
 // parseVersion – additional cases
 // ---------------------------------------------------------------------------
@@ -465,4 +503,124 @@ func TestCheckControlPlaneHealth_K3sCorednsStillRequired(t *testing.T) {
 	checkControlPlaneHealth(context.Background(), client, state)
 	assert.False(t, state.ControlPlaneHealthy,
 		"missing coredns on k3s should still mark cluster unhealthy")
+}
+
+// ---------------------------------------------------------------------------
+// probeReadyz error classification (Greptile P2 follow-up)
+// ---------------------------------------------------------------------------
+
+// Test5xxStatusErrorPredicate documents the predicate probeReadyz uses to
+// classify errors from the REST client. HTTP 5xx StatusErrors (Kubernetes
+// signals /readyz unreadiness via 503) must be routed to reached=true,
+// ready=false. Anything else (transport errors, non-5xx StatusErrors,
+// context cancellation) must NOT match the predicate.
+//
+// This is a unit test on the predicate expression in isolation. The
+// end-to-end behaviour of probeReadyz is exercised by
+// TestProbeReadyz_AgainstHTTPServer below, which drives a real REST
+// client against an httptest server.
+func Test5xxStatusErrorPredicate(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		want5xx bool
+	}{
+		{"503 ServiceUnavailable", apierrors.NewServiceUnavailable("api not ready"), true},
+		{"500 InternalError", apierrors.NewInternalError(errors.New("boom")), true},
+		{"generic transport error", errors.New("dial tcp: connection refused"), false},
+		{"context canceled", context.Canceled, false},
+		{"404 NotFound (not 5xx)", apierrors.NewNotFound(corev1.Resource("nodes"), "x"), false},
+		{"401 Unauthorized (not 5xx)", apierrors.NewUnauthorized("nope"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var se *apierrors.StatusError
+			got := errors.As(tt.err, &se) && se.ErrStatus.Code >= 500 && se.ErrStatus.Code < 600
+			assert.Equal(t, tt.want5xx, got,
+				"probeReadyz routes HTTP 5xx StatusErrors to reached=true,ready=false")
+		})
+	}
+}
+
+// TestProbeReadyz_AgainstHTTPServer drives probeReadyz end-to-end against a
+// real REST client pointed at httptest servers. This catches regressions in
+// the function's wiring that a predicate-only unit test would miss
+// (e.g. if the errors.As branch were moved, removed, or the response body
+// parsing changed). Three scenarios:
+//   - 200 "ok"       → reached=true,  ready=true
+//   - 503 + Status   → reached=true,  ready=false (Greptile P2 fix)
+//   - port nothing's listening on → reached=false, ready=false
+func TestProbeReadyz_AgainstHTTPServer(t *testing.T) {
+	t.Run("200 ok body returns reached and ready", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		}))
+		defer srv.Close()
+
+		client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+		require.NoError(t, err)
+
+		reached, ready := probeReadyz(context.Background(), client)
+		assert.True(t, reached, "200 OK must be classified as reached")
+		assert.True(t, ready, "body 'ok' must be classified as ready")
+	})
+
+	t.Run("503 with Status body returns reached but not ready", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","message":"api server not ready","code":503}`))
+		}))
+		defer srv.Close()
+
+		client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+		require.NoError(t, err)
+
+		reached, ready := probeReadyz(context.Background(), client)
+		assert.True(t, reached, "503 from /readyz must be classified as reached")
+		assert.False(t, ready, "503 must be classified as not ready")
+	})
+
+	t.Run("transport failure returns not reached", func(t *testing.T) {
+		// Port 1 is reserved (tcpmux); nothing listens. Connect should
+		// fail with a non-StatusError transport error, which probeReadyz
+		// must classify as reached=false.
+		client, err := kubernetes.NewForConfig(&rest.Config{Host: "http://127.0.0.1:1"})
+		require.NoError(t, err)
+
+		reached, ready := probeReadyz(context.Background(), client)
+		assert.False(t, reached, "transport failure must NOT be classified as reached")
+		assert.False(t, ready)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// checkControlPlaneHealth: node-list failure (Greptile P2 follow-up)
+// ---------------------------------------------------------------------------
+
+// TestCheckControlPlaneHealth_NodeListErrorClearsNodesAllReady verifies that
+// when the API server fails the Nodes().List() call, both the cluster
+// verdict flips to unhealthy AND NodesAllReady is set to false — so the
+// summary row reads "Worker Nodes: 0 NotReady" rather than the misleading
+// "Worker Nodes: All Ready" that the prior code would have produced.
+func TestCheckControlPlaneHealth_NodeListErrorClearsNodesAllReady(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		makePod("coredns-abc", "kube-system", corev1.PodRunning),
+		makePod("kube-proxy-xyz", "kube-system", corev1.PodRunning),
+	)
+	client.PrependReactor("list", "nodes", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated nodes-list error")
+	})
+
+	state := &ValidationState{
+		Log:                 testLog(),
+		ControlPlaneHealthy: true,
+		NodesAllReady:       true,
+	}
+	checkControlPlaneHealth(context.Background(), client, state)
+	assert.False(t, state.ControlPlaneHealthy,
+		"node listing failure must flip the cluster verdict")
+	assert.False(t, state.NodesAllReady,
+		"NodesAllReady must reflect that node status was not verified")
 }
