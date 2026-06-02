@@ -1,0 +1,30 @@
+# nvcf-cli config template for self-hosted helmfile BDD runs against
+# any non-local cluster (EKS today, other CSPs as they come online).
+#
+# Carries the static chart-level constants that are the same across
+# every self-hosted install. BDD features copy this file into a
+# runtime path AFTER the helmfile install completes (mimicking what
+# an operator does per docs/v0.5/helmfile-installation.md), then
+# patch the GATEWAY_ADDR-derived URL and Host fields with
+# `I update yaml file`.
+#
+# Subset of the canonical CLI template shipped at
+# src/clis/nvcf-cli/.nvcf-cli.yaml.template. The CLI template
+# carries production defaults plus heavy inline documentation; this
+# BDD fixture trims it to the keys the test does NOT patch at
+# runtime. Drift between the two is caught by
+# TestNVCFCLINonlocalFixtureMatchesCLITemplate in godog_test.go.
+#
+# Do not commit a populated copy of this file with cluster-specific
+# values; the runtime file lives under tests/bdd/out/ and is
+# snapshotted by the Ledger.
+
+# Admin token issuer config -- chart-level defaults, identical across
+# self-hosted installs.
+api_keys_service_id: "nvidia-cloud-functions-ncp-service-id-aketm"
+api_keys_issuer_service: "nvcf-api"
+api_keys_owner_id: "svc@nvcf-api.local"
+
+# Default NCA ID; matches the chart default in
+# helmfile.d/04-worker.yaml.gotmpl: ncaId: nvcf-default.
+client_id: "nvcf-default"

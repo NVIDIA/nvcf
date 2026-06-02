@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Multi-cluster Helmfile fixture for the BDD suite.
+#
+# The values-driven Helmfile install path expects the operator to
+# author topology-correct URLs in the environment file. This fixture
+# is the multi-cluster variant; the single-cluster equivalent
+# (self-managed-local-bdd.yaml) carries in-cluster DNS that only
+# resolves inside the control-plane k3d cluster. See
+# tests/bdd/AGENTS.md "CLI vs Helmfile install paths" for why the
+# two paths each need their own fixture.
+#
+# The .test hostnames in global.nvcaOperator.selfManaged below are
+# the same ones the CLI feature asserts in
+# features/multi-cluster-up.feature under
+# controlPlane.endpoints.computeReachable. Both come from
+# tools/ncp-local-cluster/scripts/configure-control-plane-endpoints.sh,
+# which aliases them to the control-plane LB container so traffic
+# from the compute cluster reaches the right place. If you change
+# those hostnames, change all three (script, fixture, CLI feature)
+# together.
+global:
+  nodeSelectors:
+    enabled: false
+
+  storageClass: local-path
+  storageSize: 2Gi
+
+  # REPLACE_WITH_SAMPLE_NGC_ORG / REPLACE_WITH_SAMPLE_NGC_TEAM
+  # are overwritten by the feature's Background via
+  # `I update yaml file ... with keys:` using ${SAMPLE_NGC_ORG} and
+  # ${SAMPLE_NGC_TEAM}. See self-managed-local-bdd.yaml header for
+  # the rationale.
+  helm:
+    sources:
+      registry: "nvcr.io"
+      repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
+
+  image:
+    registry: nvcr.io
+    repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
+
+  # Compute-reachable URLs for the multi-cluster topology. The
+  # compute-control-plane-endpoints script aliases these `.test`
+  # hostnames to the control-plane LB container over the docker
+  # network. In-cluster URLs (api.sis.svc.cluster.local etc.) only
+  # resolve inside the control-plane k3d cluster, so the
+  # single-cluster fixture's values do not work here.
+  nvcaOperator:
+    selfManaged:
+      icmsServiceURL: http://sis.nvcf-control-plane.test:8080
+      revalServiceURL: http://reval.nvcf-control-plane.test:8080
+      natsURL: nats://nats.nvcf-control-plane.test:4222
+
+cassandra:
+  replicaCount: 1
+  resourcesPreset: "large"
+  jvm:
+    # this should only be set for local development with only 1 replica is used.
+    # use of this with more than 1 replica will cause node startups to unexpectedly fail.
+    extraOpts: "-Dcassandra.superuser_setup_delay_ms=100 -Dcassandra.gossip_settle_min_wait_ms=1000"
+
+openbao:
+  migrations:
+    issuerDiscovery:
+      enabled: true
+  injector:
+    # Single-node local cluster: hard anti-affinity would leave the 2nd replica Pending.
+    replicas: 1
+
+api:
+  env:
+    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: nvcr.io/REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM/stargate-client:0.2.0
+
+# LLM gateway talks to nvcf-api over plaintext gRPC in local dev
+# (api.nvcf.svc.cluster.local:9090 has no TLS).
+addons:
+  llm:
+    enabled: true
+    gateway:
+      replicaCount: 1
+      auth:
+        grpcInsecure: true
+      metrics:
+        serviceMonitor:
+          enabled: false
+    requestRouter:
+      replicaCount: 1
+      metrics:
+        serviceMonitor:
+          enabled: false
+
+agentConfig:
+  mergeConfig: |
+    cluster:
+      validationPolicy:
+        name: Unrestricted
+    workload:
+      stargateQUICInsecure: true
+
+# Gateway API Ingress (POC)
+# Application Developer role: Only HTTPRoutes
+# Expects Cluster Operator to provision Gateway resource
+ingress:
+  gatewayApi:
+    enabled: true
+    controllerNamespace: envoy-gateway-system
+    gateways:
+      shared:
+        name: shared-gw
+        namespace: envoy-gateway-system
+      grpc:
+        name: grpc-gw
+        namespace: envoy-gateway-system
+      nats:
+        name: shared-gw
+        namespace: envoy-gateway-system
+        listenerName: nats
+    routes:
+      nats:
+        enabled: true

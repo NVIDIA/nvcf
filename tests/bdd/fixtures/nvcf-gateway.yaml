@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Gateway resources for self-hosted helmfile BDD runs against any
+# non-local cluster (EKS today, other CSPs as they come online).
+#
+# Layout:
+# - Namespace `envoy-gateway` for the Gateway resource itself.
+# - Gateway `nvcf-gateway` referencing the `eg` GatewayClass that
+#   envoy-gateway-helm provisions by default. Three listeners matching
+#   the gateway-routes chart's sectionName values:
+#     - http  port 80    (HTTPRoute, used by shared listener)
+#     - tcp   port 10081 (TCPRoute, used by grpc-proxy)
+#     - nats  port 4222  (TCPRoute, used by chart-native NATS route)
+#
+# allowedRoutes is `from: All` rather than a namespace-label selector.
+# Rationale: route fixtures land in multiple namespaces (envoy-gateway
+# for HTTP/NATS, nvcf for the grpc TCPRoute backendRef), and label-
+# managing each one from BDD is brittle (a follow-up step that
+# re-applies a namespace via kubectl apply strips unmanaged labels and
+# detaches routes). The non-local test cluster is single-purpose;
+# loosen the selector here and tighten elsewhere if the gateway ever
+# serves multi-tenant routes.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: envoy-gateway
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: nvcf-gateway
+  namespace: envoy-gateway
+spec:
+  gatewayClassName: eg
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: tcp
+      port: 10081
+      protocol: TCP
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: nats
+      port: 4222
+      protocol: TCP
+      allowedRoutes:
+        namespaces:
+          from: All

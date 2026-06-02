@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+base_http_url: "http://api.localhost:8080"
+invoke_url: "http://invocation.localhost:8080"
+api_keys_service_url: "http://api-keys.localhost:8080"
+icms_url: "http://sis.localhost:8080"
+
+api_keys_host: "api-keys.localhost"
+api_host: "api.localhost"
+invoke_host: "invocation.localhost"
+
+api_keys_service_id: "nvidia-cloud-functions-ncp-service-id-aketm"
+api_keys_issuer_service: "nvcf-api"
+api_keys_owner_id: "svc@nvcf-api.local"
+
+client_id: "nvcf-default"

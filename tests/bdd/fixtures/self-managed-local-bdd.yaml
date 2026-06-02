@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Single-cluster Helmfile fixture for the BDD suite.
+#
+# The REPLACE_WITH_SAMPLE_NGC_ORG / REPLACE_WITH_SAMPLE_NGC_TEAM
+# placeholders below are overwritten by the feature's Background via
+# `I update yaml file ... with keys:` using ${SAMPLE_NGC_ORG} and
+# ${SAMPLE_NGC_TEAM}. The literal values are never committed here.
+# If a future feature copies this fixture without performing the
+# substitution, helmfile pulls images from a path that obviously
+# does not resolve, which is the intended failure mode.
+
+global:
+  nodeSelectors:
+    enabled: false
+
+  storageClass: local-path
+  storageSize: 2Gi
+
+  helm:
+    sources:
+      registry: "nvcr.io"
+      repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
+
+  image:
+    registry: nvcr.io
+    repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
+
+  nvcaOperator:
+    selfManaged:
+      icmsServiceURL: http://api.sis.svc.cluster.local:8080
+      revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+      natsURL: nats://nats.nats-system.svc.cluster.local:4222
+
+cassandra:
+  replicaCount: 1
+  resourcesPreset: "large"
+  jvm:
+    # this should only be set for local development with only 1 replica is used.
+    # use of this with more than 1 replica will cause node startups to unexpectedly fail.
+    extraOpts: "-Dcassandra.superuser_setup_delay_ms=100 -Dcassandra.gossip_settle_min_wait_ms=1000"
+
+openbao:
+  migrations:
+    issuerDiscovery:
+      enabled: true
+  injector:
+    # Single-node local cluster: hard anti-affinity would leave the 2nd replica Pending.
+    replicas: 1
+
+api:
+  env:
+    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: nvcr.io/REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM/stargate-client:0.2.0
+
+# LLM gateway talks to nvcf-api over plaintext gRPC in local dev
+# (api.nvcf.svc.cluster.local:9090 has no TLS).
+addons:
+  llm:
+    enabled: true
+    gateway:
+      replicaCount: 1
+      auth:
+        grpcInsecure: true
+      metrics:
+        serviceMonitor:
+          enabled: false
+    requestRouter:
+      replicaCount: 1
+      metrics:
+        serviceMonitor:
+          enabled: false
+
+agentConfig:
+  mergeConfig: |
+    cluster:
+      validationPolicy:
+        name: Unrestricted
+    workload:
+      stargateQUICInsecure: true
+
+# Gateway API Ingress (POC)
+# Application Developer role: Only HTTPRoutes
+# Expects Cluster Operator to provision Gateway resource
+ingress:
+  gatewayApi:
+    enabled: true
+    controllerNamespace: envoy-gateway-system
+    gateways:
+      shared:
+        name: shared-gw
+        namespace: envoy-gateway-system
+      grpc:
+        name: grpc-gw
+        namespace: envoy-gateway-system
+      nats:
+        name: shared-gw
+        namespace: envoy-gateway-system
+        listenerName: nats
+    routes:
+      nats:
+        enabled: true
