@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+server:
+  ip_address: 0.0.0.0
+  port: '50052'
+  metrics:
+    enabled: true
+    exporters:
+    - exporter: prometheus
+      protocol: http
+      endpoint: 0.0.0.0:41338
+    service_name: nvcf-autoscaler
+    meter_name: null
+    resource_attributes: null
+  tracing:
+    endpoint_ip: http://localhost
+    endpoint_port: 4317
+    headers: {}
+    tracing_envfilter_directive: rs_autoscaler=trace,reqwest_tracing=trace
+    logging_envfilter_directive: server=trace,rs_autoscaler=trace,rs_autoscaler::nvcf_api=debug,rs_autoscaler::cassandra=trace,otel=debug,info
+    logging_nonblocking_output: true
+  envfilter_directive: server=info,rs_autoscaler=debug,rs_autoscaler::work=debug,rs_autoscaler::nvcf_api=debug,rs_autoscaler::cassandra=warn,info
+  tonic:
+    initial_connection_window_size: 65535
+    initial_stream_window_size: 65535
+    max_decoding_message_size: 4194304
+    request_timeout: 30
+region: local
+secrets_path: "local_env/vault/secrets.json"
+tracing_key: ""
+nvcf_api:
+  oauth2_token_api_address: ""
+  nvcf_api_address: "http://localhost:8082"
+  disable_auth: true
+  dry_run: true
+cassandra:
+  contact_points: "localhost"
+  port: 9042
+  compression: lz4
+  keyspace: nvcf_autoscaler
+  connection_timeout_ms: 10000
+  pool:
+    local_size: 2
+  execution_profile:
+    consistency: LOCAL_ONE
+    serial_consistency: LOCAL_SERIAL
+    request_timeout_ms: 10000
+    speculative_execution_policy:
+      max_retry_count: 3
+      retry_interval_ms: 300
+  ssl:
+    enabled: false
+timeseries_db:
+  authn_url: ""
+  timeseries_db_url: "http://localhost:8428"
+  env: "stg"
+  ignore_env: true
+  disable_auth: true
+scaling:
+  scaling_loop_interval_seconds: 30
+  discover_new_functions_interval_seconds: 30
+  lookback_seconds: 600
+  decay_factor: 0.1
+  accounts_without_worker_metrics: ""
+  policy:
+    type: Static
+    settings:
+      scaling_thresholds:
+        scale_up_threshold: 70.0
+        scale_down_threshold: 30.0
+      scaling_factors:
+        scale_up_factor: 1.2
+        scale_down_factor: 0.8
