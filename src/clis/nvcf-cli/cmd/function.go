@@ -2008,7 +2008,7 @@ func runGetFunction(cmd *cobra.Command, args []string) error {
 
 func runInvoke(cmd *cobra.Command, args []string) error {
 	// Load state to get saved function context if needed
-	if err := state.Load(); err != nil {
+	if err := LoadStateForCurrentCommand(); err != nil {
 		logging.Warning("Could not load state: %v", err)
 	}
 
@@ -2019,7 +2019,7 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 	}
 
 	// Use saved function context if function ID/version not specified
-	currentState := state.GetState()
+	currentState := GetCurrentState()
 	applySavedInvokeContext(config, currentState)
 	if err := validateInvokeConfig(config); err != nil {
 		return err
@@ -2056,6 +2056,12 @@ func applySavedInvokeContext(config *InvokeConfig, currentState *state.State) {
 		config.VersionID = currentState.VersionID
 		logging.Info("Using saved version ID: %s", config.VersionID)
 	}
+}
+
+func isSavedAPIKeyExpired(currentState *state.State) bool {
+	return currentState.APIKey != "" &&
+		!currentState.APIKeyExpiration.IsZero() &&
+		time.Now().After(currentState.APIKeyExpiration)
 }
 
 func validateInvokeConfig(config *InvokeConfig) error {
@@ -2161,7 +2167,7 @@ func invokeViaGRPCCluster(clientConfig *client.Config, currentState *state.State
 		return fmt.Errorf("API key required for function invocation")
 	}
 
-	if !state.IsAPIKeyValid() {
+	if isSavedAPIKeyExpired(currentState) {
 		logging.Warning("API key may be expired")
 	}
 
@@ -2251,7 +2257,7 @@ func invokeViaGRPCDirect(clientConfig *client.Config, currentState *state.State,
 		return fmt.Errorf("API key required for function invocation")
 	}
 
-	if !state.IsAPIKeyValid() {
+	if isSavedAPIKeyExpired(currentState) {
 		logging.Warning("API key may be expired")
 	}
 

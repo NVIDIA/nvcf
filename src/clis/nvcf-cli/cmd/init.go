@@ -28,7 +28,6 @@ import (
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
-	"nvcf-cli/internal/state"
 
 	"github.com/spf13/cobra"
 )
@@ -67,7 +66,7 @@ func init() {
 
 func runInit(cmd *cobra.Command, args []string) error {
 	// Load current state
-	if err := state.Load(); err != nil {
+	if err := LoadStateForCurrentCommand(); err != nil {
 		logging.Warning("Could not load existing state: %v", err)
 	}
 
@@ -81,8 +80,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	logging.Info("Generating admin token from API Keys service...")
 
 	// Clear existing state - init should start fresh
-	state.ClearFunction()
-	state.ClearTokens()
+	sm := GetStateManagerForCurrentCommand()
+	sm.ClearFunction()
+	sm.ClearTokens()
 
 	// Generate admin token via API endpoint
 	token, expiration, err := generateAdminTokenViaAPI(config)
@@ -95,14 +95,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Save the new token
-	state.SetTokens(token, "", expiration, time.Time{})
-	state.SetConfig("", "", false) // No cluster mode needed anymore
+	sm.SetTokens(token, "", expiration, time.Time{})
+	sm.SetConfig("", "", false) // No cluster mode needed anymore
 
 	// Set endpoints - use configured account or default
 	account := getConfigValueWithDefault("client_id", "nvcf-default")
-	state.SetEndpoints(config.BaseHTTPURL, config.BaseInvokeURL, account)
+	sm.SetEndpoints(config.BaseHTTPURL, config.BaseInvokeURL, account)
 
-	if err := state.Save(); err != nil {
+	if err := SaveStateForCurrentCommand(); err != nil {
 		logging.Warning("Failed to save state: %v", err)
 	}
 
@@ -118,11 +118,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 // TokenResponse represents the API response from the token generation endpoint
 type TokenResponse struct {
 	ID          string `json:"id"`
-	Value       string `json:"value"`        // The actual JWT token
+	Value       string `json:"value"` // The actual JWT token
 	Status      string `json:"status"`
 	Description string `json:"description"`
 	CreatedAt   string `json:"created_at"`
-	ExpiresAt   string `json:"expires_at"`  // Timestamp in RFC3339 format
+	ExpiresAt   string `json:"expires_at"` // Timestamp in RFC3339 format
 }
 
 // generateAdminTokenViaAPI generates a new admin token via direct API call

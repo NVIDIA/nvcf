@@ -26,9 +26,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"nvcf-cli/internal/state"
 
 	"github.com/spf13/viper"
 )
@@ -1164,5 +1167,59 @@ func TestGetTokenWithFallback(t *testing.T) {
 			}
 			t.Logf("token=%q source=%q", token, source)
 		})
+	}
+}
+
+func TestLoadConfigUsesStateForActiveConfigFile(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("NVCF")
+	viper.AutomaticEnv()
+	t.Cleanup(func() { viper.Reset() })
+	t.Setenv("NVCF_TOKEN", "")
+	t.Setenv("NVCF_API_KEY", "")
+	t.Setenv("HOME", t.TempDir())
+
+	configPath := filepath.Join(t.TempDir(), "nvcf-cli-local.yaml")
+	configBody := []byte(`
+base_http_url: "http://api.localhost:8080"
+invoke_url: "http://invocation.localhost:8080"
+client_id: "nvcf-default"
+`)
+	if err := os.WriteFile(configPath, configBody, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	defaultState := state.NewStateManager()
+	if err := defaultState.Load(); err != nil {
+		t.Fatalf("load default state: %v", err)
+	}
+	defaultState.SetTokens("default-token", "", time.Now().Add(time.Hour), time.Time{})
+	if err := defaultState.Save(); err != nil {
+		t.Fatalf("save default state: %v", err)
+	}
+
+	configState := state.GetStateManagerForConfig(configPath)
+	if err := configState.Load(); err != nil {
+		t.Fatalf("load config state: %v", err)
+	}
+	configState.SetTokens("config-token", "", time.Now().Add(time.Hour), time.Time{})
+	if err := configState.Save(); err != nil {
+		t.Fatalf("save config state: %v", err)
+	}
+
+	viper.SetConfigFile(configPath)
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	config, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if config.Token != "config-token" {
+		t.Fatalf("Token = %q, want config-token", config.Token)
+	}
+	if config.BaseHTTPURL != "http://api.localhost:8080" {
+		t.Fatalf("BaseHTTPURL = %q, want http://api.localhost:8080", config.BaseHTTPURL)
 	}
 }

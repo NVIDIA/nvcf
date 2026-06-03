@@ -29,7 +29,6 @@ import (
 	"nvcf-cli/internal/apikeys"
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
-	"nvcf-cli/internal/state"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -150,7 +149,7 @@ func init() {
 
 func runAPIKeyGenerate(cmd *cobra.Command, args []string) error {
 	// Load state
-	if err := state.Load(); err != nil {
+	if err := LoadStateForCurrentCommand(); err != nil {
 		logging.Warning("Could not load existing state: %v", err)
 	}
 
@@ -184,9 +183,9 @@ func runAPIKeyGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Save API key to state
-	currentState := state.GetState()
-	state.SetTokens(currentState.Token, apiKey, currentState.TokenExpiration, expirationTime)
-	if err := state.Save(); err != nil {
+	currentState := GetCurrentState()
+	SetCurrentTokens(currentState.Token, apiKey, currentState.TokenExpiration, expirationTime)
+	if err := SaveStateForCurrentCommand(); err != nil {
 		logging.Warning("Failed to save API key to state: %v", err)
 	}
 
@@ -573,11 +572,11 @@ func runRevokeAPIKey(cmd *cobra.Command, args []string) error {
 
 func runShowAPIKey(cmd *cobra.Command, args []string) error {
 	// Load state
-	if err := state.Load(); err != nil {
+	if err := LoadStateForCurrentCommand(); err != nil {
 		logging.Warning("Could not load existing state: %v", err)
 	}
 
-	currentState := state.GetState()
+	currentState := GetCurrentState()
 
 	if currentState.APIKey == "" {
 		if IsJSONOutput() {
@@ -614,11 +613,11 @@ func runShowAPIKey(cmd *cobra.Command, args []string) error {
 
 func runClearAPIKey(cmd *cobra.Command, args []string) error {
 	// Load state
-	if err := state.Load(); err != nil {
+	if err := LoadStateForCurrentCommand(); err != nil {
 		logging.Warning("Could not load existing state: %v", err)
 	}
 
-	currentState := state.GetState()
+	currentState := GetCurrentState()
 
 	if currentState.APIKey == "" {
 		if IsJSONOutput() {
@@ -643,8 +642,8 @@ func runClearAPIKey(cmd *cobra.Command, args []string) error {
 	}
 
 	// Clear the API key from state
-	state.SetTokens(currentState.Token, "", currentState.TokenExpiration, time.Time{})
-	if err := state.Save(); err != nil {
+	SetCurrentTokens(currentState.Token, "", currentState.TokenExpiration, time.Time{})
+	if err := SaveStateForCurrentCommand(); err != nil {
 		return fmt.Errorf("failed to save cleared state: %w", err)
 	}
 	if IsJSONOutput() {
@@ -747,11 +746,11 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 	currentConfigOwner := getConfigValueWithDefault("API_KEYS_OWNER_ID", "svc@nvcf-api.local")
 	if ownerID == currentConfigOwner && deletedCount > 0 {
 		// Load and clear state
-		if err := state.Load(); err == nil {
-			currentState := state.GetState()
+		if err := LoadStateForCurrentCommand(); err == nil {
+			currentState := GetCurrentState()
 			if currentState.APIKey != "" {
-				state.SetTokens(currentState.Token, "", currentState.TokenExpiration, time.Time{})
-				if err := state.Save(); err != nil {
+				SetCurrentTokens(currentState.Token, "", currentState.TokenExpiration, time.Time{})
+				if err := SaveStateForCurrentCommand(); err != nil {
 					logging.Warning("Failed to clear local API key from state: %v", err)
 				} else {
 					logging.Info("Cleared local API key from state since it may have been deleted")

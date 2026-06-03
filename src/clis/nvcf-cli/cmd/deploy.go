@@ -25,6 +25,8 @@ import (
 	"strings"
 
 	"nvcf-cli/internal/client"
+	"nvcf-cli/internal/logging"
+	"nvcf-cli/internal/state"
 
 	"github.com/spf13/cobra"
 )
@@ -493,12 +495,17 @@ func runDeployCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if err := LoadStateForCurrentCommand(); err != nil {
+		logging.Warning("Could not load existing state: %v", err)
+	}
+	applySavedDeployContext(config, GetCurrentState())
+
 	// Validate required fields
 	if config.FunctionID == "" {
-		return fmt.Errorf("function ID is required (use --function-id or specify in JSON file)")
+		return fmt.Errorf("function ID is required (use --function-id, specify in JSON file, or create a function first)")
 	}
 	if config.VersionID == "" {
-		return fmt.Errorf("version ID is required (use --version-id or specify in JSON file)")
+		return fmt.Errorf("version ID is required (use --version-id, specify in JSON file, or create a function first)")
 	}
 
 	// Load client configuration
@@ -569,6 +576,17 @@ func runDeployCreate(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Function %s deployed successfully!\n", config.FunctionID)
 
 	return nil
+}
+
+func applySavedDeployContext(config *DeployConfig, currentState *state.State) {
+	if config.FunctionID == "" && currentState.FunctionID != "" {
+		config.FunctionID = currentState.FunctionID
+		logging.Info("Using saved function ID: %s", config.FunctionID)
+	}
+	if config.VersionID == "" && currentState.VersionID != "" {
+		config.VersionID = currentState.VersionID
+		logging.Info("Using saved version ID: %s", config.VersionID)
+	}
 }
 
 // loadDeployUpdateConfig merges --input-file and CLI flags. Flags override file.

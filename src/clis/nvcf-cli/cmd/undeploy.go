@@ -23,7 +23,6 @@ import (
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
-	"nvcf-cli/internal/state"
 
 	"github.com/spf13/cobra"
 )
@@ -67,11 +66,12 @@ func init() {
 
 func runUndeploy(cmd *cobra.Command, args []string) error {
 	// Load state
-	if err := state.Load(); err != nil {
+	if err := LoadStateForCurrentCommand(); err != nil {
 		logging.Warning("Could not load state: %v", err)
 	}
 
-	currentState := state.GetState()
+	sm := GetStateManagerForCurrentCommand()
+	currentState := sm.GetState()
 
 	// Load configuration
 	config, err := client.LoadConfig()
@@ -80,7 +80,7 @@ func runUndeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check authentication
-	if !state.IsTokenValid() {
+	if !sm.IsTokenValid() {
 		logging.Error("No valid admin token found")
 		logging.Info("Please run 'nvcf-cli init' or 'nvcf-cli refresh' first")
 		return fmt.Errorf("admin token required for undeploy operation")
@@ -101,7 +101,7 @@ func runUndeploy(cmd *cobra.Command, args []string) error {
 	// Validate that we have both IDs
 	if functionID == "" || versionID == "" {
 		logging.Error("No function found to undeploy")
-		if !state.HasFunction() {
+		if !sm.HasFunction() {
 			logging.Info("Please run 'nvcf-cli create' first to create a function, or")
 			logging.Info("specify --function-id and --version-id flags")
 		} else {

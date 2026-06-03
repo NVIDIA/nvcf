@@ -177,3 +177,87 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
       When I run command "kubectl wait nvcfbackend ncp-local -n nvca-operator --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
       Then the command exit code should be 0
+
+  Rule: Helmfile-installed local NVCF can run a sample function
+
+    Background:
+      Given environment variable "NGC_API_KEY" is set
+      And environment variable "SAMPLE_NGC_ORG" is set
+      And environment variable "SAMPLE_NGC_TEAM" is set
+      And environment variable "NVCF_CLI" is set
+      And environment variable "REPO_ROOT" is set
+      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd.yaml"
+      And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
+        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
+        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
+        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
+        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0  |
+      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml"
+      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      # Conflict precheck: ncp-local-cp's k3d serverlb claims
+      # 0.0.0.0:8080/8443/4222, the same host ports single-cluster
+      # ncp-local needs. Fail loudly so the operator runs
+      # `make -C tools/ncp-local-cluster destroy-multicluster`
+      # before retrying. `k3d cluster get` exits 1 when absent (k3d v5).
+      And I run command "k3d cluster get ncp-local-cp"
+      And the command exit code should be 1
+      And a single-cluster ncp-local cluster is running
+      And the "nvcr-pull-secret" image pull secret exists in namespaces:
+        | cassandra-system |
+        | nats-system      |
+        | nvcf             |
+        | api-keys         |
+        | ess              |
+        | sis              |
+        | vault-system     |
+        | nvca-operator    |
+        | nvca-system      |
+        | nvcf-backend     |
+        | cert-manager     |
+      And command has succeeded:
+        """
+        make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd
+        """
+      And command has succeeded:
+        """
+        make -C deploy/stacks/self-managed register-cluster CLUSTER_NAME=ncp-local NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        """
+      And command has succeeded:
+        """
+        make -C deploy/stacks/self-managed install-nvca-operator CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        """
+      And command has succeeded:
+        """
+        kubectl rollout status deployment/nvca-operator -n nvca-operator --timeout=10m
+        """
+      And command has succeeded:
+        """
+        kubectl wait nvcfbackend ncp-local -n nvca-operator --for=jsonpath={.status.agentStatus}=healthy --timeout=10m
+        """
+
+    @function-lifecycle
+    Scenario: Operator creates, deploys, and invokes the Load Tester Supreme sample function
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-load-tester-supreme --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8 --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_8x --backend ncp-local --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-load-tester-supreme --scopes invoke_function,list_functions,queue_details,list_functions_details
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{"message":"bdd-echo","repeats":1}' --timeout 120 --poll-duration 5
+        """
+      Then the command exit code should be 0
+      And the command output should contain "bdd-echo"

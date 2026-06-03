@@ -32,6 +32,11 @@ import (
 
 var cfgFile string
 
+var (
+	configStateManager    *state.StateManager
+	configStateManagerKey string
+)
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "nvcf-cli",
@@ -119,10 +124,22 @@ func GetCurrentConfigName() string {
 
 // GetStateManagerForCurrentCommand returns the appropriate state manager for the current config context
 func GetStateManagerForCurrentCommand() *state.StateManager {
-	if cfgFile != "" {
-		return state.GetStateManagerForConfig(cfgFile)
+	if cfgFile == "" {
+		return state.DefaultStateManager
 	}
-	return state.DefaultStateManager
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
+	key := home + "\x00" + cfgFile
+	if configStateManager != nil && configStateManagerKey == key {
+		return configStateManager
+	}
+
+	configStateManager = state.GetStateManagerForConfig(cfgFile)
+	configStateManagerKey = key
+	return configStateManager
 }
 
 // LoadStateForCurrentCommand loads state using the current config context

@@ -163,16 +163,28 @@ func getTokenSource(configKey string, stateToken string, stateExpiration time.Ti
 	return "none"
 }
 
+func loadStateForActiveConfig() (*state.State, error) {
+	configFile := viper.ConfigFileUsed()
+	if configFile != "" {
+		sm := state.GetStateManagerForConfig(configFile)
+		err := sm.Load()
+		return sm.GetState(), err
+	}
+
+	err := state.Load()
+	return state.GetState(), err
+}
+
 // Environment variables take precedence over config file values, with state file fallback
 func LoadConfig() (*Config, error) {
 	// Load state first to get potential token fallbacks
-	if err := state.Load(); err != nil {
+	currentState, err := loadStateForActiveConfig()
+	if err != nil {
 		// Don't fail on state loading error, just log it
 		if viper.GetBool("debug") {
 			log.Printf("DEBUG: Could not load state file (not an error): %v", err)
 		}
 	}
-	currentState := state.GetState()
 	config := &Config{
 		// OAuth2 configuration (Viper maps: oauth2_client_id → NVCF_OAUTH2_CLIENT_ID)
 		OAuth2ClientID:      getConfigValue("oauth2_client_id"),
@@ -322,13 +334,13 @@ func LoadConfig() (*Config, error) {
 // This is used by commands like 'init' and 'refresh' that generate tokens.
 func LoadConfigWithoutAuth() (*Config, error) {
 	// Load state first to get potential token fallbacks
-	if err := state.Load(); err != nil {
+	currentState, err := loadStateForActiveConfig()
+	if err != nil {
 		// Don't fail on state loading error, just log it
 		if viper.GetBool("debug") {
 			log.Printf("DEBUG: Could not load state file (not an error): %v", err)
 		}
 	}
-	currentState := state.GetState()
 	config := &Config{
 		// OAuth2 configuration (Viper maps: oauth2_client_id → NVCF_OAUTH2_CLIENT_ID)
 		OAuth2ClientID:      getConfigValue("oauth2_client_id"),

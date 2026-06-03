@@ -22,7 +22,6 @@ import (
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
-	"nvcf-cli/internal/state"
 
 	"github.com/spf13/cobra"
 )
@@ -61,11 +60,12 @@ func init() {
 
 func runRefresh(cmd *cobra.Command, args []string) error {
 	// Load current state (including function context)
-	if err := state.Load(); err != nil {
+	if err := LoadStateForCurrentCommand(); err != nil {
 		logging.Warning("Could not load existing state: %v", err)
 	}
 
-	currentState := state.GetState()
+	sm := GetStateManagerForCurrentCommand()
+	currentState := sm.GetState()
 
 	// Load configuration without requiring existing authentication
 	config, err := client.LoadConfigWithoutAuth()
@@ -87,17 +87,17 @@ func runRefresh(cmd *cobra.Command, args []string) error {
 	}
 
 	// Update only the token, preserve function state
-	state.SetTokens(token, currentState.APIKey, expiration, currentState.APIKeyExpiration)
-	state.SetConfig("", config.KubeconfigPath, config.ClusterMode)
+	sm.SetTokens(token, currentState.APIKey, expiration, currentState.APIKeyExpiration)
+	sm.SetConfig("", config.KubeconfigPath, config.ClusterMode)
 
 	// Set endpoints - use cluster account if available, otherwise default
 	account := "nvcf-default"
 	if config.ClusterConfig != nil && config.ClusterConfig.NVCFAccount != "" {
 		account = config.ClusterConfig.NVCFAccount
 	}
-	state.SetEndpoints(config.BaseHTTPURL, config.BaseInvokeURL, account)
+	sm.SetEndpoints(config.BaseHTTPURL, config.BaseInvokeURL, account)
 
-	if err := state.Save(); err != nil {
+	if err := SaveStateForCurrentCommand(); err != nil {
 		logging.Warning("Failed to save state: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func runRefresh(cmd *cobra.Command, args []string) error {
 	}
 
 	// Show preserved function state
-	if state.HasFunction() {
+	if sm.HasFunction() {
 		logging.Plain("Function ID: %s", currentState.FunctionID)
 		logging.Plain("Version ID: %s", currentState.VersionID)
 		if currentState.FunctionName != "" {

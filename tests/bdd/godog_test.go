@@ -336,6 +336,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
 		"helm list -n nvca-operator -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
+		},
 		// Conflict precheck: feature asserts the conflicting
 		// multi-cluster control-plane is absent.
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
@@ -365,6 +369,9 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "install HELMFILE_ENV") {
 		t.Fatal("helmfile install make target was never invoked")
 	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke") {
+		t.Fatal("function invoke CLI command was never invoked")
+	}
 }
 
 // TestMultiClusterHelmfileFeatureFileWiresToSteps runs
@@ -380,8 +387,8 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
-		"helm list --all-namespaces --kube-context k3d-ncp-local-cp -o json":             {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
-		"helm list -n nvca-operator --kube-context k3d-ncp-local-compute-1 -o json":      {ExitCode: 0, Stdout: helmListNVCAJSON()},
+		"helm list --all-namespaces --kube-context k3d-ncp-local-cp -o json":        {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
+		"helm list -n nvca-operator --kube-context k3d-ncp-local-compute-1 -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
 		// Conflict precheck: feature asserts the conflicting
 		// single-cluster is absent.
 		"k3d cluster get ncp-local": {ExitCode: 1},
