@@ -1,0 +1,130 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- include "grpc-proxy.validateDeploymentType" . -}}
+{{- if eq .Values.grpcproxy.deploymentType "daemonset" }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "grpc-proxy.fullname" . }}-daemonset
+  namespace: {{ include "grpc-proxy.namespace" . }}
+  labels:
+    {{- include "grpc-proxy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: daemonset
+  {{- with .Values.grpcproxy.daemonset.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "grpc-proxy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: daemonset
+  updateStrategy:
+    {{- toYaml .Values.grpcproxy.daemonset.updateStrategy | nindent 4 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "grpc-proxy.podAnnotations" . | nindent 8 }}
+      labels:
+        {{- include "grpc-proxy.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: daemonset
+        {{- with .Values.grpcproxy.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.grpcproxy.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: grpc-proxy-proxy
+      securityContext:
+        {{- toYaml .Values.grpcproxy.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.grpcproxy.securityContext | nindent 12 }}
+          image: "{{ include "grpc-proxy.image" . }}"
+          imagePullPolicy: {{ .Values.grpcproxy.image.pullPolicy }}
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- range $key, $value := .Values.grpcproxy.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- if .Values.grpcproxy.env }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "grpc-proxy.fullname" . }}-env
+          {{- end }}
+          ports:
+            {{- range .Values.grpcproxy.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .containerPort }}
+              protocol: {{ .protocol }}
+            {{- end }}
+          {{- with .Values.grpcproxy.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.grpcproxy.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.grpcproxy.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{ toYaml .Values.grpcproxy.resources | nindent 12 }}
+          volumeMounts:
+            - name: token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+            {{- with .Values.grpcproxy.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: token
+          projected:
+            sources:
+            - serviceAccountToken:
+                path: token
+                expirationSeconds: 3600
+                audience: http://openbao-server.vault-system.svc.cluster.local:8200
+        - name: vault-config-templates
+          configMap:
+            name: {{ include "grpc-proxy.fullname" . }}-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+        {{- with .Values.grpcproxy.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.grpcproxy.daemonset.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.grpcproxy.daemonset.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

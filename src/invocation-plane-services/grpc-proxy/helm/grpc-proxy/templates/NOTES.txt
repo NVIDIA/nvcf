@@ -1,0 +1,10 @@
+1. Get the application URL by running these commands:
+  export POD_NAME=$(kubectl get pods -l "app.kubernetes.io/name={{ include "grpc-proxy.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
+  
+  Client Ingress Port: {{ (index .Values.grpcproxy.ports 0).containerPort }}
+  Worker TCP Ingress Port: {{ (index .Values.grpcproxy.ports 1).containerPort }}
+  
+  Service Name: {{ include "grpc-proxy.fullname" . }}.{{ include "grpc-proxy.namespace" . }}.svc.cluster.local
+
+2. View the logs:
+  kubectl logs $POD_NAME

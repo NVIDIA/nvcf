@@ -1,0 +1,138 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+grpcproxy:
+
+  namespace: ""
+
+  # This is to override the chart name.
+  nameOverride: ""
+  fullnameOverride: ""
+
+  replicaCount: 1
+
+  image:
+    registry: "" # must be supplied
+    repository: "" # must be supplied
+
+    pullPolicy: IfNotPresent
+
+    tag: "1.27.0"
+
+  # Image pull secrets for private registries
+  imagePullSecrets: []
+
+  # Deployment type: "deployment" or "daemonset" (mutually exclusive)
+  deploymentType: "deployment"
+
+  # Deployment-specific configuration (only used when deploymentType: "deployment")
+  deployment:
+    # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+    autoscaling:
+      enabled: false
+      minReplicas: 1
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 80
+      # targetMemoryUtilizationPercentage: 80
+    # Node selector for the Deployment pods
+    nodeSelector: {}
+    # Tolerations for the Deployment pods
+    tolerations: []
+    # Affinity rules for the Deployment pods
+    affinity: {}
+
+  # DaemonSet-specific configuration (only used when deploymentType: "daemonset")
+  daemonset:
+    # Node selector for the DaemonSet pods
+    nodeSelector: {}
+    # Tolerations for the DaemonSet pods
+    tolerations: []
+    # Update strategy for the DaemonSet
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 1
+    # DaemonSet metadata annotations
+    annotations: {}
+      # Add any DaemonSet-specific annotations here
+
+
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext: {}
+
+  securityContext:
+    capabilities:
+      drop:
+      - ALL
+    # readOnlyRootFilesystem: true
+    # runAsNonRoot: true
+    runAsUser: 1000
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: client
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: client
+
+  ports:
+    - name: client
+      containerPort: 10081
+      protocol: TCP
+    - name: worker-tcp
+      containerPort: 10086
+      protocol: TCP
+    - name: metrics
+      containerPort: 10083
+      protocol: TCP
+
+  # Additional volumes on the output Deployment definition.
+  volumes: []
+
+  # Additional volumeMounts on the output Deployment definition.
+  volumeMounts: []
+
+  env:
+    ENABLE_HTTP1_CONNECT: "true"
+    GEO_DISABLED: "true"
+    JETSTREAM_PLACEMENT_TAG: "dc:ncp"
+    NVCF_FQDN_GRPC: "http://api.nvcf.svc.cluster.local:9090"
+    NATS_FQDN: "nats://nats.nats-system.svc.cluster.local:4222" # TODO no tls
+    # Tracing is opt-in. The proxy treats any non-empty value here as
+    # "tracing enabled" and will attempt to export spans to this
+    # endpoint on every request that carries a traceparent header. If
+    # the endpoint is unreachable the proxy panics on the first traced
+    # request, so leave this empty unless an OTLP collector is
+    # actually deployed and reachable from the proxy.
+    # Example: "http://otel.tracing-system.svc.cluster.local:8282"
+    OTEL_EXPORTER_OTLP_ENDPOINT: ""
+
+  # Service configuration
+  service:
+    type: ClusterIP  # Options: ClusterIP, NodePort, LoadBalancer, ExternalName
+    annotations: {}
+      # service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      # service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
