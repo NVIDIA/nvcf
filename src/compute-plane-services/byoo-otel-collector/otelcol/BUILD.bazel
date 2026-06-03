@@ -90,7 +90,7 @@ GOMAXPROCS="$${GOMAXPROCS:-2}"
 export GOMODCACHE GOPATH GOCACHE HOME GOMAXPROCS
 mkdir -p "$$GOMODCACHE" "$$GOPATH" "$$GOCACHE"
 WORK_DIR=$$(dirname $$(realpath $(location go.mod)))
-ABS_OUT=$$(realpath $@)
+ABS_OUT="$$(pwd)/$@"
 cd "$$WORK_DIR"
 """
 

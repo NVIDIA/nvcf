@@ -35,11 +35,11 @@ The collector handles:
 go build -o bin/byoo-otel-collector ./cmd/byoo-otel-collector
 
 # Build the custom otel-collector-contrib binary
-go install go.opentelemetry.io/collector/cmd/builder@v0.152.0
+go install go.opentelemetry.io/collector/cmd/builder@v0.153.0
 builder --config=./otel-collector-build.yaml
 
 # Build Docker image
-docker build --build-arg OTEL_BUILDER_VERSION=v0.152.0 \
+docker build --build-arg OTEL_BUILDER_VERSION=v0.153.0 \
   -f ./Dockerfile -t byoo-otel-collector:latest .
 ```
 
@@ -326,15 +326,19 @@ If adding/changing configuration templates:
 
 ### Upgrading the OpenTelemetry Collector
 
-Agents that can read Cursor project skills should load `.cursor/skills/update-otel-collector-version/SKILL.md` before changing collector versions.
+Agents should load repo-root `ai-tooling/dev/skills/update-otel-collector-version/SKILL.md` before changing collector versions. Root `.cursor/skills`, `.codex/skills`, and `.claude/skills` contain compatibility symlinks to that `ai-tooling` skill.
 
 When upgrading to a new OpenTelemetry Collector version, use the update script so all references stay in sync:
 
 ```bash
-./scripts/update-collector-version.sh v0.152.0 v1.58.0
+./scripts/update-collector-version.sh v0.153.0 v1.59.0
+# If service release tags are already ahead of the collector patch:
+./scripts/update-collector-version.sh v0.153.0 v1.59.0 0.153.2
 ```
 
-The script updates the version in: `otel-collector-build.yaml`, `AGENTS.md`, `README.md`, `Makefile`, `Dockerfile`, `Dockerfile.nvcf-otel-collector`, `VERSION`. Run it from the repository root. You can pass versions with or without the `v` prefix (e.g. `v0.152.0` or `0.152.0`). Pass the optional `v1.x.y` provider version when the confmap provider modules need a matching stable release. After running, verify with `git diff` and run a build to confirm.
+The script updates the version in: `otel-collector-build.yaml`, `AGENTS.md`, `README.md`, `Makefile`, `Dockerfile`, `Dockerfile.nvcf-otel-collector`, `scripts/regenerate-otelcol.sh`, `../../../ai-tooling/dev/skills/update-otel-collector-version/SKILL.md`, and `VERSION`. Run it from the BYOO collector root. You can pass versions with or without the `v` prefix (e.g. `v0.153.0` or `0.153.0`). Pass the optional `v1.x.y` provider version when the stable collector modules need a matching release, and pass the optional app release override when existing service tags require the next BYOO patch version. The app release major/minor must match the collector major/minor. After running, regenerate `otelcol/`, verify with `git diff`, and run a build to confirm.
+
+The root generated release config must keep `release.version_file: VERSION` and `release.version_major_minor_source_file: otel-collector-build.yaml` for this service so publishing reads the next BYOO release version from `VERSION`, and so `VERSION` major/minor cannot drift from the collector config.
 
 ### Working with Telemetry Backends
 
@@ -406,7 +410,8 @@ make update-examples
 make validate-otelconfig
 
 # Upgrade OpenTelemetry Collector version (updates all relevant files)
-./scripts/update-collector-version.sh v0.152.0 v1.58.0
+./scripts/update-collector-version.sh v0.153.0 v1.59.0
+./scripts/update-collector-version.sh v0.153.0 v1.59.0 0.153.2
 
 # Find all test files
 find . -name '*_test.go' -not -path './vendor/*' -not -path './validator/*' -not -path './generator/*'

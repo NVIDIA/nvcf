@@ -184,7 +184,7 @@ Use `make validate-otelconfig` to validate generated configurations against the 
 go build -o bin/byoo-otel-collector ./cmd/byoo-otel-collector
 
 # Build Docker image
-docker build --build-arg OTEL_BUILDER_VERSION=v0.152.0 \
+docker build --build-arg OTEL_BUILDER_VERSION=v0.153.0 \
   -f ./Dockerfile -t byoo-otel-collector:latest .
 
 # Run the collector
@@ -227,7 +227,7 @@ Otel Collector core is built from source to enable healthcheck v2 extension supp
 
 ```bash
 # Install otel collector builder
-go install go.opentelemetry.io/collector/cmd/builder@v0.152.0
+go install go.opentelemetry.io/collector/cmd/builder@v0.153.0
 
 # Build collector
 builder --config=./otel-collector-build.yaml
@@ -242,7 +242,7 @@ The output binary will be generated under the `./output` folder.
 The BYOO otel collector container can be built directly without a GitLab access token.
 
 ```bash
-docker build --build-arg OTEL_BUILDER_VERSION=v0.152.0 \
+docker build --build-arg OTEL_BUILDER_VERSION=v0.153.0 \
   -t YOUR_REGISTRY/byoo-otel-collector:latest .
 ```
 
