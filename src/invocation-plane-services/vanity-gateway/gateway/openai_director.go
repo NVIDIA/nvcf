@@ -90,6 +90,7 @@ type FunctionInfo struct {
 	functionVersionId              string
 	pathOverride                   *string
 	usePexec                       bool
+	sessionTimeout                 config.SessionTimeoutSeconds
 	eol                            time.Time
 	offlineMessage                 string
 	tooManyRequestsMessage         string
@@ -120,6 +121,7 @@ type ModelNameToFunctionIdVersionId struct {
 	FunctionVersionId              string
 	OutgoingPathOverride           string
 	UsePexec                       bool
+	SessionTimeout                 config.SessionTimeoutSeconds
 	EOL                            time.Time
 	OfflineMessage                 string
 	TooManyRequestsMessage         string
@@ -231,6 +233,7 @@ func buildModelMapping(
 			functionVersionId:              entry.FunctionVersionId,
 			pathOverride:                   pathOverride,
 			usePexec:                       entry.UsePexec,
+			sessionTimeout:                 entry.SessionTimeout,
 			eol:                            entry.EOL,
 			offlineMessage:                 entry.OfflineMessage,
 			tooManyRequestsMessage:         entry.TooManyRequestsMessage,
@@ -390,6 +393,7 @@ func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]co
 			FunctionVersionId:              entry.FunctionVersionID,
 			OutgoingPathOverride:           entry.OutgoingPathOverride,
 			UsePexec:                       entry.UsePexec,
+			SessionTimeout:                 entry.SessionTimeout,
 			EOL:                            entry.EOL,
 			OfflineMessage:                 entry.OfflineMessage,
 			TooManyRequestsMessage:         entry.TooManyRequestsMessage,
@@ -706,6 +710,11 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 }
 
 func (d *OpenAIDirector) proxyResolvedRequest(writer http.ResponseWriter, resolved resolvedOpenAIRequest) error {
+	if resolved.functionInfo.sessionTimeout > 0 {
+		span := trace.SpanFromContext(resolved.request.Context())
+		span.SetAttributes(traceAttrSessionTimeoutSeconds.Int(int(resolved.functionInfo.sessionTimeout)))
+	}
+
 	observer := &primaryProxyObserver{}
 	proxyErr := d.vanityDirector.ServeExec(
 		VanityExecRequest{
@@ -713,6 +722,7 @@ func (d *OpenAIDirector) proxyResolvedRequest(writer http.ResponseWriter, resolv
 			FunctionVersionID: resolved.functionInfo.functionVersionId,
 			PathOverride:      resolved.functionInfo.pathOverride,
 			UsePexec:          resolved.functionInfo.usePexec,
+			SessionTimeout:    resolved.functionInfo.sessionTimeout,
 			EOL:               resolved.functionInfo.eol,
 			OfflineMessage:    resolved.functionInfo.offlineMessage,
 		},

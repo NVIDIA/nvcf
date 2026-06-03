@@ -114,6 +114,7 @@ mapping changes.
 
 Map keys must not contain periods. Runtime routing uses `modelName`
 for OpenAI-compatible endpoints and `path` for Vanity URL routes.
+`sessionTimeout` is only supported on OpenAI-compatible model entries.
 
 When `usePexec` is false or omitted, the gateway forwards to `NVCF_API_ENDPOINT`
 with `function-id` and `function-version-id` headers. When `usePexec` is true,
@@ -129,6 +130,7 @@ v2config:
         functionID: 00000000-0000-0000-0000-000000000001
         functionVersionID: 11111111-1111-1111-1111-111111111111
         usePexec: true
+        sessionTimeout: 900
         tooManyRequestsMessage: "Try again later or use a partner endpoint."
         shadowModelNames:
           - private/meta/llama-3.1-8b-shadow
@@ -168,6 +170,7 @@ v2config:
 | `functionVersionID` | No | NVCF function version ID. When empty, the gateway targets the function without pinning a version. |
 | `outgoingPathOverride` | No | Upstream path to use instead of the incoming OpenAI-compatible path. Ignored when `usePexec` is true. |
 | `usePexec` | No | When `true`, route to `/v2/nvcf/pexec/functions/{functionID}` and append `/versions/{functionVersionID}` when set. |
+| `sessionTimeout` | No | Integer seconds used as the default `NVCF-POLL-SECONDS` value for this model. Missing or `0` uses `300`; caller-provided headers take precedence. |
 | `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone` and hide the model from `/v1/models`. |
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
 | `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. |

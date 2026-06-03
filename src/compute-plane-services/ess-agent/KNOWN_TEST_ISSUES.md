@@ -9,7 +9,7 @@ required services are available. Each section describes the failure, the skip
 mechanism, and what is needed to re-enable the test.
 
 All skips are gated on the `SKIP_INTEGRATION_TESTS` environment variable
-(set in `.gitlab-ci.yml`) or the `GITLAB_CI` variable (set automatically by
+(set in `tools/ci/subproject-validations.yaml` / child pipeline) or the `GITLAB_CI` variable (set automatically by
 GitLab runners).
 
 ---
@@ -31,14 +31,14 @@ GitLab CI Kubernetes executor the dev server either fails to initialise
 properly (missing `IPC_LOCK` / `mlock` capability) or another vault process
 interferes, causing all authenticated API calls to return 403.
 
-**Skip mechanism:** `SKIP_INTEGRATION_TESTS` env var in `.gitlab-ci.yml`.
+**Skip mechanism:** `SKIP_INTEGRATION_TESTS` env var in subproject CI config.
 When set, `dependency.TestMain` exits 0 immediately.
 
 **To re-enable:**
 1. Build and push the CI image from `nv_releases/docker/Dockerfile.ci`.
-2. Use that image in `.gitlab-ci.yml` (see the TODO comment there).
+2. Wire that image in `tools/ci/subproject-validations.yaml` (ess-agent checks).
 3. Ensure the CI runner grants `IPC_LOCK` or set `VAULT_DISABLE_MLOCK=true`.
-4. Remove `SKIP_INTEGRATION_TESTS` from `.gitlab-ci.yml`.
+4. Remove `SKIP_INTEGRATION_TESTS` from subproject CI config.
 
 ---
 
@@ -152,7 +152,7 @@ The race does not affect non-race builds and does not surface in
 production code paths. Other `child/` tests (including `TestReload_signal`,
 `TestKill_signal`) do not flake.
 
-**Skip mechanism:** `.gitlab-ci.yml` `go-test:` script passes
+**Skip mechanism:** subproject CI `go-test:` script passes
 `-skip '^TestReload_noSignal$'` to `go test`. This excludes only the
 flaky test; every other test in `child/` continues to run with `-race`.
 Local developer runs (without `-skip`) still execute the test, so the
@@ -161,8 +161,7 @@ upstream behaviour stays under coverage outside CI.
 **To re-enable:** Either fix the race upstream (file an issue against
 [hashicorp/consul-template](https://github.com/hashicorp/consul-template))
 and pull the patch back into `mpl-files-modified.md`, or wait for
-upstream to address it. Once fixed, drop the `-skip` flag from
-`.gitlab-ci.yml`.
+upstream to address it. Once fixed, drop the `-skip` flag from subproject CI config.
 
 ---
 

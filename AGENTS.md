@@ -14,6 +14,9 @@ Useful pointers:
 - `tools/AGENTS.md` for repo tooling
 - `.cursor/skills/add-synthetic-import/SKILL.md` for synthetic imports
 - `.cursor/skills/documentation-style/SKILL.md` for docs style
+- `.cursor/skills/nvcf-gitlab-subproject-ci/SKILL.md` for native subproject CI
+  (read before editing `.gitlab-ci.yml`, `subproject-validations.yaml`, or
+  `generated-release-jobs.yml`)
 - `.cursor/skills/` for root dev-skill symlink fanout
 - `ai-tooling/user/skills/` and `ai-tooling/dev/skills/` for public skills
 
@@ -123,6 +126,7 @@ Tool-specific hook config files, such as `.cursor/hooks.json`, `.codex/hooks.jso
 | `bazel-oci-images` | `ai-tooling/dev/skills/` | Build multi-arch OCI images from Bazel binaries |
 | `bazel-rust-crate-universe` | `ai-tooling/dev/skills/` | Wire Rust services into Bazel with crate_universe |
 | `bazel-synthetic-import-strategy` | `ai-tooling/dev/skills/` | Plan Bazel rollout for NVCF synthetic imports |
+| `nvcf-gitlab-subproject-ci` | `ai-tooling/dev/skills/` | Native subproject CI via generated child pipeline (not root `.gitlab-ci.yml`) |
 | `documentation-style` | `ai-tooling/dev/skills/` | NVCF documentation conventions (no bold, no emojis, no em-dash) |
 | `nvcf-explore-stack` | `ai-tooling/dev/skills/` | Navigate the self-hosted stack topology and dependency graph |
 | `official-docs-style` | `ai-tooling/dev/skills/` | External-facing NVCF user documentation voice and structure |
@@ -130,6 +134,24 @@ Tool-specific hook config files, such as `.cursor/hooks.json`, `.codex/hooks.jso
 | `nvcf-self-managed-installation` | `ai-tooling/user/skills/` | Install and deploy the self-managed NVCF stack |
 
 Private skill inventory lives in the private subtree guidance.
+
+## GitLab CI for native subprojects
+
+The umbrella parent pipeline (`.gitlab-ci.yml`) is not where native service
+build, test, helm-lint, or release validation jobs go.
+
+| Job kind | Where to declare it |
+|---|---|
+| `<id>-bazel`, Go checks, custom `checks:` | `tools/ci/subproject-validations.yaml` (runs in `subproject-validations` child pipeline) |
+| Image push, semantic-release, helm publish | `release:` in same YAML, output in `tools/ci/generated-release-jobs.yml` |
+| License scan, bazel-smoke, docs, OSS snapshot | root `.gitlab-ci.yml` only |
+
+Before adding or moving any CI job for a path under `src/`, `deploy/helm/`, or
+`migrations/`, read `nvcf-gitlab-subproject-ci` (`.cursor/skills/` symlink).
+Do not add per-service jobs to root `.gitlab-ci.yml` and do not recreate
+`src/**/.gitlab-ci.yml`, `deploy/helm/**/.gitlab-ci.yml`, or
+`migrations/**/.gitlab-ci.yml` for native subprojects. Helm CI-only values
+belong in `tools/ci/helm-validate-values/`, not under chart `ci/` dirs.
 
 ## Commit Messages
 

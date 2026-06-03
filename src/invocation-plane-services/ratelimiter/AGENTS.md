@@ -45,7 +45,7 @@ Check these files first when they exist in your local workspace:
 
 ## Working In This Repo
 
-- Read this repo’s top-level `README*`, `go.mod`, `Dockerfile`, and `.gitlab-ci.yml` before making assumptions about language or tooling.
+- Read this repo’s top-level `README*`, `go.mod`, `Dockerfile`, and `tools/ci/subproject-validations.yaml` (id `ratelimiter`) before making assumptions about language or tooling.
 - **Go module:** `ratelimiter`; **entrypoint:** `cmd/main.go`.
 - Search for existing patterns with `rg` before adding new structure.
 - Keep changes scoped to the owning repo once routing is confirmed; only fan out when the workspace docs show an explicit dependency.

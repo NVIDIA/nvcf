@@ -19,38 +19,62 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	rc "ai-api-gateway-service/internal/reloadableconfig"
 )
 
+type SessionTimeoutSeconds int
+
 type ModelFunctionDetails struct {
-	ModelName                      string    `json:"modelName"`
-	FunctionID                     string    `json:"functionID"`
-	FunctionVersionID              string    `json:"functionVersionID"`
-	OutgoingPathOverride           string    `json:"outgoingPathOverride"`
-	UsePexec                       bool      `json:"usePexec"`
-	EOL                            time.Time `json:"eol,omitempty"`            // RFC3339 timestamp (full ISO 8601)
-	OfflineMessage                 string    `json:"offlineMessage,omitempty"` // non-empty = endpoint is offline
-	TooManyRequestsMessage         string    `json:"tooManyRequestsMessage"`
-	ShadowModelName                string    `json:"shadowModelName,omitempty"`
-	ShadowModelNames               []string  `json:"shadowModelNames,omitempty"`
-	ShadowPercentage               *int      `json:"shadowPercentage,omitempty"`               // 1-100 when set; omitted defaults to 100
-	ShadowCancelOnClientDisconnect bool      `json:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadow when primary completes; default false
+	ModelName                      string                `json:"modelName"`
+	FunctionID                     string                `json:"functionID"`
+	FunctionVersionID              string                `json:"functionVersionID"`
+	OutgoingPathOverride           string                `json:"outgoingPathOverride"`
+	UsePexec                       bool                  `json:"usePexec"`
+	SessionTimeout                 SessionTimeoutSeconds `json:"sessionTimeout,omitempty"`
+	EOL                            time.Time             `json:"eol,omitempty"`            // RFC3339 timestamp (full ISO 8601)
+	OfflineMessage                 string                `json:"offlineMessage,omitempty"` // non-empty = endpoint is offline
+	TooManyRequestsMessage         string                `json:"tooManyRequestsMessage"`
+	ShadowModelName                string                `json:"shadowModelName,omitempty"`
+	ShadowModelNames               []string              `json:"shadowModelNames,omitempty"`
+	ShadowPercentage               *int                  `json:"shadowPercentage,omitempty"`               // 1-100 when set; omitted defaults to 100
+	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadow when primary completes; default false
 }
 
 type PathFunctionDetails struct {
-	Path                    string    `json:"path"` // incoming path
-	OutgoingPathOverride    *string   `json:"outgoingPathOverride"`
-	FunctionID              string    `json:"functionID"`
-	FunctionVersionID       string    `json:"functionVersionID"`
-	UsePexec                bool      `json:"usePexec"`
-	EOL                     time.Time `json:"eol,omitempty"`            // RFC3339 timestamp (full ISO 8601)
-	OfflineMessage          string    `json:"offlineMessage,omitempty"` // non-empty = endpoint is offline
-	ShadowFunctionID        string    `json:"shadowFunctionID,omitempty"`
-	ShadowFunctionVersionID string    `json:"shadowFunctionVersionID,omitempty"`
-	ShadowPercentage        *int      `json:"shadowPercentage,omitempty"` // unsupported on vanity routes; rejected during validation
+	Path                    string                 `json:"path"` // incoming path
+	OutgoingPathOverride    *string                `json:"outgoingPathOverride"`
+	FunctionID              string                 `json:"functionID"`
+	FunctionVersionID       string                 `json:"functionVersionID"`
+	UsePexec                bool                   `json:"usePexec"`
+	SessionTimeout          *SessionTimeoutSeconds `json:"sessionTimeout,omitempty"`
+	EOL                     time.Time              `json:"eol,omitempty"`            // RFC3339 timestamp (full ISO 8601)
+	OfflineMessage          string                 `json:"offlineMessage,omitempty"` // non-empty = endpoint is offline
+	ShadowFunctionID        string                 `json:"shadowFunctionID,omitempty"`
+	ShadowFunctionVersionID string                 `json:"shadowFunctionVersionID,omitempty"`
+	ShadowPercentage        *int                   `json:"shadowPercentage,omitempty"` // unsupported on vanity routes; rejected during validation
+	sessionTimeoutPresent   bool
+}
+
+func (p *PathFunctionDetails) UnmarshalJSON(data []byte) error {
+	type pathFunctionDetailsAlias PathFunctionDetails
+
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+
+	var alias pathFunctionDetailsAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+
+	*p = PathFunctionDetails(alias)
+	_, p.sessionTimeoutPresent = fields["sessionTimeout"]
+	return nil
 }
 
 type VanityEntry struct {
@@ -160,6 +184,12 @@ func validateOpenAISection(sectionName string, entries map[string]ModelFunctionD
 		return err
 	}
 
+	for modelKey, entry := range entries {
+		if entry.SessionTimeout < 0 {
+			return fmt.Errorf("openai.%s.%s: sessionTimeout must be greater than or equal to 0", sectionName, modelKey)
+		}
+	}
+
 	if isMultipartOpenAISection(sectionName) {
 		return validateMultipartOpenAISection(sectionName, entries)
 	}
@@ -220,6 +250,9 @@ func validateShadowTargetNames(location string, sectionName string, modelName st
 func (c *GatewayConfig) validateVanityConfig() error {
 	for vanityName, vanity := range c.Vanity {
 		for pathKey, path := range vanity.Paths {
+			if path.sessionTimeoutPresent || path.SessionTimeout != nil {
+				return fmt.Errorf("vanity.%s.paths.%s: sessionTimeout is unsupported for vanity routes", vanityName, pathKey)
+			}
 			if path.ShadowFunctionID != "" || path.ShadowFunctionVersionID != "" || path.ShadowPercentage != nil {
 				return fmt.Errorf("vanity.%s.paths.%s: shadow config is unsupported for vanity routes", vanityName, pathKey)
 			}

@@ -136,6 +136,87 @@ v2config:
 	assert.Equal(t, []string{"private/facebook/opt-125m-shadow-b"}, primary.ShadowModelNames)
 }
 
+func TestGatewayConfigLoadAcceptsSessionTimeout(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(configPath, []byte(`
+v2config:
+  openai:
+    chatCompletions:
+      primary:
+        modelName: facebook/opt-125m
+        functionID: func-id
+        sessionTimeout: 900
+      zero:
+        modelName: facebook/opt-125m-zero
+        functionID: zero-func-id
+        sessionTimeout: 0
+`), 0600)
+	require.NoError(t, err)
+
+	reloadable, err := SetupConfigWithConfigPath(configPath)
+	require.NoError(t, err)
+
+	cfg := reloadable.Get()
+	assert.Equal(t, SessionTimeoutSeconds(900), cfg.OpenAI.ChatCompletions["primary"].SessionTimeout)
+	assert.Equal(t, SessionTimeoutSeconds(0), cfg.OpenAI.ChatCompletions["zero"].SessionTimeout)
+}
+
+func TestGatewayConfigValidateRejectsNegativeSessionTimeout(t *testing.T) {
+	cfg := &GatewayConfig{}
+	cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{
+		"primary": {
+			ModelName:      "facebook/opt-125m",
+			FunctionID:     "func-id",
+			SessionTimeout: -1,
+		},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "sessionTimeout must be greater than or equal to 0")
+}
+
+func TestGatewayConfigValidateRejectsVanitySessionTimeout(t *testing.T) {
+	sessionTimeout := SessionTimeoutSeconds(900)
+	cfg := &GatewayConfig{}
+	cfg.Vanity = map[string]VanityEntry{
+		"example": {
+			Host: "ai.example.com",
+			Paths: map[string]PathFunctionDetails{
+				"sample": {
+					Path:           "/v1/example/infer",
+					FunctionID:     "func-id",
+					SessionTimeout: &sessionTimeout,
+				},
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "sessionTimeout is unsupported for vanity routes")
+}
+
+func TestGatewayConfigLoadRejectsNullVanitySessionTimeout(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(configPath, []byte(`
+v2config:
+  vanity:
+    example:
+      host: ai.example.com
+      paths:
+        sample:
+          path: /v1/example/infer
+          functionID: func-id
+          sessionTimeout: null
+`), 0600)
+	require.NoError(t, err)
+
+	_, err = SetupConfigWithConfigPath(configPath)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "sessionTimeout is unsupported for vanity routes")
+}
+
 func TestGatewayConfigValidateRejectsDuplicateOpenAIShadows(t *testing.T) {
 	tests := []struct {
 		name    string

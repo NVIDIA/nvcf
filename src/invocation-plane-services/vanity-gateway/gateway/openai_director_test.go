@@ -325,6 +325,7 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2(t *testing.T) {
 			FunctionVersionID:              "version-456",
 			OutgoingPathOverride:           "/custom/path",
 			UsePexec:                       true,
+			SessionTimeout:                 900,
 			EOL:                            eolDate,
 			TooManyRequestsMessage:         "Try a partner API!",
 			ShadowModelName:                "private/facebook/opt-125m-shadow",
@@ -340,6 +341,7 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2(t *testing.T) {
 	assert.Equal(t, "version-456", expected.FunctionVersionId)
 	assert.Equal(t, "/custom/path", expected.OutgoingPathOverride)
 	assert.True(t, expected.UsePexec)
+	assert.Equal(t, config.SessionTimeoutSeconds(900), expected.SessionTimeout)
 	assert.Equal(t, eolDate, expected.EOL)
 	assert.Equal(t, "Try a partner API!", expected.TooManyRequestsMessage)
 	assert.Equal(t, []string{

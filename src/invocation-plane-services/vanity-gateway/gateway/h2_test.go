@@ -33,7 +33,13 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
+
+func int64Ptr(v int64) *int64 {
+	return &v
+}
 
 func TestBuildChiMux_RejectsSpoofedShadowHeader(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +85,194 @@ func TestBuildChiMux_RejectsSpoofedShadowHeader(t *testing.T) {
 
 		assert.NotEqual(t, http.StatusBadRequest, rec.Code)
 	})
+}
+
+func TestBuildChiMux_SessionTimeoutHeader(t *testing.T) {
+	receivedHeaders := make(chan string, 4)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders <- r.Header.Get(NVCFPollSeconds)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(backend.Close)
+
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = "test.host"
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+		"configured": {
+			ModelName:      "configured-model",
+			FunctionID:     "configured-func",
+			SessionTimeout: 900,
+		},
+		"default": {
+			ModelName:  "default-model",
+			FunctionID: "default-func",
+		},
+		"zero": {
+			ModelName:      "zero-model",
+			FunctionID:     "zero-func",
+			SessionTimeout: 0,
+		},
+	}
+
+	mux, err := buildChiMux(mappings, Config{
+		NvcfApiEndpoint:              backend.URL,
+		PrivateModelNameRegexPattern: "^$",
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name           string
+		model          string
+		incomingHeader string
+		expectedHeader string
+	}{
+		{
+			name:           "configured model sets poll header",
+			model:          "configured-model",
+			expectedHeader: "900",
+		},
+		{
+			name:           "caller header wins",
+			model:          "configured-model",
+			incomingHeader: "45",
+			expectedHeader: "45",
+		},
+		{
+			name:           "missing config uses default",
+			model:          "default-model",
+			expectedHeader: "300",
+		},
+		{
+			name:           "zero config uses default",
+			model:          "zero-model",
+			expectedHeader: "300",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+				bytes.NewBufferString(`{"model":"`+tc.model+`"}`))
+			req.Host = "test.host"
+			req.Header.Set("Content-Type", "application/json")
+			if tc.incomingHeader != "" {
+				req.Header.Set(NVCFPollSeconds, tc.incomingHeader)
+			}
+
+			mux.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			select {
+			case actual := <-receivedHeaders:
+				assert.Equal(t, tc.expectedHeader, actual)
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for upstream request")
+			}
+		})
+	}
+}
+
+func TestBuildChiMux_SessionTimeoutTraceAttribute(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(backend.Close)
+
+	tp, exp := newTestTracerProvider()
+	previousTracerProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previousTracerProvider)
+		tp.Shutdown(context.Background())
+	})
+
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = "test.host"
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+		"configured": {
+			ModelName:      "configured-model",
+			FunctionID:     "configured-func",
+			SessionTimeout: 900,
+		},
+		"default": {
+			ModelName:  "default-model",
+			FunctionID: "default-func",
+		},
+		"zero": {
+			ModelName:      "zero-model",
+			FunctionID:     "zero-func",
+			SessionTimeout: 0,
+		},
+	}
+
+	mux, err := buildChiMux(mappings, Config{
+		NvcfApiEndpoint:              backend.URL,
+		PrivateModelNameRegexPattern: "^$",
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name           string
+		model          string
+		incomingHeader string
+		expectedAttr   *int64
+	}{
+		{
+			name:         "configured model records timeout",
+			model:        "configured-model",
+			expectedAttr: int64Ptr(900),
+		},
+		{
+			name:           "caller header still records configured timeout",
+			model:          "configured-model",
+			incomingHeader: "45",
+			expectedAttr:   int64Ptr(900),
+		},
+		{
+			name:  "missing config omits timeout",
+			model: "default-model",
+		},
+		{
+			name:  "zero config omits timeout",
+			model: "zero-model",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			exp.Reset()
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+				bytes.NewBufferString(`{"model":"`+tc.model+`"}`))
+			req.Host = "test.host"
+			req.Header.Set("Content-Type", "application/json")
+			if tc.incomingHeader != "" {
+				req.Header.Set(NVCFPollSeconds, tc.incomingHeader)
+			}
+
+			mux.ServeHTTP(rec, req)
+			tp.ForceFlush(context.Background())
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			spans := spansByName(exp.GetSpans(), "/v1/chat/completions")
+			serverSpanIndex := -1
+			for i, span := range spans {
+				if span.SpanKind == trace.SpanKindServer {
+					serverSpanIndex = i
+					break
+				}
+			}
+			require.NotEqual(t, -1, serverSpanIndex)
+			actual, ok := spanAttr(spans[serverSpanIndex], traceAttrSessionTimeoutSeconds)
+			if tc.expectedAttr == nil {
+				assert.False(t, ok)
+				return
+			}
+			require.True(t, ok)
+			assert.Equal(t, *tc.expectedAttr, actual.AsInt64())
+		})
+	}
 }
 
 func TestBuildChiMux_ReplaysAllShadowTargets(t *testing.T) {

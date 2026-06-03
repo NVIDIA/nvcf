@@ -334,7 +334,7 @@ When upgrading to a new OpenTelemetry Collector version, use the update script s
 ./scripts/update-collector-version.sh v0.152.0 v1.58.0
 ```
 
-The script updates the version in: `otel-collector-build.yaml`, `AGENTS.md`, `README.md`, `Makefile`, `Dockerfile`, `Dockerfile.nvcf-otel-collector`, `.gitlab-ci.yml`, and `VERSION`. Run it from the repository root. You can pass versions with or without the `v` prefix (e.g. `v0.152.0` or `0.152.0`). Pass the optional `v1.x.y` provider version when the confmap provider modules need a matching stable release. After running, verify with `git diff` and run a build to confirm.
+The script updates the version in: `otel-collector-build.yaml`, `AGENTS.md`, `README.md`, `Makefile`, `Dockerfile`, `Dockerfile.nvcf-otel-collector`, `VERSION`. Run it from the repository root. You can pass versions with or without the `v` prefix (e.g. `v0.152.0` or `0.152.0`). Pass the optional `v1.x.y` provider version when the confmap provider modules need a matching stable release. After running, verify with `git diff` and run a build to confirm.
 
 ### Working with Telemetry Backends
 
@@ -416,7 +416,7 @@ find . -name '*_test.go' -not -path './vendor/*' -not -path './validator/*' -not
 
 - Go module: `github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector`
 - Dependencies managed via Go modules
-- CI/CD: GitLab CI (see `.gitlab-ci.yml`)
+- CI/CD: umbrella subproject-validations child pipeline (`tools/ci/subproject-validations.yaml`, id `byoo-otel-collector`)
 - Generator documentation: `generator/doc/README.md`
 - Validator documentation: `validator/README.md`
 - Deployment documentation: `docs/Deployment.md`

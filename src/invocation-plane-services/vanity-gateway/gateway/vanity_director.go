@@ -18,6 +18,7 @@ limitations under the License.
 package gateway
 
 import (
+	config "ai-api-gateway-service/gateway_config"
 	"ai-api-gateway-service/pool"
 	"bytes"
 	"fmt"
@@ -35,6 +36,7 @@ import (
 )
 
 const NVCFPollSeconds string = "NVCF-POLL-SECONDS"
+const defaultNVCFPollSeconds config.SessionTimeoutSeconds = 300
 
 // writeFunctionStatusError writes a 503 or 410 response if the function is offline or expired.
 // name is used in the EOL detail message; pass empty string for vanity/path-based endpoints.
@@ -94,6 +96,7 @@ type execTarget struct {
 	path              *string
 	functionID        string
 	functionVersionID string
+	sessionTimeout    config.SessionTimeoutSeconds
 }
 
 type VanityExecRequest struct {
@@ -101,6 +104,7 @@ type VanityExecRequest struct {
 	FunctionVersionID string
 	PathOverride      *string
 	UsePexec          bool
+	SessionTimeout    config.SessionTimeoutSeconds
 	EOL               time.Time
 	OfflineMessage    string
 }
@@ -131,11 +135,12 @@ func NewVanityDirector(nvcfApiHost string, transport http.RoundTripper) (*Vanity
 	return &VanityDirector{rp: rp, nvcfApiHost: nvcfApiUrl.Host, nvcfApiScheme: nvcfApiUrl.Scheme}, nil
 }
 
-func buildExecTarget(functionID string, functionVersionID string, pathOverride *string, usePexec bool) execTarget {
+func buildExecTarget(functionID string, functionVersionID string, pathOverride *string, usePexec bool, sessionTimeout config.SessionTimeoutSeconds) execTarget {
 	target := execTarget{
 		path:              pathOverride,
 		functionID:        functionID,
 		functionVersionID: functionVersionID,
+		sessionTimeout:    sessionTimeout,
 	}
 	if !usePexec {
 		return target
@@ -169,7 +174,7 @@ func applyExecTarget(request *http.Request, apiScheme string, apiHost string, ta
 		request.Header.Del("function-version-id")
 	}
 	request.Host = ""
-	setPollingHeaderIfNotPresent(request)
+	setPollingHeaderIfNotPresent(request, target.sessionTimeout)
 }
 
 func (d *VanityDirector) ServeExec(target VanityExecRequest, writer http.ResponseWriter, request *http.Request) error {
@@ -183,7 +188,7 @@ func (d *VanityDirector) ServeExec(target VanityExecRequest, writer http.Respons
 		return nil
 	}
 
-	applyExecTarget(request, d.nvcfApiScheme, d.nvcfApiHost, buildExecTarget(target.FunctionID, target.FunctionVersionID, target.PathOverride, target.UsePexec))
+	applyExecTarget(request, d.nvcfApiScheme, d.nvcfApiHost, buildExecTarget(target.FunctionID, target.FunctionVersionID, target.PathOverride, target.UsePexec, target.SessionTimeout))
 
 	// Set Deprecation header if EOL is set but not yet expired
 	if !target.EOL.IsZero() {
@@ -210,14 +215,17 @@ func (d *VanityDirector) ServePolling(writer http.ResponseWriter, request *http.
 	}
 	request.URL = nvcfUrl
 	request.Host = ""
-	setPollingHeaderIfNotPresent(request)
+	setPollingHeaderIfNotPresent(request, 0)
 
 	d.rp.ServeHTTP(writer, request)
 }
 
-func setPollingHeaderIfNotPresent(request *http.Request) {
+func setPollingHeaderIfNotPresent(request *http.Request, sessionTimeout config.SessionTimeoutSeconds) {
 	if request.Header.Get(NVCFPollSeconds) == "" {
-		request.Header.Set(NVCFPollSeconds, "300") // 5 minutes
+		if sessionTimeout <= 0 {
+			sessionTimeout = defaultNVCFPollSeconds
+		}
+		request.Header.Set(NVCFPollSeconds, strconv.Itoa(int(sessionTimeout)))
 	}
 }
 
