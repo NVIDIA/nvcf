@@ -23,8 +23,8 @@ dsl/        Pure helpers: ${VAR} interpolation, dotted-path YAML upsert
 steps/      Godog step handlers. Every handler is a thin wrapper around a
             dsl helper or CommandRunner.Run; no domain validation.
 godog_test.go
-            Live entry points (TestSingleClusterUp, TestMultiClusterUp,
-            TestSingleClusterHelmfile, TestMultiClusterHelmfile,
+            Live entry points (TestSingleClusterUp, TestSingleClusterUpOneClick,
+            TestMultiClusterUp, TestSingleClusterHelmfile, TestMultiClusterHelmfile,
             TestSingleClusterEKSHelmfile, TestMultiClusterEKSHelmfile) and
             wiring tests with a fake CommandRunner.
 .golangci.yml
@@ -57,8 +57,12 @@ run look like it succeeded when nothing actually ran.
 ```sh
 cd tests/bdd
 
-# Single-cluster CLI feature
+# Single-cluster CLI feature (install --control-plane + compute-plane primitives)
 go test -run '^TestSingleClusterUp$' -timeout 30m -v
+
+# Single-cluster CLI one-click feature (nvcf-cli self-hosted up; the quickstart).
+# Shares the ncp-local topology with TestSingleClusterUp; run one at a time.
+go test -run '^TestSingleClusterUpOneClick$' -timeout 30m -v
 
 # Multi-cluster CLI feature
 go test -run '^TestMultiClusterUp$' -timeout 60m -v

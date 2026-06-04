@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCommandRunnerSuccess(t *testing.T) {
@@ -36,6 +37,41 @@ func TestCommandRunnerSuccess(t *testing.T) {
 	}
 	if !strings.Contains(result.Stdout, "hello world") {
 		t.Fatalf("stdout = %q, want hello world", result.Stdout)
+	}
+}
+
+func TestCommandRunnerRunWithTTYMakesStdinATerminal(t *testing.T) {
+	runner := NewCommandRunner(t.TempDir(), "")
+	// `test -t 0` exits 0 only when fd 0 is a terminal.
+	result, err := runner.RunWithTTY(context.Background(), "sh -c \"test -t 0 && echo is-tty\"")
+	if err != nil {
+		t.Fatalf("run with tty: %v", err)
+	}
+	if result.ExitCode != 0 || !strings.Contains(result.Stdout, "is-tty") {
+		t.Fatalf("RunWithTTY: stdin was not a terminal (exit=%d stdout=%q)", result.ExitCode, result.Stdout)
+	}
+	// Plain Run must NOT present a terminal on stdin.
+	plain, _ := runner.Run(context.Background(), "sh -c \"test -t 0 && echo is-tty\"")
+	if plain.ExitCode == 0 {
+		t.Fatal("Run unexpectedly presented a terminal on stdin")
+	}
+}
+
+func TestCommandRunnerRunWithTTYReadHonorsContext(t *testing.T) {
+	runner := NewCommandRunner(t.TempDir(), "")
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	result, err := runner.RunWithTTY(ctx, `sh -c "read line; echo read:$line"`)
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatalf("RunWithTTY: stdin read completed unexpectedly (exit=%d stdout=%q stderr=%q)", result.ExitCode, result.Stdout, result.Stderr)
+	}
+	if ctx.Err() != context.DeadlineExceeded {
+		t.Fatalf("RunWithTTY: stdin read was not stopped by context (ctx=%v err=%v)", ctx.Err(), err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("RunWithTTY: context timeout returned too slowly after %s", elapsed)
 	}
 }
 

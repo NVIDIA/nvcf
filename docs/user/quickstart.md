@@ -1,98 +1,138 @@
-# Quickstart: One-Click Installation
+# Quickstart: Local k3d Installation
 
-Use the one-click CLI flow for a fresh self-hosted NVCF install. The command installs the control plane, registers a GPU cluster, installs the NVIDIA Cluster Agent, and performs basic health checks.
+Install a self-hosted NVCF stack on one local k3d cluster, register that
+cluster with the control plane, and confirm that the local deployment is
+healthy.
 
-Use this path when you want the fastest route to a working deployment. Use the [Helmfile installation](./helmfile-installation.md) path when you need manual release control, partial recovery, or upgrade operations.
+This quickstart uses a single k3d cluster named `ncp-local`, fake GPUs, and
+local route hostnames. It is for local development and validation only. For a
+remote deployment, or for separate control-plane and GPU clusters, use
+[Helmfile Installation](./helmfile-installation.md) and
+[Self-Managed Clusters](./cluster-management/self-managed.md).
 
-## What the CLI installs
-
-`nvcf-cli self-hosted up` runs the self-managed stack in ordered phases:
-
-1. Checks local tools and Kubernetes access.
-2. Resolves the self-managed stack bundle.
-3. Installs the control plane.
-4. Initializes CLI authentication and discovers the control-plane issuer.
-5. Registers the GPU cluster, recording its OIDC issuer and JWKS with the control plane.
-6. Installs the compute-plane components, including NVCA.
-7. Prints a final health summary.
-
-The control plane and GPU cluster can be the same Kubernetes cluster or separate clusters. For a single cluster, use your current kubeconfig context. For separate clusters, pass both kube contexts explicitly.
+Run the commands from the NVCF repository root unless a step says otherwise.
+The `nvcf-cli self-hosted up` command runs on your workstation. It does not run
+inside Kubernetes.
 
 ## Prerequisites
 
-Before you run the quickstart, prepare:
+Before you start, install and prepare:
 
-- `nvcf-cli`
+- Docker running on your workstation
+- `k3d` v5.x or later
 - `kubectl`
-- `helm`
-- `helmfile` 1.1.x
+- `helm` >= 3.14
+- `helmfile` >= 1.0. Use `helmfile` >= 1.5.0 with Helm 4.
 - `helm-diff` plugin
-- Access to the NVCF Helm charts and container images
-- A Kubernetes cluster for the control plane
-- A GPU cluster with the NVIDIA GPU Operator, or a local k3d cluster with the fake GPU operator
-- A default `StorageClass`
-- For remote clusters, Gateway API ingress prepared before install
-- For remote clusters, a CLI config that points to the Gateway load balancer
+- `nvcf-cli` on your `PATH`. See [Installation](./cli.md#installation) to
+  build it from the repository or download it from NGC.
+- An NGC API key with access to the NVCF chart and image registry
+- The NGC organization and team slugs for that registry access
 
-For artifact mirroring, refer to [Image Mirroring](./image-mirroring.md). For local k3d setup, refer to [Local Development](./local-development.md).
+Use these install helpers if you do not already have the local tools.
 
-## Choose a cluster layout
-
-| Layout | Use when | Required flags |
-| --- | --- | --- |
-| Single cluster | The control plane and GPU workers run in the same Kubernetes cluster, including local k3d. | Omit context flags, or make the current context the target cluster. |
-| Separate GPU cluster | The control plane runs in one Kubernetes cluster and GPU workloads run in another. | Set both `--control-plane-context` and `--compute-plane-context`. |
-
-The two context flags must be set together. Do not set them to the same value. For a single cluster, omit both flags.
-
-## Prepare remote Gateway and CLI config
-
-Skip this section for local k3d. For remote clusters such as Amazon EKS,
-complete [Gateway quickstart](./gateway-routing.md#gateway-quickstart) and
-[Configure the CLI for one-click](./gateway-routing.md#configure-the-cli-for-one-click)
-before running `self-hosted up`.
-
-Run the install commands from the directory that contains `.nvcf-cli.yaml`, or
-pass `--config .nvcf-cli.yaml` to each CLI command.
-
-## Run a fresh install
-
-Check prerequisites first:
+<Accordion title="Install Docker">
+Install Docker from the
+[Docker installation guide](https://docs.docker.com/get-started/get-docker/).
+After Docker starts, verify that the CLI can reach it:
 
 ```bash
-nvcf-cli self-hosted check --pre
+docker version
 ```
+</Accordion>
 
-Run the one-click install:
+<Accordion title="Install k3d, kubectl, Helm, and Helmfile">
+On macOS with Homebrew:
 
 ```bash
-nvcf-cli self-hosted up \
-  --cluster-name "${CLUSTER_NAME}" \
-  --nca-id "${NCA_ID}" \
-  --region "${REGION}"
+brew install k3d kubectl helm helmfile
+
+k3d version
+kubectl version --client
+helm version
+helmfile version
 ```
 
-For separate control-plane and GPU clusters:
+For other systems, use the official installation guides:
+[k3d](https://k3d.io/stable/#installation),
+[kubectl](https://kubernetes.io/docs/tasks/tools/),
+[Helm](https://helm.sh/docs/intro/install/), and
+[Helmfile](https://helmfile.readthedocs.io/en/stable/).
+</Accordion>
+
+<Accordion title="Install helm-diff">
+Install the Helm plugin used by Helmfile:
 
 ```bash
-export CONTROL_PLANE_CONTEXT="admin@control-plane"
-export COMPUTE_PLANE_CONTEXT="admin@gpu-cluster"
-export ICMS_URL="https://sis.example.com"
+if helm version --short | grep -q '^v4'; then
+  helm plugin install https://github.com/databus23/helm-diff --verify=false
+else
+  helm plugin install https://github.com/databus23/helm-diff
+fi
 
-nvcf-cli self-hosted up \
-  --control-plane-context "${CONTROL_PLANE_CONTEXT}" \
-  --compute-plane-context "${COMPUTE_PLANE_CONTEXT}" \
-  --cluster-name "${CLUSTER_NAME}" \
-  --nca-id "${NCA_ID}" \
-  --region "${REGION}" \
-  --icms-url "${ICMS_URL}"
+helm plugin list
 ```
 
-Use `--stack=/path/to/nvcf-self-managed-stack` when testing from a local source-built CLI or when you need to point at a specific stack checkout. Packaged CLI releases can use the packaged stack source unless your release notes say otherwise.
+See the [helm-diff installation instructions](https://github.com/databus23/helm-diff#install)
+for offline or Helm 4 installation options.
+</Accordion>
 
-## Local k3d quickstart
+<Accordion title="Build nvcf-cli from this repository">
+Run these commands from the NVCF repository root:
 
-After you create the k3d cluster, install the fake GPU operator, and install the CSI SMB driver as described in [Local Development](./local-development.md), use the local route hostnames:
+```bash
+./setup.sh
+bazel build //src/clis/nvcf-cli:nvcf-cli
+
+mkdir -p "${HOME}/.local/bin"
+install -m 0755 \
+  bazel-bin/src/clis/nvcf-cli/nvcf-cli_/nvcf-cli \
+  "${HOME}/.local/bin/nvcf-cli"
+
+export PATH="${HOME}/.local/bin:${PATH}"
+nvcf-cli version
+```
+
+For the packaged CLI release, see [Installation](./cli.md#download-from-ngc).
+</Accordion>
+
+`self-hosted up` defaults to `--env local` and supports only the single local
+k3d layout. It requires a current `k3d-*` kube context.
+
+## Step 1: Create the local k3d cluster
+
+Export the registry credentials used by the local cluster bootstrap:
+
+```bash
+export NGC_API_KEY="<ngc-api-key>"
+export SAMPLE_NGC_ORG="<ngc-org>"
+export SAMPLE_NGC_TEAM="<ngc-team>"
+```
+
+Create the single-cluster local topology:
+
+```bash
+make -C tools/ncp-local-cluster build-and-deploy-cluster
+kubectl config use-context k3d-ncp-local
+kubectl config current-context
+```
+
+Expected output:
+
+```text
+k3d-ncp-local
+```
+
+<Info>
+This creates a k3d cluster named `ncp-local`, installs the fake GPU operator,
+the CSI SMB driver, and Envoy Gateway, and makes the local kube context
+available to `kubectl` and `nvcf-cli`.
+</Info>
+
+## Step 2: Prepare local routing
+
+Add these entries to `/etc/hosts` on the workstation running the CLI if they do
+not already resolve:
 
 ```text
 127.0.0.1 api.localhost
@@ -101,73 +141,82 @@ After you create the k3d cluster, install the fake GPU operator, and install the
 127.0.0.1 invocation.localhost
 ```
 
-Set the local endpoint environment:
+Use the local CLI configuration that points commands at the local routes:
 
 ```bash
-export CLUSTER_NAME=ncp-local
-export NCA_ID=nvcf-default
-export REGION=us-west-1
-export SIS_URL=http://sis.localhost:8080
-export NVCF_BASE_HTTP_URL=http://api.localhost:8080
-export NVCF_INVOKE_URL=http://invocation.localhost:8080
-export API_KEYS_SERVICE_URL=http://api-keys.localhost:8080
-export API_KEYS_ADMIN_SERVICE_URL=http://api-keys.localhost:8080
-export API_KEYS_HOST=api-keys.localhost
-export API_HOST=api.localhost
-export INVOKE_HOST=invocation.localhost
-export NVCF_CLIENT_ID="${NCA_ID}"
-export NVCF_ICMS_URL="${SIS_URL}"
+export NVCF_CLI_CONFIG=deploy/stacks/self-managed/nvcf-cli-local.yaml
 ```
 
-For direct pulls from private NGC registries, export an API key with access to
-the NVCF container images before running `self-hosted up`. The local stack
-references `nvcr-pull-secret`, and the CLI creates or updates that secret in
-the local NVCF namespaces when `NGC_API_KEY` is set.
+Log in to the NGC container registry:
 
 ```bash
-export NGC_API_KEY="<ngc-api-key-with-container-pull-access>"
 helm registry login nvcr.io -u '$oauthtoken' -p "${NGC_API_KEY}"
 ```
 
-The account bootstrap registry credentials in
-`deploy/stacks/self-managed/secrets/local-secrets.yaml` must be base64-encoded
-`username:password` values. For NGC, encode `$oauthtoken:<api-key>`. Use a
-separate Helm-capable key for `helm.ngc.nvidia.com` if your container-pull key
-does not have Helm chart access.
+<Info>
+The local hostnames route CLI traffic through the local Envoy Gateway. The
+local CLI configuration keeps later function commands on those local routes
+instead of the hosted NVCF endpoints.
+</Info>
 
-Then run:
+## Step 3: Create the local stack secrets file
+
+Create the local secrets file used by the self-managed stack:
 
 ```bash
-nvcf-cli self-hosted up \
+cp deploy/stacks/self-managed/secrets/secrets.yaml.template \
+  deploy/stacks/self-managed/secrets/local-secrets.yaml
+
+BASE64_CRED="$(printf '%s' "\$oauthtoken:${NGC_API_KEY}" | base64 | tr -d '\n')"
+sed -i.bak "s|REPLACE_WITH_BASE64_DOCKER_CREDENTIAL|${BASE64_CRED}|g" \
+  deploy/stacks/self-managed/secrets/local-secrets.yaml
+rm deploy/stacks/self-managed/secrets/local-secrets.yaml.bak
+```
+
+<Note>
+`local-secrets.yaml` is gitignored. Keep your NGC key out of committed files.
+</Note>
+
+## Step 4: Run the install
+
+Check local tools and Kubernetes access:
+
+```bash
+nvcf-cli --config "${NVCF_CLI_CONFIG}" self-hosted check --pre
+```
+
+Run the local install:
+
+```bash
+nvcf-cli --config "${NVCF_CLI_CONFIG}" self-hosted up \
   --env=local \
-  --cluster-name="${CLUSTER_NAME}" \
-  --nca-id="${NCA_ID}" \
-  --region="${REGION}" \
-  --icms-url="${SIS_URL}" \
-  --refresh-token \
-  --plain
+  --cluster-name=ncp-local \
+  --nca-id=nvcf-default \
+  --region=us-west-1 \
+  --icms-url=http://sis.localhost:8080 \
+  --stack=deploy/stacks/self-managed \
+  --refresh-token
 ```
 
-If you are testing a local stack checkout, add:
+Expected result: the final screen reports a successful install, a registered
+cluster, and a healthy backend.
+
+<Info>
+The command installs the control plane, mints CLI authentication, registers
+`ncp-local`, installs the compute-plane components, and waits for the
+`NVCFBackend` health check to report healthy.
+</Info>
+
+## Step 5: Verify the install
+
+Run the full self-hosted health checks:
 
 ```bash
---stack=/path/to/nvcf-self-managed-stack
+nvcf-cli --config "${NVCF_CLI_CONFIG}" self-hosted check --all \
+  --cluster-name=ncp-local
 ```
 
-## Verify the install
-
-Run the CLI checks:
-
-```bash
-nvcf-cli self-hosted check --all \
-  --cluster-name="${CLUSTER_NAME}" \
-  --icms-url="${SIS_URL}"
-nvcf-cli self-hosted status \
-  --cluster-name="${CLUSTER_NAME}" \
-  --icms-url="${SIS_URL}"
-```
-
-Confirm Kubernetes resources:
+Inspect the local Kubernetes resources:
 
 ```bash
 kubectl get pods -A
@@ -175,30 +224,88 @@ kubectl get httproute -A
 kubectl get nvcfbackends -A
 ```
 
-Then create, deploy, and invoke a function using the [CLI](./cli.md). For local fake GPU clusters, choose a GPU and instance type that match the discovered node labels and GPU count. For the validated k3d H100 fake GPU setup, use:
+Expected result: the CLI checks do not report failed checks, and the
+`ncp-local` `NVCFBackend` reports healthy.
 
-```text
-gpu: H100
-instanceType: NCP.GPU.H100_8x
+## Step 6: Deploy and invoke a sample function
+
+Create a function from the `load_tester_supreme` sample image in the registry
+organization and team you exported earlier:
+
+```bash
+nvcf-cli --config "${NVCF_CLI_CONFIG}" function create \
+  --name quickstart-load-tester-supreme \
+  --image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8" \
+  --inference-url /echo \
+  --inference-port 8000 \
+  --health-uri /health \
+  --health-port 8000 \
+  --health-timeout PT30S
 ```
+
+Deploy the function to the local fake GPU backend:
+
+```bash
+nvcf-cli --config "${NVCF_CLI_CONFIG}" function deploy create \
+  --gpu H100 \
+  --instance-type NCP.GPU.H100_8x \
+  --backend ncp-local \
+  --regions us-west-1 \
+  --min-instances 1 \
+  --max-instances 1 \
+  --timeout 900
+```
+
+Generate an API key for invocation:
+
+```bash
+nvcf-cli --config "${NVCF_CLI_CONFIG}" api-key generate \
+  --description quickstart-load-tester-supreme \
+  --scopes invoke_function,list_functions,queue_details,list_functions_details
+```
+
+Invoke the sample function:
+
+```bash
+nvcf-cli --config "${NVCF_CLI_CONFIG}" function invoke \
+  --request-body '{"message":"quickstart-echo","repeats":1}' \
+  --timeout 120 \
+  --poll-duration 5
+```
+
+Expected result: the invocation response contains `quickstart-echo`.
+
+For other local fake GPU configurations, choose a `--gpu` and
+`--instance-type` that match the discovered node labels and GPU count.
 
 ## Clean up
 
-To remove the compute-plane components:
+Remove the sample function deployment and function:
 
 ```bash
-nvcf-cli self-hosted uninstall \
+nvcf-cli --config "${NVCF_CLI_CONFIG}" function deploy remove
+nvcf-cli --config "${NVCF_CLI_CONFIG}" function delete
+```
+
+Remove the compute-plane components:
+
+```bash
+nvcf-cli --config "${NVCF_CLI_CONFIG}" self-hosted uninstall \
   --compute-plane \
-  --cluster-name "${CLUSTER_NAME}"
+  --cluster-name ncp-local
 ```
 
-To remove the control plane:
+Remove the control plane:
 
 ```bash
-nvcf-cli self-hosted uninstall --control-plane
+nvcf-cli --config "${NVCF_CLI_CONFIG}" self-hosted uninstall --control-plane
 ```
 
-For manual Helmfile recovery and teardown, refer to [Helmfile Installation](./helmfile-installation.md).
+Destroy the local k3d cluster:
+
+```bash
+make -C tools/ncp-local-cluster destroy
+```
 
 ## Troubleshooting
 
@@ -206,6 +313,29 @@ If the quickstart fails, start with [Troubleshooting](./troubleshooting.md).
 
 Common local k3d issues:
 
-- `sis.localhost` must resolve from the machine running `nvcf-cli`.
-- `self-hosted check --all` is a health check, not a replacement for function deploy and invoke validation.
-- Local source-built CLI runs can need `--stack` until the packaged default stack source is available.
+- `sis.localhost` must resolve from the workstation running `nvcf-cli`.
+- `kubectl config current-context` must print `k3d-ncp-local`.
+- `lookup api-keys.nvcf.nvidia.com: no such host` means the CLI is using the
+  hosted default endpoint. Run commands with
+  `--config "${NVCF_CLI_CONFIG}"` from this quickstart.
+- `node inotify limits below NVCA minimums` means the local k3d nodes need
+  higher Linux `fs.inotify` limits. This does not change your macOS shell
+  limits. From the repository root, apply
+  `tools/ncp-local-cluster/apps/node-tuning/node-tuning.yaml`, wait for the
+  `node-tuning` DaemonSet in the `kube-system` namespace, then rerun
+  `nvcf-cli --config "${NVCF_CLI_CONFIG}" self-hosted check --pre`:
+
+  ```bash
+  kubectl apply -f tools/ncp-local-cluster/apps/node-tuning/node-tuning.yaml
+  kubectl -n kube-system rollout status ds/node-tuning --timeout=5m
+  ```
+
+  For non-local clusters, see
+  [Node inotify limits](./cluster-management/self-managed.md#node-inotify-limits).
+
+## See Also
+
+- [Local Development](./local-development.md) for local k3d variants and cleanup commands.
+- [Helmfile Installation](./helmfile-installation.md) for remote or manual control-plane installs.
+- [Self-Managed Clusters](./cluster-management/self-managed.md) for registering GPU clusters outside the local quickstart.
+- `src/clis/nvcf-cli/examples/` in this repository for sample CLI input files.

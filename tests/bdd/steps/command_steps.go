@@ -35,6 +35,7 @@ import (
 func registerCommandSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I run command "([^"]*)"$`, sc.iRunCommandLine)
 	ctx.Step(`^I run command:$`, sc.iRunCommandDoc)
+	ctx.Step(`^I run command with a terminal:$`, sc.iRunCommandWithTTYDoc)
 	ctx.Step(`^command has succeeded:$`, sc.commandHasSucceededDoc)
 	ctx.Step(`^I export command output to environment variable "([^"]*)"$`, sc.iExportCommandOutputToEnv)
 }
@@ -45,6 +46,15 @@ func (sc *ScenarioContext) iRunCommandLine(ctx context.Context, commandText stri
 
 func (sc *ScenarioContext) iRunCommandDoc(ctx context.Context, doc *godog.DocString) error {
 	return sc.runAndRecord(ctx, doc.Content)
+}
+
+// iRunCommandWithTTYDoc runs the docstring command with stdin attached to
+// a pseudo-terminal (Suite.Runner.RunWithTTY). It exists for commands that
+// only do the right thing when stdin is a terminal, such as
+// `nvcf-cli self-hosted up`, whose auth-gate mints the admin token after
+// installing the control plane only when a TTY is present.
+func (sc *ScenarioContext) iRunCommandWithTTYDoc(ctx context.Context, doc *godog.DocString) error {
+	return sc.runAndRecordWith(ctx, doc.Content, sc.Suite.Runner.RunWithTTY)
 }
 
 // commandHasSucceededDoc delegates to the shared cachedRun primitive
@@ -72,8 +82,17 @@ func (sc *ScenarioContext) commandHasSucceededDoc(ctx context.Context, doc *godo
 // non-zero exits (ExitCode > 0) ran the process and are left for the
 // assertion to inspect.
 func (sc *ScenarioContext) runAndRecord(ctx context.Context, commandText string) error {
+	return sc.runAndRecordWith(ctx, commandText, sc.Suite.Runner.Run)
+}
+
+// runAndRecordWith interpolates, executes via the supplied runner method
+// (Run or RunWithTTY), and stores the Result on the ScenarioContext so
+// later assertions can read it. The non-zero-exit-is-not-a-failure
+// contract documented on the When-form steps applies regardless of which
+// runner method is used.
+func (sc *ScenarioContext) runAndRecordWith(ctx context.Context, commandText string, run func(context.Context, string) (harness.Result, error)) error {
 	resolved := strings.TrimSpace(dsl.Interpolate(commandText))
-	result, err := sc.Suite.Runner.Run(ctx, resolved)
+	result, err := run(ctx, resolved)
 	sc.LastResult = result
 	sc.LastErr = err
 	sc.LastCommand = resolved

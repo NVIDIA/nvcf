@@ -37,6 +37,10 @@ func (r *recordingRunner) Run(_ context.Context, command string) (Result, error)
 	return r.nextResult, r.nextErr
 }
 
+func (r *recordingRunner) RunWithTTY(ctx context.Context, command string) (Result, error) {
+	return r.Run(ctx, command)
+}
+
 func TestResolveCleanupMode(t *testing.T) {
 	cases := map[string]struct {
 		envValue string

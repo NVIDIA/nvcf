@@ -47,6 +47,10 @@ func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, err
 	return f.result, f.err
 }
 
+func (f *fakeRunner) RunWithTTY(ctx context.Context, command string) (harness.Result, error) {
+	return f.Run(ctx, command)
+}
+
 func newScenarioContext(t *testing.T) (*ScenarioContext, *fakeRunner) {
 	t.Helper()
 	repoRoot := t.TempDir()
@@ -159,6 +163,24 @@ func TestIRunCommandRecordsResult(t *testing.T) {
 	}
 	if sc.LastResult.Stdout != "ok" {
 		t.Fatalf("last stdout = %q", sc.LastResult.Stdout)
+	}
+}
+
+// TestIRunCommandWithTTYDocRecordsResult verifies the pty-backed run form
+// wires through RunWithTTY and records the result like the plain docstring
+// form. The fake runner ignores the TTY and resolves identically.
+func TestIRunCommandWithTTYDocRecordsResult(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: "up ok"}
+	doc := &godog.DocString{Content: "nvcf-cli self-hosted --env local up --cluster-name ncp-local"}
+	if err := sc.iRunCommandWithTTYDoc(context.Background(), doc); err != nil {
+		t.Fatalf("run with terminal: %v", err)
+	}
+	if sc.LastResult.Stdout != "up ok" {
+		t.Fatalf("last stdout = %q", sc.LastResult.Stdout)
+	}
+	if len(fake.runs) != 1 || fake.runs[0].command != "nvcf-cli self-hosted --env local up --cluster-name ncp-local" {
+		t.Fatalf("recorded runs = %+v", fake.runs)
 	}
 }
 
@@ -418,7 +440,7 @@ func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 			RegisterAll(ctx, sc)
 		},
 		Options: &godog.Options{
-			Format:   "progress",
+			Format: "progress",
 			FeatureContents: []godog.Feature{
 				{Name: "smoke.feature", Contents: []byte(feature)},
 			},

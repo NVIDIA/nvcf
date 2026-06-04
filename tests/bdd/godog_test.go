@@ -49,6 +49,12 @@ func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, err
 	return harness.Result{ExitCode: 0}, nil
 }
 
+// RunWithTTY records and resolves identically to Run; the fake does not
+// allocate a pty.
+func (f *fakeRunner) RunWithTTY(ctx context.Context, command string) (harness.Result, error) {
+	return f.Run(ctx, command)
+}
+
 // newFakeRunner returns a runner pre-loaded with canned responses for
 // specific commands. Commands not in the map resolve to ExitCode 0
 // with empty streams. Pass nil for an all-zero-exit runner.
@@ -115,9 +121,8 @@ controlPlane:
 }
 
 // writeMulticlusterProfileHandoffArtifact seeds the profile that the
-// multi-cluster validate scenario reads. Endpoints carry the
-// nvcf-control-plane.test hostnames that the split-cluster install
-// produces.
+// multi-cluster validate scenario reads. Endpoints carry the localhost
+// hostnames emitted by the local split-cluster install.
 func writeMulticlusterProfileHandoffArtifact(t *testing.T, repoRoot string) {
 	t.Helper()
 	body := `apiVersion: nvcf.nvidia.com/v1alpha1
@@ -132,18 +137,18 @@ controlPlane:
       revalURL: http://reval.nvcf.svc.cluster.local:8080
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
     computeReachable:
-      icmsURL: http://sis.nvcf-control-plane.test:8080
-      revalURL: http://reval.nvcf-control-plane.test:8080
-      natsURL: nats://nats.nvcf-control-plane.test:4222
+      icmsURL: http://sis.localhost:8080
+      revalURL: http://reval.localhost:8080
+      natsURL: nats://nats.localhost:4222
   gateway:
     httpURL: http://api.localhost:8080
     grpcURL: grpc.localhost:10081
   hosts:
     api: api.localhost
     apiKeys: api-keys.localhost
-    sis: sis.nvcf-control-plane.test
-    reval: reval.nvcf-control-plane.test
-    nats: nats.nvcf-control-plane.test
+    sis: sis.localhost
+    reval: reval.localhost
+    nats: nats.localhost
     invocation: invocation.localhost
 `
 	writeArtifact(t, repoRoot, "control-plane-profile.yaml", body)
@@ -160,9 +165,9 @@ ncaID: nvcf-default
 region: us-west-1
 selfManaged:
   identitySource: psat
-  icmsServiceURL: http://sis.nvcf-control-plane.test:8080
-  revalServiceURL: http://reval.nvcf-control-plane.test:8080
-  natsURL: nats://nats.nvcf-control-plane.test:4222
+  icmsServiceURL: http://sis.localhost:8080
+  revalServiceURL: http://reval.localhost:8080
+  natsURL: nats://nats.localhost:4222
 `
 	writeArtifact(t, repoRoot, cluster+"-register-values.yaml", body)
 }
@@ -283,6 +288,48 @@ func TestSingleClusterUpFeatureFileWiresToSteps(t *testing.T) {
 	}
 }
 
+// TestSingleClusterUpOneClickFeatureFileWiresToSteps runs the
+// self-hosted up one-click feature against a fake CommandRunner. The
+// helm-list canned outputs carry --kube-context k3d-ncp-local so the
+// control-plane and nvca-operator json-rows assertions have something to
+// parse; the conflict-precheck k3d-get returns exit 1.
+func TestSingleClusterUpOneClickFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
+		"helm list -n nvca-operator --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
+		// Conflict precheck: feature asserts the multi-cluster
+		// control-plane is absent.
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+	}))
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "single-cluster-up-oneclick.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "single-cluster-up-oneclick-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "up --cluster-name ncp-local") {
+		t.Fatal("self-hosted up CLI command was never invoked")
+	}
+}
+
 // TestMultiClusterUpFeatureFileWiresToSteps runs multi-cluster-up.feature
 // against a fake CommandRunner, exercising the same handler chain as
 // the live run. The seeded handoff artifacts use the split-cluster
@@ -290,6 +337,8 @@ func TestSingleClusterUpFeatureFileWiresToSteps(t *testing.T) {
 func TestMultiClusterUpFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		// Conflict precheck: feature asserts the conflicting
 		// single-cluster is absent. Mimic k3d v5 "not found".
@@ -723,6 +772,16 @@ func TestMultiClusterUp(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "multi-cluster-up.feature")
+}
+
+// TestSingleClusterUpOneClick is the live entry point for the
+// self-hosted up one-click feature on a local k3d single cluster.
+// Skipped under -short.
+func TestSingleClusterUpOneClick(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "single-cluster-up-oneclick.feature")
 }
 
 // TestSingleClusterHelmfile is the live entry point for the helmfile

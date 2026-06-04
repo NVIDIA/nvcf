@@ -17,9 +17,9 @@ API-compliant controller that supports the requirements below.
 
 ## Gateway quickstart
 
-Use this quickstart before any remote deployment path that needs NVCF services
-reachable through Gateway API, including one-click CLI, Helmfile, and standalone
-Helm chart installation.
+Use this procedure before any remote deployment path that needs NVCF services
+reachable through Gateway API, including Helmfile and standalone Helm chart
+installation.
 
 Skip this section for local k3d flows that already create the local Gateway and
 route hostnames.
@@ -166,16 +166,16 @@ HTTPS.
 
 | Install path | Gateway values to use |
 | --- | --- |
-| [Quickstart](./quickstart.md) | Complete [Configure the CLI for one-click](./gateway-routing.md#configure-the-cli-for-one-click), then run `nvcf-cli self-hosted up`. |
+| [Quickstart](./quickstart.md) | Do not use these remote Gateway values. The quickstart uses local k3d route hostnames. |
 | [Helmfile Installation](./helmfile-installation.md) | Use `GATEWAY_ADDR` as `global.domain`, and set `ingress.gatewayApi.gateways` to the Gateway names, namespaces, and listener names from Gateway quickstart. |
 | [Standalone Gateway](./standalone-gateway.md) | Use `GATEWAY_ADDR` as `nvcfGatewayRoutes.domain`, and set `nvcfGatewayRoutes.gateways` to the Gateway names and namespaces from Gateway quickstart. |
 
-## Configure the CLI for one-click
+## Configure the CLI for Gateway access
 
-For one-click installs on remote clusters, configure the CLI before running
-`nvcf-cli self-hosted up`. The command installs the control plane and then
-immediately calls API, API Keys, invocation, and gRPC endpoints during health
-and cluster registration phases.
+For remote Helmfile or standalone deployments, configure the CLI after Gateway
+API ingress is available. The CLI calls API, API Keys, invocation, and gRPC
+endpoints during token minting, cluster registration, health checks, and
+function operations.
 
 ```bash
 export CLUSTER_NAME="nvcf-remote"

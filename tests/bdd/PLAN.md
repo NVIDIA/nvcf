@@ -111,6 +111,7 @@ refactor in every consumer; that is a feature.
 |------|-------|
 | `When I run command {string}` | Single-line command. `${VAR}` expansion applies. Captures exit code + stdout + stderr in scenario state. The most recent run is the one assertions reference. |
 | `When I run command:` (docstring) | Multi-line form for commands that don't fit on one line. Same recording semantics. |
+| `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
 
 ### Assertions (Then / And)

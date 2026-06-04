@@ -12,21 +12,52 @@ The NVCF Self-hosted CLI provides:
 - gRPC Invocation: Native support for gRPC function invocation
 - Shell Completion: Autocompletion for bash, zsh, fish, and PowerShell
 
-<Note>
-The CLI is available as a container image from NGC. See [self-hosted-artifact-manifest](./manifest.md) for the full artifact path.
-
-</Note>
-
 ## Prerequisites
 
 - Network access to NVCF API endpoints
-- [NGC CLI installed](https://org.ngc.nvidia.com/setup/installers/cli) (for downloading the CLI release from NGC)
+- A source checkout with Bazel/Bazelisk when you build from the repository
+- [NGC CLI installed](https://org.ngc.nvidia.com/setup/installers/cli) when you download the CLI release from NGC
 
 ## Installation
 
+You can build `nvcf-cli` from this repository or download a packaged CLI release
+from NGC. Use the source build when you are validating local changes or running
+the local k3d quickstart from a repository checkout.
+
+### Build from the repository
+
+Run the build from the repository root:
+
+```bash
+bazel build //src/clis/nvcf-cli:nvcf-cli
+```
+
+The binary is written to:
+
+```text
+bazel-bin/src/clis/nvcf-cli/nvcf-cli_/nvcf-cli
+```
+
+Install it on your `PATH`:
+
+```bash
+install -m 0755 \
+  bazel-bin/src/clis/nvcf-cli/nvcf-cli_/nvcf-cli \
+  /usr/local/bin/nvcf-cli
+```
+
+If your environment cannot reach the configured Bazel remote cache, disable the
+remote cache for this build:
+
+```bash
+bazel build --remote_cache= //src/clis/nvcf-cli:nvcf-cli
+```
+
 ### Download from NGC
 
-The CLI is available as a resource from NGC. See [download-nvcf-cli](./image-mirroring.md) for detailed download and extraction instructions.
+The CLI is available as a resource from NGC. See
+[download-nvcf-cli](./image-mirroring.md) for detailed download and extraction
+instructions.
 
 The downloaded package includes:
 
@@ -37,11 +68,15 @@ The downloaded package includes:
 
 ## Configuration
 
-The CLI uses YAML configuration files. After extracting the CLI, copy the included template:
+The CLI uses YAML configuration files. If you downloaded the packaged CLI, copy
+the included template:
 
 ```bash
 cp .nvcf-cli.yaml.template .nvcf-cli.yaml
 ```
+
+If you built the CLI from source, create `.nvcf-cli.yaml` from the examples
+below or from `src/clis/nvcf-cli/examples/config-dev.yaml`.
 
 Configuration files are searched in this order:
 
@@ -60,21 +95,21 @@ For self-hosted deployments, the CLI must be configured to communicate with
 your gateway. The gateway uses hostname-based routing for HTTP services.
 
 <Note>
-For a complete understanding of how the gateway routes traffic, including architecture diagrams, verification commands, and production DNS/HTTPS setup, see [gateway-routing](./gateway-routing.md).
+For Gateway routing details, including architecture diagrams, verification commands, and production DNS/HTTPS setup, see [gateway-routing](./gateway-routing.md).
 
 </Note>
 
 #### Prepare Gateway API ingress
 
-For one-click installs on a remote cluster, set up Gateway API ingress before
-running `self-hosted up`. The command installs the control plane, then calls
-the configured API, API Keys, invocation, and gRPC endpoints during health and
-cluster registration phases.
+For remote Helmfile or standalone deployments, set up Gateway API ingress
+before you configure the CLI. The CLI calls the configured API, API Keys,
+invocation, and gRPC endpoints during token minting, cluster registration,
+health checks, and function operations.
 
 Complete [Gateway quickstart](./gateway-routing.md#gateway-quickstart) before you
-configure the CLI. The shared Gateway quickstart installs the Gateway API CRDs,
-creates and labels the required namespaces, installs Envoy Gateway, creates the
-GatewayClass and Gateway, waits for the Gateway to be programmed, and exports:
+configure the CLI. That procedure installs the Gateway API CRDs, creates and
+labels the required namespaces, installs Envoy Gateway, creates the GatewayClass
+and Gateway, waits for the Gateway to be programmed, and exports:
 
 ```bash
 echo "$HTTP_GATEWAY_NAMESPACE/$HTTP_GATEWAY_NAME"
@@ -83,9 +118,9 @@ echo "$GATEWAY_ADDR"
 echo "$GRPC_GATEWAY_ADDR"
 ```
 
-These are the same Gateway setup steps used by the one-click, Helmfile, and
-standalone install paths. Keep the exported values in your shell, then configure
-the CLI.
+These are the same Gateway setup steps used by the Helmfile and standalone
+install paths. Keep the exported values in your shell, then configure the CLI.
+The local k3d quickstart uses local route hostnames instead.
 
 For test environments without production DNS, use the Gateway load balancer
 address as the stack domain:
@@ -373,31 +408,23 @@ Available scopes for API keys (all included by default):
 
 ### Self-hosted Deployment Commands
 
-Use these commands to install and inspect self-hosted NVCF deployments. For the full fresh-install walkthrough, see [Quickstart](./quickstart.md).
+Use these commands to install and inspect self-hosted NVCF deployments. For the local k3d installation flow, see [Quickstart](./quickstart.md).
 
 | Command | Description |
 | --- | --- |
 | `self-hosted check --pre` | Check local tools and Kubernetes access before installation. |
 | `self-hosted check --all` | Run all currently available self-hosted checks. Use this with pod, route, and function smoke validation. |
-| `self-hosted up --cluster-name <cluster-name> --nca-id <nca-id> --region <region>` | Run the one-click fresh-install flow. |
+| `self-hosted up --cluster-name <cluster-name> --nca-id <nca-id> --region <region>` | Run the local k3d fresh-install flow. |
 | `self-hosted status` | Show a deployment health summary. |
 | `self-hosted install --control-plane` | Run the control-plane installation primitive. |
 | `self-hosted install --compute-plane --cluster-name <cluster-name>` | Run the compute-plane installation primitive for a registered GPU cluster. |
 | `self-hosted uninstall --compute-plane --cluster-name <cluster-name>` | Remove compute-plane components for the GPU cluster. |
 | `self-hosted uninstall --control-plane` | Remove control-plane components. |
 
-For separate control-plane and GPU clusters, pass both kube contexts:
-
-```bash
-./nvcf-cli self-hosted up \
-  --control-plane-context <control-plane-context> \
-  --compute-plane-context <gpu-cluster-context> \
-  --cluster-name <cluster-name> \
-  --nca-id <nca-id> \
-  --region <region>
-```
-
-For a single cluster, omit both context flags.
+`self-hosted up` supports only a single local k3d cluster. It requires
+`--env local`, a current `k3d-*` kube context, and no split-context flags. For
+separate control-plane and GPU clusters, use the explicit control-plane and
+compute-plane install primitives with [Self-Managed Clusters](./cluster-management/self-managed.md).
 
 ### Cluster Registration
 
