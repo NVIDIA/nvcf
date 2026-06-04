@@ -54,6 +54,9 @@ spec:
             - name: http
               containerPort: {{ .Values.apikeys.service.port }}
               protocol: TCP
+            - name: management-port
+              containerPort: {{ .Values.apikeys.managementPort }}
+              protocol: TCP
           env:
             - name: POD_IP
               valueFrom:
@@ -63,6 +66,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "nv_api_keys.fullname" . }}-env
+          {{- end }}
+          {{- with .Values.apikeys.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.apikeys.livenessProbe }}
           livenessProbe:
