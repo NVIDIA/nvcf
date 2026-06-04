@@ -399,6 +399,80 @@ For separate control-plane and GPU clusters, pass both kube contexts:
 
 For a single cluster, omit both context flags.
 
+### Cluster Registration
+
+Self-managed GPU clusters must be registered with the control plane before the NVCA
+operator can start an agent. Registration records the GPU cluster's OIDC issuer and public
+JWKS with the control plane (ICMS) so the agent's projected service account tokens (PSAT)
+validate at runtime. The `cluster register` command performs this registration and prints
+the Helm values the operator install needs.
+
+<Note>
+`init` does double duty: it mints the admin token and discovers the control-plane issuer.
+Run `init` before `cluster register`. The one-click `self-hosted up` flow runs both
+internally.
+
+</Note>
+
+```bash
+# 1. Mint the admin token and discover the control-plane issuer
+./nvcf-cli init
+
+# 2. Register the GPU cluster (prints a summary and a Helm values block)
+./nvcf-cli cluster register \
+  --name <cluster-name> \
+  --nca-id <nca-id> \
+  --region <region> \
+  --icms-url "http://<GATEWAY_ADDR>" \
+  --ignore-existing
+```
+
+`cluster register` flags:
+
+| Flag | Description |
+| --- | --- |
+| `--name` | Cluster name (required) |
+| `--nca-id` | NCA/tenant ID (required) |
+| `--region` | Cluster region (default: `us-west-1`) |
+| `--icms-url` | SIS/ICMS endpoint URL the agent uses to reach the control plane |
+| `--nats-url` | NATS endpoint URL for the agent (optional) |
+| `--kubeconfig` | Path to the target GPU cluster kubeconfig (defaults to the current context) |
+| `--oidc-issuer-url` | OIDC issuer URL. Overrides auto-detection and skips SPIRE and Kubernetes discovery |
+| `--ignore-existing` | Return existing IDs instead of failing if the cluster is already registered |
+
+Issuer and JWKS discovery: `cluster register` detects the GPU cluster's OIDC issuer and
+fetches its public JWKS, then sends them to ICMS. Detection precedence:
+
+1. `--oidc-issuer-url` if provided (manual override).
+2. A SPIRE OIDC discovery service in the cluster, if present.
+3. The Kubernetes API server OIDC endpoint (default).
+
+The detected source is recorded as `identitySource` in the output: `psat` for the
+Kubernetes API server, `spire` for SPIRE, or `custom` for a manual issuer.
+
+Output: the command prints a summary (cluster group ID, cluster ID, OIDC issuer, region)
+followed by a `--- Helm values for nvca-operator ---` block. Copy that YAML block into a
+`<cluster-name>-register-values.yaml` file and pass it to the operator install. The values
+schema:
+
+```yaml
+clusterID: <uuid>
+clusterGroupID: <uuid>
+ncaID: <nca-id>
+region: <region>
+selfManaged:
+  identitySource: psat
+  icmsServiceURL: "http://<GATEWAY_ADDR>"
+  revalServiceURL: "http://<GATEWAY_ADDR>"
+  natsURL: "nats://<GATEWAY_ADDR>:4222"
+```
+
+For load-balancer-fronted gateways that route by hostname, add the matching host-header
+overrides (`selfManaged.icmsServiceHostHeaderOverride`,
+`selfManaged.revalServiceHostHeaderOverride`, `selfManaged.natsHostOverride`) to these
+values. See [self-managed-clusters](./cluster-management/self-managed.md) for how the
+register values feed the operator install and when host-header overrides are required.
+
 ### General Commands
 
 | Command | Description |

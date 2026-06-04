@@ -11,8 +11,8 @@ Use this path when you want the fastest route to a working deployment. Use the [
 1. Checks local tools and Kubernetes access.
 2. Resolves the self-managed stack bundle.
 3. Installs the control plane.
-4. Initializes CLI authentication.
-5. Registers the GPU cluster with SIS.
+4. Initializes CLI authentication and discovers the control-plane issuer.
+5. Registers the GPU cluster, recording its OIDC issuer and JWKS with the control plane.
 6. Installs the compute-plane components, including NVCA.
 7. Prints a final health summary.
 

@@ -438,6 +438,14 @@ The Envoy Gateway uses hostname-based routing to direct traffic to different bac
 
 Without the correct `Host` header, the gateway cannot match the request to an HTTPRoute and returns 404.
 
+<Note>
+The NVCA agent on a self-managed GPU cluster has the same requirement when it reaches the
+control plane through a load-balancer-fronted gateway. Configure its host-header overrides
+in the operator values, not the CLI config. See
+[self-managed-clusters](./cluster-management/self-managed.md).
+
+</Note>
+
 <Warning>
 Host header routing only works with plaintext HTTP traffic. Without TLS/SNI spoofing support in your client, you cannot use HTTPS with this method. The TLS handshake occurs before the Host header is sent, so the server cannot route based on a custom Host header when using HTTPS. For encrypted traffic, use proper DNS records as described in [production-dns-https](./gateway-routing.md).
 

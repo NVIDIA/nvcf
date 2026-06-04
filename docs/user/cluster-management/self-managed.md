@@ -1,8 +1,10 @@
 # Self-Managed Clusters
 
-GPU clusters are registered with the NVCF control plane using the NVCA Operator. The operator
-creates its configuration locally via Kubernetes ConfigMaps and authenticates through the
-local OpenBao (Vault) instance.
+GPU clusters are registered with the NVCF control plane using the `nvcf-cli`, then managed
+by the NVCA Operator. You register the cluster with the CLI (which discovers the cluster's
+OIDC issuer and public JWKS and records them with the control plane), then install the
+operator with the cluster identity the CLI returns. The operator reads that identity from a
+local ConfigMap and authenticates through the local OpenBao (Vault) instance.
 
 <Info>
 A running NVCF control plane (SIS, OpenBao, NATS, Cassandra, and all core services) is
@@ -20,7 +22,7 @@ Before installing the NVCA Operator, ensure the following prerequisites are met:
 
 - The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/getting-started.html) is installed on the GPU cluster. The GPU Operator manages the NVIDIA drivers, device plugin, and GPU feature discovery required for workload scheduling. For development or testing environments without physical GPUs, see [fake-gpu-operator](../fake-gpu-operator.md).
 
-- The [KAI Scheduler](./kai-scheduler.md) is installed on the GPU cluster. KAI Scheduler is required for optimized AI workload scheduling and bin-packing of GPU resources.
+- (Optional) The [KAI Scheduler](./kai-scheduler.md) can be installed on the GPU cluster for optimized AI workload scheduling and bin-packing of GPU resources. It is required only when you enable the `KAIScheduler` feature flag (see [Configuration](#configuration)).
 
 - `GPU Workload Components` must be available in a user-managed registry that your Kubernetes cluster can access. See `GPU Workload Components` under [self-hosted-artifact-manifest](../manifest.md) for necessary artifacts and [self-hosted-image-mirroring](../image-mirroring.md) for mirroring instructions.
 
@@ -36,24 +38,72 @@ Before installing the NVCA Operator, ensure the following prerequisites are met:
 
 ## How It Works
 
-When `ngcConfig.clusterSource` is set to `self-managed`, the NVCA Operator uses a local
-bootstrap process:
+When `ngcConfig.clusterSource` is set to `self-managed`, the cluster identity comes from the
+CLI registration step, and the operator consumes it:
 
-1. The Helm chart creates a **local ConfigMap** (`nvcfbackend-self-managed`) with cluster
-   configuration from your values file (name, region, capabilities, SIS endpoint).
-2. The `ngcConfig.serviceKey` field is required by the chart schema but **not used**. Set it
-   to any non-empty string.
-3. An **init container** (`nvca-self-managed-bootstrap`) runs before the operator starts.
-   It reads the vault-injected SIS JWT token and registers the cluster with the local SIS
-   service, writing the resulting `clusterId` and `clusterGroupId` to the
-   `nvca-cluster-registration` ConfigMap.
-4. The **operator** starts with the cluster already registered. It reads the IDs from the
-   ConfigMap and creates the NVCFBackend resource.
-5. The **NVCA agent** pod is created by the operator. It authenticates with SIS using a
-   vault-injected token and begins managing GPU workloads.
-6. Secrets (Cassandra credentials, registry pull secrets) are injected by the **OpenBao vault
-   agent** sidecar, which authenticates using Kubernetes service account JWT tokens against
-   the local OpenBao instance.
+1. You run `nvcf-cli cluster register` (see [Register the cluster](#register-the-cluster)).
+   The CLI discovers the GPU cluster's OIDC issuer and public JWKS, records them with the
+   control plane (ICMS), and returns the `clusterID`, `clusterGroupID`, identity source, and
+   service URLs as Helm values.
+2. You install the operator with those values. `clusterID` and `clusterGroupID` are required
+   in self-managed mode. The `ngcConfig.serviceKey` field is required by the chart schema but
+   not used; set it to any non-empty string.
+3. The Helm chart renders a local ConfigMap (`nvcfbackend-self-managed`) holding the cluster
+   identity and the SIS, ReVal, and NATS endpoints (plus any host-header overrides). The
+   operator reads that ConfigMap and creates the NVCFBackend resource.
+4. The operator creates the NVCA agent pod. The agent authenticates to the control plane
+   with a projected service account token (PSAT), which the control plane validates against
+   the issuer and JWKS registered in step 1, and begins managing GPU workloads.
+5. Secrets (Cassandra credentials, registry pull secrets) are injected by the OpenBao
+   vault-agent sidecar, which authenticates using Kubernetes service account JWT tokens
+   against the local OpenBao instance.
+
+## Register the cluster
+
+Register the GPU cluster with the control plane before installing the operator. The
+`nvcf-cli` discovers the cluster's OIDC issuer and JWKS and records them with the control
+plane, then returns the Helm values the operator needs. See [self-hosted-cli](../cli.md) for
+CLI installation and configuration, and the [Cluster Registration](../cli.md#cluster-registration)
+reference for full flag and output details.
+
+<Note>
+The control plane must expose its issuer for the CLI to discover. The Helmfile and
+standalone install paths enable this with `openbao.migrations.issuerDiscovery.enabled: true`
+(see [standalone-infrastructure](../standalone-infrastructure.md)).
+
+</Note>
+
+Point the CLI at your gateway, then run `init` followed by `cluster register`:
+
+```bash
+# init mints the admin token and discovers the control-plane issuer
+./nvcf-cli init
+
+# register the GPU cluster (run against the GPU cluster's kube context)
+./nvcf-cli cluster register \
+  --name <cluster-name> \
+  --nca-id <nca-id> \
+  --region <region> \
+  --icms-url "http://<GATEWAY_ADDR>" \
+  --ignore-existing
+```
+
+Copy the YAML printed under `--- Helm values for nvca-operator ---` into
+`<cluster-name>-register-values.yaml`. It carries the cluster identity and endpoints:
+
+```yaml
+clusterID: <uuid>
+clusterGroupID: <uuid>
+ncaID: <nca-id>
+region: <region>
+selfManaged:
+  identitySource: psat
+  icmsServiceURL: "http://<GATEWAY_ADDR>"
+  revalServiceURL: "http://<GATEWAY_ADDR>"
+  natsURL: "nats://<GATEWAY_ADDR>:4222"
+```
+
+You pass this file to the operator install alongside your `nvca-operator-values.yaml`.
 
 ## Installing the NVCA Operator
 
@@ -115,11 +165,19 @@ Key values:
 | --- | --- |
 | `ngcConfig.serviceKey` | Required by the chart but not used. Set to any non-empty string. |
 | `selfManaged.nvcaVersion` | The NVCA agent container version to deploy |
-| `selfManaged.featureGateValues` | Feature flags. `DynamicGPUDiscovery` enables automatic GPU detection. `SelfHosted` enables local vault-based auth. |
+| `selfManaged.featureGateValues` | Feature flags. `DynamicGPUDiscovery` enables automatic GPU detection. `SelfHosted` enables local vault-based auth. `KAIScheduler` is optional (see warning below). |
 | `selfManaged.imageCredHelper` | Image credential helper sidecar (enables function pods to pull from private registries) |
 | `selfManaged.sharedStorage` | Samba sidecar for shared model cache storage |
 
 If you are using node selectors, uncomment the `nodeSelector` section.
+
+<Warning>
+The `KAIScheduler` feature flag is optional. Enable it only if the
+[KAI Scheduler](./kai-scheduler.md) is installed on the GPU cluster. The flag has no effect,
+and GPU workload scheduling will not work as expected, if KAI Scheduler is not present. Omit
+`KAIScheduler` from `featureGateValues` when KAI Scheduler is not installed.
+
+</Warning>
 
 <Note>
 For the full list of available feature flags and how to set or modify them, see
@@ -250,49 +308,78 @@ The operator propagates this secret to all namespaces it manages (`nvca-system`,
 
 ### Install
 
+Install with both your `nvca-operator-values.yaml` and the
+`<cluster-name>-register-values.yaml` produced in [Register the cluster](#register-the-cluster).
+The register values supply the required `clusterID` and `clusterGroupID`:
+
 ```bash
 helm upgrade --install nvca-operator \
   oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator \
   --namespace nvca-operator --create-namespace \
   --wait --timeout 10m \
   -f nvca-operator-values.yaml \
+  -f <cluster-name>-register-values.yaml \
   --version 1.12.0
 ```
 
 During installation, the chart will:
 
-1. Create the operator deployment with vault agent annotations for OpenBao auth
-2. Run the `nvca-self-managed-bootstrap` init container to register the cluster with SIS
-3. Start the operator, which creates the NVCFBackend and NVCA agent deployment
+1. Create the operator deployment with vault agent annotations for OpenBao auth.
+2. Render the `nvcfbackend-self-managed` ConfigMap from the register values (cluster
+   identity, SIS/ReVal/NATS endpoints, and any host-header overrides).
+3. Start the operator, which reads the ConfigMap and creates the NVCFBackend and NVCA agent
+   deployment.
+
+### Load-balancer-fronted gateways (host-header overrides)
+
+When the agent reaches the control plane through a single load balancer with hostname-based
+gateway routing (for example a cloud load balancer that exposes one address for all
+services), the bare load balancer address resolves in DNS but does not match any gateway
+HTTPRoute on its own. The agent dials the service URL and sends that URL's host as the HTTP
+`Host` header, so the host must match the route.
+
+Set host-header overrides so the agent keeps dialing the resolvable load balancer address
+while sending the route-matching `Host` header. Add these to your register values (or
+`nvca-operator-values.yaml`) under `selfManaged`:
+
+```yaml
+selfManaged:
+  icmsServiceURL: "http://<GATEWAY_ADDR>"
+  icmsServiceHostHeaderOverride: "sis.<GATEWAY_ADDR>"
+  revalServiceURL: "http://<GATEWAY_ADDR>"
+  revalServiceHostHeaderOverride: "reval.<GATEWAY_ADDR>"
+  natsURL: "nats://<GATEWAY_ADDR>:4222"
+  natsHostOverride: "nats.<GATEWAY_ADDR>"
+```
+
+<Note>
+Host-header overrides require `helm-nvca-operator` 1.12.0 or later. With proper per-service
+DNS and TLS (see [gateway-routing](../gateway-routing.md)), the service hostnames resolve
+directly and no host-header overrides are needed.
+
+</Note>
 
 ### Verify
 
-Check the operator pod is running (4 containers: operator, nvca-mirror, nvca-bootstrap-watch, vault-agent):
+Check the operator pod is running. The pod runs the operator, the `nvca-mirror` sidecar, and
+the OpenBao vault-agent sidecar (and a `cluster-validator` init container when network
+validation is enabled):
 
 ```bash
 kubectl get pods -n nvca-operator
 
 # Expected:
 # NAME                             READY   STATUS    RESTARTS   AGE
-# nvca-operator-...                4/4     Running   0          1m
+# nvca-operator-...                Running 0          1m
 ```
 
-Check the bootstrap init container completed successfully:
+Check the cluster identity ConfigMap was rendered from the register values:
 
 ```bash
-kubectl logs -n nvca-operator -c nvca-self-managed-bootstrap \
-  -l app.kubernetes.io/name=nvca-operator --tail=5
+kubectl get cm nvcfbackend-self-managed -n nvca-operator \
+  -o jsonpath='{.data.cluster-dto\.yaml}'
 
-# Expected: "Bootstrap completed successfully" with cluster_id and cluster_group_id
-```
-
-Check the cluster registration ConfigMap has IDs populated:
-
-```bash
-kubectl get cm nvca-cluster-registration -n nvca-operator \
-  -o jsonpath='{.data}'
-
-# Expected: {"clusterGroupId":"<uuid>","clusterId":"<uuid>"}
+# Expected: cluster-dto.yaml with non-empty clusterId and clusterGroupId
 ```
 
 Check the NVCFBackend resource was created:
@@ -449,47 +536,25 @@ You can also use the **NVCF CLI** for easier function management:
 
 See [self-hosted-cli](../cli.md) for installation and usage instructions.
 
-## Manual Cluster Registration
+## Re-registering a cluster
 
-The cluster bootstrap runs automatically as an init container during `helm install`. If
-you need to re-run registration (for example, after a failed install or to update the
-cluster registration), you can invoke the bootstrap CLI directly from the running operator
-pod:
-
-```bash
-kubectl exec -n nvca-operator deploy/nvca-operator -c nvca-operator -- \
-  /usr/bin/nvca-self-managed bootstrap --system-namespace nvca-operator
-```
-
-This command:
-
-- Reads the cluster config from the `nvcfbackend-self-managed` ConfigMap
-- Authenticates with SIS using the vault-injected JWT token
-- Registers the cluster (or re-discovers an existing registration)
-- Updates the `nvca-cluster-registration` ConfigMap with the cluster IDs
-
-After manual registration, **restart the operator** so it re-reads the updated ConfigMap.
-The operator caches the cluster IDs at startup and does not watch the bootstrap ConfigMap
-for changes, so a restart is required:
+Registration is performed by the CLI, not by the operator. To re-register (for example,
+after a failed install, or to refresh the recorded issuer and JWKS), re-run the CLI and
+re-apply the operator with the refreshed register values:
 
 ```bash
-kubectl rollout restart deployment nvca-operator -n nvca-operator
+./nvcf-cli init
+./nvcf-cli cluster register \
+  --name <cluster-name> \
+  --nca-id <nca-id> \
+  --region <region> \
+  --icms-url "http://<GATEWAY_ADDR>" \
+  --ignore-existing
 ```
 
-Wait for the operator to come back up (the bootstrap init container will run again and
-confirm the existing registration), then verify the agent starts successfully:
-
-```bash
-kubectl rollout status deployment nvca-operator -n nvca-operator --timeout=120s
-kubectl get pods -n nvca-system
-```
-
-<Warning>
-Simply annotating the NVCFBackend to force a rollout is **not sufficient** after manual
-registration. The operator must be restarted to pick up the new cluster IDs from the
-ConfigMap.
-
-</Warning>
+Copy the refreshed Helm values into `<cluster-name>-register-values.yaml`, then re-run the
+`helm upgrade --install` from [Install](#install) with the updated file. The operator reads
+the cluster identity at startup, so re-running the upgrade restarts it with the new values.
 
 ## Uninstalling
 
@@ -525,19 +590,13 @@ deletion. If you encounter stuck resources, see [Handling Stuck Resources] below
    ```
 
    <Note>
-   Helm will report that the `nvca-cluster-registration` ConfigMap was
-   kept due to resource policy. This is intentional because it preserves the cluster registration
-   IDs so that a reinstall can reuse them. Delete it manually if you want a completely
-   clean removal.
+   The cluster identity (`clusterID` and `clusterGroupID`) persists in the control plane
+   (ICMS) and in your `<cluster-name>-register-values.yaml`. A reinstall reuses it by
+   re-applying that file. Pass `--ignore-existing` to `cluster register` if you re-register.
+
    </Note>
 
-4. **Clean up the retained ConfigMap** (optional: skip if you plan to reinstall):
-
-   ```bash
-   kubectl delete cm nvca-cluster-registration -n nvca-operator --ignore-not-found
-   ```
-
-5. **Delete CRDs** (removes all NVCFBackend, MiniService, and StorageRequest custom resources
+4. **Delete CRDs** (removes all NVCFBackend, MiniService, and StorageRequest custom resources
    cluster-wide):
 
    ```bash
@@ -548,7 +607,7 @@ deletion. If you encounter stuck resources, see [Handling Stuck Resources] below
      --ignore-not-found
    ```
 
-6. **Delete namespaces**:
+5. **Delete namespaces**:
 
    ```bash
    kubectl delete namespace nvca-operator nvca-system nvca-modelcache-init --ignore-not-found
@@ -580,17 +639,14 @@ Cleanup Script appendix in the self-hosted troubleshooting guide.
 
 ## Troubleshooting
 
-- **Bootstrap init container failed**: Check the bootstrap logs to see why registration
-  failed:
+- **Cluster IDs empty in the ConfigMap after install**: The register values were not
+  applied. Confirm `<cluster-name>-register-values.yaml` was passed to `helm upgrade` and
+  that its `clusterID` and `clusterGroupID` are populated, then re-run the install:
 
   ```bash
-  kubectl logs -n nvca-operator -c nvca-self-managed-bootstrap \
-    -l app.kubernetes.io/name=nvca-operator
+  kubectl get cm nvcfbackend-self-managed -n nvca-operator \
+    -o jsonpath='{.data.cluster-dto\.yaml}'
   ```
-
-- **ConfigMap shows empty cluster IDs after install**: The vault token may not have been
-  available when the init container ran. Run the bootstrap manually (see
-  [Manual Cluster Registration] above).
 
 - **Operator pod not starting**: Check the operator logs:
 
@@ -609,10 +665,11 @@ Cleanup Script appendix in the self-hosted troubleshooting guide.
   kubectl describe nvcfbackends -n nvca-operator
   ```
 
-- **Agent fails to register with SIS (HTTP 401)**: Check the bootstrap registration
-  ConfigMap for populated cluster IDs. If they are empty, run the bootstrap manually.
-  Also verify the vault agent sidecar on the agent pod is running and rendering the
-  secrets file:
+- **Agent fails to register with SIS (HTTP 401)**: The control plane could not validate the
+  agent's PSAT against the recorded issuer and JWKS. Re-run `nvcf-cli cluster register` for
+  the cluster (see [Re-registering a cluster](#re-registering-a-cluster)) so ICMS has the
+  current issuer and JWKS. Also verify the vault agent sidecar on the agent pod is running
+  and rendering the secrets file:
 
   ```bash
   kubectl logs -n nvca-system -l app.kubernetes.io/name=nvca -c vault-agent --tail=10
