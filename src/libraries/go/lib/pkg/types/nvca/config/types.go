@@ -568,6 +568,8 @@ type ClusterIssuedTokenSource string
 const (
 	// ClusterIssuedTokenSourcePSAT configures the agent to use the projected service account token authz path.
 	ClusterIssuedTokenSourcePSAT ClusterIssuedTokenSource = "psat"
+
+	ClusterIssuedTokenSourceNone ClusterIssuedTokenSource = "none"
 )
 
 type AuthzConfig struct {

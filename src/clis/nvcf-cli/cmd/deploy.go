@@ -94,7 +94,7 @@ Note: gpu, instanceType, backend, clusters, availabilityZones, preferredOrder,
 and maxRequestConcurrency are immutable on an existing GPU spec and cannot be
 changed here.
 
-Authentication: Requires NVCF_TOKEN (JWT) with admin:deploy_function scope.`,
+Authentication: Requires NVCF_TOKEN or NVCF_API_KEY with deploy_function scope.`,
 	RunE: runDeployUpdate,
 }
 
@@ -142,7 +142,7 @@ Examples:
   # Get deployment details in JSON format
   nvcf-cli function deploy get --function-id <id> --version-id <version> --json
 
-Authentication: Requires NVCF_TOKEN (JWT) with deploy_function scope.`,
+Authentication: Requires NVCF_TOKEN or NVCF_API_KEY with deploy_function scope.`,
 	RunE: runDeployGet,
 }
 

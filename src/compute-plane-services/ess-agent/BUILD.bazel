@@ -74,9 +74,10 @@ go_test(
 )
 
 # Multi-arch OCI image. Distroless/go base, binary at /usr/bin/ess-agent.
-# Build/load/index/tar targets live here. The internal NGC publish lanes
-# (kaze, nv-ngc-devops, ncp-dev) are defined under //nvidia-internal:*
-# so the registry coordinates stay out of the public OSS snapshot.
+# Build/load/index/tar targets live here. Release publishing is owned
+# by the private release repo: source CI pushes :image_index to a
+# staging registry and emits release-manifest.json; the private repo
+# copies the digest by reference to the production NVCR destinations.
 go_oci_image(
     name = "image",
     base = "@distroless_go",

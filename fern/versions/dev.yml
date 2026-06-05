@@ -109,8 +109,6 @@ navigation:
     contents:
       - page: API
         path: ../../docs/user/api.md
-      - page: Service Keys
-        path: ../../docs/user/service-keys.md
       - page: Function Creation
         path: ../../docs/user/function-creation.md
       - page: LLM Gateway
@@ -286,6 +284,8 @@ navigation:
             path: ../../docs/ngc-managed/cluster-management/kai-scheduler.md
       - page: Function Lifecycle
         path: ../../docs/ngc-managed/function-lifecycle.md
+      - page: Service Keys
+        path: ../../docs/ngc-managed/service-keys.md
       - page: Observability
         slug: managed-observability
         path: ../../docs/ngc-managed/observability.md

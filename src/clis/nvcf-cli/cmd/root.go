@@ -67,13 +67,16 @@ Template file: .nvcf-cli.yaml.template (copy to .nvcf-cli.yaml and customize)
 Authentication:
 
 Generate tokens or use existing credentials:
-  NVCF_API_KEY (for user operations: list, invoke, queue details)
-  NVCF_TOKEN (for admin operations: create, deploy, delete)
+  NVCF_API_KEY (default for list, invoke, queue details)
+  NVCF_TOKEN (default for create, deploy, delete, and cluster management)
+
+For NVCF API endpoints, either bearer type can be used when it includes the
+required scope. Self-hosted SIS cluster management uses NVCF_TOKEN.
 
 Token Generation:
   Run: nvcf-cli init
   - Calls API Keys service directly (no kubectl needed!)
-  - Stores tokens in ~/.nvcf-cli-state.json
+  - Stores tokens in ~/.nvcf-cli.state
   - Works with both production and staging environments
 
 API Endpoints:

@@ -376,6 +376,24 @@ build_find_prune() {
     echo -n " ) -prune -o"
 }
 
+path_has_skipped_dir_component() {
+    local filepath="$1"
+    local rel_path component skip_dir
+    local -a path_components
+
+    [[ "${filepath}" == "${REPO_ROOT}/"* ]] || return 1
+    rel_path="${filepath#"${REPO_ROOT}"/}"
+
+    IFS='/' read -r -a path_components <<< "${rel_path}"
+    for component in "${path_components[@]}"; do
+        for skip_dir in "${SKIP_DIR_NAMES[@]}"; do
+            [[ "${component}" == "${skip_dir}" ]] && return 0
+        done
+    done
+
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -473,6 +491,12 @@ unset 'PRUNE_ARGS[${#PRUNE_ARGS[@]}-1]'
 
 while IFS= read -r filepath; do
     [[ -z "${filepath}" ]] && continue
+
+    # `find -name vendor -prune` does not catch targeted scans rooted below
+    # vendor, so apply skipped directory names to each discovered file too.
+    if path_has_skipped_dir_component "${filepath}"; then
+        continue
+    fi
 
     name="${filepath##*/}"
 

@@ -484,6 +484,41 @@ HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra sync
 ```
 </Accordion>
 
+#### Worker Image Version Overrides
+
+The NVCF API uses the worker image versions in its `nvcf.sidecars.*`
+configuration. To pin worker sidecars for one Helmfile deployment, add an inline
+remote-config override to the `api` release in `helmfile.d/02-core.yaml.gotmpl`:
+
+```yaml
+- name: api
+  version: 1.19.3
+  namespace: nvcf
+  inherit:
+    - template: service
+  values:
+    - ../global.yaml.gotmpl
+    - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
+    - api:
+        remoteConfig:
+          enabled: true
+          configData:
+            nvcf:
+              sidecars:
+                init-container: "${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_init:<tag>"
+                utils-container-image:
+                  go: "${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_utils:<tag>"
+                niclls-container: "${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_niclls:<tag>"
+  needs:
+    - ess/ess-api
+```
+
+The `${nvcf.sidecars.hostname}` and `${nvcf.sidecars.repository}` placeholders
+resolve from the stack image registry and repository settings. Re-include
+`global.yaml.gotmpl` and the secrets file because defining `values` on the
+release replaces the inherited `values` list. Keep the existing `needs` entry on
+the release.
+
 ### Step 3. Configure your secrets file (`secrets/<environment-name>-secrets.yaml`)
 
 Secrets configuration contains any sensitive data required for NVCF operation. The image pull secret credentials you insert here will be used to bootstrap the NVCF API with registry credentials for all worker components (function sidecars), function containers and helm charts.

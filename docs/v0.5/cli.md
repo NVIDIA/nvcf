@@ -331,7 +331,7 @@ Refresh your token while preserving function context:
 ./nvcf-cli api-key generate --validate
 ```
 
-Available scopes for API keys (all included by default):
+Default API key scopes:
 
 | Scope | Description |
 | --- | --- |
@@ -339,7 +339,6 @@ Available scopes for API keys (all included by default):
 | `list_functions` | View available functions |
 | `list_functions_details` | View detailed function metadata |
 | `queue_details` | Monitor function execution queues |
-| `manage_registries` | Manage registry credentials |
 
 ## Command Reference
 

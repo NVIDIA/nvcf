@@ -42,6 +42,20 @@ guidance should only record subtree-specific ownership exceptions, adjacent
 subtrees that commonly need follow-up, and commands that must be run from that
 subtree.
 
+## OSS Snapshot Hygiene
+
+Treat every file matched by the root or nested `.oss-allowlist` files as public
+GitHub content. Do not add private tracker IDs, private bug IDs, private
+merge-request links or ref names, internal hostnames or URLs, private service
+names, registry endpoints, vault endpoints, or debugging context that external
+readers cannot access.
+
+Keep private context in `nvidia-internal/`, in the internal Merge
+Request/Pull Request description outside the public commit section, or in a
+non-allowlisted runbook. If a change requires public wording, generalize it to
+the user-visible behavior and remove the private evidence trail from the
+allowlisted file.
+
 ## Local QA and Testing Environment Safety
 
 For new local QA and testing, including one-click or self-hosted install
@@ -130,15 +144,22 @@ When adding a skill:
 
 ### Where hooks live
 
-Hooks follow the same source-and-fanout pattern as root dev skills:
+Hooks follow the same source-and-fanout pattern as root dev skills. The root
+hook directories are agent-facing fanouts only; hook implementation scripts
+must live in their owning public or private source tree.
 
 - `ai-tooling/dev/hooks/`: public hook source scripts.
-- Private hook source scripts live in the private `dev/hooks/` source tree.
 - `.cursor/hooks/`: Cursor hook script fanout only. Entries must be symlinks.
 - `.codex/hooks/`: Codex hook script fanout only. Entries must be symlinks.
 - `.claude/hooks/`: Claude hook script fanout only. Entries must be symlinks.
 
 Tool-specific hook config files, such as `.cursor/hooks.json`, `.codex/hooks.json`, `.codex/config.toml`, and `.claude/settings.json`, may be regular files. Hook implementation scripts must live in a public or private `dev/hooks/` source tree and be exposed through matching symlinks in all three root hook fanouts.
+
+Internal checkouts may configure stop hooks that audit fanout integrity and
+newly added private references in OSS-allowlisted files. If a hook reports
+public snapshot hygiene findings, remove or rewrite those additions before
+finishing. If the hook is unavailable in a public snapshot, still follow the
+OSS Snapshot Hygiene policy manually.
 
 ### Public skills
 

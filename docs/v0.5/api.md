@@ -32,47 +32,130 @@ All API endpoints include versioning in the path prefix.
 
 ## Authorization
 
-The NVCF API supports API key-based authorization. API keys can be generated using the [CLI](./cli.md) or directly via the API Keys service endpoint.
+Self-hosted NVCF uses two bearer credential types:
 
-### Generate an API Key
+| Credential | CLI source | Typical use |
+| --- | --- | --- |
+| `NVCF_TOKEN` | `nvcf-cli init` | Default CLI credential for management operations and self-hosted cluster management |
+| `NVCF_API_KEY` | `nvcf-cli api-key generate` | Default CLI credential for function invocation, function discovery, and queue status |
 
-API keys can be generated using the [CLI](./cli.md) or directly via the API Keys service. There are two types of API keys:
-
-**Using the CLI**
-
-The simplest way to generate an API key is via the [CLI](./cli.md):
+Both credential types are sent as bearer credentials:
 
 ```bash
-nvcf-cli api-key create
+Authorization: Bearer <credential>
 ```
 
-Refer to the [CLI documentation](./cli.md) for full usage and additional token generation options.
-
-**Admin Token**
-
-An admin token provides full access to all NVCF API endpoints. This is useful for initial setup, managing functions, and administrative tasks.
+Use the CLI for normal credential management:
 
 ```bash
-export GATEWAY_ADDR=<your-gateway-address>
-
-export NVCF_TOKEN=$(curl -s -X POST "http://${GATEWAY_ADDR}/v1/admin/keys" \
-  -H "Host: api-keys.${GATEWAY_ADDR}" \
-  | grep -o '"value":"[^"]*"' | cut -d'"' -f4)
-
-echo "Token generated: ${NVCF_TOKEN:0:20}..."
+nvcf-cli init
+nvcf-cli api-key generate
 ```
 
-**Scoped API Key**
-
-A scoped API key restricts access to specific operations and resources. This is recommended for application use, such as invoking functions.
+`nvcf-cli init` calls the API Keys admin endpoint and mints the JWT used as
+`NVCF_TOKEN`. The CLI saves the token in `~/.nvcf-cli.state` for the default
+configuration and reads it automatically on later commands. Export it only when
+you are making direct API calls or using tooling that reads environment
+variables:
 
 ```bash
+export NVCF_TOKEN=$(jq -r .token ~/.nvcf-cli.state)
+```
+
+The default self-hosted admin issuer role gives this token the following
+scopes:
+
+- `register_function`
+- `list_functions`
+- `list_functions_details`
+- `deploy_function`
+- `update_function`
+- `update_secrets`
+- `delete_function`
+- `manage_telemetries`
+- `manage_registry_credentials`
+- `cluster-management`
+
+The API key command creates a key with these default scopes:
+
+- `invoke_function`
+- `list_functions`
+- `queue_details`
+- `list_functions_details`
+
+NVCF API authorization is scope-based. For the NVCF API endpoints below, either
+`NVCF_TOKEN` or `NVCF_API_KEY` can be used if that bearer includes the required
+scope. The CLI prefers `NVCF_API_KEY` for read, invoke, and queue commands. It
+prefers `NVCF_TOKEN` for management commands when both credentials are
+configured.
+
+Pass `--scopes` when you need to narrow a key or create a key with management
+scopes for testing.
+
+### Scope reference
+
+The OpenAPI spec describes the permission checked for each endpoint. "Accepted
+bearer" means which saved CLI credential type can be sent as
+`Authorization: Bearer <credential>` when it includes the listed scope.
+
+| Category | Method and endpoint | Accepted bearer | Scope |
+| --- | --- | --- | --- |
+| Function invocation | `POST /v2/nvcf/pexec/functions/{functionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `invoke_function` |
+| Function invocation | `POST /v2/nvcf/pexec/functions/{functionId}/versions/{versionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `invoke_function` |
+| Function invocation | `GET /v2/nvcf/pexec/status/{requestId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `invoke_function` |
+| Queue details | `GET /v2/nvcf/queues/{requestId}/position` | `NVCF_TOKEN` or `NVCF_API_KEY` | `queue_details` |
+| Queue details | `GET /v2/nvcf/queues/functions/{functionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `queue_details` |
+| Queue details | `GET /v2/nvcf/queues/functions/{functionId}/versions/{versionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `queue_details` |
+| Function management | `GET /v2/nvcf/functions` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions` or `list_functions_details` |
+| Function management | `GET /v2/nvcf/functions/ids` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions` or `list_functions_details` |
+| Function management | `POST /v2/nvcf/functions` | `NVCF_TOKEN` or `NVCF_API_KEY` | `register_function` |
+| Function management | `GET /v2/nvcf/functions/{functionId}/versions` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions` or `list_functions_details` |
+| Function management | `POST /v2/nvcf/functions/{functionId}/versions` | `NVCF_TOKEN` or `NVCF_API_KEY` | `register_function` |
+| Function management | `GET /v2/nvcf/functions/{functionId}/versions/{functionVersionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions` or `list_functions_details` |
+| Function management | `PUT /v2/nvcf/functions/{functionId}/versions/{functionVersionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `update_function` |
+| Function management | `DELETE /v2/nvcf/functions/{functionId}/versions/{functionVersionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `delete_function` |
+| Function management | `PUT /v2/nvcf/metadata/functions/{functionId}/versions/{functionVersionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `update_function` |
+| Function deployment | `GET /v2/nvcf/deployments/functions/{functionId}/versions/{functionVersionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `deploy_function` |
+| Function deployment | `POST /v2/nvcf/deployments/functions/{functionId}/versions/{functionVersionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `deploy_function` |
+| Function deployment | `PUT /v2/nvcf/deployments/functions/{functionId}/versions/{functionVersionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `deploy_function` |
+| Function deployment | `DELETE /v2/nvcf/deployments/functions/{functionId}/versions/{functionVersionId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `deploy_function` |
+| Function deployment | `GET /v2/nvcf/deployments/{deploymentId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `deploy_function` |
+| Function deployment | `PATCH /v2/nvcf/deployments/{deploymentId}/gpu-specifications/{gpuSpecId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `deploy_function` |
+| Registry credential management | `GET /v2/nvcf/registry-credentials` | `NVCF_TOKEN` or `NVCF_API_KEY` | `manage_registry_credentials` |
+| Registry credential management | `POST /v2/nvcf/registry-credentials` | `NVCF_TOKEN` or `NVCF_API_KEY` | `manage_registry_credentials` |
+| Registry credential management | `GET /v2/nvcf/registry-credentials/{registryCredentialId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `manage_registry_credentials` |
+| Registry credential management | `PATCH /v2/nvcf/registry-credentials/{registryCredentialId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `manage_registry_credentials` |
+| Registry credential management | `DELETE /v2/nvcf/registry-credentials/{registryCredentialId}` | `NVCF_TOKEN` or `NVCF_API_KEY` | `manage_registry_credentials` |
+| Registry credential management | `GET /v2/nvcf/recognized-registries` | `NVCF_TOKEN` or `NVCF_API_KEY` | `manage_registry_credentials` |
+
+Self-hosted cluster management uses SIS endpoints from the Spot API. In
+self-hosted CLI workflows, use `NVCF_TOKEN` with the `cluster-management` scope
+for these endpoints.
+
+| Method and endpoint | Accepted bearer | Scope |
+| --- | --- | --- |
+| `GET /v1/accounts/{ncaId}/clusters` | `NVCF_TOKEN` | `cluster-management` |
+| `POST /v1/accounts/{ncaId}/clusters` | `NVCF_TOKEN` | `cluster-management` |
+| `GET /v1/accounts/{ncaId}/clusters/{clusterId}` | `NVCF_TOKEN` | `cluster-management` |
+| `PUT /v1/accounts/{ncaId}/clusters/{clusterId}` | `NVCF_TOKEN` | `cluster-management` |
+| `DELETE /v1/accounts/{ncaId}/clusters/{clusterId}` | `NVCF_TOKEN` | `cluster-management` |
+| `GET /v1/accounts/{ncaId}/clusterVersions` | `NVCF_TOKEN` | `cluster-management` |
+
+### Direct API key creation
+
+The CLI calls the API Keys service for you. If you need to call it directly,
+send `NVCF_TOKEN`, then set `expires_at` and the `scopes` array explicitly.
+
+```bash
+GATEWAY_ADDR=<your-gateway-address>
+NVCF_TOKEN=<token-from-nvcf-cli-init>
 EXPIRES_AT=$(date -u -v+1d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')
 SERVICE_ID="nvidia-cloud-functions-ncp-service-id-aketm"
 
-export API_KEY=$(curl -s -X POST "http://${GATEWAY_ADDR}/v1/keys" \
+curl -s -X POST "http://${GATEWAY_ADDR}/v1/keys" \
   -H "Host: api-keys.${GATEWAY_ADDR}" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${NVCF_TOKEN}" \
   -H "Key-Issuer-Service: nvcf-api" \
   -H "Key-Issuer-Id: ${SERVICE_ID}" \
   -H "Key-Owner-Id: test@nvcf-api.local" \
@@ -88,38 +171,9 @@ export API_KEY=$(curl -s -X POST "http://${GATEWAY_ADDR}/v1/keys" \
           {"id": "*", "type": "account-functions"},
           {"id": "*", "type": "authorized-functions"}
         ],
-        "scopes": ["invoke_function", "list_functions", "list_functions_details"]
+        "scopes": ["invoke_function", "list_functions", "queue_details", "list_functions_details"]
       }]
     },
     "audience_service_ids": ["'"${SERVICE_ID}"'"]
-  }' | jq -r '.value')
-
-echo "API Key: ${API_KEY:0:20}..."
+  }' | jq .
 ```
-
-<Note>
-The `scopes` array controls which API operations the key can perform. See [self-hosted-scopes](./api.md) for the full list. The `expires_at` field is required for scoped API keys.
-
-</Note>
-
-**API Key Usage**
-
-Both key types are passed in the `Authorization` header.
-
-```bash
-Authorization: Bearer $API_KEY
-```
-
-### API Key Scopes
-
-The [OpenAPI Spec](https://api.nvcf.nvidia.com/v3/openapi) describes the scopes required for each endpoint.
-
-| Scope Name          | API Category            |
-| ------------------- | ----------------------- |
-| update_function     | Function Management     |
-| register_function   | Function Management     |
-| list_functions      | Function Management     |
-| list_cluster_groups | Cluster Groups and GPUs |
-| invoke_function     | Function Invocation     |
-| deploy_function     | Function Deployment     |
-| delete_function     | Function Management     |

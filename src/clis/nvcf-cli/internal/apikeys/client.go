@@ -57,6 +57,19 @@ type APIKey struct {
 	Value       string    `json:"value,omitempty"` // Only present on creation
 }
 
+var defaultScopes = []string{
+	"invoke_function",
+	"list_functions",
+	"queue_details",
+	"list_functions_details",
+}
+
+// DefaultScopes returns the scopes used when an API key is generated without
+// an explicit --scopes value.
+func DefaultScopes() []string {
+	return append([]string(nil), defaultScopes...)
+}
+
 // NewClient creates a new API Keys service client
 func NewClient(cfg *Config) *Client {
 	// Build transport chain with host header override if configured
@@ -103,13 +116,8 @@ func (c *Client) GenerateAPIKey(ctx context.Context, description string, expires
 	// Determine scopes to use - custom scopes if provided, otherwise default scopes
 	scopes := customScopes
 	if len(scopes) == 0 {
-		// Default scopes for API keys (user operations: invoke and list only)
-		scopes = []string{
-			"invoke_function",
-			"list_functions",
-			"queue_details",
-			"list_functions_details",
-		}
+		// Default scopes for API keys used by invoke, list, and queue status commands.
+		scopes = DefaultScopes()
 		if c.config.Debug {
 			logging.Debug("Using default API key scopes: %v", scopes)
 		}

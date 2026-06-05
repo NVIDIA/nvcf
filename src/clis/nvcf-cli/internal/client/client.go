@@ -545,7 +545,7 @@ func NewClient(config *Config) (*Client, error) {
 
 		// Add authentication transport layer (this adds the Authorization header)
 		if config.Token != "" {
-			// Use multi-token transport when we have a function creation specific token
+			// Use multi-token transport when a management token is configured.
 			finalTransport = newMultiTokenTransport(config.APIKey, config.Token, finalTransport)
 			if config.Debug {
 				log.Println("DEBUG: HTTP debugging enabled with multi-token support")

@@ -178,7 +178,7 @@ Examples:
   # Graceful deployment deletion
   nvcf-cli function delete --deployment-only --graceful
 
-Authentication: This command uses NVCF_TOKEN only for authentication.`,
+Authentication: Requires NVCF_TOKEN or NVCF_API_KEY with delete_function scope.`,
 	Args: cobra.RangeArgs(0, 2),
 	RunE: runDelete,
 }
@@ -264,7 +264,7 @@ updates support routingMethod and tokenRateLimit.
 
 For updating deployments, use: nvcf-cli function deploy update
 
-Authentication: Requires NVCF_TOKEN with admin:update_function scope.`,
+Authentication: Requires NVCF_TOKEN or NVCF_API_KEY with update_function scope.`,
 	RunE: runUpdate,
 }
 
@@ -1054,17 +1054,16 @@ func writeJSONFile(filename string, data interface{}) error {
 	return nil
 }
 
-// loadTokenOnlyConfig loads configuration using only NVCF_TOKEN for delete operations
-func loadTokenOnlyConfig() (*client.Config, error) {
+// loadDeleteClientConfig loads client authentication for delete operations.
+func loadDeleteClientConfig() (*client.Config, error) {
 	// Use the standard config loading which handles state file, etc.
 	config, err := client.LoadConfig()
 	if err != nil {
 		return nil, fmt.Errorf(errLoadConfigFmt, err)
 	}
 
-	// Verify we have a token for delete operations
-	if config.Token == "" {
-		return nil, fmt.Errorf("NVCF_TOKEN is required for delete operations (set in environment variable or config file)")
+	if config.Token == "" && config.APIKey == "" {
+		return nil, fmt.Errorf("NVCF_TOKEN or NVCF_API_KEY with delete_function or deploy_function scope is required for delete operations")
 	}
 
 	return config, nil
@@ -1810,8 +1809,7 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("version ID is required - provide as argument, flag, in JSON file, or ensure current function is set in state")
 	}
 
-	// Load client configuration with NVCF_TOKEN only for delete operations
-	clientConfig, err := loadTokenOnlyConfig()
+	clientConfig, err := loadDeleteClientConfig()
 	if err != nil {
 		return fmt.Errorf(errLoadConfigFmt, err)
 	}
