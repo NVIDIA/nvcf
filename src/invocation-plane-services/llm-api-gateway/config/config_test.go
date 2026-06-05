@@ -57,6 +57,19 @@ func TestLoadFromEnvReadsMetricsPort(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvReadsOAuth2ProviderHost(t *testing.T) {
+	t.Setenv("OAUTH2_PROVIDER_HOST", "https://oauth.example.test")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	if cfg.NVCF.OAuth2ProviderHost != "https://oauth.example.test" {
+		t.Fatalf("oauth2 provider host = %q, want https://oauth.example.test", cfg.NVCF.OAuth2ProviderHost)
+	}
+}
+
 func TestLoadFromEnvRejectsInvalidMetricsPort(t *testing.T) {
 	t.Setenv("METRICS_PORT", "disabled")
 

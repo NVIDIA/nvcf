@@ -64,10 +64,11 @@ func main() {
 	var authClient *nvcf.GRPCClient
 	if cfg.NVCF.GRPCAddr != "" {
 		authClient, err = nvcf.NewClient(nvcf.Config{
-			Addr:        cfg.NVCF.GRPCAddr,
-			SecretsPath: cfg.NVCF.SecretsPath,
-			Insecure:    cfg.NVCF.GRPCInsecure,
-			Timeout:     cfg.NVCF.GRPCTimeout,
+			Addr:               cfg.NVCF.GRPCAddr,
+			SecretsPath:        cfg.NVCF.SecretsPath,
+			OAuth2ProviderHost: cfg.NVCF.OAuth2ProviderHost,
+			Insecure:           cfg.NVCF.GRPCInsecure,
+			Timeout:            cfg.NVCF.GRPCTimeout,
 		})
 		if err != nil {
 			zlog.Fatal().Err(err).Msg("failed to initialize nvcf grpc auth client")

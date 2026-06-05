@@ -53,6 +53,26 @@ go_sdk.download(version = "1.25.6")
 
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")
+
+# The shared NVCF Go library ships generated BUILD.bazel files from a different
+# bzlmod context. Regenerate them here and treat committed .pb.go files as
+# plain Go sources, matching the ratelimiter module.
+go_deps.gazelle_override(
+    build_file_generation = "clean",
+    directives = ["gazelle:proto disable_global"],
+    path = "github.com/NVIDIA/nvcf/src/libraries/go/lib",
+)
+
+# Prebuilt protoc toolchain. Required because grpc-gateway-v2, pulled in by the
+# shared NVCF Go library, declares a proto_library.
+bazel_dep(name = "toolchains_protoc", version = "0.6.1")
+
+protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
+protoc.toolchain(
+    google_protobuf = "com_google_protobuf",
+    version = "v29.0",
+)
+
 use_repo(
     go_deps,
     "com_github_go_viper_mapstructure_v2",
@@ -60,6 +80,7 @@ use_repo(
     "com_github_kaptinlin_jsonrepair",
     "com_github_labstack_echo_v4",
     "com_github_nats_io_nats_go",
+    "com_github_nvidia_nvcf_src_libraries_go_lib",
     "com_github_olric_data_olric",
     "com_github_prometheus_client_golang",
     "com_github_prometheus_common",

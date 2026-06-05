@@ -35,19 +35,23 @@ import (
 	"google.golang.org/grpc/status"
 
 	llmgatewaypb "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf/pb"
+	nvauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
 const (
 	metadataAuthorization = "authorization"
+	nvcfAPITokenKey       = "nvcfApiToken"
+	oauth2InvocationScope = "llm:check_invocation"
 )
 
 type Config struct {
-	Addr        string
-	SecretsPath string
-	Insecure    bool
-	Timeout     time.Duration
+	Addr               string
+	SecretsPath        string
+	OAuth2ProviderHost string
+	Insecure           bool
+	Timeout            time.Duration
 }
 
 type Client interface {
@@ -83,18 +87,61 @@ func NewClient(cfg Config) (*GRPCClient, error) {
 		})
 	}
 
-	conn, err := grpc.NewClient(
-		cfg.Addr,
+	tokenSource, rpcCredentials, err := newAuthCredentials(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	dialOptions := []grpc.DialOption{
 		grpc.WithTransportCredentials(transportCredentials),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	}
+	if rpcCredentials != nil {
+		dialOptions = append(dialOptions, grpc.WithPerRPCCredentials(rpcCredentials))
+	}
+
+	conn, err := grpc.NewClient(
+		cfg.Addr,
+		dialOptions...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create nvcf grpc client: %w", err)
 	}
 
-	tokenSource := newCachedTokenSource(cfg.SecretsPath)
-
 	return NewClientWithConn(conn, tokenSource, cfg.Timeout), nil
+}
+
+func newAuthCredentials(cfg Config) (func() string, credentials.PerRPCCredentials, error) {
+	if token, err := readNVCFAPIToken(cfg.SecretsPath); err == nil && token != "" {
+		return newCachedTokenSource(cfg.SecretsPath), nil, nil
+	}
+
+	if cfg.OAuth2ProviderHost == "" {
+		return nil, nil, fmt.Errorf(
+			"nvcf secrets file must contain %s or OAUTH2_PROVIDER_HOST must be configured",
+			nvcfAPITokenKey,
+		)
+	}
+
+	authnConfig := &nvauth.AuthnConfig{
+		OIDCConfig: &nvauth.ProviderConfig{
+			Host:            cfg.OAuth2ProviderHost,
+			CredentialsFile: cfg.SecretsPath,
+			Scopes:          []string{oauth2InvocationScope},
+		},
+		RefreshConfig: &nvauth.RefreshConfig{
+			Interval: int64((5 * time.Minute).Seconds()),
+		},
+		DisableTransportSecurity: cfg.Insecure,
+	}
+	rpcCredentials, err := authnConfig.GRPCClientWithAuth()
+	if err != nil {
+		return nil, nil, fmt.Errorf("configure oauth2 nvcf grpc auth: %w", err)
+	}
+	if rpcCredentials == nil {
+		return nil, nil, fmt.Errorf("configure oauth2 nvcf grpc auth: no credentials returned")
+	}
+	return nil, rpcCredentials, nil
 }
 
 func NewClientWithConn(
@@ -115,6 +162,23 @@ func NewClientWithConn(
 
 // TODO: replace with fsnotify file watcher for immediate refresh
 const tokenCacheTTL = 60 * time.Second
+
+func readNVCFAPIToken(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var secrets struct {
+		NVCFApiToken string `json:"nvcfApiToken"`
+	}
+	if err := json.Unmarshal(data, &secrets); err != nil {
+		return "", err
+	}
+	if secrets.NVCFApiToken == "" {
+		return "", fmt.Errorf("%s is empty", nvcfAPITokenKey)
+	}
+	return secrets.NVCFApiToken, nil
+}
 
 func newCachedTokenSource(path string) func() string {
 	var (

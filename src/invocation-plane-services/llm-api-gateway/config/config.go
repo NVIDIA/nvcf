@@ -65,10 +65,11 @@ type StargateConfig struct {
 }
 
 type NVCFConfig struct {
-	GRPCAddr     string
-	SecretsPath  string
-	GRPCInsecure bool
-	GRPCTimeout  time.Duration
+	GRPCAddr           string
+	SecretsPath        string
+	OAuth2ProviderHost string
+	GRPCInsecure       bool
+	GRPCTimeout        time.Duration
 }
 
 // OlricConfig controls the embedded Olric node used as the rate-limit state
@@ -290,6 +291,10 @@ func applyStargateNVCFEnv(cfg *Config, errs *envErrs) {
 
 	if secretsPath := os.Getenv("SECRETS_PATH"); secretsPath != "" {
 		cfg.NVCF.SecretsPath = secretsPath
+	}
+
+	if oauth2ProviderHost := os.Getenv("OAUTH2_PROVIDER_HOST"); oauth2ProviderHost != "" {
+		cfg.NVCF.OAuth2ProviderHost = oauth2ProviderHost
 	}
 
 	if insecure, ok := errs.boolean("NVCF_GRPC_INSECURE"); ok {

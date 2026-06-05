@@ -19,7 +19,10 @@ package nvcf
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -220,14 +223,91 @@ func TestNewClientPropagatesTraceContext(t *testing.T) {
 	}
 }
 
+func TestNewClientFallsBackToOAuth2ClientCredentials(t *testing.T) {
+	invocationService := &stubInvocationService{
+		t:                  t,
+		clientProjectID:    "project-789",
+		expectedAuthHeader: "Bearer oauth-token",
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server := grpc.NewServer()
+	llmgatewaypb.RegisterLlmGatewayServer(server, invocationService)
+
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+
+	oauth2Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/token" {
+			t.Fatalf("oauth2 path = %q, want /token", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse oauth2 form: %v", err)
+		}
+		if got := r.Form.Get("scope"); got != oauth2InvocationScope {
+			t.Fatalf("oauth2 scope = %q, want %s", got, oauth2InvocationScope)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"oauth-token","token_type":"Bearer","expires_in":300}`)
+	}))
+	t.Cleanup(oauth2Server.Close)
+
+	secretsPath := t.TempDir() + "/secrets.json"
+	if err := os.WriteFile(secretsPath, []byte(`{"id":"client-id","secret":"client-secret"}`), 0o600); err != nil {
+		t.Fatalf("write secrets: %v", err)
+	}
+
+	client, err := NewClient(Config{
+		Addr:               listener.Addr().String(),
+		SecretsPath:        secretsPath,
+		OAuth2ProviderHost: oauth2Server.URL,
+		Insecure:           true,
+		Timeout:            time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = client.Close()
+	})
+
+	if _, err := client.AuthorizeInvocation(context.Background(), "client-token", "fn-123"); err != nil {
+		t.Fatalf("AuthorizeInvocation() error = %v", err)
+	}
+}
+
+func TestNewAuthCredentialsRequiresTokenOrOAuth2Provider(t *testing.T) {
+	secretsPath := t.TempDir() + "/secrets.json"
+	if err := os.WriteFile(secretsPath, []byte(`{"id":"client-id","secret":"client-secret"}`), 0o600); err != nil {
+		t.Fatalf("write secrets: %v", err)
+	}
+
+	_, _, err := newAuthCredentials(Config{SecretsPath: secretsPath})
+	if err == nil {
+		t.Fatal("newAuthCredentials() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "OAUTH2_PROVIDER_HOST") {
+		t.Fatalf("newAuthCredentials() error = %q, want OAUTH2_PROVIDER_HOST", err)
+	}
+}
+
 type stubInvocationService struct {
 	llmgatewaypb.UnimplementedLlmGatewayServer
 
-	t               *testing.T
-	clientAuthID    string
-	clientNCAID     string
-	clientProjectID string
-	traceparent     string
+	t                  *testing.T
+	clientAuthID       string
+	clientNCAID        string
+	clientProjectID    string
+	expectedAuthHeader string
+	traceparent        string
 }
 
 func (s *stubInvocationService) AuthLlmInvocation(
@@ -237,8 +317,12 @@ func (s *stubInvocationService) AuthLlmInvocation(
 	s.t.Helper()
 
 	authHeader := incomingAuthorizationHeader(ctx)
-	if authHeader != "Bearer service-token" {
-		s.t.Fatalf("authorization header = %q, want Bearer service-token", authHeader)
+	expectedAuthHeader := s.expectedAuthHeader
+	if expectedAuthHeader == "" {
+		expectedAuthHeader = "Bearer service-token"
+	}
+	if authHeader != expectedAuthHeader {
+		s.t.Fatalf("authorization header = %q, want %s", authHeader, expectedAuthHeader)
 	}
 	if req.GetClientAuthorizationToken() != "client-token" {
 		tok := req.GetClientAuthorizationToken()

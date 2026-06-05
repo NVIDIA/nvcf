@@ -139,7 +139,11 @@ Useful overrides:
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
 - `NVCF_GRPC_ADDR` to enable NVCF gRPC auth
-- `NVCF_GRPC_AUTH_TOKEN` for the gateway-to-NVCF service bearer token
+- `SECRETS_PATH` for the gateway-to-NVCF secrets file. Use `nvcfApiToken` for
+  fixed bearer-token auth, or `id` and `secret` with `OAUTH2_PROVIDER_HOST` for
+  OAuth2 client-credentials auth.
+- `OAUTH2_PROVIDER_HOST` to enable OAuth2 client-credentials auth when
+  `nvcfApiToken` is not present in `SECRETS_PATH`
 - `NVCF_GRPC_INSECURE=true` to disable TLS for local gRPC testing
 - `NVCF_GRPC_TIMEOUT` to cap each gRPC auth or policy call
 - `RATE_LIMIT_ENABLED=false` to disable rate limiting locally
