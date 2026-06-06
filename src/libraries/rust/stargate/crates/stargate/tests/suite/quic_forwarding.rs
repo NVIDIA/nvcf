@@ -25,11 +25,11 @@ use pylon_lib::{
     OutputTokenParserFactory, ReverseQuicTunnelConfig, ReverseQuicTunnelHandle,
     TunnelTransportProtocol, start_reverse_quic_tunnel,
 };
-use stargate::forwarding::ForwardingResolver;
+use stargate_forwarding::ForwardingResolver;
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::{
-    CalibrationState, InferenceServerModelRegistration, InferenceServerRegistration,
-    InferenceServerStatus, ModelStats, StargateInfo,
+    InferenceServerModelRegistration, InferenceServerRegistration, InferenceServerStatus,
+    ModelStats, StargateInfo,
 };
 
 fn make_registration(
@@ -58,7 +58,6 @@ fn make_registration(
                 ..ModelStats::default()
             }),
             status: status.into(),
-            calibration_state: CalibrationState::Unknown as i32,
         },
     );
     InferenceServerRegistration {
@@ -116,6 +115,9 @@ async fn start_two_stargates_with_quic_tls(
     let (http_b, http_listener_b) = bind_ephemeral();
     let (reverse_a, reverse_socket_a) = bind_ephemeral_udp();
     let (reverse_b, reverse_socket_b) = bind_ephemeral_udp();
+    let server_tls_identity =
+        stargate_tls::ServerTlsIdentity::from_optional_pem(tls_cert_pem.clone(), tls_key_pem)
+            .expect("test TLS cert/key pair should be complete");
 
     // QUIC forwarding resolvers match against *.stargate.external SNI
     let mut resolver_a = MapResolver::new("sg-a.stargate.external");
@@ -133,7 +135,7 @@ async fn start_two_stargates_with_quic_tls(
     config_a.reverse_tunnel_listen_addr = Some(reverse_a);
     // Exercise both secure and insecure QUIC relay modes from the same topology helper.
     config_a.proxy_transport.tls_cert_pem = tls_cert_pem.clone();
-    config_a.proxy_transport.tls_key_pem = tls_key_pem.clone();
+    config_a.proxy_transport.server_tls_identity = server_tls_identity.clone();
     config_a.proxy_transport.quic_insecure = quic_insecure;
     config_a.proxy_transport.tunnel_protocol = tunnel_protocol;
     let runtime_a = stargate::runtime::StargateRuntime::new(config_a, Box::new(discovery_a))
@@ -149,7 +151,7 @@ async fn start_two_stargates_with_quic_tls(
     config_b.reverse_tunnel_listen_addr = Some(reverse_b);
     // Exercise both secure and insecure QUIC relay modes from the same topology helper.
     config_b.proxy_transport.tls_cert_pem = tls_cert_pem;
-    config_b.proxy_transport.tls_key_pem = tls_key_pem;
+    config_b.proxy_transport.server_tls_identity = server_tls_identity;
     config_b.proxy_transport.quic_insecure = quic_insecure;
     config_b.proxy_transport.tunnel_protocol = tunnel_protocol;
     let runtime_b = stargate::runtime::StargateRuntime::new(config_b, Box::new(discovery_b))

@@ -19,7 +19,7 @@ ARG GRPC_HEALTH_PROBE_VERSION=v0.4.38
 ##### COMMON BUILDER STAGE (BUILDPLATFORM)
 ##########################################
 # Pinned alongside rust-toolchain.toml (1.94.0 stable, 2026-03-05).
-FROM --platform=$BUILDPLATFORM rust:1.94-bookworm AS builder-base
+FROM --platform=$BUILDPLATFORM rust:1.96-bookworm AS builder-base
 
 ARG TARGETARCH
 
@@ -57,10 +57,11 @@ COPY crates ./crates
 ##########################################
 FROM --platform=$BUILDPLATFORM builder-base AS binary-builder
 
-# Cached target dirs can keep generated schema outputs newer than freshly copied sources.
+# Generated schema outputs in the cached target dir must not race concurrent
+# Tilt/CI image builds using different source revisions.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/usr/src/stargate/target \
+    --mount=type=cache,target=/usr/src/stargate/target,sharing=locked \
     set -eux; \
     case "${TARGETARCH}" in \
         amd64) rust_target=x86_64-unknown-linux-gnu ;; \
@@ -98,7 +99,7 @@ RUN curl -sSfL -o /usr/local/bin/grpc_health_probe \
 #########################
 ### BASE RUNTIME STAGE ##
 #########################
-FROM nvcr.io/nvidia/distroless/cc:v4.0.5 AS runtime-base
+FROM nvcr.io/nvidia/distroless/cc:v4.0.6 AS runtime-base
 
 ############################
 ### STARGATE RUNTIME #######

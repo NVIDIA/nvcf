@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "jwt",
+    srcs = [
+        "builder.go",
+        "claims.go",
+        "doc.go",
+        "errors.go",
+        "jwt.go",
+        "validation.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4/jwt",
+    importpath = "github.com/go-jose/go-jose/v4/jwt",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//vendor/github.com/go-jose/go-jose/v4/json",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jwt",
+    visibility = ["//visibility:public"],
+)

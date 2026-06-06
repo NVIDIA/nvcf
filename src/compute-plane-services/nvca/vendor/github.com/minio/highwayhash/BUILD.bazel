@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "highwayhash",
+    srcs = [
+        "highwayhash.go",
+        "highwayhashAVX2_amd64.s",
+        "highwayhashSVE_arm64.s",
+        "highwayhash_amd64.go",
+        "highwayhash_amd64.s",
+        "highwayhash_arm64.go",
+        "highwayhash_arm64.s",
+        "highwayhash_generic.go",
+        "highwayhash_ppc64le.go",
+        "highwayhash_ppc64le.s",
+        "highwayhash_ref.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/minio/highwayhash",
+    importpath = "github.com/minio/highwayhash",
+    visibility = ["//visibility:public"],
+    deps = select({
+        "@rules_go//go/platform:amd64": [
+            "//vendor/golang.org/x/sys/cpu",
+        ],
+        "@rules_go//go/platform:arm64": [
+            "//vendor/golang.org/x/sys/cpu",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":highwayhash",
+    visibility = ["//visibility:public"],
+)

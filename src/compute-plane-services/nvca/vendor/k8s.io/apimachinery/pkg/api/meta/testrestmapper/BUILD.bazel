@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "testrestmapper",
+    srcs = ["test_restmapper.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/meta/testrestmapper",
+    importpath = "k8s.io/apimachinery/pkg/api/meta/testrestmapper",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/apimachinery/pkg/util/sets",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":testrestmapper",
+    visibility = ["//visibility:public"],
+)

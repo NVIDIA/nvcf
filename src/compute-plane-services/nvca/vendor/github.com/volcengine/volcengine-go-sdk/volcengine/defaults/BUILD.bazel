@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "defaults",
+    srcs = [
+        "defaults.go",
+        "shared_config.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/defaults",
+    importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/defaults",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/volcengine/volcengine-go-sdk/internal/shareddefaults",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/corehandlers",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/credentials",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/credentials/endpointcreds",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/request",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":defaults",
+    visibility = ["//visibility:public"],
+)

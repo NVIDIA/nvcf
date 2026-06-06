@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "modes",
+    srcs = [
+        "buffers.go",
+        "decode.go",
+        "diagnostic.go",
+        "encode.go",
+        "transcoding.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer/cbor/internal/modes",
+    importpath = "k8s.io/apimachinery/pkg/runtime/serializer/cbor/internal/modes",
+    visibility = ["//vendor/k8s.io/apimachinery/pkg/runtime/serializer/cbor:__subpackages__"],
+    deps = [
+        "//vendor/github.com/fxamacker/cbor/v2:cbor",
+        "//vendor/sigs.k8s.io/json",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":modes",
+    visibility = ["//vendor/k8s.io/apimachinery/pkg/runtime/serializer/cbor:__subpackages__"],
+)

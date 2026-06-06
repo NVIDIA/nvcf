@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "name",
+    srcs = [
+        "check.go",
+        "digest.go",
+        "doc.go",
+        "errors.go",
+        "options.go",
+        "ref.go",
+        "registry.go",
+        "repository.go",
+        "tag.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-containerregistry/pkg/name",
+    importpath = "github.com/google/go-containerregistry/pkg/name",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/opencontainers/go-digest"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":name",
+    visibility = ["//visibility:public"],
+)

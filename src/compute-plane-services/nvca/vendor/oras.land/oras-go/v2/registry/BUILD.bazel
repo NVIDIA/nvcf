@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "registry",
+    srcs = [
+        "reference.go",
+        "registry.go",
+        "repository.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry",
+    importpath = "oras.land/oras-go/v2/registry",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/opencontainers/go-digest",
+        "//vendor/github.com/opencontainers/image-spec/specs-go/v1:specs-go",
+        "//vendor/oras.land/oras-go/v2/content",
+        "//vendor/oras.land/oras-go/v2/errdef",
+        "//vendor/oras.land/oras-go/v2/internal/descriptor",
+        "//vendor/oras.land/oras-go/v2/internal/spec",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":registry",
+    visibility = ["//visibility:public"],
+)

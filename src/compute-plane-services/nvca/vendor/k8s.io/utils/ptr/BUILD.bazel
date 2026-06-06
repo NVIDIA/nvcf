@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "ptr",
+    srcs = ["ptr.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/utils/ptr",
+    importpath = "k8s.io/utils/ptr",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ptr",
+    visibility = ["//visibility:public"],
+)

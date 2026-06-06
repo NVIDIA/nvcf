@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fake",
+    srcs = [
+        "doc.go",
+        "fake_clusterrole.go",
+        "fake_clusterrolebinding.go",
+        "fake_rbac_client.go",
+        "fake_role.go",
+        "fake_rolebinding.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/rbac/v1beta1/fake",
+    importpath = "k8s.io/client-go/kubernetes/typed/rbac/v1beta1/fake",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/rbac/v1beta1",
+        "//vendor/k8s.io/client-go/applyconfigurations/rbac/v1beta1",
+        "//vendor/k8s.io/client-go/gentype",
+        "//vendor/k8s.io/client-go/kubernetes/typed/rbac/v1beta1",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/testing",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fake",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "volcengineerr",
+    srcs = [
+        "error.go",
+        "types.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
+    importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":volcengineerr",
+    visibility = ["//visibility:public"],
+)

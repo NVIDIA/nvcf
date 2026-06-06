@@ -43,6 +43,7 @@ import (
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
@@ -354,6 +355,12 @@ func (r *Reconciler) ensureImageCredentialUpdaterObjects(
 	// Use NVCA's service account to run the job for API access and image pull secrets.
 	tprUpdaterInitJob.Spec.Template.Spec.ServiceAccountName = "nvca"
 	k8sutil.MergePodSpecTolerations(&tprUpdaterInitJob.Spec.Template.Spec, r.cfg.Workload.Tolerations...)
+
+	// All Pods created by NVCA must use the same scheduler.
+	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
+		tprUpdaterInitJob.Spec.Template.Spec.SchedulerName = kaischeduler.SchedulerName
+		tprUpdaterInitJob.Spec.Template.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.GetQName()
+	}
 
 	// Set TTL to 1 hour so jobs are cleaned up in case of terminal failure
 	// or the instance is cleaned up before this check completes.

@@ -1,0 +1,45 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "v1beta3",
+    srcs = [
+        "exemptprioritylevelconfiguration.go",
+        "flowdistinguishermethod.go",
+        "flowschema.go",
+        "flowschemacondition.go",
+        "flowschemaspec.go",
+        "flowschemastatus.go",
+        "groupsubject.go",
+        "limitedprioritylevelconfiguration.go",
+        "limitresponse.go",
+        "nonresourcepolicyrule.go",
+        "policyruleswithsubjects.go",
+        "prioritylevelconfiguration.go",
+        "prioritylevelconfigurationcondition.go",
+        "prioritylevelconfigurationreference.go",
+        "prioritylevelconfigurationspec.go",
+        "prioritylevelconfigurationstatus.go",
+        "queuingconfiguration.go",
+        "resourcepolicyrule.go",
+        "serviceaccountsubject.go",
+        "subject.go",
+        "usersubject.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/flowcontrol/v1beta3",
+    importpath = "k8s.io/client-go/applyconfigurations/flowcontrol/v1beta3",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/flowcontrol/v1beta3",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/types",
+        "//vendor/k8s.io/apimachinery/pkg/util/managedfields",
+        "//vendor/k8s.io/client-go/applyconfigurations/internal",
+        "//vendor/k8s.io/client-go/applyconfigurations/meta/v1:meta",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":v1beta3",
+    visibility = ["//visibility:public"],
+)

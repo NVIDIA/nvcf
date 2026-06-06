@@ -24,10 +24,10 @@ use rand::Rng;
 use xxhash_rust::xxh3::xxh3_64;
 
 use super::{
-    HashInputBuilder, LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice,
-    LoadBalancerRequest, cache_affinity_key_is_cacheable,
+    GroqMultiregionAlgorithmConfig, HashInputBuilder, LoadBalancer, LoadBalancerAlgorithmConfig,
+    LoadBalancerCandidateChoice, LoadBalancerRequest, cache_affinity_key_is_cacheable,
 };
-use crate::load_balancer_state::{RoutedClusterSnapshot, RoutingTargetKey};
+use crate::routing_state::{RoutedClusterSnapshot, RoutingTargetKey};
 
 const CACHE_AFFINITY_SELECTION_CACHE_LIMIT: usize = 4096;
 
@@ -47,6 +47,83 @@ pub(super) struct GroqMultiregionLoadBalancer {
 struct TtftEstimate {
     queue_ms: f64,
     ttft_ms: f64,
+}
+
+struct CandidateEstimateAccumulator<'a> {
+    estimates: Vec<(&'a RoutedClusterSnapshot, TtftEstimate)>,
+    input_tokens: Option<u64>,
+    priority: u32,
+    max_queue_time_ms: Option<f64>,
+    ignore_queue_time: bool,
+    ignore_input_processing_time: bool,
+    fastest_ttft: f64,
+    slowest_ttft: f64,
+    all_estimates_finite: bool,
+}
+
+impl<'a> CandidateEstimateAccumulator<'a> {
+    fn new(
+        config: &GroqMultiregionConfig,
+        request: &LoadBalancerRequest<'_>,
+        candidate_capacity: usize,
+    ) -> Self {
+        let max_queue_time_ms = config
+            .max_queue_time(request)
+            .map(|duration| duration.as_secs_f64() * 1000.0);
+
+        Self {
+            estimates: Vec::with_capacity(candidate_capacity),
+            input_tokens: request.input_tokens,
+            priority: request.priority,
+            max_queue_time_ms,
+            ignore_queue_time: config.ignore_queue_time(),
+            ignore_input_processing_time: config.ignore_input_processing_time(),
+            fastest_ttft: f64::INFINITY,
+            slowest_ttft: f64::NEG_INFINITY,
+            all_estimates_finite: true,
+        }
+    }
+
+    fn filters_by_queue_slo(&self) -> bool {
+        self.max_queue_time_ms.is_some()
+    }
+
+    fn push_estimate(&mut self, candidate: &'a RoutedClusterSnapshot) {
+        let estimate = estimate_ttft_ms(
+            candidate,
+            self.input_tokens,
+            self.priority,
+            self.ignore_queue_time,
+            self.ignore_input_processing_time,
+        );
+        if !within_queue_slo(&estimate, self.max_queue_time_ms) {
+            return;
+        }
+
+        if estimate.ttft_ms.is_finite() {
+            self.fastest_ttft = self.fastest_ttft.min(estimate.ttft_ms);
+            self.slowest_ttft = self.slowest_ttft.max(estimate.ttft_ms);
+        } else {
+            self.all_estimates_finite = false;
+        }
+        self.estimates.push((candidate, estimate));
+    }
+
+    fn is_empty(&self) -> bool {
+        self.estimates.is_empty()
+    }
+
+    fn has_finite_fastest_ttft(&self) -> bool {
+        self.fastest_ttft.is_finite()
+    }
+
+    fn all_estimates_in_first_bucket(&self, bucket_size_ms: f64) -> bool {
+        self.all_estimates_finite && self.slowest_ttft - self.fastest_ttft <= bucket_size_ms
+    }
+
+    fn into_estimates(self) -> Vec<(&'a RoutedClusterSnapshot, TtftEstimate)> {
+        self.estimates
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +154,10 @@ impl GroqMultiregionLoadBalancer {
         }
     }
 
+    pub(super) fn has_queue_slo(&self, request: &LoadBalancerRequest<'_>) -> bool {
+        self.config.max_queue_time(request).is_some()
+    }
+
     #[cfg(test)]
     pub(super) fn cached_affinity_key_bytes(&self) -> usize {
         let cache = self.cache_affinity_ring.read();
@@ -86,6 +167,13 @@ impl GroqMultiregionLoadBalancer {
 
 impl GroqMultiregionConfig {
     pub(super) fn from_algorithm_config(config: &LoadBalancerAlgorithmConfig) -> Self {
+        let config = config
+            .multiregion_settings()
+            .expect("multiregion settings should match load-balancer algorithm");
+        Self::from_settings(config)
+    }
+
+    pub(super) fn from_settings(config: &GroqMultiregionAlgorithmConfig) -> Self {
         let queue_slo = match (
             config.max_queue_time_floor_ms,
             config.max_queue_time_ceil_ms,
@@ -93,13 +181,6 @@ impl GroqMultiregionConfig {
             (Some(floor_ms), Some(ceil_ms)) => Some(QueueSloConfig {
                 floor: Duration::from_millis(floor_ms),
                 ceil: Duration::from_millis(ceil_ms),
-            }),
-            _ if config.queue_slo_ms.is_some() => config.queue_slo_ms.map(|queue_slo_ms| {
-                let fixed_slo = Duration::from_millis(queue_slo_ms);
-                QueueSloConfig {
-                    floor: fixed_slo,
-                    ceil: fixed_slo,
-                }
             }),
             _ => None,
         };
@@ -552,7 +633,7 @@ impl GroqMultiregionLoadBalancer {
             .map(|(candidate, _)| choice_for_candidate(candidates, candidate, 1))
     }
 
-    fn choose_from_candidate_indices(
+    pub(super) fn choose_from_candidate_indices(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
@@ -658,35 +739,16 @@ impl GroqMultiregionLoadBalancer {
     ) -> Option<LoadBalancerCandidateChoice> {
         let candidates = candidates.into_iter();
 
-        let max_queue_time_ms = self
-            .config
-            .max_queue_time(request)
-            .map(|duration| duration.as_secs_f64() * 1000.0);
-        let mut fastest_ttft = f64::INFINITY;
-        let mut slowest_ttft = f64::NEG_INFINITY;
-        let mut all_estimates_finite = true;
-        let mut estimated = Vec::with_capacity(candidate_capacity);
-        if max_queue_time_ms.is_none() && !request.has_excluded_clusters() {
+        let mut estimates =
+            CandidateEstimateAccumulator::new(&self.config, request, candidate_capacity);
+        if !estimates.filters_by_queue_slo() && !request.has_excluded_clusters() {
             // This is the steady-state proxy path: first-attempt routing with no
             // queue SLO. Keep it separate so every candidate does not pay for
             // retry exclusion and queue-SLO option checks.
             for candidate in candidates {
-                let estimate = estimate_ttft_ms(
-                    candidate,
-                    request.input_tokens,
-                    request.priority,
-                    self.config.ignore_queue_time(),
-                    self.config.ignore_input_processing_time(),
-                );
-                if estimate.ttft_ms.is_finite() {
-                    fastest_ttft = fastest_ttft.min(estimate.ttft_ms);
-                    slowest_ttft = slowest_ttft.max(estimate.ttft_ms);
-                } else {
-                    all_estimates_finite = false;
-                }
-                estimated.push((candidate, estimate));
+                estimates.push_estimate(candidate);
             }
-        } else if max_queue_time_ms.is_none() {
+        } else if !estimates.filters_by_queue_slo() {
             if let Some(excluded_cluster_id) = single_excluded_cluster_id(request) {
                 // Most retries exclude exactly the backend that failed the prior
                 // attempt. Compare against that one borrowed id directly instead
@@ -697,20 +759,7 @@ impl GroqMultiregionLoadBalancer {
                     if candidate.cluster_id == excluded_cluster_id {
                         continue;
                     }
-                    let estimate = estimate_ttft_ms(
-                        candidate,
-                        request.input_tokens,
-                        request.priority,
-                        self.config.ignore_queue_time(),
-                        self.config.ignore_input_processing_time(),
-                    );
-                    if estimate.ttft_ms.is_finite() {
-                        fastest_ttft = fastest_ttft.min(estimate.ttft_ms);
-                        slowest_ttft = slowest_ttft.max(estimate.ttft_ms);
-                    } else {
-                        all_estimates_finite = false;
-                    }
-                    estimated.push((candidate, estimate));
+                    estimates.push_estimate(candidate);
                 }
             } else {
                 // Multi-exclusion retries are less common, but they still avoid
@@ -720,20 +769,7 @@ impl GroqMultiregionLoadBalancer {
                     if request.excludes_cluster(&candidate.cluster_id) {
                         continue;
                     }
-                    let estimate = estimate_ttft_ms(
-                        candidate,
-                        request.input_tokens,
-                        request.priority,
-                        self.config.ignore_queue_time(),
-                        self.config.ignore_input_processing_time(),
-                    );
-                    if estimate.ttft_ms.is_finite() {
-                        fastest_ttft = fastest_ttft.min(estimate.ttft_ms);
-                        slowest_ttft = slowest_ttft.max(estimate.ttft_ms);
-                    } else {
-                        all_estimates_finite = false;
-                    }
-                    estimated.push((candidate, estimate));
+                    estimates.push_estimate(candidate);
                 }
             }
         } else {
@@ -741,38 +777,26 @@ impl GroqMultiregionLoadBalancer {
                 if request.excludes_cluster(&candidate.cluster_id) {
                     continue;
                 }
-                let estimate = estimate_ttft_ms(
-                    candidate,
-                    request.input_tokens,
-                    request.priority,
-                    self.config.ignore_queue_time(),
-                    self.config.ignore_input_processing_time(),
-                );
-                if !within_queue_slo(&estimate, max_queue_time_ms) {
-                    continue;
-                }
-                if estimate.ttft_ms.is_finite() {
-                    fastest_ttft = fastest_ttft.min(estimate.ttft_ms);
-                    slowest_ttft = slowest_ttft.max(estimate.ttft_ms);
-                } else {
-                    all_estimates_finite = false;
-                }
-                estimated.push((candidate, estimate));
+                estimates.push_estimate(candidate);
             }
         }
 
-        if estimated.is_empty() {
+        if estimates.is_empty() {
             return None;
         }
-        if !fastest_ttft.is_finite() {
+        if !estimates.has_finite_fastest_ttft() {
             return None;
         }
 
         let bucket_size_ms = self.config.ttft_bucket_size().as_secs_f64() * 1000.0;
-        if all_estimates_finite && slowest_ttft - fastest_ttft <= bucket_size_ms {
-            return self.choose_from_unlocked_candidates(estimated, candidate_index_source);
+        if estimates.all_estimates_in_first_bucket(bucket_size_ms) {
+            return self.choose_from_unlocked_candidates(
+                estimates.into_estimates(),
+                candidate_index_source,
+            );
         }
 
+        let mut estimated = estimates.into_estimates();
         estimated.sort_unstable_by(|(candidate_a, estimate_a), (candidate_b, estimate_b)| {
             estimate_a
                 .ttft_ms
@@ -945,6 +969,7 @@ fn choice_for_candidate(
     LoadBalancerCandidateChoice {
         candidate_index,
         rank_depth,
+        selected_after_kv_free_tokens_skip: false,
     }
 }
 
@@ -1436,14 +1461,7 @@ pub(super) fn cache_affinity_virtual_node_hash(
 ) -> u64 {
     let mut bytes = HashInputBuilder::new();
     append_cache_affinity_ring_prefix(&mut bytes, config, request);
-    // Keep the legacy ring wire format stable when `cluster_id` falls back to
-    // the original backend id, but use the cluster routing identity for
-    // shared-backend clusters.
-    append_tagged_bytes(
-        &mut bytes,
-        b"inference_server_id",
-        candidate.cluster_id.as_bytes(),
-    );
+    append_tagged_bytes(&mut bytes, b"cluster_id", candidate.cluster_id.as_bytes());
     append_tagged_bytes(&mut bytes, b"virtual_node", &virtual_node.to_le_bytes());
     xxh3_64(bytes.as_slice())
 }

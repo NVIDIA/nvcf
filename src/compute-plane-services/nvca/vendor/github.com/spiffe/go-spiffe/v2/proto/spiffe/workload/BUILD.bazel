@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "workload",
+    srcs = [
+        "workload.pb.go",
+        "workload_grpc.pb.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/proto/spiffe/workload",
+    importpath = "github.com/spiffe/go-spiffe/v2/proto/spiffe/workload",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/google.golang.org/grpc",
+        "//vendor/google.golang.org/grpc/codes",
+        "//vendor/google.golang.org/grpc/status",
+        "//vendor/google.golang.org/protobuf/reflect/protoreflect",
+        "//vendor/google.golang.org/protobuf/runtime/protoimpl",
+        "//vendor/google.golang.org/protobuf/types/known/structpb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":workload",
+    visibility = ["//visibility:public"],
+)

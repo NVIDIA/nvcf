@@ -1,0 +1,35 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "v1beta1",
+    srcs = [
+        "api.go",
+        "computedomain.go",
+        "computedomainconfig.go",
+        "doc.go",
+        "gpuconfig.go",
+        "migconfig.go",
+        "register.go",
+        "sharing.go",
+        "validate.go",
+        "zz_generated.deepcopy.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1",
+    importpath = "github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/featuregates",
+        "//vendor/k8s.io/apimachinery/pkg/api/resource",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/serializer/json",
+        "//vendor/k8s.io/utils/ptr",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":v1beta1",
+    visibility = ["//visibility:public"],
+)

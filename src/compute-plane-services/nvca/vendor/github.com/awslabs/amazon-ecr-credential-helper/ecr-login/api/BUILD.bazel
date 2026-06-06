@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "api",
+    srcs = [
+        "client.go",
+        "factory.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/awslabs/amazon-ecr-credential-helper/ecr-login/api",
+    importpath = "github.com/awslabs/amazon-ecr-credential-helper/ecr-login/api",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//vendor/github.com/aws/aws-sdk-go-v2/config",
+        "//vendor/github.com/aws/aws-sdk-go-v2/service/ecr",
+        "//vendor/github.com/aws/aws-sdk-go-v2/service/ecrpublic",
+        "//vendor/github.com/aws/smithy-go/middleware",
+        "//vendor/github.com/aws/smithy-go/transport/http",
+        "//vendor/github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cache",
+        "//vendor/github.com/awslabs/amazon-ecr-credential-helper/ecr-login/version",
+        "//vendor/github.com/sirupsen/logrus",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":api",
+    visibility = ["//visibility:public"],
+)

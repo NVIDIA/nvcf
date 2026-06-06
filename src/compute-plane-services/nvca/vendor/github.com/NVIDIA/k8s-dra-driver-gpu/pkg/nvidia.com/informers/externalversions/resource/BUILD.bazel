@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "resource",
+    srcs = ["interface.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/resource",
+    importpath = "github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/resource",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/internalinterfaces",
+        "//vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/resource/v1beta1",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":resource",
+    visibility = ["//visibility:public"],
+)

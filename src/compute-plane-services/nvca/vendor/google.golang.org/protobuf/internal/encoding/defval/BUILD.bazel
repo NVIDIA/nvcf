@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "defval",
+    srcs = ["default.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/internal/encoding/defval",
+    importpath = "google.golang.org/protobuf/internal/encoding/defval",
+    visibility = ["//vendor/google.golang.org/protobuf:__subpackages__"],
+    deps = [
+        "//vendor/google.golang.org/protobuf/internal/encoding/text",
+        "//vendor/google.golang.org/protobuf/internal/errors",
+        "//vendor/google.golang.org/protobuf/reflect/protoreflect",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":defval",
+    visibility = ["//vendor/google.golang.org/protobuf:__subpackages__"],
+)

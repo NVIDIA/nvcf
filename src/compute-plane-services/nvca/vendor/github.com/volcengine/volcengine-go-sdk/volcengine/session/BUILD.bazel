@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "session",
+    srcs = [
+        "credentials.go",
+        "env_config.go",
+        "session.go",
+        "shared_config.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/session",
+    importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/session",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/volcengine/volcengine-go-sdk/internal/ini",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/client",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/corehandlers",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/credentials",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/credentials/processcreds",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/defaults",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/endpoints",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/request",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineutil",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":session",
+    visibility = ["//visibility:public"],
+)

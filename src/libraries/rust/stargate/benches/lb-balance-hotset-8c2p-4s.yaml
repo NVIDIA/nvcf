@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: lb-balance-hotset-8c2p-4s
+metadata:
+  description: Scaled cache-hot ramp across eight routing clusters of two pylons served by four stargates.
+  tags: [load-balance, grouped-pylons, multi-stargate, steady-state, heterogeneous, cache, pulsar]
+  expected_runtime: long
+  expected_signal: Cache-aware routing should improve cache locality while capacity-aware routing controls latency and aggregate cluster distribution as offered load rises.
+model: dummy-model
+seed: 703
+request_count: 800
+max_concurrency: 160
+
+stargates:
+  count: 4
+
+backends:
+  count: 16
+  pylons_per_cluster: 2
+  cluster_id_template: cluster-{cluster_index}
+  profile:
+    name: balanced
+    weight: 1.0
+    max_concurrent_requests: 8
+    kv_cache_capacity_tokens: 180000
+    service_time_ms:
+      ttft_mean: 55
+      ttft_jitter_ms: 8
+      decode_jitter_ms: 3
+      prefill_tokens_per_s: 8200
+      decode_tokens_per_s: 190
+    registration:
+      last_mean_input_tps: 185
+  profiles:
+    - count: 4
+      profile:
+        name: fast-cluster
+        weight: 1.0
+        max_concurrent_requests: 12
+        kv_cache_capacity_tokens: 300000
+        service_time_ms:
+          ttft_mean: 30
+          ttft_jitter_ms: 5
+          decode_jitter_ms: 2
+          prefill_tokens_per_s: 14000
+          decode_tokens_per_s: 285
+        registration:
+          last_mean_input_tps: 310
+    - count: 8
+      profile:
+        name: balanced-cluster
+        weight: 1.0
+        max_concurrent_requests: 8
+        kv_cache_capacity_tokens: 180000
+        service_time_ms:
+          ttft_mean: 55
+          ttft_jitter_ms: 8
+          decode_jitter_ms: 3
+          prefill_tokens_per_s: 8200
+          decode_tokens_per_s: 190
+        registration:
+          last_mean_input_tps: 185
+    - count: 4
+      profile:
+        name: constrained-cluster
+        weight: 1.0
+        max_concurrent_requests: 4
+        kv_cache_capacity_tokens: 100000
+        service_time_ms:
+          ttft_mean: 105
+          ttft_jitter_ms: 18
+          decode_jitter_ms: 6
+          prefill_tokens_per_s: 4000
+          decode_tokens_per_s: 100
+        registration:
+          last_mean_input_tps: 90
+
+traffic_pattern:
+  kind: zipf_hotset
+  routing_keys: 0
+  cache_affinity_keys: 256
+  hotset_fraction: 0.15
+  hotset_share: 0.85
+  input_tokens:
+    distribution: lognormal
+    mean: 700
+    sigma: 0.55
+    p99_cap: 4000
+  output_tokens:
+    distribution: lognormal
+    mean: 80
+    sigma: 0.45
+    p99_cap: 384
+  arrival:
+    distribution: poisson
+    target_rps: 140
+
+algorithms:
+  - name: power-of-two
+    config:
+      default: power-of-two
+  - name: round-robin
+    config:
+      default: round-robin
+  - name: random
+    config:
+      default: random
+  - name: groq-multiregion
+    config:
+      default: groq-multiregion
+  - name: pulsar
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: grouped-hotset-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true

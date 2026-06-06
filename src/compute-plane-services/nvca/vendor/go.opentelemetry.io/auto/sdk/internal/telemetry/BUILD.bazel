@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "telemetry",
+    srcs = [
+        "attr.go",
+        "doc.go",
+        "id.go",
+        "number.go",
+        "resource.go",
+        "scope.go",
+        "span.go",
+        "status.go",
+        "traces.go",
+        "value.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/auto/sdk/internal/telemetry",
+    importpath = "go.opentelemetry.io/auto/sdk/internal/telemetry",
+    visibility = ["//vendor/go.opentelemetry.io/auto/sdk:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":telemetry",
+    visibility = ["//vendor/go.opentelemetry.io/auto/sdk:__subpackages__"],
+)

@@ -8,13 +8,13 @@ MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
 go_library(
     name = "nvca-mirror_lib",
     srcs = ["main.go"],
-    importpath = MODULE_PATH + "/cmd/nvca-mirror",
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvca-mirror",
     visibility = ["//visibility:private"],
     deps = [
         "//pkg/operator/mirror",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
-        "@com_github_urfave_cli_v2//:cli",
+        "//vendor/github.com/urfave/cli/v2:cli",
     ],
 )
 

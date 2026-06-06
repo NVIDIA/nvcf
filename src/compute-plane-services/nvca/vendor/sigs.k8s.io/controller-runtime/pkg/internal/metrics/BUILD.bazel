@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "metrics",
+    srcs = ["workqueue.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/metrics",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/internal/metrics",
+    visibility = ["//vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
+    deps = [
+        "//vendor/github.com/prometheus/client_golang/prometheus",
+        "//vendor/k8s.io/client-go/util/workqueue",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/metrics",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":metrics",
+    visibility = ["//vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
+)

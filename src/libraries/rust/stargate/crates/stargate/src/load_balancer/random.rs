@@ -17,8 +17,10 @@ use std::fmt;
 
 use rand::{Rng, seq::IteratorRandom};
 
+#[cfg(test)]
+use super::LoadBalancerTestChoiceExt;
 use super::{LoadBalancer, LoadBalancerCandidateChoice, LoadBalancerRequest};
-use crate::load_balancer_state::RoutedClusterSnapshot;
+use crate::routing_state::RoutedClusterSnapshot;
 
 const EXCLUSION_REJECTION_ATTEMPTS: usize = 8;
 const REJECTION_SAMPLE_EXCLUSION_RATIO_DIVISOR: usize = 4;
@@ -113,10 +115,10 @@ mod tests {
     use std::collections::HashSet;
     use std::time::{Duration, Instant};
 
-    use stargate_proto::pb::ModelStats;
+    use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
     use super::*;
-    use crate::load_balancer_state::RoutingTargetKey;
+    use crate::routing_state::RoutingTargetKey;
 
     fn candidate(cluster_id: &str) -> RoutedClusterSnapshot {
         RoutedClusterSnapshot {
@@ -124,7 +126,7 @@ mod tests {
             stats: ModelStats::default(),
             rtt: Duration::from_millis(1),
             snapshot_updated_at: Instant::now(),
-            status: 1,
+            status: InferenceServerStatus::Active,
             active_backend_count: 1,
         }
     }
@@ -160,7 +162,7 @@ mod tests {
 
         for _ in 0..128 {
             let choice = RandomLoadBalancer
-                .choose(&request, &candidates)
+                .choose_for_test(&request, &candidates)
                 .expect("eligible candidate should be selected");
             assert_eq!(choice.candidate.cluster_id, "eligible");
         }
@@ -180,7 +182,7 @@ mod tests {
 
         for _ in 0..512 {
             let choice = RandomLoadBalancer
-                .choose(&request, &candidates)
+                .choose_for_test(&request, &candidates)
                 .expect("eligible candidate should be selected");
             assert_ne!(choice.candidate.cluster_id, "cluster-0000");
         }
@@ -196,6 +198,10 @@ mod tests {
         let request = request(&target, Some(&excluded));
         let candidates = [candidate("excluded-a"), candidate("excluded-b")];
 
-        assert!(RandomLoadBalancer.choose(&request, &candidates).is_none());
+        assert!(
+            RandomLoadBalancer
+                .choose_for_test(&request, &candidates)
+                .is_none()
+        );
     }
 }

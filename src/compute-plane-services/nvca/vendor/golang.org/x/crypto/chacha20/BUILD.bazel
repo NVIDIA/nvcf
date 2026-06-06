@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "chacha20",
+    srcs = [
+        "chacha_arm64.go",
+        "chacha_arm64.s",
+        "chacha_generic.go",
+        "chacha_noasm.go",
+        "chacha_ppc64x.go",
+        "chacha_ppc64x.s",
+        "chacha_s390x.go",
+        "chacha_s390x.s",
+        "xor.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/chacha20",
+    importpath = "golang.org/x/crypto/chacha20",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/golang.org/x/crypto/internal/alias",
+    ] + select({
+        "@rules_go//go/platform:s390x": [
+            "//vendor/golang.org/x/sys/cpu",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":chacha20",
+    visibility = ["//visibility:public"],
+)

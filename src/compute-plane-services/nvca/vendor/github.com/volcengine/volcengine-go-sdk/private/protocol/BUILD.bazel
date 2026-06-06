@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "protocol",
+    srcs = [
+        "host.go",
+        "host_prefix.go",
+        "idempotency.go",
+        "jsonvalue.go",
+        "payload.go",
+        "timestamp.go",
+        "unmarshal.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/private/protocol",
+    importpath = "github.com/volcengine/volcengine-go-sdk/private/protocol",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/volcengine/volcengine-go-sdk/internal/sdkmath",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/client/metadata",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/request",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":protocol",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "objx",
+    srcs = [
+        "accessors.go",
+        "conversions.go",
+        "doc.go",
+        "map.go",
+        "mutations.go",
+        "security.go",
+        "tests.go",
+        "type_specific.go",
+        "type_specific_codegen.go",
+        "value.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/stretchr/objx",
+    importpath = "github.com/stretchr/objx",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":objx",
+    visibility = ["//visibility:public"],
+)

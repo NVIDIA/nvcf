@@ -48,6 +48,10 @@ pub struct RequestResult {
     pub first_output_ms: Option<u64>,
     pub completion_ms: u64,
     pub kv_cache_hit: Option<bool>,
+    #[serde(default)]
+    pub kv_cache_reused_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub kv_cache_uncached_input_tokens: Option<u64>,
     pub kv_cache_evicted_entries: Option<u64>,
     pub kv_cache_evicted_tokens: Option<u64>,
     pub ok: bool,
@@ -147,6 +151,10 @@ async fn execute_request(
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned);
             let kv_cache_hit = bool_header(response.headers(), "x-kv-cache-hit");
+            let kv_cache_reused_input_tokens =
+                u64_header(response.headers(), "x-kv-cache-reused-input-tokens");
+            let kv_cache_uncached_input_tokens =
+                u64_header(response.headers(), "x-kv-cache-uncached-input-tokens");
             let kv_cache_evicted_entries =
                 u64_header(response.headers(), "x-kv-cache-evicted-entries");
             let kv_cache_evicted_tokens =
@@ -181,6 +189,8 @@ async fn execute_request(
                             first_output_ms,
                             completion_ms: duration_ms(dispatch_time.elapsed()),
                             kv_cache_hit,
+                            kv_cache_reused_input_tokens,
+                            kv_cache_uncached_input_tokens,
                             kv_cache_evicted_entries,
                             kv_cache_evicted_tokens,
                             ok: false,
@@ -205,6 +215,8 @@ async fn execute_request(
                 first_output_ms,
                 completion_ms: duration_ms(dispatch_time.elapsed()),
                 kv_cache_hit,
+                kv_cache_reused_input_tokens,
+                kv_cache_uncached_input_tokens,
                 kv_cache_evicted_entries,
                 kv_cache_evicted_tokens,
                 ok: (200..300).contains(&status_code),
@@ -226,6 +238,8 @@ async fn execute_request(
             first_output_ms: None,
             completion_ms: duration_ms(dispatch_time.elapsed()),
             kv_cache_hit: None,
+            kv_cache_reused_input_tokens: None,
+            kv_cache_uncached_input_tokens: None,
             kv_cache_evicted_entries: None,
             kv_cache_evicted_tokens: None,
             ok: false,
@@ -355,6 +369,8 @@ mod tests {
             max_concurrency: 2,
             stargate_count: 1,
             backend_count: 1,
+            cluster_count: 1,
+            pylons_per_cluster: 1,
             requests: vec![request(0, 0), request(1, 300), request(2, 50)],
         };
 
@@ -394,6 +410,8 @@ mod tests {
             max_concurrency: 0,
             stargate_count: 1,
             backend_count: 1,
+            cluster_count: 1,
+            pylons_per_cluster: 1,
             requests: Vec::new(),
         };
 

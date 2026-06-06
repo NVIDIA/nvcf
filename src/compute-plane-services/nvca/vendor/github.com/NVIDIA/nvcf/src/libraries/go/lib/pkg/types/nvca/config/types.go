@@ -410,6 +410,31 @@ type WorkloadConfig struct {
 	// Stargate configuration
 	DefaultStargateAddress string `yaml:",omitempty"`
 	StargateQUICInsecure   bool   `yaml:",omitempty"`
+
+	// TransportTLS configures trust material used by workload transport clients.
+	TransportTLS *TransportTLSConfig `yaml:",omitempty"`
+}
+
+// TrustMode controls how the NVCA agent's LLM worker pins the QUIC TLS
+// certificate served by Stargate. "system" uses the host's standard CA
+// pool; "bundle" requires the operator-supplied PEM and fingerprint and
+// pins exclusively against that root.
+type TrustMode string
+
+const (
+	TrustModeSystem TrustMode = "system"
+	TrustModeBundle TrustMode = "bundle"
+)
+
+// TransportTLSConfig is the operator-supplied trust material the NVCA agent
+// uses to verify Stargate's openbao-issued QUIC TLS certificate on
+// self-managed clusters.
+type TransportTLSConfig struct {
+	TrustMode                TrustMode `yaml:"trustMode"`
+	TrustBundleConfigMapName string    `yaml:"trustBundleConfigMapName"`
+	TrustBundleKey           string    `yaml:"trustBundleKey"`
+	TrustBundleFingerprint   string    `yaml:"trustBundleFingerprint"`
+	TrustBundlePEM           string    `yaml:"trustBundlePem"`
 }
 
 func (t WorkloadConfig) Complete() WorkloadConfig {
@@ -535,6 +560,13 @@ func panicOnUnsetFields(t any) {
 	}
 }
 
+type ClusterIssuedTokenSource string
+
+const (
+	// ClusterIssuedTokenSourcePSAT configures the agent to use the projected service account token authz path.
+	ClusterIssuedTokenSourcePSAT ClusterIssuedTokenSource = "psat"
+)
+
 type AuthzConfig struct {
 	// ClientID must come from a secret and set in-memory.
 	// It will not be stored when the config is written.
@@ -554,11 +586,21 @@ type AuthzConfig struct {
 	// SelfManagedVaultSecretsJSONPath is the path to the secrets.json file created by Vault
 	// for self-managed environments.
 	SelfManagedVaultSecretsJSONPath string `yaml:",omitempty"`
+
+	// Cluster-issued JWT authz configuration
+
+	// ClusterIssuedTokenSource is the source of the cluster-issued JWT token.
+	ClusterIssuedTokenSource ClusterIssuedTokenSource `yaml:",omitempty"`
+	// ClusterIssuedTokenFilePath is the path to the cluster-issued token file.
+	ClusterIssuedTokenFilePath string `yaml:",omitempty"`
 }
 
 func (t AuthzConfig) Complete() AuthzConfig {
 	if t.TokenFetchFailureThreshold == 0 {
 		t.TokenFetchFailureThreshold = 3
+	}
+	if t.ClusterIssuedTokenSource == "" {
+		t.ClusterIssuedTokenSource = ClusterIssuedTokenSourcePSAT
 	}
 	return t
 }

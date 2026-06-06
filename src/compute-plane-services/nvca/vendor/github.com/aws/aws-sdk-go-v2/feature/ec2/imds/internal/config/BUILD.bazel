@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "config",
+    srcs = ["resolvers.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds/internal/config",
+    importpath = "github.com/aws/aws-sdk-go-v2/feature/ec2/imds/internal/config",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":config",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds:__subpackages__"],
+)

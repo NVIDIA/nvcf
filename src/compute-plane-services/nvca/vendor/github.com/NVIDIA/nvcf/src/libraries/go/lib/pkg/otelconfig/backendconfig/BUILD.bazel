@@ -18,7 +18,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig",
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig",
     visibility = ["//visibility:public"],
-    deps = ["@in_gopkg_yaml_v3//:yaml_v3"],
+    deps = ["//vendor/gopkg.in/yaml.v3:yaml_v3"],
 )
 
 alias(

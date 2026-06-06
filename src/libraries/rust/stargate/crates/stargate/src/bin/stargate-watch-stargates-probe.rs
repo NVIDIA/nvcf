@@ -33,6 +33,9 @@ struct Args {
     #[arg(long = "expect-advertise-addr", value_name = "ADDR")]
     expected_advertise_addrs: Vec<String>,
 
+    #[arg(long = "expect-grpc-pylon-dial-addr", value_name = "ADDR")]
+    expected_grpc_pylon_dial_addrs: Vec<String>,
+
     #[arg(long = "expect-watch-url", value_name = "URL")]
     expected_watch_urls: Vec<String>,
 
@@ -173,6 +176,19 @@ fn validate_snapshot(
         }
     }
 
+    let grpc_pylon_dial_addrs: HashSet<_> = response
+        .stargates
+        .iter()
+        .map(|s| s.grpc_pylon_dial_addr.as_str())
+        .collect();
+    for expected_grpc_pylon_dial_addr in &args.expected_grpc_pylon_dial_addrs {
+        if !grpc_pylon_dial_addrs.contains(expected_grpc_pylon_dial_addr.as_str()) {
+            bail!(
+                "missing grpc_pylon_dial_addr {expected_grpc_pylon_dial_addr}; got {grpc_pylon_dial_addrs:?}"
+            );
+        }
+    }
+
     let watch_urls: HashSet<_> = response
         .watch_stargate_urls
         .iter()
@@ -217,6 +233,7 @@ mod tests {
             addr: "127.0.0.1:50071".to_string(),
             expected_ids: Vec::new(),
             expected_advertise_addrs: Vec::new(),
+            expected_grpc_pylon_dial_addrs: Vec::new(),
             expected_watch_urls: Vec::new(),
             expect_stargate_count: None,
             expect_watch_url_count: None,
@@ -235,6 +252,8 @@ mod tests {
             "stargate-0.stargate-headless.region-a.svc.cluster.local:50071".to_string(),
             "stargate-1.stargate-headless.region-a.svc.cluster.local:50071".to_string(),
         ];
+        args.expected_grpc_pylon_dial_addrs =
+            vec!["stargate-grpc-lb.region-a.svc.cluster.local:443".to_string()];
         args.expected_watch_urls = vec!["stargate.region-b.svc.cluster.local:50071".to_string()];
         args.expect_stargate_count = Some(2);
         args.expect_watch_url_count = Some(1);
@@ -250,6 +269,8 @@ mod tests {
                             "stargate-1.stargate-headless.region-a.svc.cluster.local:50071"
                                 .to_string(),
                         http_advertise_addr: String::new(),
+                        grpc_pylon_dial_addr: "stargate-grpc-lb.region-a.svc.cluster.local:443"
+                            .to_string(),
                     },
                     StargateInfo {
                         stargate_id: "stargate-0".to_string(),
@@ -257,6 +278,8 @@ mod tests {
                             "stargate-0.stargate-headless.region-a.svc.cluster.local:50071"
                                 .to_string(),
                         http_advertise_addr: String::new(),
+                        grpc_pylon_dial_addr: "stargate-grpc-lb.region-a.svc.cluster.local:443"
+                            .to_string(),
                     },
                 ],
                 watch_stargate_urls: vec!["stargate.region-b.svc.cluster.local:50071".to_string()],
@@ -280,6 +303,7 @@ mod tests {
                     stargate_id: "remote-service".to_string(),
                     advertise_addr: "stargate.region-b.svc.cluster.local:50071".to_string(),
                     http_advertise_addr: String::new(),
+                    grpc_pylon_dial_addr: String::new(),
                 }],
                 watch_stargate_urls: vec!["stargate.region-b.svc.cluster.local:50071".to_string()],
             },

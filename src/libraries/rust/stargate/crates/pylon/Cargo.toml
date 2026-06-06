@@ -39,4 +39,5 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 pylon-lib = { workspace = true }
 stargate-proto = { workspace = true }
+stargate-protocol = { workspace = true }
 stargate-telemetry = { workspace = true }

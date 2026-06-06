@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "errors",
+    srcs = [
+        "errors.go",
+        "join.go",
+        "join_go1_19.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-viper/mapstructure/v2/internal/errors",
+    importpath = "github.com/go-viper/mapstructure/v2/internal/errors",
+    visibility = ["//vendor/github.com/go-viper/mapstructure/v2:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":errors",
+    visibility = ["//vendor/github.com/go-viper/mapstructure/v2:__subpackages__"],
+)

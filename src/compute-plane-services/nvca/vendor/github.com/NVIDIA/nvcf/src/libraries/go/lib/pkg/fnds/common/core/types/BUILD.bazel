@@ -8,7 +8,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/utils",
-        "@com_github_google_uuid//:uuid",
+        "//vendor/github.com/google/uuid",
     ],
 )
 

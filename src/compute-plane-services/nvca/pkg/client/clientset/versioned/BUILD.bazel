@@ -13,9 +13,9 @@ go_library(
         "//pkg/client/clientset/versioned/typed/nvca/v1alpha1",
         "//pkg/client/clientset/versioned/typed/nvca/v2beta1",
         "//pkg/client/clientset/versioned/typed/nvcf/v1:nvcf",
-        "@io_k8s_client_go//discovery",
-        "@io_k8s_client_go//rest",
-        "@io_k8s_client_go//util/flowcontrol",
+        "//vendor/k8s.io/client-go/discovery",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/util/flowcontrol",
     ],
 )
 

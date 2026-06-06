@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "loading",
+    srcs = [
+        "doc.go",
+        "errors.go",
+        "json.go",
+        "loading.go",
+        "options.go",
+        "yaml.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/loading",
+    importpath = "github.com/go-openapi/swag/loading",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/go-openapi/swag/yamlutils"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":loading",
+    visibility = ["//visibility:public"],
+)

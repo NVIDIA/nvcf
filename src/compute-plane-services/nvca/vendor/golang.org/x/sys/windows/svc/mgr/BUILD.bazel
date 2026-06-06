@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "mgr",
+    srcs = [
+        "config.go",
+        "mgr.go",
+        "recovery.go",
+        "service.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/sys/windows/svc/mgr",
+    importpath = "golang.org/x/sys/windows/svc/mgr",
+    visibility = ["//visibility:public"],
+    deps = select({
+        "@rules_go//go/platform:windows": [
+            "//vendor/golang.org/x/sys/windows",
+            "//vendor/golang.org/x/sys/windows/svc",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":mgr",
+    visibility = ["//visibility:public"],
+)

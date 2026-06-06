@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go-jose",
+    srcs = [
+        "asymmetric.go",
+        "crypter.go",
+        "doc.go",
+        "encoding.go",
+        "jwe.go",
+        "jwk.go",
+        "jws.go",
+        "opaque.go",
+        "shared.go",
+        "signing.go",
+        "symmetric.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4",
+    importpath = "github.com/go-jose/go-jose/v4",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-jose/go-jose/v4/cipher",
+        "//vendor/github.com/go-jose/go-jose/v4/json",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":go-jose",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "zap",
+    srcs = [
+        "flags.go",
+        "kube_helpers.go",
+        "zap.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/log/zap",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/log/zap",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-logr/logr",
+        "//vendor/github.com/go-logr/zapr",
+        "//vendor/go.uber.org/zap",
+        "//vendor/go.uber.org/zap/buffer",
+        "//vendor/go.uber.org/zap/zapcore",
+        "//vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":zap",
+    visibility = ["//visibility:public"],
+)

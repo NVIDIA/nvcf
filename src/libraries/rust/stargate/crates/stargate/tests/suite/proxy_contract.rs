@@ -35,8 +35,8 @@ use pylon_lib::{
     QuicHttpTunnelConfig, QuicHttpTunnelHandle, RequestObservation, RequestObservationEndpoint,
     RequestObservationState, start_quic_http_tunnel,
 };
-use stargate::http_proxy::ProxyRetryConfig;
-use stargate::load_balancer_state::RoutingTargetKey;
+use stargate::proxy::ProxyRetryConfig;
+use stargate::routing::RoutingTargetKey;
 use stargate::runtime::StargateRuntime;
 use stargate_proto::pb::InferenceServerStatus;
 use tokio::net::TcpListener;
@@ -333,14 +333,6 @@ async fn endpoint_contract_response(
         HeaderName::from_static("content-type"),
         HeaderValue::from_static("text/event-stream"),
     );
-    response.headers_mut().insert(
-        HeaderName::from_static("x-pylon-engine-stat-input-tokens-total"),
-        HeaderValue::from_static("7"),
-    );
-    response.headers_mut().insert(
-        HeaderName::from_static("x-pylon-engine-stat-output-tokens-generated"),
-        HeaderValue::from_static("2"),
-    );
     response
 }
 
@@ -460,17 +452,6 @@ async fn chat_completions_route_proxies_path_query_and_body_through_quic_tunnel(
             .unwrap(),
         "chat-contract-inst"
     );
-    assert!(
-        resp.headers()
-            .get("x-pylon-engine-stat-input-tokens-total")
-            .is_none()
-    );
-    assert!(
-        resp.headers()
-            .get("x-pylon-engine-stat-output-tokens-generated")
-            .is_none()
-    );
-
     let response_text = resp.text().await.expect("response should be text");
     assert!(response_text.contains(r#""object":"chat.completion.chunk""#));
     assert!(response_text.contains(r#""model":"chat-contract-model""#));
@@ -631,17 +612,6 @@ async fn responses_route_proxies_path_and_query_through_quic_tunnel() {
             .unwrap(),
         "responses-inst"
     );
-    assert!(
-        resp.headers()
-            .get("x-pylon-engine-stat-input-tokens-total")
-            .is_none()
-    );
-    assert!(
-        resp.headers()
-            .get("x-pylon-engine-stat-output-tokens-generated")
-            .is_none()
-    );
-
     let response_text = resp.text().await.expect("response should be text");
     assert!(response_text.contains("event: response.created"));
     assert!(response_text.contains("event: response.completed"));
@@ -1811,20 +1781,13 @@ async fn queue_estimate_mismatch_retries_alternate_backend_before_upstream() {
         input_tokens: 100,
         embedding_items: 0,
         embedding_items_observed: false,
-        input_tokens_processed: 0,
-        input_tokens_processed_from_inference_progress: false,
-        engine_reported_input_tokens_total: None,
-        input_tokens_total_mismatch: false,
         upstream_status: None,
         output_messages: 0,
         output_tokens: 0,
         output_tokens_explicit: false,
         output_tokens_from_chunk_usage: false,
-        has_engine_request_stats: false,
-        has_inference_progress_stats: false,
         state: RequestObservationState::UpstreamConnecting,
         time_to_response_headers: None,
-        time_to_input_tokens_processed: None,
         time_to_first_output: None,
         time_to_first_token: None,
         total_duration: Duration::ZERO,
@@ -2142,20 +2105,13 @@ async fn queue_estimate_mismatch_retries_sibling_in_selected_shared_cluster() {
         input_tokens: 100,
         embedding_items: 0,
         embedding_items_observed: false,
-        input_tokens_processed: 0,
-        input_tokens_processed_from_inference_progress: false,
-        engine_reported_input_tokens_total: None,
-        input_tokens_total_mismatch: false,
         upstream_status: None,
         output_messages: 0,
         output_tokens: 0,
         output_tokens_explicit: false,
         output_tokens_from_chunk_usage: false,
-        has_engine_request_stats: false,
-        has_inference_progress_stats: false,
         state: RequestObservationState::UpstreamConnecting,
         time_to_response_headers: None,
-        time_to_input_tokens_processed: None,
         time_to_first_output: None,
         time_to_first_token: None,
         total_duration: Duration::ZERO,

@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -128,6 +129,8 @@ type BackendK8sCache struct {
 
 	// Either stage or prod
 	envType nvidiaiov1.EnvType
+
+	clusterSource nvcaoptypes.ClusterSource
 
 	// Function deployment stages service URL
 	functionDeploymentStagesServiceURL string
@@ -376,6 +379,12 @@ func (b *BackendK8sCacheBuilder) WithIdentitySource(identitySource string) *Back
 	return &next
 }
 
+func (b *BackendK8sCacheBuilder) WithClusterSource(clusterSource nvcaoptypes.ClusterSource) *BackendK8sCacheBuilder {
+	next := *b
+	next.clusterSource = clusterSource
+	return &next
+}
+
 func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <-chan *core.Event, error) {
 	log := core.GetLogger(ctx)
 	resyncPeriod := b.resyncPeriod
@@ -422,6 +431,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		functionEnvOverridesB64:            b.functionEnvOverridesB64,
 		taskEnvOverridesB64:                b.taskEnvOverridesB64,
 		identitySource:                     b.identitySource,
+		clusterSource:                      b.clusterSource,
 	}
 
 	if c.operatorNamespace == "" {
@@ -1037,6 +1047,10 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 	if err := bc.validateNVCFBackend(ctx, nbMerged); err != nil {
 		return nvcaoperatorerrors.FatalError(err)
 	}
+	// Set cluster source if empty for downstream conditionals.
+	if nbMerged.Spec.ClusterSource == "" {
+		nbMerged.Spec.ClusterSource = bc.clusterSource
+	}
 
 	// Ensure CRDs always exist, regardless of rollout status.
 	// CRDs are foundational infrastructure and must be present before any rollout.
@@ -1102,7 +1116,8 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 			bc.eventRecorder.Eventf(nbMerged, corev1.EventTypeNormal,
 				string(nvcaoptypes.EventCategoryUpgrade), "Updating %v account configuration", AgentName)
 		} else if !reflect.DeepEqual(nbMerged.Spec.FeatureGate, nbMerged.Status.FeatureGate) {
-			log.Infof("Updating %v feature configuration from %+v to %+v", AgentName, nbMerged.Spec.FeatureGate, nbMerged.Status.FeatureGate)
+			log.Infof("Updating %v feature configuration: %s", AgentName,
+				formatFeatureGateChangeSummary(nbMerged.Status.FeatureGate, nbMerged.Spec.FeatureGate))
 			bc.eventRecorder.Eventf(nbMerged, corev1.EventTypeNormal,
 				string(nvcaoptypes.EventCategoryUpgrade), "Updating %v feature configuration", AgentName)
 		} else {
@@ -1169,6 +1184,51 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 	return nil
 }
 
+func formatFeatureGateChangeSummary(previous, desired nvidiaiov1.FeatureGate) string {
+	added, removed := featureGateValueDelta(previous.Values, desired.Values)
+	summary := fmt.Sprintf("feature gates: added=%v removed=%v", added, removed)
+	if !reflect.DeepEqual(previous.SharedStorage, desired.SharedStorage) {
+		summary += " sharedStorageChanged=true"
+	}
+	if !reflect.DeepEqual(previous.InternalPersistentStorage, desired.InternalPersistentStorage) {
+		summary += " internalPersistentStorageChanged=true"
+	}
+	if !reflect.DeepEqual(previous.OTELConfig, desired.OTELConfig) {
+		summary += " otelConfigChanged=true"
+	}
+	return summary
+}
+
+func featureGateValueDelta(previous, desired []string) ([]string, []string) {
+	previousSet := make(map[string]struct{}, len(previous))
+	for _, gate := range previous {
+		previousSet[gate] = struct{}{}
+	}
+
+	desiredSet := make(map[string]struct{}, len(desired))
+	for _, gate := range desired {
+		desiredSet[gate] = struct{}{}
+	}
+
+	added := make([]string, 0)
+	for gate := range desiredSet {
+		if _, ok := previousSet[gate]; !ok {
+			added = append(added, gate)
+		}
+	}
+	sort.Strings(added)
+
+	removed := make([]string, 0)
+	for gate := range previousSet {
+		if _, ok := desiredSet[gate]; !ok {
+			removed = append(removed, gate)
+		}
+	}
+	sort.Strings(removed)
+
+	return added, removed
+}
+
 func (bc *BackendK8sCache) validateNVCFBackend(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
 	log := core.GetLogger(ctx)
 
@@ -1177,6 +1237,12 @@ func (bc *BackendK8sCache) validateNVCFBackend(ctx context.Context, nb *nvidiaio
 		func() error {
 			_, err := bc.getCustomNetworkPoliciesData(ctx, bc.clients.K8s.CoreV1().ConfigMaps(nb.Namespace).Get)
 			return err
+		},
+		func() error {
+			if nb.Spec.ClusterSource != "" && bc.clusterSource != nb.Spec.ClusterSource {
+				return fmt.Errorf("cluster source cannot be changed after initial deployment")
+			}
+			return nil
 		},
 	}
 	for _, check := range nvcaValidationChecks {

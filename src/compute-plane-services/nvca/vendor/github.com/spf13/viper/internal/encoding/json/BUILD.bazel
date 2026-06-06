@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "json",
+    srcs = ["codec.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/viper/internal/encoding/json",
+    importpath = "github.com/spf13/viper/internal/encoding/json",
+    visibility = ["//vendor/github.com/spf13/viper:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":json",
+    visibility = ["//vendor/github.com/spf13/viper:__subpackages__"],
+)

@@ -11,11 +11,11 @@ go_library(
     deps = [
         "//pkg/queue",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "@com_github_aws_aws_sdk_go//aws",
-        "@com_github_aws_aws_sdk_go//aws/credentials",
-        "@com_github_aws_aws_sdk_go//aws/endpoints",
-        "@com_github_aws_aws_sdk_go//aws/session",
-        "@com_github_aws_aws_sdk_go//service/sqs",
+        "//vendor/github.com/aws/aws-sdk-go/aws",
+        "//vendor/github.com/aws/aws-sdk-go/aws/credentials",
+        "//vendor/github.com/aws/aws-sdk-go/aws/endpoints",
+        "//vendor/github.com/aws/aws-sdk-go/aws/session",
+        "//vendor/github.com/aws/aws-sdk-go/service/sqs",
     ],
 )
 
@@ -32,7 +32,7 @@ go_test(
     deps = [
         "//pkg/queue",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
     ],
 )

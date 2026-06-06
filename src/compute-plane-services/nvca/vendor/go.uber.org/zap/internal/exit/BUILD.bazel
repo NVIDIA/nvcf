@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "exit",
+    srcs = ["exit.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal/exit",
+    importpath = "go.uber.org/zap/internal/exit",
+    visibility = ["//vendor/go.uber.org/zap:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":exit",
+    visibility = ["//vendor/go.uber.org/zap:__subpackages__"],
+)

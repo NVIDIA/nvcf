@@ -20,8 +20,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::{Stream, StreamExt, future, stream};
-use tokio::sync::watch;
+use futures::{Stream, StreamExt, stream};
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -29,19 +29,21 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 use url::Url;
 
+use stargate_forwarding::{ForwardingResolver, PeerResolution, PeerTarget};
+
 use crate::auth::WorkerAuthenticator;
 use crate::discovery::Discovery;
-use crate::forwarding::{ForwardingResolver, PeerResolution, PeerTarget};
-use crate::load_balancer_state::{RegistrationIdentity, RunningRegistration, StargateState};
-use crate::quic_tunnel::{ConnectionWatcher, EnsureConnectedResult, QuicHttpProxy};
+use crate::routing_state::{RegistrationIdentity, RunningRegistration, StargateState};
+use crate::tunnel::{ConnectionWatcher, EnsureConnectedResult, QuicHttpProxy};
 
 use stargate_proto::REGISTRATION_HEARTBEAT_MS_METADATA;
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::stargate_control_plane_server::StargateControlPlane;
 use stargate_proto::pb::stargate_model_discovery_server::StargateModelDiscovery;
 use stargate_proto::pb::{
-    InferenceServerAck, InferenceServerRegistration, ListModelsRequest, ListModelsResponse,
-    ModelCalibrationDirective, StargateInfo, WatchStargatesRequest, WatchStargatesResponse,
+    CalibrationState, InferenceServerAck, InferenceServerRegistration, ListModelsRequest,
+    ListModelsResponse, ModelCalibrationDirective, StargateInfo, SubmitClusterCalibrationRequest,
+    SubmitClusterCalibrationResponse, WatchStargatesRequest, WatchStargatesResponse,
 };
 
 #[derive(Clone)]
@@ -72,6 +74,7 @@ pub struct StargateServiceConfig {
     pub discovery_dns_name: String,
     pub discovery: Box<dyn Discovery>,
     pub remote_watch_stargate_urls: Vec<String>,
+    pub grpc_pylon_dial_addr: Option<String>,
     pub discovery_poll_interval: Duration,
     pub watch_heartbeat_interval: Duration,
     pub shutdown_token: CancellationToken,
@@ -93,6 +96,7 @@ impl StargateService {
             config.remote_watch_stargate_urls,
             &local_watch_endpoint_keys,
         );
+        let grpc_pylon_dial_addr = config.grpc_pylon_dial_addr;
         let discovery_poll_interval = config.discovery_poll_interval;
         let watch_heartbeat_interval = config.watch_heartbeat_interval;
         let shutdown_token = config.shutdown_token;
@@ -131,6 +135,7 @@ impl StargateService {
                         build_watch_stargates_response(
                             stargates,
                             &remote_watch_stargate_urls,
+                            grpc_pylon_dial_addr.as_deref(),
                         )
                     },
                 };
@@ -203,19 +208,30 @@ impl StargateService {
     pub fn state(&self) -> Arc<StargateState> {
         self.state.clone()
     }
-
-    pub fn watch_stargates_receiver(&self) -> watch::Receiver<WatchStargatesResponse> {
-        self.watch_stargates_rx.clone()
-    }
 }
 
 fn build_watch_stargates_response(
     stargates: Vec<StargateInfo>,
     remote_watch_stargate_urls: &[String],
+    grpc_pylon_dial_addr: Option<&str>,
 ) -> WatchStargatesResponse {
+    let mut stargates = normalize_stargates(stargates);
+    apply_grpc_pylon_dial_addr(&mut stargates, grpc_pylon_dial_addr);
     WatchStargatesResponse {
-        stargates: normalize_stargates(stargates),
+        stargates,
         watch_stargate_urls: remote_watch_stargate_urls.to_vec(),
+    }
+}
+
+fn apply_grpc_pylon_dial_addr(stargates: &mut [StargateInfo], grpc_pylon_dial_addr: Option<&str>) {
+    let Some(grpc_pylon_dial_addr) = grpc_pylon_dial_addr
+        .map(str::trim)
+        .filter(|addr| !addr.is_empty())
+    else {
+        return;
+    };
+    for stargate in stargates {
+        stargate.grpc_pylon_dial_addr = grpc_pylon_dial_addr.to_string();
     }
 }
 
@@ -322,6 +338,45 @@ fn watch_response_has_entries(response: &WatchStargatesResponse) -> bool {
     !response.stargates.is_empty() || !response.watch_stargate_urls.is_empty()
 }
 
+fn registration_message_stream<S>(
+    inbound: S,
+) -> (
+    impl Stream<Item = InferenceServerRegistration>,
+    RegistrationStreamErrorRx,
+)
+where
+    S: Stream<Item = Result<InferenceServerRegistration, Status>> + Send + 'static,
+{
+    let (stream_error_tx, stream_error_rx) = mpsc::channel(1);
+    let messages = inbound.filter_map(move |result| {
+        let stream_error_tx = stream_error_tx.clone();
+        async move {
+            match result {
+                Ok(message) => Some(message),
+                Err(error) => {
+                    warn!(
+                        error = %error,
+                        "forwarded registration stream read error, forwarding stream error"
+                    );
+                    let _ = stream_error_tx.send(error).await;
+                    None
+                }
+            }
+        }
+    });
+    (messages, stream_error_rx)
+}
+
+async fn pending_registration_stream_error(
+    stream_error_rx: &mut RegistrationStreamErrorRx,
+) -> Option<Status> {
+    match stream_error_rx.try_recv() {
+        Ok(error) => Some(error),
+        Err(mpsc::error::TryRecvError::Empty) => stream_error_rx.recv().await,
+        Err(mpsc::error::TryRecvError::Disconnected) => None,
+    }
+}
+
 enum PeerGrpcTarget {
     Local,
     Peer(PeerTarget),
@@ -331,6 +386,7 @@ type WatchStargatesStream =
     Pin<Box<dyn Stream<Item = Result<WatchStargatesResponse, Status>> + Send + 'static>>;
 type RegisterInferenceServerStream =
     Pin<Box<dyn Stream<Item = Result<InferenceServerAck, Status>> + Send + 'static>>;
+type RegistrationStreamErrorRx = mpsc::Receiver<Status>;
 
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const HEALTH_CHECK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -509,23 +565,44 @@ impl StargateControlPlane for StargateService {
                 );
                 let mut peer_client = Self::connect_peer(&peer.dial_addr).await?;
                 let metadata = request.metadata().clone();
-                let inbound = request
-                    .into_inner()
-                    .take_while(|r| {
-                        if let Err(error) = r {
-                            warn!(error = %error, "forwarded registration stream read error, stopping");
-                        }
-                        future::ready(r.is_ok())
-                    })
-                    .filter_map(|r| future::ready(r.ok()));
+                let (inbound, mut stream_error_rx) =
+                    registration_message_stream(request.into_inner());
                 let mut forwarded = Request::new(inbound);
                 *forwarded.metadata_mut() = metadata;
                 let resp = peer_client.register_inference_server(forwarded).await?;
                 let mut inner = resp.into_inner();
                 let stream = async_stream::stream! {
                     let _client = peer_client;
-                    while let Some(msg) = inner.message().await.transpose() {
-                        yield msg;
+                    let mut stream_error_rx_open = true;
+                    loop {
+                        tokio::select! {
+                            error = stream_error_rx.recv(), if stream_error_rx_open => {
+                                match error {
+                                    Some(error) => {
+                                        yield Err(error);
+                                        break;
+                                    }
+                                    None => stream_error_rx_open = false,
+                                }
+                            }
+                            message = inner.message() => {
+                                match message {
+                                    Ok(Some(message)) => yield Ok(message),
+                                    Ok(None) => {
+                                        if let Some(error) =
+                                            pending_registration_stream_error(&mut stream_error_rx).await
+                                        {
+                                            yield Err(error);
+                                        }
+                                        break;
+                                    }
+                                    Err(error) => {
+                                        yield Err(error);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
                 };
                 return Ok(Response::new(Box::pin(stream)));
@@ -578,6 +655,49 @@ impl StargateControlPlane for StargateService {
         });
 
         Ok(Response::new(Box::pin(out)))
+    }
+
+    async fn submit_cluster_calibration(
+        &self,
+        request: Request<SubmitClusterCalibrationRequest>,
+    ) -> Result<Response<SubmitClusterCalibrationResponse>, Status> {
+        match self.peer_grpc_target(&request) {
+            PeerGrpcTarget::Peer(peer) => {
+                info!(
+                    peer = %peer.dial_addr,
+                    server_name = %peer.server_name,
+                    "forwarding submit_cluster_calibration to peer"
+                );
+                let mut peer_client = Self::connect_peer(&peer.dial_addr).await?;
+                let metadata = request.metadata().clone();
+                let mut forwarded = Request::new(request.into_inner());
+                *forwarded.metadata_mut() = metadata;
+                return peer_client.submit_cluster_calibration(forwarded).await;
+            }
+            PeerGrpcTarget::Local => {}
+        }
+
+        let token = request
+            .metadata()
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "));
+        let auth_result = self
+            .authenticator
+            .authenticate(token)
+            .await
+            .map_err(|error| {
+                warn!(error = %error, "gRPC calibration submission authentication failed");
+                Status::unauthenticated("authentication failed")
+            })?;
+
+        self.state
+            .submit_cluster_calibration(auth_result.routing_key, request.get_ref())
+            .await?;
+
+        Ok(Response::new(SubmitClusterCalibrationResponse {
+            state: CalibrationState::Complete as i32,
+        }))
     }
 }
 
@@ -666,7 +786,6 @@ async fn process_registration_stream_with_state(
         debug!(
             inference_server_id = %update.inference_server_id,
             model_ids = ?update.models.keys().collect::<Vec<_>>(),
-            inference_server = ?update,
             "received inference servers update"
         );
 
@@ -910,7 +1029,14 @@ async fn apply_registration_update(
         {
             EnsureConnectedResult::Connected => true,
             EnsureConnectedResult::ReverseDisconnected => false,
-            EnsureConnectedResult::Unavailable => return Ok(ApplyUpdateOutcome::Skip),
+            EnsureConnectedResult::Unavailable => {
+                // Keep the no-ack retry behavior while clearing any stale route
+                // that depended on the now-unavailable direct connection.
+                state
+                    .apply_registration_update(&mut running.running, update, false, None)
+                    .await;
+                return Ok(ApplyUpdateOutcome::Skip);
+            }
         }
     } else {
         true
@@ -1109,11 +1235,11 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::auth::{AuthResult, OpenAuthenticator};
-    use crate::load_balancer_state::RegistrationIdentity;
-    use crate::quic_tunnel::QuicTunnelConfig;
+    use crate::routing_state::RegistrationIdentity;
+    use crate::tunnel::QuicTunnelConfig;
     use stargate_proto::pb::{
-        CalibrationState, InferenceServerModelRegistration, InferenceServerRegistration,
-        InferenceServerStatus, ModelStats, StargateInfo,
+        InferenceServerModelRegistration, InferenceServerRegistration, InferenceServerStatus,
+        ModelStats, StargateInfo,
     };
 
     #[test]
@@ -1208,6 +1334,72 @@ mod tests {
         assert_eq!(error, "model_ids must not contain empty values");
     }
 
+    #[tokio::test]
+    async fn registration_message_stream_reports_inbound_stream_errors() {
+        let (messages, mut errors) = registration_message_stream(futures::stream::iter([Err(
+            Status::cancelled("client cancelled registration stream"),
+        )]));
+        futures::pin_mut!(messages);
+
+        assert!(
+            messages.next().await.is_none(),
+            "stream errors must not be converted into registration messages"
+        );
+        let error = errors
+            .recv()
+            .await
+            .expect("inbound stream error should be retained for response termination");
+        assert_eq!(error.code(), tonic::Code::Cancelled);
+        assert_eq!(error.message(), "client cancelled registration stream");
+    }
+
+    #[tokio::test]
+    async fn pending_registration_stream_error_returns_buffered_error() {
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.send(Status::cancelled("buffered registration stream error"))
+            .await
+            .expect("receiver should be alive");
+
+        let error = pending_registration_stream_error(&mut rx)
+            .await
+            .expect("buffered stream error should be returned");
+
+        assert_eq!(error.code(), tonic::Code::Cancelled);
+        assert_eq!(error.message(), "buffered registration stream error");
+    }
+
+    #[tokio::test]
+    async fn pending_registration_stream_error_waits_for_delayed_error() {
+        let (tx, mut rx) = mpsc::channel(1);
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            tx.send(Status::internal("delayed registration stream error"))
+                .await
+                .expect("receiver should be alive");
+        });
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            pending_registration_stream_error(&mut rx),
+        )
+        .await
+        .expect("pending stream error should arrive")
+        .expect("delayed stream error should be returned");
+
+        assert_eq!(error.code(), tonic::Code::Internal);
+        assert_eq!(error.message(), "delayed registration stream error");
+    }
+
+    #[tokio::test]
+    async fn pending_registration_stream_error_returns_none_after_disconnect() {
+        let (tx, mut rx) = mpsc::channel(1);
+        drop(tx);
+
+        let error = pending_registration_stream_error(&mut rx).await;
+
+        assert!(error.is_none());
+    }
+
     fn make_identity() -> RegistrationIdentity {
         RegistrationIdentity {
             inference_server_id: "server-1".to_string(),
@@ -1240,7 +1432,7 @@ mod tests {
                         request_timeout: Duration::from_millis(10),
                         direct_quic_connections: 1,
                         tls_cert_pem: None,
-                        tls_key_pem: None,
+                        server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
                         quic_insecure: true,
                         tunnel_protocol: Default::default(),
                     },
@@ -1361,19 +1553,23 @@ mod tests {
                     stargate_id: "stargate-1".to_string(),
                     advertise_addr: "10.0.0.2:50071".to_string(),
                     http_advertise_addr: "10.0.0.2:8000".to_string(),
+                    grpc_pylon_dial_addr: String::new(),
                 },
                 StargateInfo {
                     stargate_id: "stargate-0".to_string(),
                     advertise_addr: "10.0.0.1:50071".to_string(),
                     http_advertise_addr: "10.0.0.1:8000".to_string(),
+                    grpc_pylon_dial_addr: String::new(),
                 },
                 StargateInfo {
                     stargate_id: "stargate-1".to_string(),
                     advertise_addr: "10.0.0.2:50071".to_string(),
                     http_advertise_addr: "10.0.0.2:8000".to_string(),
+                    grpc_pylon_dial_addr: String::new(),
                 },
             ],
             &remote_watch_urls,
+            None,
         );
 
         let ids: Vec<&str> = response
@@ -1396,19 +1592,46 @@ mod tests {
                     stargate_id: String::new(),
                     advertise_addr: "10.0.0.1:50071".to_string(),
                     http_advertise_addr: "10.0.0.1:8000".to_string(),
+                    grpc_pylon_dial_addr: String::new(),
                 },
                 StargateInfo {
                     stargate_id: "stargate-0".to_string(),
                     advertise_addr: "10.0.0.1:50071".to_string(),
                     http_advertise_addr: "10.0.0.1:8000".to_string(),
+                    grpc_pylon_dial_addr: String::new(),
                 },
             ],
             &[],
+            None,
         );
 
         assert_eq!(response.stargates.len(), 1);
         assert_eq!(response.stargates[0].stargate_id, "stargate-0");
         assert_eq!(response.stargates[0].advertise_addr, "10.0.0.1:50071");
+    }
+
+    #[test]
+    fn watch_stargates_response_applies_configured_grpc_pylon_dial_addr() {
+        let response = build_watch_stargates_response(
+            vec![StargateInfo {
+                stargate_id: "stargate-0".to_string(),
+                advertise_addr: "stargate-0.region-a:50071".to_string(),
+                http_advertise_addr: String::new(),
+                grpc_pylon_dial_addr: String::new(),
+            }],
+            &[],
+            Some(" stargate-grpc-lb.region-a:443 "),
+        );
+
+        assert_eq!(response.stargates.len(), 1);
+        assert_eq!(
+            response.stargates[0].advertise_addr,
+            "stargate-0.region-a:50071"
+        );
+        assert_eq!(
+            response.stargates[0].grpc_pylon_dial_addr,
+            "stargate-grpc-lb.region-a:443"
+        );
     }
 
     #[test]
@@ -1444,6 +1667,7 @@ mod tests {
                 stargate_id: "stargate-0".to_string(),
                 advertise_addr: "10.0.0.1:50071".to_string(),
                 http_advertise_addr: "10.0.0.1:8000".to_string(),
+                grpc_pylon_dial_addr: String::new(),
             }],
             watch_stargate_urls: Vec::new(),
         }));
@@ -1461,6 +1685,7 @@ mod tests {
                 stargate_id: "stargate-0".to_string(),
                 advertise_addr: "10.0.0.1:50071".to_string(),
                 http_advertise_addr: "10.0.0.1:8000".to_string(),
+                grpc_pylon_dial_addr: String::new(),
             }],
             watch_stargate_urls: Vec::new(),
         };
@@ -1481,6 +1706,7 @@ mod tests {
                 stargate_id: "stargate-1".to_string(),
                 advertise_addr: "10.0.0.2:50071".to_string(),
                 http_advertise_addr: "10.0.0.2:8000".to_string(),
+                grpc_pylon_dial_addr: String::new(),
             }],
             watch_stargate_urls: Vec::new(),
         };
@@ -1505,7 +1731,6 @@ mod tests {
                 InferenceServerModelRegistration {
                     stats: Some(ModelStats::default()),
                     status: InferenceServerStatus::Active as i32,
-                    calibration_state: CalibrationState::Unknown as i32,
                 },
             )]),
         };
@@ -1513,7 +1738,7 @@ mod tests {
             .apply_registration_update(&mut running, &update, true, Some(Duration::from_millis(5)))
             .await;
 
-        let target = crate::load_balancer_state::RoutingTargetKey {
+        let target = crate::routing_state::RoutingTargetKey {
             routing_key: None,
             model_id: "model-idle".to_string(),
         };
@@ -1557,11 +1782,10 @@ mod tests {
                 InferenceServerModelRegistration {
                     stats: Some(ModelStats::default()),
                     status: InferenceServerStatus::Active as i32,
-                    calibration_state: CalibrationState::Unknown as i32,
                 },
             )]),
         };
-        let target = crate::load_balancer_state::RoutingTargetKey {
+        let target = crate::routing_state::RoutingTargetKey {
             routing_key: None,
             model_id: "model-unavailable".to_string(),
         };
@@ -1584,6 +1808,78 @@ mod tests {
             Err(flume::TryRecvError::Disconnected)
         ));
         assert!(state.candidates_for_target(&target).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unavailable_direct_update_removes_existing_route_before_stream_cleanup() {
+        let state = Arc::new(StargateState::default());
+        let identity = RegistrationIdentity {
+            inference_server_id: "lost-direct".to_string(),
+            cluster_id: "lost-direct".to_string(),
+            inference_server_url: "quic://127.0.0.1:1".to_string(),
+            routing_key: None,
+            reverse_tunnel: false,
+            coordinated_calibration: false,
+        };
+        let mut running = state.begin_registration(&identity).await.unwrap();
+        let update = InferenceServerRegistration {
+            inference_server_id: identity.inference_server_id.clone(),
+            cluster_id: identity.cluster_id.clone(),
+            inference_server_url: identity.inference_server_url.clone(),
+            reverse_tunnel: false,
+            coordinated_calibration: false,
+            models: HashMap::from([(
+                "model-lost-direct".to_string(),
+                InferenceServerModelRegistration {
+                    stats: Some(ModelStats::default()),
+                    status: InferenceServerStatus::Active as i32,
+                },
+            )]),
+        };
+        let target = crate::routing_state::RoutingTargetKey {
+            routing_key: None,
+            model_id: "model-lost-direct".to_string(),
+        };
+        state
+            .apply_registration_update(&mut running, &update, true, Some(Duration::from_millis(5)))
+            .await;
+        assert_eq!(state.candidates_for_target(&target).await.len(), 1);
+
+        let config = test_registration_connection_config();
+        let watcher = ConnectionWatcher::new(
+            config.quic_proxy.clone(),
+            config.reverse_tunnel_connect_timeout,
+        );
+        let stream = futures::stream::iter([Ok(update)]).chain(futures::stream::pending());
+        let (tx, rx) = flume::bounded(1);
+        let task = tokio::spawn(process_registration_stream_with_state(
+            stream,
+            state.clone(),
+            config,
+            tx,
+            AuthResult { routing_key: None },
+            None,
+            RegistrationStreamState::Running(Box::new(StreamRegistration {
+                running,
+                reverse_tunnel_watcher: Some(watcher),
+                health_check: None,
+            })),
+        ));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state.candidates_for_target(&target).await.is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("unavailable direct connection should clear stale route");
+        assert!(matches!(rx.try_recv(), Err(flume::TryRecvError::Empty)));
+
+        task.abort();
+        let _ = task.await;
     }
 
     #[tokio::test]
@@ -1627,11 +1923,10 @@ mod tests {
             reverse_tunnel: false,
             coordinated_calibration: false,
             models: HashMap::from([(
-                "model-legacy".to_string(),
+                "model-idle-timeout".to_string(),
                 InferenceServerModelRegistration {
                     stats: Some(ModelStats::default()),
                     status: InferenceServerStatus::Active as i32,
-                    calibration_state: CalibrationState::Unknown as i32,
                 },
             )]),
         };
@@ -1639,9 +1934,9 @@ mod tests {
             .apply_registration_update(&mut running, &update, true, Some(Duration::from_millis(5)))
             .await;
 
-        let target = crate::load_balancer_state::RoutingTargetKey {
+        let target = crate::routing_state::RoutingTargetKey {
             routing_key: None,
-            model_id: "model-legacy".to_string(),
+            model_id: "model-idle-timeout".to_string(),
         };
         assert_eq!(state.candidates_for_target(&target).await.len(), 1);
 

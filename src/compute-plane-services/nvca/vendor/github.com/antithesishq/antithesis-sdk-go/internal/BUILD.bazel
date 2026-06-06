@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "internal",
+    srcs = ["sdk_const.go"],
+    cgo = True,
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/antithesishq/antithesis-sdk-go/internal",
+    importpath = "github.com/antithesishq/antithesis-sdk-go/internal",
+    visibility = ["//vendor/github.com/antithesishq/antithesis-sdk-go:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":internal",
+    visibility = ["//vendor/github.com/antithesishq/antithesis-sdk-go:__subpackages__"],
+)

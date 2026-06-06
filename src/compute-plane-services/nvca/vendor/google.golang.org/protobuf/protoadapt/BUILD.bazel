@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "protoadapt",
+    srcs = ["convert.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/protoadapt",
+    importpath = "google.golang.org/protobuf/protoadapt",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/google.golang.org/protobuf/proto",
+        "//vendor/google.golang.org/protobuf/runtime/protoiface",
+        "//vendor/google.golang.org/protobuf/runtime/protoimpl",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":protoadapt",
+    visibility = ["//visibility:public"],
+)

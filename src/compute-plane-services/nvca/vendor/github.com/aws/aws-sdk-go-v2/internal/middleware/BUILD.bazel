@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "middleware",
+    srcs = ["middleware.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/middleware",
+    importpath = "github.com/aws/aws-sdk-go-v2/internal/middleware",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/context",
+        "//vendor/github.com/aws/smithy-go/middleware",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":middleware",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
+)

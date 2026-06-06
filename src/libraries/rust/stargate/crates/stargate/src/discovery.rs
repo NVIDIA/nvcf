@@ -16,11 +16,10 @@
 use std::net::{IpAddr, SocketAddr};
 
 use hickory_resolver::TokioAsyncResolver;
+use stargate_forwarding::render_hostname;
 use tracing::warn;
 
 use stargate_proto::pb::StargateInfo;
-
-use crate::forwarding::render_hostname;
 
 #[async_trait::async_trait]
 pub trait Discovery: Send + Sync + 'static {
@@ -86,6 +85,7 @@ impl HeadlessDnsDiscovery {
             // stargate-proxy. Per-pod HTTP addresses would either be unroutable
             // or imply peer forwarding that the proxy deliberately does not do.
             http_advertise_addr: String::new(),
+            grpc_pylon_dial_addr: String::new(),
         }
     }
 }
@@ -174,6 +174,7 @@ impl SelfOnlyDiscovery {
                 stargate_id: self_stargate_id,
                 advertise_addr: self_addr.to_string(),
                 http_advertise_addr: SocketAddr::new(self_addr.ip(), http_port).to_string(),
+                grpc_pylon_dial_addr: String::new(),
             },
         }
     }
@@ -235,6 +236,7 @@ impl DnsDiscovery {
             } else {
                 String::new()
             },
+            grpc_pylon_dial_addr: String::new(),
         })
     }
 }
@@ -247,6 +249,7 @@ impl Discovery for DnsDiscovery {
             stargate_id: self.self_stargate_id.clone(),
             advertise_addr: self_addr,
             http_advertise_addr: SocketAddr::new(self.self_addr.ip(), self.http_port).to_string(),
+            grpc_pylon_dial_addr: String::new(),
         }]
     }
 
@@ -277,6 +280,7 @@ impl Discovery for DnsDiscovery {
                 advertise_addr: self_addr_str,
                 http_advertise_addr: SocketAddr::new(self.self_addr.ip(), self.http_port)
                     .to_string(),
+                grpc_pylon_dial_addr: String::new(),
             });
         }
 
@@ -317,6 +321,7 @@ mod tests {
                 stargate_id: "stargate-0".to_string(),
                 advertise_addr: "stargate-0.stargate.external:50071".to_string(),
                 http_advertise_addr: String::new(),
+                grpc_pylon_dial_addr: String::new(),
             }]
         );
     }
@@ -331,6 +336,7 @@ mod tests {
                 stargate_id: "stargate-1".to_string(),
                 advertise_addr: "stargate-1.stargate.external:50071".to_string(),
                 http_advertise_addr: String::new(),
+                grpc_pylon_dial_addr: String::new(),
             }
         );
     }
@@ -360,11 +366,13 @@ mod tests {
                 stargate_id: "stargate-1".to_string(),
                 advertise_addr: "stargate-1.stargate.external:50071".to_string(),
                 http_advertise_addr: String::new(),
+                grpc_pylon_dial_addr: String::new(),
             },
             StargateInfo {
                 stargate_id: "stargate-0".to_string(),
                 advertise_addr: "stargate-0.stargate.external:50071".to_string(),
                 http_advertise_addr: String::new(),
+                grpc_pylon_dial_addr: String::new(),
             },
         ];
 
@@ -390,6 +398,7 @@ mod tests {
             stargate_id: "local-stargate".to_string(),
             advertise_addr: "127.0.0.1:50071".to_string(),
             http_advertise_addr: "127.0.0.1:8000".to_string(),
+            grpc_pylon_dial_addr: String::new(),
         }];
 
         assert_eq!(discovery.initial_stargates(), expected);
@@ -414,6 +423,7 @@ mod tests {
                 stargate_id: "local-stargate".to_string(),
                 advertise_addr: "127.0.0.1:50071".to_string(),
                 http_advertise_addr: "127.0.0.1:8000".to_string(),
+                grpc_pylon_dial_addr: String::new(),
             })
         );
         assert_eq!(discovery.stargate_info_for_ip("::1".parse().unwrap()), None);

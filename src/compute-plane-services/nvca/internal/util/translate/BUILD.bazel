@@ -22,7 +22,7 @@ go_test(
     srcs = ["duration_test.go"],
     embed = [":translate"],
     deps = [
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
     ],
 )

@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gobreaker",
+    srcs = [
+        "counter.go",
+        "distributed_gobreaker.go",
+        "gobreaker.go",
+        "twostep_gobreaker.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/sony/gobreaker/v2",
+    importpath = "github.com/sony/gobreaker/v2",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gobreaker",
+    visibility = ["//visibility:public"],
+)

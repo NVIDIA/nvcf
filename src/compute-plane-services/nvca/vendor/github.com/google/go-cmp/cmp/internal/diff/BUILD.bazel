@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "diff",
+    srcs = [
+        "debug_disable.go",
+        "diff.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-cmp/cmp/internal/diff",
+    importpath = "github.com/google/go-cmp/cmp/internal/diff",
+    visibility = ["//vendor/github.com/google/go-cmp/cmp:__subpackages__"],
+    deps = ["//vendor/github.com/google/go-cmp/cmp/internal/flags"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":diff",
+    visibility = ["//vendor/github.com/google/go-cmp/cmp:__subpackages__"],
+)

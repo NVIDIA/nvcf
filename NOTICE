@@ -108,9 +108,30 @@ The following third-party licenses are included in this repository:
     src/compute-plane-services/nvca/vendor/dario.cat/mergo/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/antithesishq/antithesis-sdk-go/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/antlr4-go/antlr/v4/LICENSE
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/config/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/credentials/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/configsources/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/endpoints/v2/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/ini/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/sync/singleflight/LICENSE
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/NOTICE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/ecr/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/ecrpublic/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/internal/presigned-url/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/signin/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/sso/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/ssooidc/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/sts/LICENSE.txt
     src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/internal/sync/singleflight/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/LICENSE.txt
     src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/NOTICE.txt
+    src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/internal/sync/singleflight/LICENSE
+    src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/LICENSE
+    src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/NOTICE
+    src/compute-plane-services/nvca/vendor/github.com/awslabs/amazon-ecr-credential-helper/ecr-login/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/beorn7/perks/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/blang/semver/v4/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/bombsimon/logrusr/v4/LICENSE
@@ -174,6 +195,7 @@ The following third-party licenses are included in this repository:
     src/compute-plane-services/nvca/vendor/github.com/Masterminds/semver/v3/LICENSE.txt
     src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/minio/highwayhash/LICENSE
+    src/compute-plane-services/nvca/vendor/github.com/mitchellh/go-homedir/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/modern-go/concurrent/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/modern-go/reflect2/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/munnerz/goautoneg/LICENSE
@@ -188,9 +210,9 @@ The following third-party licenses are included in this repository:
     src/compute-plane-services/nvca/vendor/github.com/NVIDIA/KAI-scheduler/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/NVIDIA/KAI-scheduler/NOTICE
     src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/LICENSE
-    src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/NOTICE
     src/compute-plane-services/nvca/vendor/github.com/opencontainers/go-digest/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/opencontainers/go-digest/LICENSE.docs
+    src/compute-plane-services/nvca/vendor/github.com/opencontainers/image-spec/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/pelletier/go-toml/v2/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/pmezard/go-difflib/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/internal/github.com/golang/gddo/LICENSE
@@ -222,6 +244,8 @@ The following third-party licenses are included in this repository:
     src/compute-plane-services/nvca/vendor/github.com/subosito/gotenv/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/undefinedlabs/go-mpatch/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/urfave/cli/v2/LICENSE
+    src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/LICENSE.txt
+    src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/NOTICE.txt
     src/compute-plane-services/nvca/vendor/github.com/x448/float16/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/xrash/smetrics/LICENSE
     src/compute-plane-services/nvca/vendor/go.opentelemetry.io/auto/sdk/LICENSE
@@ -277,6 +301,7 @@ The following third-party licenses are included in this repository:
     src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/validation/spec/LICENSE
     src/compute-plane-services/nvca/vendor/k8s.io/utils/internal/third_party/forked/golang/LICENSE
     src/compute-plane-services/nvca/vendor/k8s.io/utils/LICENSE
+    src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/LICENSE
     src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/LICENSE
     src/compute-plane-services/nvca/vendor/sigs.k8s.io/json/LICENSE
     src/compute-plane-services/nvca/vendor/sigs.k8s.io/randfill/LICENSE

@@ -36,8 +36,8 @@ use stargate::runtime::{StargateHandle, StargateRuntime};
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::stargate_model_discovery_client::StargateModelDiscoveryClient;
 use stargate_proto::pb::{
-    CalibrationState, InferenceServerModelRegistration, InferenceServerRegistration,
-    InferenceServerStatus, ListModelsRequest, ModelStats, StargateInfo,
+    InferenceServerModelRegistration, InferenceServerRegistration, InferenceServerStatus,
+    ListModelsRequest, ModelStats, StargateInfo,
 };
 use tokio::task::JoinHandle;
 use tonic::transport::Channel;
@@ -1580,7 +1580,6 @@ fn calibration_bringup_without_active_canary() -> BringupConfig {
     // unrelated repeating lifecycle transition after the model advertises.
     BringupConfig {
         enabled: true,
-        coordinated_calibration: false,
         active_canary_interval: Duration::ZERO,
         canary_timeout: Duration::from_millis(250),
         calibration_requests: 5,
@@ -1596,7 +1595,6 @@ fn active_canary_bringup() -> BringupConfig {
     // demotion and recovery after the backend is already routable.
     BringupConfig {
         enabled: true,
-        coordinated_calibration: false,
         active_canary_interval: Duration::from_millis(50),
         canary_timeout: Duration::from_millis(250),
         canary_max_generation_threshold: CANARY_FAILURE_TOKEN_THRESHOLD,
@@ -1608,7 +1606,6 @@ fn active_canary_bringup() -> BringupConfig {
 fn coordinated_calibration_bringup() -> BringupConfig {
     BringupConfig {
         enabled: true,
-        coordinated_calibration: true,
         active_canary_interval: Duration::ZERO,
         canary_timeout: Duration::from_millis(250),
         calibration_requests: 5,
@@ -1717,7 +1714,6 @@ fn raw_registration(
                         ..ModelStats::default()
                     }),
                     status: (*status).into(),
-                    calibration_state: CalibrationState::Unknown as i32,
                 },
             )
         })

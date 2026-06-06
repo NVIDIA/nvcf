@@ -25,7 +25,7 @@ use super::{
     LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerRequest,
     cache_affinity_key_is_cacheable,
 };
-use crate::load_balancer_state::{RoutedClusterSnapshot, RoutingTargetKey};
+use crate::routing_state::{RoutedClusterSnapshot, RoutingTargetKey};
 
 const RANKING_CACHE_LIMIT: usize = 4096;
 const RANKING_CACHE_PROBATION_LIMIT: usize = 4096;
@@ -303,7 +303,8 @@ impl PulsarLoadBalancer {
       - ranking: weighted rendezvous hashing
       - key material: routing target + cache-affinity key + cluster_id + optional seed
       - weight: `last_mean_input_tps`
-      - feasibility: presence of KV metrics when required + free-token check
+      - feasibility: retry exclusions, plus an optional reported-free-KV gate
+        against request input tokens
 
     So the control flow is:
 
@@ -346,13 +347,21 @@ impl PulsarLoadBalancer {
         candidates: &[RoutedClusterSnapshot],
         ranked_indices: &[usize],
     ) -> Option<LoadBalancerCandidateChoice> {
+        let mut selected_after_kv_free_tokens_skip = false;
         for (index, candidate_index) in ranked_indices.iter().enumerate() {
             let candidate = &candidates[*candidate_index];
-            if self.is_feasible(request, candidate) {
-                return Some(LoadBalancerCandidateChoice {
-                    candidate_index: *candidate_index,
-                    rank_depth: index + 1,
-                });
+            match self.feasibility(request, candidate) {
+                PulsarCandidateFeasibility::Eligible => {
+                    return Some(LoadBalancerCandidateChoice {
+                        candidate_index: *candidate_index,
+                        rank_depth: index + 1,
+                        selected_after_kv_free_tokens_skip,
+                    });
+                }
+                reason if reason.skipped_for_kv_free_tokens() => {
+                    selected_after_kv_free_tokens_skip = true;
+                }
+                _ => {}
             }
         }
 
@@ -399,13 +408,13 @@ impl PulsarLoadBalancer {
         Some((cache.miss_lookup(cache_affinity_key), None))
     }
 
-    fn compute_ranking(
+    pub(super) fn compute_ranking(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Vec<usize> {
         let mut hash_bytes = pulsar_hash_prefix(
-            self.config.seed.as_deref(),
+            self.config.seed(),
             &request.routing_target.routing_key,
             &request.routing_target.model_id,
             request.cache_affinity_key,
@@ -441,7 +450,7 @@ impl PulsarLoadBalancer {
         candidates: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice> {
         let mut hash_bytes = pulsar_hash_prefix(
-            self.config.seed.as_deref(),
+            self.config.seed(),
             &request.routing_target.routing_key,
             &request.routing_target.model_id,
             request.cache_affinity_key,
@@ -469,7 +478,7 @@ impl PulsarLoadBalancer {
                 });
             }
 
-            if !self.is_feasible(request, candidate) {
+            if !self.feasibility(request, candidate).is_eligible() {
                 continue;
             }
             let is_best_feasible = best_feasible.as_ref().is_none_or(|best: &ScoredCandidate| {
@@ -504,6 +513,33 @@ impl PulsarLoadBalancer {
         Some(LoadBalancerCandidateChoice {
             candidate_index: best.candidate_index,
             rank_depth,
+            selected_after_kv_free_tokens_skip: rank_depth > 1
+                && self.higher_rank_kv_free_tokens_skip(request, candidates, chosen, best.score),
+        })
+    }
+
+    fn higher_rank_kv_free_tokens_skip(
+        &self,
+        request: &LoadBalancerRequest<'_>,
+        candidates: &[RoutedClusterSnapshot],
+        chosen: &RoutedClusterSnapshot,
+        chosen_score: f64,
+    ) -> bool {
+        let mut hash_bytes = pulsar_hash_prefix(
+            self.config.seed(),
+            &request.routing_target.routing_key,
+            &request.routing_target.model_id,
+            request.cache_affinity_key,
+        );
+        let hash_prefix_len = hash_bytes.len();
+        candidates.iter().any(|candidate| {
+            let Some(score) = self.score(&mut hash_bytes, hash_prefix_len, candidate) else {
+                return false;
+            };
+            compare_ranked_candidate(score, candidate, chosen_score, chosen).is_lt()
+                && self
+                    .feasibility(request, candidate)
+                    .skipped_for_kv_free_tokens()
         })
     }
 
@@ -515,7 +551,7 @@ impl PulsarLoadBalancer {
         chosen_score: f64,
     ) -> usize {
         let mut hash_bytes = pulsar_hash_prefix(
-            self.config.seed.as_deref(),
+            self.config.seed(),
             &request.routing_target.routing_key,
             &request.routing_target.model_id,
             request.cache_affinity_key,
@@ -547,12 +583,12 @@ impl PulsarLoadBalancer {
         None
     }
 
-    fn is_feasible(
+    pub(super) fn feasibility(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidate: &RoutedClusterSnapshot,
-    ) -> bool {
-        candidate_is_request_feasible(&self.config, request, candidate)
+    ) -> PulsarCandidateFeasibility {
+        candidate_feasibility(&self.config, request, candidate)
     }
 }
 
@@ -561,37 +597,63 @@ pub(super) fn input_work_admission_candidate(
     request: &LoadBalancerRequest<'_>,
     candidate: &RoutedClusterSnapshot,
 ) -> bool {
-    has_valid_input_capacity(candidate) && candidate_is_request_feasible(config, request, candidate)
+    has_valid_input_capacity(candidate)
+        && candidate_feasibility(config, request, candidate).is_eligible()
 }
 
 fn has_valid_input_capacity(candidate: &RoutedClusterSnapshot) -> bool {
     candidate.stats.last_mean_input_tps > 0.0 && candidate.stats.last_mean_input_tps.is_finite()
 }
 
-fn candidate_is_request_feasible(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PulsarCandidateFeasibility {
+    Eligible,
+    RetryExcluded,
+    MissingRequiredInputTokens,
+    MissingKvFreeTokens,
+    InsufficientKvFreeTokens,
+}
+
+impl PulsarCandidateFeasibility {
+    pub(super) fn is_eligible(self) -> bool {
+        self == Self::Eligible
+    }
+
+    pub(super) fn skipped_for_kv_free_tokens(self) -> bool {
+        matches!(
+            self,
+            Self::MissingKvFreeTokens | Self::InsufficientKvFreeTokens
+        )
+    }
+}
+
+fn candidate_feasibility(
     config: &LoadBalancerAlgorithmConfig,
     request: &LoadBalancerRequest<'_>,
     candidate: &RoutedClusterSnapshot,
-) -> bool {
+) -> PulsarCandidateFeasibility {
     if request.excludes_cluster(&candidate.cluster_id) {
-        return false;
+        return PulsarCandidateFeasibility::RetryExcluded;
     }
 
-    if config.requires_kv_metrics() && !has_kv_metrics(candidate) {
-        return false;
+    if !config.considers_kv_free_tokens() {
+        return PulsarCandidateFeasibility::Eligible;
     }
 
-    if let Some(input_tokens) = request.input_tokens
-        && has_kv_metrics(candidate)
-        && candidate.stats.kv_cache_free_tokens < input_tokens
-    {
-        return false;
+    let Some(input_tokens) = request.input_tokens else {
+        return PulsarCandidateFeasibility::MissingRequiredInputTokens;
+    };
+    if !has_kv_free_token_metrics(candidate) {
+        return PulsarCandidateFeasibility::MissingKvFreeTokens;
+    }
+    if candidate.stats.kv_cache_free_tokens < input_tokens {
+        return PulsarCandidateFeasibility::InsufficientKvFreeTokens;
     }
 
-    true
+    PulsarCandidateFeasibility::Eligible
 }
 
-fn has_kv_metrics(candidate: &RoutedClusterSnapshot) -> bool {
+fn has_kv_free_token_metrics(candidate: &RoutedClusterSnapshot) -> bool {
     candidate.stats.kv_cache_capacity_tokens > 0
         || candidate.stats.kv_cache_used_tokens > 0
         || candidate.stats.kv_cache_free_tokens > 0
@@ -608,11 +670,7 @@ pub(super) fn pulsar_hash64(
     affinity_target_id: &str,
 ) -> u64 {
     let mut bytes = pulsar_hash_prefix(seed, routing_key, model_id, cache_affinity_key);
-    append_tagged_bytes(
-        &mut bytes,
-        b"inference_server_id",
-        affinity_target_id.as_bytes(),
-    );
+    append_tagged_bytes(&mut bytes, b"cluster_id", affinity_target_id.as_bytes());
     xxh3_64(&bytes)
 }
 
@@ -645,14 +703,7 @@ fn hash_to_unit_interval(
     candidate: &RoutedClusterSnapshot,
 ) -> f64 {
     bytes.truncate(prefix_len);
-    // Keep the legacy hash wire format stable for the default single-backend
-    // path (`cluster_id == inference_server_id`) while switching the logical
-    // routing identity to the cluster.
-    append_tagged_bytes(
-        bytes,
-        b"inference_server_id",
-        candidate.cluster_id.as_bytes(),
-    );
+    append_tagged_bytes(bytes, b"cluster_id", candidate.cluster_id.as_bytes());
     let hash = xxh3_64(bytes);
     let numerator = (hash as f64) + 1.0;
     let denominator = (u64::MAX as f64) + 2.0;

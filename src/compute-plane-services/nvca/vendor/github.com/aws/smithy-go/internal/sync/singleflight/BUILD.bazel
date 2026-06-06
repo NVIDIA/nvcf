@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "singleflight",
+    srcs = [
+        "docs.go",
+        "singleflight.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/internal/sync/singleflight",
+    importpath = "github.com/aws/smithy-go/internal/sync/singleflight",
+    visibility = ["//vendor/github.com/aws/smithy-go:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":singleflight",
+    visibility = ["//vendor/github.com/aws/smithy-go:__subpackages__"],
+)

@@ -10,9 +10,9 @@ go_library(
     visibility = ["//cmd:__subpackages__"],
     deps = [
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "@io_k8s_client_go//kubernetes",
-        "@io_k8s_client_go//rest",
-        "@io_k8s_client_go//tools/clientcmd",
+        "//vendor/k8s.io/client-go/kubernetes",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/tools/clientcmd",
     ],
 )
 
@@ -27,10 +27,10 @@ go_test(
     srcs = ["util_test.go"],
     embed = [":internal"],
     deps = [
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
-        "@io_k8s_client_go//kubernetes",
-        "@io_k8s_client_go//rest",
-        "@io_k8s_client_go//tools/clientcmd",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
+        "//vendor/k8s.io/client-go/kubernetes",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/tools/clientcmd",
     ],
 )

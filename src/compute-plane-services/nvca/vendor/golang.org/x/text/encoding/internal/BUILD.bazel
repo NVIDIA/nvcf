@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "internal",
+    srcs = ["internal.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/text/encoding/internal",
+    importpath = "golang.org/x/text/encoding/internal",
+    visibility = ["//vendor/golang.org/x/text/encoding:__subpackages__"],
+    deps = [
+        "//vendor/golang.org/x/text/encoding",
+        "//vendor/golang.org/x/text/encoding/internal/identifier",
+        "//vendor/golang.org/x/text/transform",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":internal",
+    visibility = ["//vendor/golang.org/x/text/encoding:__subpackages__"],
+)

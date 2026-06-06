@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "http",
+    srcs = [
+        "client.go",
+        "content_type.go",
+        "response_error.go",
+        "response_error_middleware.go",
+        "timeout_read_closer.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/transport/http",
+    importpath = "github.com/aws/aws-sdk-go-v2/aws/transport/http",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/middleware",
+        "//vendor/github.com/aws/smithy-go",
+        "//vendor/github.com/aws/smithy-go/middleware",
+        "//vendor/github.com/aws/smithy-go/tracing",
+        "//vendor/github.com/aws/smithy-go/transport/http",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":http",
+    visibility = ["//visibility:public"],
+)

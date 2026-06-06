@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "net",
+    srcs = [
+        "ipfamily.go",
+        "ipnet.go",
+        "multi_listen.go",
+        "net.go",
+        "parse.go",
+        "port.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/utils/net",
+    importpath = "k8s.io/utils/net",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/k8s.io/utils/internal/third_party/forked/golang/net"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":net",
+    visibility = ["//visibility:public"],
+)

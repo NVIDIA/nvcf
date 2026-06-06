@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fake",
+    srcs = [
+        "doc.go",
+        "fake_authorization_client.go",
+        "fake_localsubjectaccessreview.go",
+        "fake_selfsubjectaccessreview.go",
+        "fake_selfsubjectrulesreview.go",
+        "fake_subjectaccessreview.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/authorization/v1/fake",
+    importpath = "k8s.io/client-go/kubernetes/typed/authorization/v1/fake",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/authorization/v1:authorization",
+        "//vendor/k8s.io/client-go/gentype",
+        "//vendor/k8s.io/client-go/kubernetes/typed/authorization/v1:authorization",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/testing",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fake",
+    visibility = ["//visibility:public"],
+)

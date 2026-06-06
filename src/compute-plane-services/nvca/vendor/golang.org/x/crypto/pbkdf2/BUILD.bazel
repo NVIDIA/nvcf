@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "pbkdf2",
+    srcs = ["pbkdf2.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/pbkdf2",
+    importpath = "golang.org/x/crypto/pbkdf2",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":pbkdf2",
+    visibility = ["//visibility:public"],
+)

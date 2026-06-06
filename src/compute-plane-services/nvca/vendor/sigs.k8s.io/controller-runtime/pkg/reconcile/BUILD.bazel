@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "reconcile",
+    srcs = [
+        "doc.go",
+        "reconcile.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/reconcile",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/reconcile",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/types",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":reconcile",
+    visibility = ["//visibility:public"],
+)

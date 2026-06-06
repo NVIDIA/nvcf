@@ -38,6 +38,12 @@ global:
     registry: nvcr.io
     repository: YOUR_ORG/YOUR_TEAM
 
+  # Worker-facing control-plane endpoints advertised by API services into
+  # launched workloads. Leave empty to use service defaults; set per
+  # environment when worker clusters need externally reachable endpoints.
+  workerEndpoints:
+    essServiceURL: ""
+
   nodeSelectors:
     enabled: false
     # Uncomment if you have a single node pool for all system workloads.
@@ -223,6 +229,10 @@ stateMetrics:
   # Disable ServiceMonitor for environments without Prometheus Operator
   serviceMonitor:
     enabled: false
+
+rateLimiter:
+  enabled: false
+  replicaCount: 1
 
 # Ingress Gateway Configuration
 ingress:

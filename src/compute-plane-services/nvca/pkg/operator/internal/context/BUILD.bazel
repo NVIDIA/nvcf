@@ -20,5 +20,5 @@ go_test(
     name = "context_test",
     srcs = ["context_test.go"],
     embed = [":context"],
-    deps = ["@com_github_stretchr_testify//assert"],
+    deps = ["//vendor/github.com/stretchr/testify/assert"],
 )

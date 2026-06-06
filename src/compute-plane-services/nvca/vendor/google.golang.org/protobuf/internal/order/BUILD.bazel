@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "order",
+    srcs = [
+        "order.go",
+        "range.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/internal/order",
+    importpath = "google.golang.org/protobuf/internal/order",
+    visibility = ["//vendor/google.golang.org/protobuf:__subpackages__"],
+    deps = ["//vendor/google.golang.org/protobuf/reflect/protoreflect"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":order",
+    visibility = ["//vendor/google.golang.org/protobuf:__subpackages__"],
+)

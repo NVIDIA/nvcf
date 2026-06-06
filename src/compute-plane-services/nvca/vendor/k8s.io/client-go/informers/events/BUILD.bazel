@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "events",
+    srcs = ["interface.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/events",
+    importpath = "k8s.io/client-go/informers/events",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/client-go/informers/events/v1:events",
+        "//vendor/k8s.io/client-go/informers/events/v1beta1",
+        "//vendor/k8s.io/client-go/informers/internalinterfaces",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":events",
+    visibility = ["//visibility:public"],
+)

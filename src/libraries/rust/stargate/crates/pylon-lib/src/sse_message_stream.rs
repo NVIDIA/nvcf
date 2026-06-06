@@ -273,24 +273,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_progress_comments_are_plain_sse_comments() {
-        let mut messages = SseMessageBuffer::default();
-        messages.push_bytes(
-            b": keepalive\n: inference-progress.v1 v=1 req=req-1 seq=1 og=2\ndata: {\"x\":1}\n\n",
-        );
-
-        let parsed = messages.next().expect("complete SSE event");
-
-        assert!(parsed.message.counts_as_output());
-        assert_eq!(
-            parsed.raw_event,
-            Bytes::from_static(
-                b": keepalive\n: inference-progress.v1 v=1 req=req-1 seq=1 og=2\ndata: {\"x\":1}\n\n"
-            )
-        );
-    }
-
-    #[test]
     fn parses_multiline_crlf_chat_events() {
         let mut messages = SseMessageBuffer::default();
         messages.push_bytes(
@@ -340,10 +322,54 @@ mod tests {
     }
 
     #[test]
+    fn sse_peeking_helpers_preserve_token_and_forwarding_accounting() {
+        let input = SseBenchmarkInput::new(8, 37);
+
+        let raw_bytes = raw_forward_only(&input.chunks, 1);
+        let peeked = peek_sse_events(&input.chunks, 1);
+        let fallback = fallback_sse_events(&input.chunks, 1, false);
+        let quality_fallback = fallback_sse_events(&input.chunks, 1, true);
+
+        assert_eq!(raw_bytes, input.total_bytes);
+        assert_eq!(peeked.output_messages, input.output_events);
+        assert_eq!(fallback.output_messages, input.output_events);
+        assert_eq!(quality_fallback.output_messages, input.output_events);
+        assert_eq!(peeked.output_tokens, input.output_events as u64);
+        assert_eq!(fallback.output_tokens, input.output_events as u64);
+        assert_eq!(quality_fallback.output_tokens, input.output_events as u64);
+        assert_eq!(fallback.forwarded_bytes, input.total_bytes);
+        assert_eq!(quality_fallback.forwarded_bytes, input.total_bytes);
+
+        print_sse_measurement(
+            "tiny_sse_peek_fixture",
+            Duration::from_micros(1),
+            input.total_events,
+            input.total_bytes,
+        );
+        print_sse_improvement(
+            "tiny_sse_peek_fixture",
+            Duration::ZERO,
+            Duration::from_micros(1),
+        );
+        print_sse_improvement(
+            "tiny_sse_peek_fixture",
+            Duration::from_micros(2),
+            Duration::from_micros(1),
+        );
+    }
+
+    #[test]
+    fn sse_peeking_overhead_report_runs_on_tiny_fixture() {
+        run_sse_peeking_overhead(SseBenchmarkInput::new(8, 37), 1);
+    }
+
+    #[test]
     #[ignore = "benchmark helper; run with --release -- --ignored --nocapture"]
     fn bench_sse_peeking_overhead() {
-        let input = SseBenchmarkInput::new(256, 37);
-        let repetitions = 8_192usize;
+        run_sse_peeking_overhead(SseBenchmarkInput::new(256, 37), 8_192);
+    }
+
+    fn run_sse_peeking_overhead(input: SseBenchmarkInput, repetitions: usize) {
         let total_events = input.total_events * repetitions;
         let total_output_events = input.output_events * repetitions;
         let total_bytes = input.total_bytes * repetitions;
@@ -352,17 +378,11 @@ mod tests {
         let raw_bytes = raw_forward_only(&input.chunks, repetitions);
         let raw_elapsed = raw_started.elapsed();
 
-        let legacy_peek_started = Instant::now();
-        let legacy_peeked = legacy_peek_sse_events(&input.chunks, repetitions);
-        let legacy_peek_elapsed = legacy_peek_started.elapsed();
-
         let peek_started = Instant::now();
         let peeked = peek_sse_events(&input.chunks, repetitions);
         let peek_elapsed = peek_started.elapsed();
 
         assert_eq!(raw_bytes, total_bytes);
-        assert_eq!(legacy_peeked.output_messages, total_output_events);
-        assert_eq!(legacy_peeked.output_tokens, total_output_events as u64);
         assert_eq!(peeked.output_messages, total_output_events);
         assert_eq!(peeked.output_tokens, total_output_events as u64);
 
@@ -397,7 +417,6 @@ mod tests {
         assert_eq!(quality_optimized.forwarded_bytes, total_bytes);
 
         let raw_ns_per_event = raw_elapsed.as_nanos() as f64 / total_events as f64;
-        let legacy_peek_ns_per_event = legacy_peek_elapsed.as_nanos() as f64 / total_events as f64;
         let peek_ns_per_event = peek_elapsed.as_nanos() as f64 / total_events as f64;
         let overhead_ns_per_event = peek_ns_per_event - raw_ns_per_event;
         let overhead_ratio = peek_elapsed.as_secs_f64() / raw_elapsed.as_secs_f64();
@@ -413,12 +432,6 @@ mod tests {
             mib / raw_elapsed.as_secs_f64()
         );
         println!(
-            "legacy_peek_sse_events: {:.3?}, {:.1} ns/event, {:.1} MiB/s",
-            legacy_peek_elapsed,
-            legacy_peek_ns_per_event,
-            mib / legacy_peek_elapsed.as_secs_f64()
-        );
-        println!(
             "peek_sse_events:  {:.3?}, {:.1} ns/event, {:.1} MiB/s",
             peek_elapsed,
             peek_ns_per_event,
@@ -428,7 +441,6 @@ mod tests {
             "peek_overhead:    {:.1} ns/event, {:.2}x raw baseline",
             overhead_ns_per_event, overhead_ratio
         );
-        print_sse_improvement("peek_sse_events", legacy_peek_elapsed, peek_elapsed);
         print_sse_measurement(
             "fallback_token_parser_baseline",
             fallback_baseline_elapsed,
@@ -546,77 +558,6 @@ mod tests {
             }
         }
         black_box(peeked)
-    }
-
-    fn legacy_peek_sse_events(chunks: &[Bytes], repetitions: usize) -> PeekedEvents {
-        let mut peeked = PeekedEvents::default();
-        for _ in 0..repetitions {
-            let mut messages = LegacySseMessageBuffer::default();
-            let mut token_parser = OutputTokenParser::new();
-            for chunk in chunks {
-                messages.push_bytes(black_box(chunk.as_ref()));
-                for parsed in messages.by_ref() {
-                    black_box(parsed.raw_event.len());
-                    if let SseMessage::ChatCompletionChunk { raw_data } = parsed.message {
-                        peeked.output_messages += 1;
-                        if let Some(delta) = token_parser.parse_incremental_output_tokens(&raw_data)
-                        {
-                            peeked.output_tokens += delta;
-                        }
-                    }
-                }
-            }
-        }
-        black_box(peeked)
-    }
-
-    #[derive(Debug, Default)]
-    struct LegacySseMessageBuffer {
-        buffer: BytesMut,
-    }
-
-    impl LegacySseMessageBuffer {
-        fn push_bytes(&mut self, chunk: &[u8]) {
-            self.buffer.extend_from_slice(chunk);
-        }
-    }
-
-    impl Iterator for LegacySseMessageBuffer {
-        type Item = ParsedSseMessage;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            let event_end = find_sse_event_end(&self.buffer)?;
-            let raw_event = self.buffer.split_to(event_end).freeze();
-            let event_name = legacy_extract_sse_event_name(raw_event.as_ref());
-            Some(ParsedSseMessage {
-                message: classify_sse_message(
-                    event_name.as_deref(),
-                    legacy_extract_sse_data(raw_event.as_ref()),
-                ),
-                raw_event,
-            })
-        }
-    }
-
-    fn legacy_extract_sse_data(event_bytes: &[u8]) -> String {
-        let text = String::from_utf8_lossy(event_bytes);
-        let mut data_lines = Vec::new();
-        for raw_line in text.lines() {
-            let line = raw_line.trim_end_matches('\r');
-            if let Some(rest) = line.strip_prefix("data:") {
-                data_lines.push(rest.trim_start().to_string());
-            }
-        }
-        data_lines.join("\n")
-    }
-
-    fn legacy_extract_sse_event_name(event_bytes: &[u8]) -> Option<String> {
-        let text = String::from_utf8_lossy(event_bytes);
-        text.lines().find_map(|raw_line| {
-            let line = raw_line.trim_end_matches('\r');
-            line.strip_prefix("event:")
-                .map(|rest| rest.trim_start().to_string())
-        })
     }
 
     fn fallback_sse_events(

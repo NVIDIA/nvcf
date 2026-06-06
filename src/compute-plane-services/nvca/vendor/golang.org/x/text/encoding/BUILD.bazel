@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "encoding",
+    srcs = ["encoding.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/text/encoding",
+    importpath = "golang.org/x/text/encoding",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/golang.org/x/text/encoding/internal/identifier",
+        "//vendor/golang.org/x/text/transform",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":encoding",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "content",
+    srcs = [
+        "decimal_int.go",
+        "dns.go",
+        "errors.go",
+        "identifier.go",
+        "kube.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/validate/content",
+    importpath = "k8s.io/apimachinery/pkg/api/validate/content",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/k8s.io/apimachinery/pkg/api/validate/constraints"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":content",
+    visibility = ["//visibility:public"],
+)

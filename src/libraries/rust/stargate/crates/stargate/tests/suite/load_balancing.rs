@@ -26,9 +26,8 @@ use pylon_lib::{
     BringupConfig, CurrentModelStats, InferenceServerRegistrationClient,
     InferenceServerRegistrationConfig, OutputTokenParserFactory,
 };
-use stargate::load_balancer_state::{
-    RoutedClusterSnapshot, RoutedInferenceServerSnapshot, RoutingTargetKey, StargateState,
-};
+use stargate::routing::{RoutedClusterSnapshot, RoutedInferenceServerSnapshot, RoutingTargetKey};
+use stargate::test_support::StargateState;
 use stargate_proto::pb::InferenceServerStatus;
 
 #[derive(Debug)]
@@ -1784,8 +1783,7 @@ async fn pulsar_routes_same_affinity_key_consistently() {
                     "algorithm": "pulsar",
                     "seed": "test-seed",
                     "require_cache_affinity_key": true,
-                    "require_input_tokens": true,
-                    "require_kv_metrics": true
+                    "require_input_tokens": true
                 }
             }
         }"#,

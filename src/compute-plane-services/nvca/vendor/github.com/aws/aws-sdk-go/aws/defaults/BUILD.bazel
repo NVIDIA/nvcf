@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "defaults",
+    srcs = [
+        "defaults.go",
+        "shared_config.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/defaults",
+    importpath = "github.com/aws/aws-sdk-go/aws/defaults",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go/aws",
+        "//vendor/github.com/aws/aws-sdk-go/aws/awserr",
+        "//vendor/github.com/aws/aws-sdk-go/aws/corehandlers",
+        "//vendor/github.com/aws/aws-sdk-go/aws/credentials",
+        "//vendor/github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds",
+        "//vendor/github.com/aws/aws-sdk-go/aws/credentials/endpointcreds",
+        "//vendor/github.com/aws/aws-sdk-go/aws/ec2metadata",
+        "//vendor/github.com/aws/aws-sdk-go/aws/endpoints",
+        "//vendor/github.com/aws/aws-sdk-go/aws/request",
+        "//vendor/github.com/aws/aws-sdk-go/internal/shareddefaults",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":defaults",
+    visibility = ["//visibility:public"],
+)

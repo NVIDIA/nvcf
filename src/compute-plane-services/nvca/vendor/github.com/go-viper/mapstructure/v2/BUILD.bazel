@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "mapstructure",
+    srcs = [
+        "decode_hooks.go",
+        "errors.go",
+        "mapstructure.go",
+        "reflect_go1_19.go",
+        "reflect_go1_20.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-viper/mapstructure/v2",
+    importpath = "github.com/go-viper/mapstructure/v2",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/go-viper/mapstructure/v2/internal/errors"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":mapstructure",
+    visibility = ["//visibility:public"],
+)

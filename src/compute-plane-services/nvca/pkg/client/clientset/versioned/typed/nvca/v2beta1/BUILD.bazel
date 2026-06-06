@@ -17,11 +17,11 @@ go_library(
     deps = [
         "//pkg/apis/nvca/v2beta1",
         "//pkg/client/clientset/versioned/scheme",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
-        "@io_k8s_apimachinery//pkg/types",
-        "@io_k8s_apimachinery//pkg/watch",
-        "@io_k8s_client_go//gentype",
-        "@io_k8s_client_go//rest",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/types",
+        "//vendor/k8s.io/apimachinery/pkg/watch",
+        "//vendor/k8s.io/client-go/gentype",
+        "//vendor/k8s.io/client-go/rest",
     ],
 )
 

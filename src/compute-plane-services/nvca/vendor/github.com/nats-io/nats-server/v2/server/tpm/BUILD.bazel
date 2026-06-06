@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "tpm",
+    srcs = [
+        "js_ek_tpm_other.go",
+        "js_ek_tpm_windows.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/tpm",
+    importpath = "github.com/nats-io/nats-server/v2/server/tpm",
+    visibility = ["//visibility:public"],
+    deps = select({
+        "@rules_go//go/platform:windows": [
+            "//vendor/github.com/google/go-tpm/legacy/tpm2",
+            "//vendor/github.com/google/go-tpm/tpmutil",
+            "//vendor/github.com/nats-io/nkeys",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":tpm",
+    visibility = ["//visibility:public"],
+)

@@ -171,6 +171,9 @@ bazel test //... --test_env=KUBEBUILDER_ASSETS
 
 # Re-run Gazelle after adding new Go imports or files. Updates
 # srcs / deps lists and refreshes go_deps overrides in MODULE.bazel.
+bazel run @rules_go//go -- mod tidy
+bazel run @rules_go//go -- mod vendor
+find vendor -name BUILD.bazel -delete
 bazel run //:gazelle
 bazel mod tidy
 

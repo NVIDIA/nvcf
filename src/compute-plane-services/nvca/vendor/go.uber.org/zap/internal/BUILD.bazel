@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "internal",
+    srcs = ["level_enabler.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal",
+    importpath = "go.uber.org/zap/internal",
+    visibility = ["//vendor/go.uber.org/zap:__subpackages__"],
+    deps = ["//vendor/go.uber.org/zap/zapcore"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":internal",
+    visibility = ["//vendor/go.uber.org/zap:__subpackages__"],
+)

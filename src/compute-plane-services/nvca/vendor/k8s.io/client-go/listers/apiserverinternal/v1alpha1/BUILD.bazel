@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "v1alpha1",
+    srcs = [
+        "expansion_generated.go",
+        "storageversion.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers/apiserverinternal/v1alpha1",
+    importpath = "k8s.io/client-go/listers/apiserverinternal/v1alpha1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/apiserverinternal/v1alpha1",
+        "//vendor/k8s.io/apimachinery/pkg/labels",
+        "//vendor/k8s.io/client-go/listers",
+        "//vendor/k8s.io/client-go/tools/cache",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":v1alpha1",
+    visibility = ["//visibility:public"],
+)

@@ -10,9 +10,9 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/apis/nvcf/v1:nvcf",
-        "@io_opentelemetry_go_otel//:otel",
-        "@io_opentelemetry_go_otel//attribute",
-        "@io_opentelemetry_go_otel_trace//:trace",
+        "//vendor/go.opentelemetry.io/otel",
+        "//vendor/go.opentelemetry.io/otel/attribute",
+        "//vendor/go.opentelemetry.io/otel/trace",
     ],
 )
 
@@ -28,7 +28,7 @@ go_test(
     embed = [":otel"],
     deps = [
         "//pkg/apis/nvcf/v1:nvcf",
-        "@com_github_stretchr_testify//assert",
-        "@io_opentelemetry_go_otel//attribute",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/go.opentelemetry.io/otel/attribute",
     ],
 )

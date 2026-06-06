@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "ec2metadata",
+    srcs = [
+        "api.go",
+        "service.go",
+        "token_provider.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/ec2metadata",
+    importpath = "github.com/aws/aws-sdk-go/aws/ec2metadata",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go/aws",
+        "//vendor/github.com/aws/aws-sdk-go/aws/awserr",
+        "//vendor/github.com/aws/aws-sdk-go/aws/client",
+        "//vendor/github.com/aws/aws-sdk-go/aws/client/metadata",
+        "//vendor/github.com/aws/aws-sdk-go/aws/corehandlers",
+        "//vendor/github.com/aws/aws-sdk-go/aws/credentials",
+        "//vendor/github.com/aws/aws-sdk-go/aws/request",
+        "//vendor/github.com/aws/aws-sdk-go/internal/sdkuri",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ec2metadata",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "jsonutils",
+    srcs = [
+        "concat.go",
+        "doc.go",
+        "json.go",
+        "ordered_map.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/jsonutils",
+    importpath = "github.com/go-openapi/swag/jsonutils",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-openapi/swag/jsonutils/adapters",
+        "//vendor/github.com/go-openapi/swag/jsonutils/adapters/ifaces",
+        "//vendor/github.com/go-openapi/swag/typeutils",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jsonutils",
+    visibility = ["//visibility:public"],
+)

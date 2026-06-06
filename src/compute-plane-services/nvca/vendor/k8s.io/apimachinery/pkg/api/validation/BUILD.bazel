@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "validation",
+    srcs = [
+        "doc.go",
+        "generic.go",
+        "objectmeta.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/validation",
+    importpath = "k8s.io/apimachinery/pkg/api/validation",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/api/equality",
+        "//vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1/validation",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//vendor/k8s.io/apimachinery/pkg/util/validation",
+        "//vendor/k8s.io/apimachinery/pkg/util/validation/field",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":validation",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "toml",
+    srcs = ["codec.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/viper/internal/encoding/toml",
+    importpath = "github.com/spf13/viper/internal/encoding/toml",
+    visibility = ["//vendor/github.com/spf13/viper:__subpackages__"],
+    deps = ["//vendor/github.com/pelletier/go-toml/v2:go-toml"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":toml",
+    visibility = ["//vendor/github.com/spf13/viper:__subpackages__"],
+)

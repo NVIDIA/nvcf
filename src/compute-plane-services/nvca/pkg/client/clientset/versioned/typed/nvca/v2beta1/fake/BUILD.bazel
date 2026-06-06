@@ -16,9 +16,9 @@ go_library(
     deps = [
         "//pkg/apis/nvca/v2beta1",
         "//pkg/client/clientset/versioned/typed/nvca/v2beta1",
-        "@io_k8s_client_go//gentype",
-        "@io_k8s_client_go//rest",
-        "@io_k8s_client_go//testing",
+        "//vendor/k8s.io/client-go/gentype",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/testing",
     ],
 )
 

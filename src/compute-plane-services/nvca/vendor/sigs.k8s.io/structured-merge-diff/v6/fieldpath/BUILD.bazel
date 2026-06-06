@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fieldpath",
+    srcs = [
+        "doc.go",
+        "element.go",
+        "fromvalue.go",
+        "managers.go",
+        "path.go",
+        "pathelementmap.go",
+        "serialize.go",
+        "serialize-pe.go",
+        "set.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/fieldpath",
+    importpath = "sigs.k8s.io/structured-merge-diff/v6/fieldpath",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/json-iterator/go",
+        "//vendor/sigs.k8s.io/structured-merge-diff/v6/schema",
+        "//vendor/sigs.k8s.io/structured-merge-diff/v6/value",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fieldpath",
+    visibility = ["//visibility:public"],
+)

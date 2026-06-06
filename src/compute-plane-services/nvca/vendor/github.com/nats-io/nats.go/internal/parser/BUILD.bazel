@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "parser",
+    srcs = ["parse.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go/internal/parser",
+    importpath = "github.com/nats-io/nats.go/internal/parser",
+    visibility = ["//vendor/github.com/nats-io/nats.go:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":parser",
+    visibility = ["//vendor/github.com/nats-io/nats.go:__subpackages__"],
+)

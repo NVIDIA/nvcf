@@ -352,10 +352,9 @@ func NewOperatorCommand() *cli.Command {
 			&cli.StringFlag{
 				Name: "identity-source",
 				Usage: "Identity source for self-hosted NVCA agents: 'psat' (projected SA token; default and currently the only supported value)." +
-					" Empty/unset is treated as 'psat'. Ignored for managed clusters." +
+					" Empty/unset is treated as 'psat' for self-hosted clusters. Ignored for managed clusters." +
 					" SPIRE is scaffolded in-tree but not yet supported end-to-end.",
 				EnvVars: []string{"NVCA_IDENTITY_SOURCE"},
-				Value:   "psat",
 			},
 		},
 		Action: func(c *cli.Context) error {
@@ -451,6 +450,16 @@ func doAction(c *cli.Context) error {
 		}
 	}
 
+	// Resolve identity source for self-hosted clusters only.
+	identitySource := c.String("identity-source")
+	if clusterSource == nvcaoptypes.ClusterSourceSelfHosted {
+		if identitySource, err = detectIdentitySource(identitySource); err != nil {
+			return err
+		}
+	} else if identitySource != "" {
+		return fmt.Errorf("identity-source is not supported for cluster source %s", clusterSource)
+	}
+
 	opts := &AgentOptions{
 		NCAID:                             c.String("nca-id"),
 		KubeConfigPath:                    c.String("kubeconfig"),
@@ -500,7 +509,7 @@ func doAction(c *cli.Context) error {
 		TaskEnvOverridesB64:               c.String("task-env-overrides-b64"),
 		AgentOverrideEnvVars:              agentOverrideEnvVars,
 		VaultOAuthClientMountPathTemplate: vaultOAuthClientMountPathTemplate,
-		IdentitySource:                    c.String("identity-source"),
+		IdentitySource:                    identitySource,
 	}
 
 	a, err := NewAgent(ctx, opts)

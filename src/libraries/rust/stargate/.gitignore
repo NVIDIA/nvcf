@@ -14,14 +14,13 @@
 # limitations under the License.
 
 target
+.coverage/
+.desloppify/
+mutants.out/
 .codex
 .bench-out/
 .vscode
 .codex
-plans/*
-!plans/benchmark-runner-improvements.md
-!plans/stargate-pylon-performance-investigation.md
-!plans/LINF-154-retry-queue-estimation-mismatch.md
 scripts/__pycache__
 
 # Rendered PlantUML output (see scripts/watch_puml.sh)

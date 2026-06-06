@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fs",
+    srcs = [
+        "doc.go",
+        "fs.go",
+        "security.go",
+        "zsyscall_windows.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio/internal/fs",
+    importpath = "github.com/Microsoft/go-winio/internal/fs",
+    visibility = ["//vendor/github.com/Microsoft/go-winio:__subpackages__"],
+    deps = select({
+        "@rules_go//go/platform:windows": [
+            "//vendor/github.com/Microsoft/go-winio/internal/stringbuffer",
+            "//vendor/golang.org/x/sys/windows",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fs",
+    visibility = ["//vendor/github.com/Microsoft/go-winio:__subpackages__"],
+)

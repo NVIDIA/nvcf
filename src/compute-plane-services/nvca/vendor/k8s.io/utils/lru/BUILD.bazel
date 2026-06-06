@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "lru",
+    srcs = ["lru.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/utils/lru",
+    importpath = "k8s.io/utils/lru",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/k8s.io/utils/internal/third_party/forked/golang/golang-lru"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":lru",
+    visibility = ["//visibility:public"],
+)

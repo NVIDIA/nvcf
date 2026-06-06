@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "sts",
+    srcs = [
+        "api.go",
+        "customizations.go",
+        "doc.go",
+        "errors.go",
+        "service.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/service/sts",
+    importpath = "github.com/aws/aws-sdk-go/service/sts",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go/aws",
+        "//vendor/github.com/aws/aws-sdk-go/aws/awsutil",
+        "//vendor/github.com/aws/aws-sdk-go/aws/client",
+        "//vendor/github.com/aws/aws-sdk-go/aws/client/metadata",
+        "//vendor/github.com/aws/aws-sdk-go/aws/credentials",
+        "//vendor/github.com/aws/aws-sdk-go/aws/request",
+        "//vendor/github.com/aws/aws-sdk-go/aws/signer/v4:signer",
+        "//vendor/github.com/aws/aws-sdk-go/private/protocol/query",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sts",
+    visibility = ["//visibility:public"],
+)

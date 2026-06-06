@@ -17,10 +17,10 @@ go_library(
         "//internal/auth",
         "//pkg/queue",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "@com_github_nats_io_nats_go//:nats_go",
-        "@com_github_nats_io_nats_go//jetstream",
-        "@com_github_nats_io_nkeys//:nkeys",
-        "@com_github_sirupsen_logrus//:logrus",
+        "//vendor/github.com/nats-io/nats.go:nats_go",
+        "//vendor/github.com/nats-io/nats.go/jetstream",
+        "//vendor/github.com/nats-io/nkeys",
+        "//vendor/github.com/sirupsen/logrus",
     ],
 )
 
@@ -41,11 +41,11 @@ go_test(
     deps = [
         "//internal/auth",
         "//pkg/queue",
-        "@com_github_nats_io_nats_go//:nats_go",
-        "@com_github_nats_io_nats_server_v2//server",
-        "@com_github_nats_io_nats_server_v2//test",
-        "@com_github_nats_io_nkeys//:nkeys",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
+        "//vendor/github.com/nats-io/nats.go:nats_go",
+        "//vendor/github.com/nats-io/nats-server/v2/server",
+        "//vendor/github.com/nats-io/nats-server/v2/test",
+        "//vendor/github.com/nats-io/nkeys",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
     ],
 )

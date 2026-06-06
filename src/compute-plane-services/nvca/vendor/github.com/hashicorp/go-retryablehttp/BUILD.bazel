@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go-retryablehttp",
+    srcs = [
+        "cert_error_go119.go",
+        "cert_error_go120.go",
+        "client.go",
+        "roundtripper.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/hashicorp/go-retryablehttp",
+    importpath = "github.com/hashicorp/go-retryablehttp",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/hashicorp/go-cleanhttp"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":go-retryablehttp",
+    visibility = ["//visibility:public"],
+)

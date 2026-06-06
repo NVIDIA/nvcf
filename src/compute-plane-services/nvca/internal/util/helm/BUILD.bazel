@@ -30,6 +30,6 @@ go_test(
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task",
-        "@com_github_stretchr_testify//assert",
+        "//vendor/github.com/stretchr/testify/assert",
     ],
 )

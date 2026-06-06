@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "install",
+    srcs = ["install.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/pkg/apis/clientauthentication/install",
+    importpath = "k8s.io/client-go/pkg/apis/clientauthentication/install",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//vendor/k8s.io/client-go/pkg/apis/clientauthentication",
+        "//vendor/k8s.io/client-go/pkg/apis/clientauthentication/v1:clientauthentication",
+        "//vendor/k8s.io/client-go/pkg/apis/clientauthentication/v1beta1",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":install",
+    visibility = ["//visibility:public"],
+)

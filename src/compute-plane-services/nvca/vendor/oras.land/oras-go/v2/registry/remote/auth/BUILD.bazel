@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "auth",
+    srcs = [
+        "cache.go",
+        "challenge.go",
+        "client.go",
+        "credential.go",
+        "scope.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote/auth",
+    importpath = "oras.land/oras-go/v2/registry/remote/auth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/oras.land/oras-go/v2/errdef",
+        "//vendor/oras.land/oras-go/v2/internal/syncutil",
+        "//vendor/oras.land/oras-go/v2/registry",
+        "//vendor/oras.land/oras-go/v2/registry/remote/internal/errutil",
+        "//vendor/oras.land/oras-go/v2/registry/remote/retry",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":auth",
+    visibility = ["//visibility:public"],
+)

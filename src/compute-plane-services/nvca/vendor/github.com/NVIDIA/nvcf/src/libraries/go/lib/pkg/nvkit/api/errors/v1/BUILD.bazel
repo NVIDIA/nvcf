@@ -1,11 +1,5 @@
 load("@rules_go//go:def.bzl", "go_library")
 
-# Phase 1: protobuf toolchain is not wired in MODULE.bazel yet, so this
-# package builds the pre-generated nverrors.pb.go directly. When rules_proto
-# and protobuf are added, switch back to gazelle's proto_library +
-# go_proto_library + embed pattern (see git history).
-# gazelle:proto disable
-
 go_library(
     name = "errors",
     srcs = ["nverrors.pb.go"],
@@ -13,10 +7,10 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1",
     visibility = ["//visibility:public"],
     deps = [
-        "@com_github_grpc_ecosystem_grpc_gateway_v2//protoc-gen-openapiv2/options",
-        "@org_golang_google_protobuf//reflect/protoreflect",
-        "@org_golang_google_protobuf//runtime/protoimpl",
-        "@org_golang_google_protobuf//types/descriptorpb",
+        "//vendor/github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2/options",
+        "//vendor/google.golang.org/protobuf/reflect/protoreflect",
+        "//vendor/google.golang.org/protobuf/runtime/protoimpl",
+        "//vendor/google.golang.org/protobuf/types/descriptorpb",
     ],
 )
 

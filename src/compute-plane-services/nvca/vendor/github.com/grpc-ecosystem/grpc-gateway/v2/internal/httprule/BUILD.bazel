@@ -1,6 +1,4 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
-
-package(default_visibility = ["//visibility:public"])
+load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "httprule",
@@ -9,27 +7,14 @@ go_library(
         "parse.go",
         "types.go",
     ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/internal/httprule",
     importpath = "github.com/grpc-ecosystem/grpc-gateway/v2/internal/httprule",
-    deps = ["//utilities"],
-)
-
-go_test(
-    name = "httprule_test",
-    size = "small",
-    srcs = [
-        "compile_test.go",
-        "parse_test.go",
-        "types_test.go",
-    ],
-    embed = [":httprule"],
-    deps = [
-        "//utilities",
-        "@org_golang_google_grpc//grpclog",
-    ],
+    visibility = ["//vendor/github.com/grpc-ecosystem/grpc-gateway/v2:__subpackages__"],
+    deps = ["//vendor/github.com/grpc-ecosystem/grpc-gateway/v2/utilities"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":httprule",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//vendor/github.com/grpc-ecosystem/grpc-gateway/v2:__subpackages__"],
 )

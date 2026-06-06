@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "presigned-url",
+    srcs = [
+        "context.go",
+        "doc.go",
+        "go_module_metadata.go",
+        "middleware.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/internal/presigned-url",
+    importpath = "github.com/aws/aws-sdk-go-v2/service/internal/presigned-url",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2/service:__subpackages__"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/middleware",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/signer/v4:signer",
+        "//vendor/github.com/aws/smithy-go/middleware",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":presigned-url",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2/service:__subpackages__"],
+)

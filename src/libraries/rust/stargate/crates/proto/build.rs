@@ -13,23 +13,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::configure()
-        .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
-        .field_attribute(
-            "stargate.WatchStargatesResponse.stargates",
-            "#[serde(default, serialize_with = \"crate::pb::serde_stargates_set::serialize\", deserialize_with = \"crate::pb::serde_stargates_set::deserialize\")]",
-        )
-        .field_attribute(
-            "stargate.WatchStargatesResponse.watch_stargate_urls",
-            "#[serde(default, serialize_with = \"crate::pb::serde_string_set::serialize\", deserialize_with = \"crate::pb::serde_string_set::deserialize\")]",
-        )
-        .build_server(true)
-        .compile_protos(&["proto/stargate.proto"], &["proto"])?;
+#[cfg(not(test))]
+#[path = "src/build_plan.rs"]
+mod build_plan;
+#[cfg(test)]
+use crate::build_plan;
 
-    tonic_build::configure()
-        .build_server(false)
-        .compile_protos(&["proto/llm_gateway.proto"], &["proto"])?;
+#[cfg(not(test))]
+use build_plan::ProtoCompilePlan;
 
+#[cfg(not(test))]
+fn compile_proto_plan(plan: ProtoCompilePlan) -> Result<(), Box<dyn std::error::Error>> {
+    let mut builder = tonic_prost_build::configure();
+    for &(path, attribute) in plan.type_attributes {
+        builder = builder.type_attribute(path, attribute);
+    }
+    for &(path, attribute) in plan.field_attributes {
+        builder = builder.field_attribute(path, attribute);
+    }
+    builder
+        .build_server(plan.build_server)
+        .compile_protos(plan.protos, plan.includes)?;
     Ok(())
+}
+
+#[cfg(not(test))]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    for plan in build_plan::proto_compile_plans() {
+        compile_proto_plan(plan)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn planned_proto_compile_count() -> usize {
+    build_plan::proto_compile_plans().len()
 }

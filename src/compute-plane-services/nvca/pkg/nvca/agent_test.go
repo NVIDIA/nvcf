@@ -32,6 +32,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	cmnoauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
@@ -332,15 +333,19 @@ func TestAgentOptions_String_IncludesNVCAOperatorVersion(t *testing.T) {
 
 func TestAgentOptions_String_IncludesIdentitySourceAndPSATPath(t *testing.T) {
 	agentOpts := AgentOptions{
+		Config: nvcaconfig.Config{
+			Authz: nvcaconfig.AuthzConfig{
+				ClusterIssuedTokenSource:   nvcaconfig.ClusterIssuedTokenSourcePSAT,
+				ClusterIssuedTokenFilePath: "/var/run/secrets/tokens/token",
+			},
+		},
 		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
 			PSATTokenFilePath: "/var/run/secrets/tokens/token",
 		},
-		IdentitySource:     "psat",
 		FeatureFlagFetcher: featureflag.DefaultFetcher,
 	}
 
 	str := agentOpts.sanitizedString()
-	assert.Contains(t, str, "IdentitySource:\"psat\"")
 	assert.Contains(t, str, "PSATTokenFilePath:\"/var/run/secrets/tokens/token\"")
 }
 

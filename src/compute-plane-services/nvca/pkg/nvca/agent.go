@@ -161,13 +161,6 @@ type AgentOptions struct {
 
 	FeatureFlagFetcher featureflag.Fetcher
 
-	// IdentitySource declares the projected-token mechanism the agent runs
-	// under. Empty/unset is treated as "psat" for backwards compatibility.
-	// Set by the operator from --identity-source / NVCF_IDENTITY_SOURCE.
-	// Source-specific behaviors (e.g. JWKS pushing) key off this rather than
-	// on PSATTokenFilePath, which is shared between PSAT and SPIRE.
-	IdentitySource string
-
 	NCAId string
 
 	ClusterName        string
@@ -434,7 +427,6 @@ func (o *AgentOptions) sanitizedString() string {
 	}
 	sanitized.OAuthTokenScope = o.OAuthTokenScope
 	sanitized.OAuthClientSecretsEnvFile = o.OAuthClientSecretsEnvFile
-	sanitized.IdentitySource = o.IdentitySource
 	sanitized.PSATTokenFilePath = o.PSATTokenFilePath
 	sanitized.EndpointURL = o.EndpointURL
 	sanitized.NATSURL = o.NATSURL
@@ -1185,9 +1177,9 @@ func (a *Agent) Start(ctx context.Context) error {
 		// PSATTokenFilePath; both feed the same NATS PSAT token fetcher.
 		// IdentitySource discriminates source-specific behavior below.
 		if psatPath := a.AgentOptions.TokenFetcherOptions.PSATTokenFilePath; psatPath != "" {
-			source := a.AgentOptions.IdentitySource
+			source := a.AgentOptions.Config.Authz.ClusterIssuedTokenSource
 			if source == "" {
-				source = "psat"
+				source = nvcaconfig.ClusterIssuedTokenSourcePSAT
 			}
 			log.Infof("SelfHosted + %s identity, initializing NATS queue client with projected-token fetcher", source)
 			psatFetcher, ferr := nvcaauth.NewPSATTokenFetcher(psatPath)
@@ -1213,7 +1205,7 @@ func (a *Agent) Start(ctx context.Context) error {
 			// satisfies controller-runtime's manager.Runnable, so a future
 			// multi-replica NVCA can switch to manager-registered leader-
 			// elected startup without touching the updater itself.
-			if source == "psat" {
+			if source == nvcaconfig.ClusterIssuedTokenSourcePSAT {
 				jwksUpdater, jerr := NewJWKSUpdater(JWKSUpdaterOptions{
 					ICMSURL:   a.EffectiveICMSURL(),
 					ClusterID: a.ClusterID,

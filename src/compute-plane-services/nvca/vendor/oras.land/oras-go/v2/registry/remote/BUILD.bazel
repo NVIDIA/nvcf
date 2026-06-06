@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "remote",
+    srcs = [
+        "manifest.go",
+        "referrers.go",
+        "registry.go",
+        "repository.go",
+        "url.go",
+        "utils.go",
+        "warning.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote",
+    importpath = "oras.land/oras-go/v2/registry/remote",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/opencontainers/go-digest",
+        "//vendor/github.com/opencontainers/image-spec/specs-go",
+        "//vendor/github.com/opencontainers/image-spec/specs-go/v1:specs-go",
+        "//vendor/oras.land/oras-go/v2/content",
+        "//vendor/oras.land/oras-go/v2/errdef",
+        "//vendor/oras.land/oras-go/v2/internal/cas",
+        "//vendor/oras.land/oras-go/v2/internal/descriptor",
+        "//vendor/oras.land/oras-go/v2/internal/docker",
+        "//vendor/oras.land/oras-go/v2/internal/httputil",
+        "//vendor/oras.land/oras-go/v2/internal/ioutil",
+        "//vendor/oras.land/oras-go/v2/internal/spec",
+        "//vendor/oras.land/oras-go/v2/internal/syncutil",
+        "//vendor/oras.land/oras-go/v2/registry",
+        "//vendor/oras.land/oras-go/v2/registry/remote/auth",
+        "//vendor/oras.land/oras-go/v2/registry/remote/errcode",
+        "//vendor/oras.land/oras-go/v2/registry/remote/internal/errutil",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":remote",
+    visibility = ["//visibility:public"],
+)

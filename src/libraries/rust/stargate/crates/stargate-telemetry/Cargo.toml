@@ -36,3 +36,6 @@ opentelemetry_sdk = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

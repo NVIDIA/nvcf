@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "selector",
+    srcs = ["utils.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/field/selector",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/internal/field/selector",
+    visibility = ["//vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/fields",
+        "//vendor/k8s.io/apimachinery/pkg/selection",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":selector",
+    visibility = ["//vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
+)

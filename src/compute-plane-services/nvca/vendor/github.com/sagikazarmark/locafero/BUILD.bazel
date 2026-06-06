@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "locafero",
+    srcs = [
+        "file_type.go",
+        "finder.go",
+        "glob.go",
+        "glob_windows.go",
+        "helpers.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/sagikazarmark/locafero",
+    importpath = "github.com/sagikazarmark/locafero",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/sourcegraph/conc/pool",
+        "//vendor/github.com/spf13/afero",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":locafero",
+    visibility = ["//visibility:public"],
+)

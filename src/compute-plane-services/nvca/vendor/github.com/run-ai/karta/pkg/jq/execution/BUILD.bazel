@@ -13,7 +13,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//vendor/github.com/itchyny/gojq",
-        "@org_uber_go_mock//gomock",
+        "//vendor/go.uber.org/mock/gomock",
     ],
 )
 

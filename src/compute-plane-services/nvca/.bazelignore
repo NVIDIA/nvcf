@@ -19,13 +19,3 @@
 # imported by proxy/. See gazelle directives in root BUILD.bazel.
 local
 vault
-
-# Pre-existing BUILD.bazel files in some vendored deps reference
-# legacy `@io_bazel_rules_go` (WORKSPACE-era), invisible from bzlmod.
-# Skip those subtrees so Bazel doesn't try to parse them. Their
-# Go code is still consumed by the vendor-mode resolves for nvcf-go
-# in the root BUILD.bazel and via go_deps for everything else.
-
-vendor/cel.dev/expr/
-vendor/github.com/google/cel-go
-vendor/github.com/grpc-ecosystem/grpc-gateway

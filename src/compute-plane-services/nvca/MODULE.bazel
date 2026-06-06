@@ -74,23 +74,11 @@ go_sdk.download(version = "1.25.10")
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")
 
-# nvcf-go ships pre-generated BUILD.bazel files inside the module that
-# reference `@rules_go`. From inside the fetched module's bzlmod
-# context that name does not resolve, and `bazel build` aborts with
-# "No repository visible as '@rules_go' from repository
-# '@@gazelle++go_deps+com_github_nvidia_nvcf_src_libraries_go_lib'".
-# Force Gazelle to re-generate the module's BUILD.bazel files in the
-# nvca-build context so the references resolve. Same workaround
-# grpc-proxy uses for the public nvcf-go path.
-go_deps.gazelle_override(
-    build_file_generation = "on",
-    directives = ["gazelle:proto disable_global"],
-    path = "github.com/NVIDIA/nvcf/src/libraries/go/lib",
-)
-
 # Auto-managed by `bazel mod tidy`. Re-run after adding or removing
 # imports in cmd/, internal/, or pkg/. The set is the transitive closure
 # of go.mod.
+# Keep additional vendored targets listed when `bazel build //...` needs
+# them, even if `bazel mod tidy` classifies them as indirect.
 use_repo(
     go_deps,
     "com_github_aws_aws_sdk_go",
@@ -117,6 +105,7 @@ use_repo(
     "com_github_prometheus_client_golang",
     "com_github_prometheus_client_model",
     "com_github_prometheus_common",
+    "com_github_run_ai_karta",
     "com_github_sirupsen_logrus",
     "com_github_sony_gobreaker_v2",
     "com_github_sourcegraph_conc",
@@ -144,26 +133,6 @@ use_repo(
     "io_opentelemetry_go_otel_trace",
     "org_golang_x_time",
     "xyz_gomodules_jsonpatch_v2",
-    "com_github_felixge_httpsnoop",
-    "com_github_fsnotify_fsnotify",
-    "com_github_go_viper_mapstructure_v2",
-    "com_github_golang_jwt_jwt_v5",
-    "com_github_google_shlex",
-    "com_github_grpc_ecosystem_grpc_gateway_v2",
-    "com_github_masterminds_semver_v3",
-    "com_github_spf13_viper",
-    "io_opentelemetry_go_contrib_instrumentation_github_com_gorilla_mux_otelmux",
-    "in_yaml_go_yaml_v3",
-    "cat_dario_mergo",
-    "io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracegrpc",
-    "org_golang_google_genproto_googleapis_rpc",
-    "org_golang_google_grpc",
-    "org_golang_google_protobuf",
-    "org_uber_go_zap",
-    "org_golang_x_sys",
-    "org_uber_go_mock",
-    "org_golang_x_text",
-
 )
 
 # ============================================================================
@@ -221,16 +190,16 @@ http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_
 
 http_file(
     name = "tini_static_amd64",
-    urls = ["https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-amd64"],
-    sha256 = "c5b0666b4cb676901f90dfcb37106783c5fe2077b04590973b885950611b30ee",
     downloaded_file_path = "tini",
     executable = True,
+    sha256 = "c5b0666b4cb676901f90dfcb37106783c5fe2077b04590973b885950611b30ee",
+    urls = ["https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-amd64"],
 )
 
 http_file(
     name = "tini_static_arm64",
-    urls = ["https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-arm64"],
-    sha256 = "eae1d3aa50c48fb23b8cbdf4e369d0910dfc538566bfd09df89a774aa84a48b9",
     downloaded_file_path = "tini",
     executable = True,
+    sha256 = "eae1d3aa50c48fb23b8cbdf4e369d0910dfc538566bfd09df89a774aa84a48b9",
+    urls = ["https://github.com/krallin/tini/releases/download/v0.19.0/tini-static-arm64"],
 )

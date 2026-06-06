@@ -17,10 +17,10 @@ go_library(
         "//pkg/client/clientset/versioned",
         "//pkg/client/informers/externalversions/internalinterfaces",
         "//pkg/client/listers/nvca/v2beta1",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
-        "@io_k8s_apimachinery//pkg/runtime",
-        "@io_k8s_apimachinery//pkg/watch",
-        "@io_k8s_client_go//tools/cache",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/watch",
+        "//vendor/k8s.io/client-go/tools/cache",
     ],
 )
 

@@ -17,6 +17,7 @@ use std::path::Path;
 
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize};
+use stargate_protocol::TunnelTransportProtocol;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -30,7 +31,7 @@ pub struct BenchmarkConfig {
     pub request_count: usize,
     pub max_concurrency: usize,
     #[serde(default)]
-    pub tunnel_protocol: TunnelProtocol,
+    pub tunnel_protocol: TunnelTransportProtocol,
     #[serde(default)]
     pub stargates: StargateConfig,
     pub backends: BackendConfig,
@@ -39,26 +40,6 @@ pub struct BenchmarkConfig {
     pub degradation: DegradationConfig,
     #[serde(default)]
     pub algorithms: Vec<AlgorithmConfig>,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[serde(rename_all = "lowercase")]
-pub enum TunnelProtocol {
-    #[default]
-    Custom,
-    Http3,
-    WebTransport,
-}
-
-impl TunnelProtocol {
-    pub fn as_arg(self) -> &'static str {
-        match self {
-            Self::Custom => "custom",
-            Self::Http3 => "http3",
-            Self::WebTransport => "webtransport",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -251,7 +232,7 @@ impl BenchmarkConfig {
             .and_then(|ext| ext.to_str())
             .unwrap_or_default();
         match ext {
-            "yaml" | "yml" => serde_yaml::from_slice(&bytes).with_context(|| {
+            "yaml" | "yml" => serde_yaml_ng::from_slice(&bytes).with_context(|| {
                 format!("failed to parse YAML benchmark config {}", path.display())
             }),
             _ => serde_json::from_slice(&bytes).with_context(|| {
@@ -299,37 +280,87 @@ pub struct BackendConfig {
     pub count: usize,
     #[serde(default)]
     pub cluster_id_template: Option<String>,
+    #[serde(default = "default_pylons_per_cluster")]
+    pub pylons_per_cluster: usize,
     pub profile: BackendProfile,
     #[serde(default)]
     pub profiles: Vec<BackendProfileGroup>,
 }
 
+fn default_pylons_per_cluster() -> usize {
+    1
+}
+
 impl BackendConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         ensure!(self.count > 0, "backends.count must be > 0");
+        ensure!(
+            self.pylons_per_cluster > 0,
+            "backends.pylons_per_cluster must be > 0"
+        );
         if let Some(template) = &self.cluster_id_template {
             ensure!(
                 !template.trim().is_empty(),
                 "backends.cluster_id_template must not be empty when set"
             );
+            if template.contains("{cluster_index}") {
+                ensure!(
+                    self.count.is_multiple_of(self.pylons_per_cluster),
+                    "backends.count must be divisible by backends.pylons_per_cluster when using {{cluster_index}}"
+                );
+            } else {
+                ensure!(
+                    self.pylons_per_cluster == 1,
+                    "backends.pylons_per_cluster requires cluster_id_template to contain {{cluster_index}}"
+                );
+            }
+        } else {
+            ensure!(
+                self.pylons_per_cluster == 1,
+                "backends.pylons_per_cluster requires backends.cluster_id_template"
+            );
         }
         validate_profile(&self.profile)?;
-        if self.profiles.is_empty() {
-            return Ok(());
+        if !self.profiles.is_empty() {
+            let mut total = 0usize;
+            for group in &self.profiles {
+                ensure!(group.count > 0, "backend profile counts must be > 0");
+                validate_profile(&group.profile)?;
+                total = total
+                    .checked_add(group.count)
+                    .context("sum of backend profile counts overflowed usize")?;
+            }
+            ensure!(
+                total == self.count,
+                "sum of backends.profiles counts must equal backends.count"
+            );
         }
 
-        let mut total = 0usize;
-        for group in &self.profiles {
-            ensure!(group.count > 0, "backend profile counts must be > 0");
-            validate_profile(&group.profile)?;
-            total = total
-                .checked_add(group.count)
-                .context("sum of backend profile counts overflowed usize")?;
+        let mut first_index_by_cluster = std::collections::BTreeMap::new();
+        for index in 0..self.count {
+            let cluster_id = self.effective_cluster_id_for_index(index);
+            if let Some(first_index) = first_index_by_cluster.get(&cluster_id) {
+                ensure!(
+                    self.profile_for_index(*first_index) == self.profile_for_index(index),
+                    "shared routing cluster must use identical backend profiles: {cluster_id}"
+                );
+            } else {
+                first_index_by_cluster.insert(cluster_id, index);
+            }
         }
-        ensure!(
-            total == self.count,
-            "sum of backends.profiles counts must equal backends.count"
-        );
+        for first_index in first_index_by_cluster.into_values() {
+            let profile = self.profile_for_index(first_index);
+            let pylon_count = self.pylon_count_for_upstream(first_index);
+            if let Some(max_concurrent_requests) = profile.max_concurrent_requests {
+                max_concurrent_requests
+                    .checked_mul(pylon_count)
+                    .context("shared routing cluster max_concurrent_requests overflowed usize")?;
+            }
+            profile
+                .kv_cache_capacity_tokens
+                .checked_mul(pylon_count as u64)
+                .context("shared routing cluster kv_cache_capacity_tokens overflowed u64")?;
+        }
         Ok(())
     }
 
@@ -359,9 +390,50 @@ impl BackendConfig {
             index < self.count,
             "backend index must be less than backend count"
         );
-        self.cluster_id_template
-            .as_ref()
-            .map(|template| template.replace("{backend_index}", &index.to_string()))
+        self.cluster_id_template.as_ref().map(|template| {
+            template
+                .replace(
+                    "{cluster_index}",
+                    &(index / self.pylons_per_cluster).to_string(),
+                )
+                .replace("{backend_index}", &index.to_string())
+        })
+    }
+
+    pub fn effective_cluster_id_for_index(&self, index: usize) -> String {
+        self.cluster_id_for_index(index)
+            .unwrap_or_else(|| format!("backend-{index}"))
+    }
+
+    pub fn upstream_index_for_index(&self, index: usize) -> usize {
+        let cluster_id = self.effective_cluster_id_for_index(index);
+        (0..=index)
+            .find(|candidate| self.effective_cluster_id_for_index(*candidate) == cluster_id)
+            .expect("the current backend must belong to its own routing cluster")
+    }
+
+    pub fn upstream_indices(&self) -> Vec<usize> {
+        (0..self.count)
+            .filter(|index| self.upstream_index_for_index(*index) == *index)
+            .collect()
+    }
+
+    pub fn pylon_count_for_upstream(&self, upstream_index: usize) -> usize {
+        assert!(
+            self.upstream_index_for_index(upstream_index) == upstream_index,
+            "backend index must identify a shared upstream"
+        );
+        let cluster_id = self.effective_cluster_id_for_index(upstream_index);
+        (0..self.count)
+            .filter(|index| self.effective_cluster_id_for_index(*index) == cluster_id)
+            .count()
+    }
+
+    pub fn cluster_count(&self) -> usize {
+        (0..self.count)
+            .map(|index| self.effective_cluster_id_for_index(index))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
     }
 }
 
@@ -393,6 +465,10 @@ fn validate_traffic_pattern(pattern: &TrafficPatternConfig) -> anyhow::Result<()
         TrafficPatternConfig::StairStep(config) => {
             ensure!(config.step_requests > 0, "step_requests must be > 0");
         }
+        TrafficPatternConfig::PrefixReuse(config) => ensure!(
+            config.cache_affinity_keys > 0,
+            "prefix_reuse cache_affinity_keys must be > 0"
+        ),
         TrafficPatternConfig::Uniform(_)
         | TrafficPatternConfig::ZipfHotset(_)
         | TrafficPatternConfig::MixedSize(_) => {}
@@ -458,6 +534,7 @@ pub enum TrafficPatternConfig {
     Bursty(BurstyTrafficConfig),
     StairStep(StairStepTrafficConfig),
     MixedSize(MixedSizeTrafficConfig),
+    PrefixReuse(PrefixReuseTrafficConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -522,6 +599,17 @@ pub struct MixedSizeTrafficConfig {
 pub struct MixedSizeClassConfig {
     pub input_tokens: TokenDistributionConfig,
     pub output_tokens: TokenDistributionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PrefixReuseTrafficConfig {
+    pub routing_keys: usize,
+    pub cache_affinity_keys: usize,
+    pub initial_input_tokens: TokenDistributionConfig,
+    pub incremental_input_tokens: TokenDistributionConfig,
+    pub output_tokens: TokenDistributionConfig,
+    pub arrival: ArrivalPatternConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -615,7 +703,7 @@ mod tests {
 
     #[test]
     fn parses_webtransport_tunnel_protocol_from_yaml() {
-        let config: BenchmarkConfig = serde_yaml::from_str(
+        let config: BenchmarkConfig = serde_yaml_ng::from_str(
             r#"
 name: webtransport
 model: dummy-model
@@ -647,13 +735,16 @@ traffic_pattern:
         )
         .expect("config should parse");
 
-        assert_eq!(config.tunnel_protocol, TunnelProtocol::WebTransport);
-        assert_eq!(config.tunnel_protocol.as_arg(), "webtransport");
+        assert_eq!(
+            config.tunnel_protocol,
+            TunnelTransportProtocol::WebTransport
+        );
+        assert_eq!(config.tunnel_protocol.to_string(), "webtransport");
     }
 
     #[test]
     fn parses_degradation_actions_from_yaml() {
-        let config: BenchmarkConfig = serde_yaml::from_str(
+        let config: BenchmarkConfig = serde_yaml_ng::from_str(
             r#"
 name: degradation
 model: dummy-model
@@ -712,7 +803,7 @@ degradation:
 
     #[test]
     fn parses_per_algorithm_pylon_queue_admission_variants_from_yaml() {
-        let config: BenchmarkConfig = serde_yaml::from_str(
+        let config: BenchmarkConfig = serde_yaml_ng::from_str(
             r#"
 name: queue-admission-ab
 model: dummy-model
@@ -832,7 +923,7 @@ algorithms:
 
     #[test]
     fn rejects_unknown_top_level_config_fields() {
-        let err = serde_yaml::from_str::<BenchmarkConfig>(
+        let err = serde_yaml_ng::from_str::<BenchmarkConfig>(
             r#"
 name: unknown-top-level
 model: dummy-model
@@ -872,7 +963,7 @@ traffic_pattern:
 
     #[test]
     fn rejects_unknown_nested_config_fields() {
-        let err = serde_yaml::from_str::<BenchmarkConfig>(
+        let err = serde_yaml_ng::from_str::<BenchmarkConfig>(
             r#"
 name: unknown-nested
 model: dummy-model
@@ -912,7 +1003,7 @@ traffic_pattern:
 
     #[test]
     fn validates_bursty_period_is_nonzero() {
-        let config: BenchmarkConfig = serde_yaml::from_str(
+        let config: BenchmarkConfig = serde_yaml_ng::from_str(
             r#"
 name: bursty-zero-period
 model: dummy-model
@@ -955,7 +1046,7 @@ traffic_pattern:
 
     #[test]
     fn validates_stair_step_requests_is_nonzero() {
-        let config: BenchmarkConfig = serde_yaml::from_str(
+        let config: BenchmarkConfig = serde_yaml_ng::from_str(
             r#"
 name: stair-step-zero-period
 model: dummy-model
@@ -992,6 +1083,161 @@ traffic_pattern:
         assert!(
             err.to_string().contains("step_requests must be > 0"),
             "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn expands_grouped_pylon_cluster_id_template() {
+        let config: BenchmarkConfig = serde_yaml_ng::from_str(
+            r#"
+name: grouped-pylons
+model: dummy-model
+request_count: 1
+max_concurrency: 1
+backends:
+  count: 4
+  pylons_per_cluster: 2
+  cluster_id_template: cluster-{cluster_index}
+  profile:
+    service_time_ms:
+      ttft_mean: 10
+      decode_tokens_per_s: 100
+    registration:
+      last_mean_input_tps: 100.0
+traffic_pattern:
+  kind: uniform
+  routing_keys: 0
+  cache_affinity_keys: 0
+  input_tokens:
+    distribution: constant
+    value: 10
+  output_tokens:
+    distribution: constant
+    value: 5
+  arrival:
+    distribution: constant
+    interval_ms: 1
+"#,
+        )
+        .expect("grouped pylon configuration should parse");
+
+        config
+            .validate()
+            .expect("complete grouped topology should validate");
+        assert_eq!(
+            (0..4)
+                .map(|index| config.backends.cluster_id_for_index(index).unwrap())
+                .collect::<Vec<_>>(),
+            vec!["cluster-0", "cluster-0", "cluster-1", "cluster-1"]
+        );
+    }
+
+    #[test]
+    fn rejects_partial_grouped_pylon_cluster_topology() {
+        let config: BenchmarkConfig = serde_yaml_ng::from_str(
+            r#"
+name: partial-grouped-pylons
+model: dummy-model
+request_count: 1
+max_concurrency: 1
+backends:
+  count: 5
+  pylons_per_cluster: 2
+  cluster_id_template: cluster-{cluster_index}
+  profile:
+    service_time_ms:
+      ttft_mean: 10
+      decode_tokens_per_s: 100
+    registration:
+      last_mean_input_tps: 100.0
+traffic_pattern:
+  kind: uniform
+  routing_keys: 0
+  cache_affinity_keys: 0
+  input_tokens:
+    distribution: constant
+    value: 10
+  output_tokens:
+    distribution: constant
+    value: 5
+  arrival:
+    distribution: constant
+    interval_ms: 1
+"#,
+        )
+        .expect("grouped pylon configuration should parse");
+
+        let error = config
+            .validate()
+            .expect_err("partial grouped topology should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("divisible by backends.pylons_per_cluster"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn rejects_different_profiles_within_shared_cluster() {
+        let config: BenchmarkConfig = serde_yaml_ng::from_str(
+            r#"
+name: mixed-shared-cluster
+model: dummy-model
+request_count: 1
+max_concurrency: 1
+backends:
+  count: 2
+  pylons_per_cluster: 2
+  cluster_id_template: cluster-{cluster_index}
+  profile:
+    service_time_ms:
+      ttft_mean: 10
+      decode_tokens_per_s: 100
+    registration:
+      last_mean_input_tps: 100.0
+  profiles:
+    - count: 1
+      profile:
+        name: first
+        service_time_ms:
+          ttft_mean: 10
+          decode_tokens_per_s: 100
+        registration:
+          last_mean_input_tps: 100.0
+    - count: 1
+      profile:
+        name: second
+        service_time_ms:
+          ttft_mean: 20
+          decode_tokens_per_s: 100
+        registration:
+          last_mean_input_tps: 100.0
+traffic_pattern:
+  kind: uniform
+  routing_keys: 0
+  cache_affinity_keys: 0
+  input_tokens:
+    distribution: constant
+    value: 10
+  output_tokens:
+    distribution: constant
+    value: 5
+  arrival:
+    distribution: constant
+    interval_ms: 1
+"#,
+        )
+        .expect("shared-cluster configuration should parse");
+
+        let error = config
+            .validate()
+            .expect_err("a shared cache cluster cannot have mixed mock profiles");
+        assert!(
+            error
+                .to_string()
+                .contains("shared routing cluster must use identical backend profiles"),
+            "unexpected error: {error:#}"
         );
     }
 }

@@ -45,10 +45,10 @@ rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
 stargate = { workspace = true }
 stargate-proto = { workspace = true }
 stargate-protocol = { workspace = true }
 stargate-tls = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
-serde_yaml = "0.9"

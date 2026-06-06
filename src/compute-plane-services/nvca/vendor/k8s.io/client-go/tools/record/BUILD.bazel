@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "record",
+    srcs = [
+        "doc.go",
+        "event.go",
+        "events_cache.go",
+        "fake.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/record",
+    importpath = "k8s.io/client-go/tools/record",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//vendor/k8s.io/apimachinery/pkg/util/strategicpatch",
+        "//vendor/k8s.io/apimachinery/pkg/watch",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/tools/internal/events",
+        "//vendor/k8s.io/client-go/tools/record/util",
+        "//vendor/k8s.io/client-go/tools/reference",
+        "//vendor/k8s.io/client-go/util/flowcontrol",
+        "//vendor/k8s.io/klog/v2:klog",
+        "//vendor/k8s.io/utils/clock",
+        "//vendor/k8s.io/utils/lru",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":record",
+    visibility = ["//visibility:public"],
+)

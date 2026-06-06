@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go-mpatch",
+    srcs = [
+        "patcher.go",
+        "patcher.s",
+        "patcher_arm64.go",
+        "patcher_unix.go",
+        "patcher_unsupported.go",
+        "patcher_windows.go",
+        "patcher_x32.go",
+        "patcher_x64.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/undefinedlabs/go-mpatch",
+    importpath = "github.com/undefinedlabs/go-mpatch",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":go-mpatch",
+    visibility = ["//visibility:public"],
+)

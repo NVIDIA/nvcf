@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cbor",
+    srcs = [
+        "bytestring.go",
+        "cache.go",
+        "common.go",
+        "decode.go",
+        "diagnose.go",
+        "doc.go",
+        "encode.go",
+        "encode_map.go",
+        "omitzero_go124.go",
+        "omitzero_pre_go124.go",
+        "simplevalue.go",
+        "stream.go",
+        "structfields.go",
+        "tag.go",
+        "valid.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/fxamacker/cbor/v2",
+    importpath = "github.com/fxamacker/cbor/v2",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/x448/float16"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cbor",
+    visibility = ["//visibility:public"],
+)

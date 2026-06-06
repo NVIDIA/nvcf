@@ -26,6 +26,13 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use futures::StreamExt;
 use rand::Rng;
+use stargate_protocol::tunnel_contract::{
+    HEADER_INFERENCE_SERVER_ID as HEADER_CHOSEN_INFERENCE_SERVER_ID, HEADER_INPUT_TOKENS,
+    HEADER_MODEL, HEADER_PRIORITY, HEADER_REQUEST_ID, HEADER_ROUTING_KEY,
+    HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
+    HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
+};
+use stargate_tls::ServerTlsIdentity;
 use tracing::{Instrument, Span, field, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -33,29 +40,20 @@ use crate::load_balancer::{
     LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride, LoadBalancerRequest,
     LoadBalancerRouter, LoadBalancerRoutingAlgorithmError, input_work_seconds_for_request,
 };
-use crate::load_balancer_state::{
-    RoutedClusterSnapshot, RoutedInferenceServerSnapshot, RoutingTargetKey, StargateState,
-};
 use crate::metrics::StargateMetrics;
-use crate::quic_tunnel::QuicHttpProxy;
+use crate::routing_state::{
+    RoutedClusterSnapshot, RoutedInferenceServerSnapshot, RoutingReservation, RoutingTargetKey,
+    StargateState,
+};
 use crate::telemetry::{inject_trace_context, parent_context_from_headers};
+use crate::tunnel::QuicHttpProxy;
 
-const HEADER_MODEL: &str = "x-model";
-const HEADER_ROUTING_KEY: &str = "x-routing-key";
 const HEADER_ROUTING_METHOD: &str = "x-routing-method";
-const HEADER_REQUEST_ID: &str = "x-request-id";
-const HEADER_INPUT_TOKENS: &str = "x-input-tokens";
-const HEADER_PRIORITY: &str = "x-priority";
 const HEADER_MAX_WAIT_MS: &str = "x-max-wait-ms";
 const HEADER_REQUEST_SLO_MS: &str = "x-request-slo-ms";
 const HEADER_CACHE_AFFINITY_KEY: &str = "x-cache-affinity-key";
-const HEADER_CHOSEN_INFERENCE_SERVER_ID: &str = "x-inference-server-id";
 const HEADER_CHOSEN_INFERENCE_SERVER_URL: &str = "x-inference-server-url";
 const HEADER_CHOSEN_CLUSTER_ID: &str = "x-stargate-cluster-id";
-const HEADER_STARGATE_RETRYABLE: &str = "x-stargate-retryable";
-const HEADER_STARGATE_RETRY_REASON: &str = "x-stargate-retry-reason";
-const HEADER_STARGATE_RETRY_AFTER_MS: &str = "x-stargate-retry-after-ms";
-const HEADER_STARGATE_EXPECTED_QUEUE_MS: &str = "x-stargate-expected-queue-ms";
 const HEADER_STARGATE_ERROR_CODE: &str = "x-stargate-error-code";
 const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
 const RETRY_REASON_RETRYABLE_PROXY_ERROR: &str = "retryable_proxy_error";
@@ -130,7 +128,7 @@ pub struct ProxyTransportConfig {
     pub quic_connect_timeout: Duration,
     pub quic_request_timeout: Duration,
     pub tls_cert_pem: Option<Vec<u8>>,
-    pub tls_key_pem: Option<Vec<u8>>,
+    pub server_tls_identity: ServerTlsIdentity,
     pub quic_insecure: bool,
     pub tunnel_protocol: stargate_protocol::TunnelTransportProtocol,
     pub direct_quic_connections: usize,
@@ -152,29 +150,14 @@ pub struct ProxyAppState {
     pub retry: ProxyRetryConfig,
 }
 
-pub fn make_router(
-    state: Arc<StargateState>,
-    traffic: ProxyTrafficState,
-    quic_proxy: Arc<QuicHttpProxy>,
-    lb_router: Arc<LoadBalancerRouter>,
-    metrics: Arc<StargateMetrics>,
-    retry: ProxyRetryConfig,
-    _stargate_id: String,
-) -> Router {
+pub fn make_router(app: ProxyAppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/v1/chat/completions", post(proxy_chat_completions))
         .route("/v1/responses", post(proxy_responses))
         .route("/v1/embeddings", post(proxy_embeddings))
-        .with_state(ProxyAppState {
-            state,
-            quic_proxy,
-            traffic,
-            lb_router,
-            metrics,
-            retry,
-        })
+        .with_state(app)
 }
 
 async fn proxy_chat_completions(
@@ -262,106 +245,66 @@ async fn proxy_openai_request_inner(
     let mut replay_body =
         ReplayableRequestBody::new(&parts.headers, body, app.retry.max_replay_body_bytes)?;
 
-    let mut failed_backend_ids = HashSet::new();
-    let mut failed_cluster_ids = HashSet::new();
-    let mut attempt = 0;
-    let mut connect_retries = 0;
-    let mut request_retries = 0;
-    let routing_start = Instant::now();
-    let routing_retry_deadline = routing_retry_deadline(request_start, request_inputs.max_wait_ms);
-    let mut routing_retry_attempts = 0u64;
-    let mut recorded_routing_duration = false;
+    let mut proxy_run =
+        ProxyRequestRun::new(&app, &target, request_start, request_inputs.max_wait_ms);
+    let mut attempt_counters = ProxyAttemptCounters::default();
 
     'cluster: loop {
         let candidates = app.state.cluster_candidates_for_target(&target).await;
         let num_candidates = candidates.len();
-        let excluded_cluster_ids = (!failed_cluster_ids.is_empty()).then_some(&failed_cluster_ids);
         let eligible_candidate_count =
-            eligible_cluster_candidate_count(&candidates, excluded_cluster_ids);
-        let lb_request = LoadBalancerRequest {
-            routing_target: &target,
-            cache_affinity_key: request_inputs.cache_affinity_key.as_deref(),
-            input_tokens: request_inputs.input_tokens,
-            priority: request_inputs.priority,
-            received_at: request_start,
-            request_slo: request_inputs.request_slo_ms.map(Duration::from_millis),
-            excluded_cluster_ids,
-        };
-        if eligible_candidate_count > 0
-            && let Some(limit_seconds) = lb_resolution.config().max_input_work_seconds
-            && let Some(reason) = input_work_admission_rejection_reason(
-                lb_resolution.config(),
+            eligible_cluster_candidate_count(&candidates, proxy_run.excluded_cluster_ids());
+        let selection = {
+            let lb_request = proxy_run.load_balancer_request(&request_inputs);
+            if eligible_candidate_count > 0
+                && let Some(limit_seconds) = lb_resolution.config().max_input_work_seconds
+                && let Some(reason) = input_work_admission_rejection_reason(
+                    lb_resolution.config(),
+                    &lb_request,
+                    &candidates,
+                    limit_seconds,
+                )
+            {
+                return Ok(input_work_admission_rejection_response(
+                    app.metrics.as_ref(),
+                    &target,
+                    reason,
+                ));
+            }
+            app.lb_router.choose_candidate_with_algorithm_resolution(
                 &lb_request,
                 &candidates,
-                limit_seconds,
+                &lb_resolution,
             )
-        {
-            return Ok(input_work_admission_rejection_response(
-                app.metrics.as_ref(),
-                &target,
-                reason,
-            ));
-        }
-
-        let selection = match app.lb_router.choose_candidate_with_algorithm_resolution(
-            &lb_request,
-            &candidates,
-            &lb_resolution,
-        ) {
+        };
+        let selection = match selection {
             Some(selection) => selection,
             None => {
-                let target_registered = if num_candidates == 0
-                    && failed_backend_ids.is_empty()
-                    && failed_cluster_ids.is_empty()
+                match proxy_run
+                    .resolve_no_routing_choice(num_candidates, eligible_candidate_count)
+                    .await
                 {
-                    app.state.has_registered_model_for_target(&target).await
-                } else {
-                    false
-                };
-                match classify_no_routing_choice(NoRoutingChoiceInputs {
-                    num_candidates,
-                    eligible_candidate_count,
-                    target_registered,
-                    failed_backend_count: failed_backend_ids.len(),
-                    failed_cluster_count: failed_cluster_ids.len(),
-                    retry_allowed: should_retry_routing(routing_retry_deadline),
-                }) {
-                    NoRoutingChoiceAction::RetryRouting => {
-                        routing_retry_attempts += 1;
-                        Span::current().record("routing.retry_attempts", routing_retry_attempts);
-                        sleep_before_routing_retry(routing_retry_deadline).await;
+                    NoRoutingChoiceResolution::RetryRouting => {
                         continue;
                     }
-                    NoRoutingChoiceAction::Finalize(finalization) => {
-                        return finalize_no_routing_choice(NoRoutingFinalizationContext {
-                            metrics: app.metrics.as_ref(),
-                            target: &target,
-                            finalization,
-                            failed_backend_count: failed_backend_ids.len(),
-                            failed_cluster_count: failed_cluster_ids.len(),
-                            routing_retry_attempts,
-                        });
-                    }
+                    NoRoutingChoiceResolution::Return(response) => return response,
                 }
             }
         };
         let routing_algorithm = selection.effective_algorithm.to_string();
         let requested_algorithm = selection.requested_algorithm.clone();
         let rank_depth = selection.choice.rank_depth;
+        let selected_after_kv_free_tokens_skip =
+            selection.choice.selected_after_kv_free_tokens_skip;
         let chosen_cluster = &candidates[selection.choice.candidate_index];
         let expected_queue_ms = crate::queue_estimate::queue_time_estimate_ms_for_priority(
             &chosen_cluster.stats,
             request_inputs.priority,
         );
         let mut retry_backend = None;
+        let mut recorded_selection = false;
 
         loop {
-            attempt += 1;
-            Span::current().record("proxy.attempt", attempt as i64);
-            Span::current().record("proxy.connect_attempts", connect_retries as i64);
-            Span::current().record("proxy.request_retries", request_retries as i64);
-            Span::current().record("proxy.failed_backends", failed_backend_ids.len() as i64);
-
             let chosen = if let Some(chosen) = retry_backend.take() {
                 chosen
             } else if let Some(chosen) = app
@@ -369,433 +312,86 @@ async fn proxy_openai_request_inner(
                 .select_backend_for_cluster(
                     &target,
                     &chosen_cluster.cluster_id,
-                    &failed_backend_ids,
+                    proxy_run.failed_backend_ids(),
                 )
                 .await
             {
                 chosen
             } else {
-                failed_cluster_ids.insert(chosen_cluster.cluster_id.clone());
+                proxy_run.fail_cluster(chosen_cluster.cluster_id.clone());
                 continue 'cluster;
             };
 
-            Span::current().record("routing.retry_attempts", routing_retry_attempts);
-            record_routing_to_span(
-                &Span::current(),
-                RoutingTraceFields {
-                    routing_algorithm: &routing_algorithm,
-                    requested_algorithm: requested_algorithm.as_deref(),
-                    num_candidates,
-                    rank_depth,
-                    cluster: chosen_cluster,
-                    chosen: &chosen,
-                },
-            );
-            if !recorded_routing_duration {
-                let routing_elapsed = routing_start.elapsed();
+            if !recorded_selection {
+                let selection_class = if rank_depth > 1 {
+                    "fallback"
+                } else {
+                    "primary"
+                };
                 app.metrics
-                    .routing_duration_seconds(rk_ref, model_id)
-                    .observe(routing_elapsed.as_secs_f64());
-                recorded_routing_duration = true;
-            }
-
-            if !chosen.reverse_tunnel
-                && connect_retries < app.retry.max_connect_retries
-                && !app
-                    .quic_proxy
-                    .has_healthy_connection(&chosen.inference_server_id)
-                    .await
-            {
-                connect_retries += 1;
-                app.metrics
-                    .quic_connection_evictions_total(
-                        &chosen.inference_server_id,
-                        "stale_connection",
-                    )
+                    .routing_selections_total(rk_ref, model_id, &routing_algorithm, selection_class)
                     .inc();
-                match app
-                    .quic_proxy
-                    .reconnect_direct(&chosen.inference_server_id, &chosen.inference_server_url)
-                    .await
-                {
-                    Ok(()) => {
-                        app.metrics
-                            .quic_hot_path_reconnect_total(&chosen.inference_server_id, "success")
-                            .inc();
-                        app.metrics
-                            .proxy_retries_total(rk_ref, model_id, "hot_path_reconnect")
-                            .inc();
-                        Span::current().record("proxy.retry_reason", "hot_path_reconnect");
-                    }
-                    Err(error) => {
-                        app.metrics
-                            .quic_hot_path_reconnect_total(&chosen.inference_server_id, "error")
-                            .inc();
-                        warn!(
-                            inference_server_id = %chosen.inference_server_id,
-                            error = %error,
-                            connect_retries,
-                            "failed to reconnect stale QUIC upstream"
-                        );
-                        failed_backend_ids.insert(chosen.inference_server_id.clone());
-                        continue;
-                    }
+                if selected_after_kv_free_tokens_skip {
+                    app.metrics
+                        .routing_kv_free_token_fallback_selections_total(
+                            rk_ref,
+                            model_id,
+                            &routing_algorithm,
+                        )
+                        .inc();
                 }
+                recorded_selection = true;
             }
+            proxy_run.record_routing_selection(RoutingTraceFields {
+                routing_algorithm: &routing_algorithm,
+                requested_algorithm: requested_algorithm.as_deref(),
+                num_candidates,
+                rank_depth,
+                selected_after_kv_free_tokens_skip,
+                cluster: chosen_cluster,
+                chosen: &chosen,
+            });
 
-            let reservation = app
-                .state
-                .reserve_inference_server_for_target(
-                    &target,
-                    &chosen.inference_server_id,
-                    request_inputs.input_tokens,
-                    request_inputs.priority,
-                )
-                .await;
-
-            info!(
-                routing_key = ?target.routing_key,
-                model_id = %model_id,
-                input_tokens = request_inputs.input_tokens.unwrap_or(0),
-                requested_algorithm = requested_algorithm.as_deref().unwrap_or(""),
-                routing_algorithm = %routing_algorithm,
-                inference_server_id = %chosen.inference_server_id,
-                inference_server_url = %chosen.inference_server_url,
-                connect_retries,
-                request_retries,
-                "proxying request"
-            );
-
-            let upstream_span = tracing::info_span!(
-                "proxy_upstream_http_request",
-                request.endpoint = endpoint.name(),
-                http.method = %method,
-                http.path = %path_and_query,
-                proxy.attempt = attempt as i64,
-                selected_cluster.id = %chosen.cluster_id,
-                selected_inst.id = %chosen.inference_server_id,
-                routing.algorithm = %routing_algorithm,
-                proxy.queue.expected_ms = expected_queue_ms.map(|value| value as i64).unwrap_or_default(),
-                proxy.queue.expected_present = expected_queue_ms.is_some(),
-                proxy.upstream_status = field::Empty,
-                proxy.error = field::Empty,
-                proxy.time_to_first_byte_ms = field::Empty,
-            );
-            Span::current().record(
-                "proxy.queue.expected_ms",
-                expected_queue_ms
-                    .map(|value| value as i64)
-                    .unwrap_or_default(),
-            );
-            Span::current().record("proxy.queue.expected_present", expected_queue_ms.is_some());
-            let attempt_headers =
-                headers_for_upstream_attempt(&forwarded_headers, &upstream_span, expected_queue_ms);
-            let upstream_start = Instant::now();
-            let upstream = proxy_via_quic_streaming(
-                &app,
-                &chosen.inference_server_id,
-                method.clone(),
-                &path_and_query,
-                attempt_headers,
-                || replay_body.body_for_attempt(),
+            let route = ProxyAttemptRoute {
+                chosen: &chosen,
+                routing_algorithm: &routing_algorithm,
+                requested_algorithm: requested_algorithm.as_deref(),
+                expected_queue_ms,
+            };
+            match run_proxy_attempt(
+                ProxyAttemptContext {
+                    app: &app,
+                    target: &target,
+                    request_inputs: &request_inputs,
+                    endpoint,
+                    method: &method,
+                    path_and_query: &path_and_query,
+                    forwarded_headers: &forwarded_headers,
+                    retry_deadline,
+                    request_start,
+                },
+                route,
+                &mut attempt_counters,
+                &mut replay_body,
+                proxy_run.failed_backend_ids.len(),
             )
-            .instrument(upstream_span.clone())
-            .await;
-            let replay_body_bytes = replay_body.buffered_len();
-            Span::current().record("proxy.replay_body_bytes", replay_body_bytes as i64);
-            app.metrics
-                .proxy_replay_buffer_bytes(model_id)
-                .observe(replay_body_bytes as f64);
-
-            let upstream_ttfb = upstream_start.elapsed();
-            let ttfb = request_start.elapsed();
-            record_upstream_attempt_to_span(&upstream_span, &upstream, upstream_ttfb);
-            let attempt_result = proxy_attempt_result(&upstream);
-            app.metrics
-                .proxy_attempts_total(
-                    rk_ref,
-                    model_id,
-                    &chosen.inference_server_id,
-                    &attempt_result,
-                )
-                .inc();
-            record_upstream_result_to_span(
-                &Span::current(),
-                app.metrics.as_ref(),
-                &upstream,
-                ttfb,
-                rk_ref,
-                model_id,
-                &chosen,
-            );
-
-            match upstream {
-                Ok(upstream) => {
-                    if should_release_queue_mismatch_reservation(upstream.status, &upstream.headers)
-                        && let Some(reservation) = reservation
-                    {
-                        app.state
-                            .release_inference_server_reservation_for_target(&target, reservation)
-                            .await;
-                    }
-                    match decide_upstream_response_retry(
-                        upstream.status,
-                        &upstream.headers,
-                        &app.retry,
-                        retry_budget_has_remaining(retry_deadline),
-                        request_retries,
-                        replay_body.replay_readiness(),
-                    ) {
-                        UpstreamResponseRetryDecision::ReturnFinal => {
-                            return final_upstream_response(
-                                app.metrics.as_ref(),
-                                rk_ref,
-                                model_id,
-                                &chosen,
-                                upstream,
-                            );
-                        }
-                        UpstreamResponseRetryDecision::ReturnFinalRetryBudgetExhausted => {
-                            app.metrics
-                                .proxy_retry_exhausted_total(
-                                    rk_ref,
-                                    model_id,
-                                    "retry_budget_exhausted",
-                                )
-                                .inc();
-                            Span::current().record("proxy.retry_reason", "retry_budget_exhausted");
-                            return final_upstream_response(
-                                app.metrics.as_ref(),
-                                rk_ref,
-                                model_id,
-                                &chosen,
-                                upstream,
-                            );
-                        }
-                        UpstreamResponseRetryDecision::ReturnFinalRetryExhausted {
-                            retry_reason,
-                        } => {
-                            Span::current().record("proxy.retry_reason", retry_reason.as_str());
-                            app.metrics
-                                .proxy_retry_exhausted_total(rk_ref, model_id, &retry_reason)
-                                .inc();
-                            return final_upstream_response(
-                                app.metrics.as_ref(),
-                                rk_ref,
-                                model_id,
-                                &chosen,
-                                upstream,
-                            );
-                        }
-                        UpstreamResponseRetryDecision::ReturnFinalReplayIncomplete {
-                            retry_reason,
-                        } => {
-                            Span::current().record("proxy.retry_reason", retry_reason.as_str());
-                            warn!(
-                                inference_server_id = %chosen.inference_server_id,
-                                status = %upstream.status,
-                                retry_reason = %retry_reason,
-                                "not retrying response because request body replay buffer is incomplete"
-                            );
-                            return final_upstream_response(
-                                app.metrics.as_ref(),
-                                rk_ref,
-                                model_id,
-                                &chosen,
-                                upstream,
-                            );
-                        }
-                        UpstreamResponseRetryDecision::ReturnProxyError {
-                            status,
-                            retry_reason,
-                        } => {
-                            Span::current().record("proxy.retry_reason", retry_reason.as_str());
-                            return final_proxy_error(
-                                app.metrics.as_ref(),
-                                rk_ref,
-                                model_id,
-                                &chosen,
-                                status,
-                            );
-                        }
-                        UpstreamResponseRetryDecision::RetryAlternateBackend { retry_reason } => {
-                            Span::current().record("proxy.retry_reason", retry_reason.as_str());
-                            request_retries += 1;
-                            app.metrics
-                                .proxy_retries_total(rk_ref, model_id, &retry_reason)
-                                .inc();
-                            failed_backend_ids.insert(chosen.inference_server_id.clone());
-                            warn!(
-                                inference_server_id = %chosen.inference_server_id,
-                                cluster_id = %chosen.cluster_id,
-                                status = %upstream.status,
-                                request_retries,
-                                retry_reason = %retry_reason,
-                                "retrying request on a sibling backend after local queue mismatch"
-                            );
-                            continue;
-                        }
-                        UpstreamResponseRetryDecision::RetryAlternateCluster { retry_reason } => {
-                            Span::current().record("proxy.retry_reason", retry_reason.as_str());
-                            request_retries += 1;
-                            app.metrics
-                                .proxy_retries_total(rk_ref, model_id, &retry_reason)
-                                .inc();
-                            failed_cluster_ids.insert(chosen.cluster_id.clone());
-                            warn!(
-                                inference_server_id = %chosen.inference_server_id,
-                                cluster_id = %chosen.cluster_id,
-                                status = %upstream.status,
-                                request_retries,
-                                retry_reason = %retry_reason,
-                                "retrying request after retryable upstream response"
-                            );
-                            continue 'cluster;
-                        }
-                    }
+            .await
+            {
+                ProxyAttemptOutcome::ReturnFinal(response) => return Ok(response),
+                ProxyAttemptOutcome::ProxyError(status) => return Err(status),
+                ProxyAttemptOutcome::RetrySameBackend { chosen } => {
+                    retry_backend = Some(*chosen);
+                    continue;
                 }
-                Err(status) => {
-                    match decide_proxy_error_retry(
-                        status,
-                        &app.retry,
-                        retry_budget_has_remaining(retry_deadline),
-                        connect_retries,
-                        replay_body.replay_readiness(),
-                    ) {
-                        ProxyErrorRetryDecision::ReturnFinal => {
-                            return final_proxy_error(
-                                app.metrics.as_ref(),
-                                rk_ref,
-                                model_id,
-                                &chosen,
-                                status,
-                            );
-                        }
-                        ProxyErrorRetryDecision::ReturnFinalRetryBudgetExhausted => {
-                            app.metrics
-                                .proxy_retry_exhausted_total(
-                                    rk_ref,
-                                    model_id,
-                                    "retry_budget_exhausted",
-                                )
-                                .inc();
-                            Span::current().record("proxy.retry_reason", "retry_budget_exhausted");
-                            return final_proxy_error(
-                                app.metrics.as_ref(),
-                                rk_ref,
-                                model_id,
-                                &chosen,
-                                status,
-                            );
-                        }
-                        ProxyErrorRetryDecision::ReturnFinalConnectRetriesExhausted => {
-                            app.metrics
-                                .proxy_retry_exhausted_total(
-                                    rk_ref,
-                                    model_id,
-                                    "connect_retries_exhausted",
-                                )
-                                .inc();
-                            Span::current()
-                                .record("proxy.retry_reason", "connect_retries_exhausted");
-                            return final_proxy_error(
-                                app.metrics.as_ref(),
-                                rk_ref,
-                                model_id,
-                                &chosen,
-                                status,
-                            );
-                        }
-                        ProxyErrorRetryDecision::ReturnPayloadTooLarge => {
-                            return final_proxy_error(
-                                app.metrics.as_ref(),
-                                rk_ref,
-                                model_id,
-                                &chosen,
-                                StatusCode::PAYLOAD_TOO_LARGE,
-                            );
-                        }
-                        ProxyErrorRetryDecision::ReturnFinalReplayIncomplete { retry_reason } => {
-                            Span::current().record("proxy.retry_reason", retry_reason.as_str());
-                            warn!(
-                                inference_server_id = %chosen.inference_server_id,
-                                status = %status,
-                                retry_reason = %retry_reason,
-                                "not retrying proxy error because request body replay buffer is incomplete"
-                            );
-                            return final_proxy_error(
-                                app.metrics.as_ref(),
-                                rk_ref,
-                                model_id,
-                                &chosen,
-                                status,
-                            );
-                        }
-                        ProxyErrorRetryDecision::RetryConnectionOrFailover => {
-                            connect_retries += 1;
-                            if !chosen.reverse_tunnel {
-                                app.metrics
-                                    .quic_connection_evictions_total(
-                                        &chosen.inference_server_id,
-                                        "proxy_error",
-                                    )
-                                    .inc();
-                                match app
-                                    .quic_proxy
-                                    .reconnect_direct(
-                                        &chosen.inference_server_id,
-                                        &chosen.inference_server_url,
-                                    )
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        app.metrics
-                                            .quic_hot_path_reconnect_total(
-                                                &chosen.inference_server_id,
-                                                "success",
-                                            )
-                                            .inc();
-                                        app.metrics
-                                            .proxy_retries_total(
-                                                rk_ref,
-                                                model_id,
-                                                "hot_path_reconnect",
-                                            )
-                                            .inc();
-                                        Span::current()
-                                            .record("proxy.retry_reason", "hot_path_reconnect");
-                                        warn!(
-                                            inference_server_id = %chosen.inference_server_id,
-                                            connect_retries,
-                                            "reconnected QUIC upstream after proxy failure"
-                                        );
-                                        retry_backend = Some(chosen.clone());
-                                        continue;
-                                    }
-                                    Err(error) => {
-                                        app.metrics
-                                            .quic_hot_path_reconnect_total(
-                                                &chosen.inference_server_id,
-                                                "error",
-                                            )
-                                            .inc();
-                                        warn!(
-                                            inference_server_id = %chosen.inference_server_id,
-                                            error = %error,
-                                            connect_retries,
-                                            "failed to reconnect QUIC upstream"
-                                        );
-                                    }
-                                }
-                            }
-                            app.metrics
-                                .proxy_retries_total(rk_ref, model_id, "connect_failover")
-                                .inc();
-                            Span::current().record("proxy.retry_reason", "connect_failover");
-                            failed_backend_ids.insert(chosen.inference_server_id.clone());
-                            continue;
-                        }
-                    }
+                ProxyAttemptOutcome::RetryAlternateBackend {
+                    inference_server_id,
+                } => {
+                    proxy_run.fail_backend(inference_server_id);
+                    continue;
+                }
+                ProxyAttemptOutcome::RetryAlternateCluster { cluster_id } => {
+                    proxy_run.fail_cluster(cluster_id);
+                    continue 'cluster;
                 }
             }
         }
@@ -834,6 +430,7 @@ fn proxy_openai_request_span(headers: &HeaderMap) -> Span {
         routing.algorithm = field::Empty,
         routing.num_candidates = field::Empty,
         routing.rank_depth = field::Empty,
+        routing.selected_after_kv_free_tokens_skip = field::Empty,
         routing.retry_attempts = field::Empty,
         routing.admission_rejection_reason = field::Empty,
         proxy.upstream_status = field::Empty,
@@ -846,7 +443,7 @@ fn proxy_openai_request_span(headers: &HeaderMap) -> Span {
         proxy.retry_reason = field::Empty,
         proxy.replay_body_bytes = field::Empty,
     );
-    span.set_parent(parent_context_from_headers(headers));
+    let _ = span.set_parent(parent_context_from_headers(headers));
     span
 }
 
@@ -874,15 +471,682 @@ fn final_upstream_response(
     build_proxy_response(upstream, chosen)
 }
 
-fn final_proxy_error(
-    metrics: &StargateMetrics,
-    routing_key: Option<&str>,
-    model_id: &str,
+struct ProxyRequestRun<'a> {
+    app: &'a ProxyAppState,
+    target: &'a RoutingTargetKey,
+    request_start: Instant,
+    routing_start: Instant,
+    routing_retry_deadline: Option<Instant>,
+    routing_retry_attempts: u64,
+    failed_backend_ids: HashSet<String>,
+    failed_cluster_ids: HashSet<String>,
+    recorded_routing_duration: bool,
+}
+
+impl<'a> ProxyRequestRun<'a> {
+    fn new(
+        app: &'a ProxyAppState,
+        target: &'a RoutingTargetKey,
+        request_start: Instant,
+        max_wait_ms: Option<u64>,
+    ) -> Self {
+        Self {
+            app,
+            target,
+            request_start,
+            routing_start: Instant::now(),
+            routing_retry_deadline: routing_retry_deadline(request_start, max_wait_ms),
+            routing_retry_attempts: 0,
+            failed_backend_ids: HashSet::new(),
+            failed_cluster_ids: HashSet::new(),
+            recorded_routing_duration: false,
+        }
+    }
+
+    fn routing_key(&self) -> Option<&str> {
+        self.target.routing_key.as_deref()
+    }
+
+    fn model_id(&self) -> &str {
+        self.target.model_id.as_str()
+    }
+
+    fn excluded_cluster_ids(&self) -> Option<&HashSet<String>> {
+        (!self.failed_cluster_ids.is_empty()).then_some(&self.failed_cluster_ids)
+    }
+
+    fn failed_backend_ids(&self) -> &HashSet<String> {
+        &self.failed_backend_ids
+    }
+
+    fn load_balancer_request<'b>(
+        &'b self,
+        request_inputs: &'b ProxyRequestInputs,
+    ) -> LoadBalancerRequest<'b> {
+        LoadBalancerRequest {
+            routing_target: self.target,
+            cache_affinity_key: request_inputs.cache_affinity_key.as_deref(),
+            input_tokens: Some(request_inputs.input_tokens),
+            priority: request_inputs.priority,
+            received_at: self.request_start,
+            request_slo: request_inputs.request_slo_ms.map(Duration::from_millis),
+            excluded_cluster_ids: self.excluded_cluster_ids(),
+        }
+    }
+
+    async fn resolve_no_routing_choice(
+        &mut self,
+        num_candidates: usize,
+        eligible_candidate_count: usize,
+    ) -> NoRoutingChoiceResolution {
+        let target_registered = if num_candidates == 0 {
+            self.app
+                .state
+                .has_registered_model_for_target(self.target)
+                .await
+        } else {
+            false
+        };
+
+        match classify_no_routing_choice(NoRoutingChoiceInputs {
+            num_candidates,
+            eligible_candidate_count,
+            target_registered,
+            failed_backend_count: self.failed_backend_ids.len(),
+            failed_cluster_count: self.failed_cluster_ids.len(),
+            retry_allowed: should_retry_routing(self.routing_retry_deadline),
+        }) {
+            NoRoutingChoiceAction::RetryRouting => {
+                self.routing_retry_attempts += 1;
+                Span::current().record("routing.retry_attempts", self.routing_retry_attempts);
+                sleep_before_routing_retry(self.routing_retry_deadline).await;
+                NoRoutingChoiceResolution::RetryRouting
+            }
+            NoRoutingChoiceAction::Finalize(finalization) => NoRoutingChoiceResolution::Return(
+                finalize_no_routing_choice(NoRoutingFinalizationContext {
+                    metrics: self.app.metrics.as_ref(),
+                    target: self.target,
+                    finalization,
+                    failed_backend_count: self.failed_backend_ids.len(),
+                    failed_cluster_count: self.failed_cluster_ids.len(),
+                    routing_retry_attempts: self.routing_retry_attempts,
+                }),
+            ),
+        }
+    }
+
+    fn fail_backend(&mut self, inference_server_id: String) {
+        self.failed_backend_ids.insert(inference_server_id);
+    }
+
+    fn fail_cluster(&mut self, cluster_id: String) {
+        self.failed_cluster_ids.insert(cluster_id);
+    }
+
+    fn record_routing_selection(&mut self, routing: RoutingTraceFields<'_>) {
+        Span::current().record("routing.retry_attempts", self.routing_retry_attempts);
+        record_routing_to_span(&Span::current(), routing);
+        if self.recorded_routing_duration {
+            return;
+        }
+
+        self.app
+            .metrics
+            .routing_duration_seconds(self.routing_key(), self.model_id())
+            .observe(self.routing_start.elapsed().as_secs_f64());
+        self.recorded_routing_duration = true;
+    }
+}
+
+enum NoRoutingChoiceResolution {
+    RetryRouting,
+    Return(Result<Response<Body>, StatusCode>),
+}
+
+#[derive(Default)]
+struct ProxyAttemptCounters {
+    attempt: u32,
+    connect_retries: u32,
+    request_retries: u32,
+}
+
+struct ProxyAttemptContext<'a> {
+    app: &'a ProxyAppState,
+    target: &'a RoutingTargetKey,
+    request_inputs: &'a ProxyRequestInputs,
+    endpoint: OpenAiProxyEndpoint,
+    method: &'a Method,
+    path_and_query: &'a str,
+    forwarded_headers: &'a HeaderMap,
+    retry_deadline: Option<Instant>,
+    request_start: Instant,
+}
+
+impl ProxyAttemptContext<'_> {
+    fn routing_key(&self) -> Option<&str> {
+        self.target.routing_key.as_deref()
+    }
+
+    fn model_id(&self) -> &str {
+        self.target.model_id.as_str()
+    }
+}
+
+struct ProxyAttemptRoute<'a> {
+    chosen: &'a RoutedInferenceServerSnapshot,
+    routing_algorithm: &'a str,
+    requested_algorithm: Option<&'a str>,
+    expected_queue_ms: Option<u64>,
+}
+
+enum ProxyAttemptOutcome {
+    ReturnFinal(Response<Body>),
+    ProxyError(StatusCode),
+    RetrySameBackend {
+        chosen: Box<RoutedInferenceServerSnapshot>,
+    },
+    RetryAlternateBackend {
+        inference_server_id: String,
+    },
+    RetryAlternateCluster {
+        cluster_id: String,
+    },
+}
+
+async fn run_proxy_attempt(
+    context: ProxyAttemptContext<'_>,
+    route: ProxyAttemptRoute<'_>,
+    counters: &mut ProxyAttemptCounters,
+    replay_body: &mut ReplayableRequestBody,
+    failed_backend_count: usize,
+) -> ProxyAttemptOutcome {
+    counters.attempt += 1;
+    record_proxy_attempt_counters(counters, failed_backend_count);
+
+    if let Some(outcome) = ensure_hot_path_connection(&context, route.chosen, counters).await {
+        return outcome;
+    }
+
+    let reservation = context
+        .app
+        .state
+        .reserve_inference_server_for_target(
+            context.target,
+            &route.chosen.inference_server_id,
+            Some(context.request_inputs.input_tokens),
+            context.request_inputs.priority,
+        )
+        .await;
+    record_proxy_attempt_start(&context, &route, counters);
+
+    let upstream_span = proxy_upstream_attempt_span(&context, &route, counters.attempt);
+    Span::current().record(
+        "proxy.queue.expected_ms",
+        route
+            .expected_queue_ms
+            .map(|value| value as i64)
+            .unwrap_or_default(),
+    );
+    Span::current().record(
+        "proxy.queue.expected_present",
+        route.expected_queue_ms.is_some(),
+    );
+    let attempt_headers = headers_for_upstream_attempt(
+        context.forwarded_headers,
+        &upstream_span,
+        route.expected_queue_ms,
+    );
+    let upstream_start = Instant::now();
+    let upstream = proxy_via_quic_streaming(
+        context.app,
+        &route.chosen.inference_server_id,
+        context.method.clone(),
+        context.path_and_query,
+        attempt_headers,
+        || replay_body.body_for_attempt(),
+    )
+    .instrument(upstream_span.clone())
+    .await;
+    record_proxy_attempt_result(
+        &context,
+        &route,
+        replay_body,
+        &upstream,
+        &upstream_span,
+        upstream_start,
+    );
+
+    match upstream {
+        Ok(upstream) => {
+            handle_upstream_response_attempt(
+                &context,
+                &route,
+                counters,
+                replay_body,
+                reservation,
+                upstream,
+            )
+            .await
+        }
+        Err(status) => {
+            handle_proxy_error_attempt(&context, &route, counters, replay_body, status).await
+        }
+    }
+}
+
+fn record_proxy_attempt_counters(counters: &ProxyAttemptCounters, failed_backend_count: usize) {
+    Span::current().record("proxy.attempt", counters.attempt as i64);
+    Span::current().record("proxy.connect_attempts", counters.connect_retries as i64);
+    Span::current().record("proxy.request_retries", counters.request_retries as i64);
+    Span::current().record("proxy.failed_backends", failed_backend_count as i64);
+}
+
+async fn ensure_hot_path_connection(
+    context: &ProxyAttemptContext<'_>,
+    chosen: &RoutedInferenceServerSnapshot,
+    counters: &mut ProxyAttemptCounters,
+) -> Option<ProxyAttemptOutcome> {
+    if chosen.reverse_tunnel
+        || counters.connect_retries >= context.app.retry.max_connect_retries
+        || context
+            .app
+            .quic_proxy
+            .has_healthy_connection(&chosen.inference_server_id)
+            .await
+    {
+        return None;
+    }
+
+    counters.connect_retries += 1;
+    context
+        .app
+        .metrics
+        .quic_connection_evictions_total(&chosen.inference_server_id, "stale_connection")
+        .inc();
+    match context
+        .app
+        .quic_proxy
+        .reconnect_direct(&chosen.inference_server_id, &chosen.inference_server_url)
+        .await
+    {
+        Ok(()) => {
+            record_hot_path_reconnect_success(context, chosen);
+            None
+        }
+        Err(error) => {
+            record_hot_path_reconnect_error(context, chosen);
+            warn!(
+                inference_server_id = %chosen.inference_server_id,
+                error = %error,
+                connect_retries = counters.connect_retries,
+                "failed to reconnect stale QUIC upstream"
+            );
+            Some(ProxyAttemptOutcome::RetryAlternateBackend {
+                inference_server_id: chosen.inference_server_id.clone(),
+            })
+        }
+    }
+}
+
+fn record_proxy_attempt_start(
+    context: &ProxyAttemptContext<'_>,
+    route: &ProxyAttemptRoute<'_>,
+    counters: &ProxyAttemptCounters,
+) {
+    info!(
+        routing_key = ?context.target.routing_key,
+        model_id = %context.model_id(),
+        input_tokens = context.request_inputs.input_tokens,
+        requested_algorithm = route.requested_algorithm.unwrap_or(""),
+        routing_algorithm = %route.routing_algorithm,
+        inference_server_id = %route.chosen.inference_server_id,
+        inference_server_url = %route.chosen.inference_server_url,
+        connect_retries = counters.connect_retries,
+        request_retries = counters.request_retries,
+        "proxying request"
+    );
+}
+
+fn proxy_upstream_attempt_span(
+    context: &ProxyAttemptContext<'_>,
+    route: &ProxyAttemptRoute<'_>,
+    attempt: u32,
+) -> Span {
+    tracing::info_span!(
+        "proxy_upstream_http_request",
+        request.endpoint = context.endpoint.name(),
+        http.method = %context.method,
+        http.path = %context.path_and_query,
+        proxy.attempt = attempt as i64,
+        selected_cluster.id = %route.chosen.cluster_id,
+        selected_inst.id = %route.chosen.inference_server_id,
+        routing.algorithm = %route.routing_algorithm,
+        proxy.queue.expected_ms = route.expected_queue_ms.map(|value| value as i64).unwrap_or_default(),
+        proxy.queue.expected_present = route.expected_queue_ms.is_some(),
+        proxy.upstream_status = field::Empty,
+        proxy.error = field::Empty,
+        proxy.time_to_first_byte_ms = field::Empty,
+    )
+}
+
+fn record_proxy_attempt_result(
+    context: &ProxyAttemptContext<'_>,
+    route: &ProxyAttemptRoute<'_>,
+    replay_body: &ReplayableRequestBody,
+    upstream: &Result<UpstreamStreamingResponse, StatusCode>,
+    upstream_span: &Span,
+    upstream_start: Instant,
+) {
+    let replay_body_bytes = replay_body.buffered_len();
+    Span::current().record("proxy.replay_body_bytes", replay_body_bytes as i64);
+    context
+        .app
+        .metrics
+        .proxy_replay_buffer_bytes(context.model_id())
+        .observe(replay_body_bytes as f64);
+
+    let upstream_ttfb = upstream_start.elapsed();
+    let ttfb = context.request_start.elapsed();
+    record_upstream_attempt_to_span(upstream_span, upstream, upstream_ttfb);
+    let attempt_result = proxy_attempt_result(upstream);
+    context
+        .app
+        .metrics
+        .proxy_attempts_total(
+            context.routing_key(),
+            context.model_id(),
+            &route.chosen.inference_server_id,
+            &attempt_result,
+        )
+        .inc();
+    record_upstream_result_to_span(
+        &Span::current(),
+        context.app.metrics.as_ref(),
+        upstream,
+        ttfb,
+        context.routing_key(),
+        context.model_id(),
+        route.chosen,
+    );
+}
+
+async fn handle_upstream_response_attempt(
+    context: &ProxyAttemptContext<'_>,
+    route: &ProxyAttemptRoute<'_>,
+    counters: &mut ProxyAttemptCounters,
+    replay_body: &mut ReplayableRequestBody,
+    reservation: Option<RoutingReservation>,
+    upstream: UpstreamStreamingResponse,
+) -> ProxyAttemptOutcome {
+    let should_release_reservation =
+        should_release_queue_mismatch_reservation(upstream.status, &upstream.headers);
+    release_queue_mismatch_reservation_if_needed(context, reservation, should_release_reservation)
+        .await;
+    match decide_upstream_response_retry(
+        upstream.status,
+        &upstream.headers,
+        &context.app.retry,
+        retry_budget_has_remaining(context.retry_deadline),
+        counters.request_retries,
+        replay_body.replay_readiness(),
+    ) {
+        UpstreamResponseRetryDecision::ReturnFinal => {
+            final_upstream_response_outcome(context, route.chosen, upstream)
+        }
+        UpstreamResponseRetryDecision::ReturnFinalRetryBudgetExhausted => {
+            record_retry_exhausted(context, "retry_budget_exhausted");
+            final_upstream_response_outcome(context, route.chosen, upstream)
+        }
+        UpstreamResponseRetryDecision::ReturnFinalRetryExhausted { retry_reason } => {
+            record_retry_exhausted(context, &retry_reason);
+            final_upstream_response_outcome(context, route.chosen, upstream)
+        }
+        UpstreamResponseRetryDecision::ReturnFinalReplayIncomplete { retry_reason } => {
+            Span::current().record("proxy.retry_reason", retry_reason.as_str());
+            warn!(
+                inference_server_id = %route.chosen.inference_server_id,
+                status = %upstream.status,
+                retry_reason = %retry_reason,
+                "not retrying response because request body replay buffer is incomplete"
+            );
+            final_upstream_response_outcome(context, route.chosen, upstream)
+        }
+        UpstreamResponseRetryDecision::ReturnProxyError {
+            status,
+            retry_reason,
+        } => {
+            Span::current().record("proxy.retry_reason", retry_reason.as_str());
+            final_proxy_error_outcome(context, route.chosen, status)
+        }
+        UpstreamResponseRetryDecision::RetryAlternateBackend { retry_reason } => {
+            record_request_retry(context, counters, &retry_reason);
+            warn!(
+                inference_server_id = %route.chosen.inference_server_id,
+                cluster_id = %route.chosen.cluster_id,
+                status = %upstream.status,
+                request_retries = counters.request_retries,
+                retry_reason = %retry_reason,
+                "retrying request on a sibling backend after local queue mismatch"
+            );
+            ProxyAttemptOutcome::RetryAlternateBackend {
+                inference_server_id: route.chosen.inference_server_id.clone(),
+            }
+        }
+        UpstreamResponseRetryDecision::RetryAlternateCluster { retry_reason } => {
+            record_request_retry(context, counters, &retry_reason);
+            warn!(
+                inference_server_id = %route.chosen.inference_server_id,
+                cluster_id = %route.chosen.cluster_id,
+                status = %upstream.status,
+                request_retries = counters.request_retries,
+                retry_reason = %retry_reason,
+                "retrying request after retryable upstream response"
+            );
+            ProxyAttemptOutcome::RetryAlternateCluster {
+                cluster_id: route.chosen.cluster_id.clone(),
+            }
+        }
+    }
+}
+
+async fn release_queue_mismatch_reservation_if_needed(
+    context: &ProxyAttemptContext<'_>,
+    reservation: Option<RoutingReservation>,
+    should_release_reservation: bool,
+) {
+    if should_release_reservation && let Some(reservation) = reservation {
+        context
+            .app
+            .state
+            .release_inference_server_reservation_for_target(context.target, reservation)
+            .await;
+    }
+}
+
+async fn handle_proxy_error_attempt(
+    context: &ProxyAttemptContext<'_>,
+    route: &ProxyAttemptRoute<'_>,
+    counters: &mut ProxyAttemptCounters,
+    replay_body: &mut ReplayableRequestBody,
+    status: StatusCode,
+) -> ProxyAttemptOutcome {
+    match decide_proxy_error_retry(
+        status,
+        &context.app.retry,
+        retry_budget_has_remaining(context.retry_deadline),
+        counters.connect_retries,
+        replay_body.replay_readiness(),
+    ) {
+        ProxyErrorRetryDecision::ReturnFinal => {
+            final_proxy_error_outcome(context, route.chosen, status)
+        }
+        ProxyErrorRetryDecision::ReturnFinalRetryBudgetExhausted => {
+            record_retry_exhausted(context, "retry_budget_exhausted");
+            final_proxy_error_outcome(context, route.chosen, status)
+        }
+        ProxyErrorRetryDecision::ReturnFinalConnectRetriesExhausted => {
+            record_retry_exhausted(context, "connect_retries_exhausted");
+            final_proxy_error_outcome(context, route.chosen, status)
+        }
+        ProxyErrorRetryDecision::ReturnPayloadTooLarge => {
+            final_proxy_error_outcome(context, route.chosen, StatusCode::PAYLOAD_TOO_LARGE)
+        }
+        ProxyErrorRetryDecision::ReturnFinalReplayIncomplete { retry_reason } => {
+            Span::current().record("proxy.retry_reason", retry_reason.as_str());
+            warn!(
+                inference_server_id = %route.chosen.inference_server_id,
+                status = %status,
+                retry_reason = %retry_reason,
+                "not retrying proxy error because request body replay buffer is incomplete"
+            );
+            final_proxy_error_outcome(context, route.chosen, status)
+        }
+        ProxyErrorRetryDecision::RetryConnectionOrFailover => {
+            retry_connection_or_failover(context, route.chosen, counters).await
+        }
+    }
+}
+
+async fn retry_connection_or_failover(
+    context: &ProxyAttemptContext<'_>,
+    chosen: &RoutedInferenceServerSnapshot,
+    counters: &mut ProxyAttemptCounters,
+) -> ProxyAttemptOutcome {
+    counters.connect_retries += 1;
+    if !chosen.reverse_tunnel {
+        context
+            .app
+            .metrics
+            .quic_connection_evictions_total(&chosen.inference_server_id, "proxy_error")
+            .inc();
+        match context
+            .app
+            .quic_proxy
+            .reconnect_direct(&chosen.inference_server_id, &chosen.inference_server_url)
+            .await
+        {
+            Ok(()) => {
+                record_hot_path_reconnect_success(context, chosen);
+                warn!(
+                    inference_server_id = %chosen.inference_server_id,
+                    connect_retries = counters.connect_retries,
+                    "reconnected QUIC upstream after proxy failure"
+                );
+                return ProxyAttemptOutcome::RetrySameBackend {
+                    chosen: Box::new(chosen.clone()),
+                };
+            }
+            Err(error) => {
+                record_hot_path_reconnect_error(context, chosen);
+                warn!(
+                    inference_server_id = %chosen.inference_server_id,
+                    error = %error,
+                    connect_retries = counters.connect_retries,
+                    "failed to reconnect QUIC upstream"
+                );
+            }
+        }
+    }
+    context
+        .app
+        .metrics
+        .proxy_retries_total(
+            context.routing_key(),
+            context.model_id(),
+            "connect_failover",
+        )
+        .inc();
+    Span::current().record("proxy.retry_reason", "connect_failover");
+    ProxyAttemptOutcome::RetryAlternateBackend {
+        inference_server_id: chosen.inference_server_id.clone(),
+    }
+}
+
+fn record_hot_path_reconnect_success(
+    context: &ProxyAttemptContext<'_>,
+    chosen: &RoutedInferenceServerSnapshot,
+) {
+    context
+        .app
+        .metrics
+        .quic_hot_path_reconnect_total(&chosen.inference_server_id, "success")
+        .inc();
+    context
+        .app
+        .metrics
+        .proxy_retries_total(
+            context.routing_key(),
+            context.model_id(),
+            "hot_path_reconnect",
+        )
+        .inc();
+    Span::current().record("proxy.retry_reason", "hot_path_reconnect");
+}
+
+fn record_hot_path_reconnect_error(
+    context: &ProxyAttemptContext<'_>,
+    chosen: &RoutedInferenceServerSnapshot,
+) {
+    context
+        .app
+        .metrics
+        .quic_hot_path_reconnect_total(&chosen.inference_server_id, "error")
+        .inc();
+}
+
+fn record_retry_exhausted(context: &ProxyAttemptContext<'_>, retry_reason: &str) {
+    context
+        .app
+        .metrics
+        .proxy_retry_exhausted_total(context.routing_key(), context.model_id(), retry_reason)
+        .inc();
+    Span::current().record("proxy.retry_reason", retry_reason);
+}
+
+fn record_request_retry(
+    context: &ProxyAttemptContext<'_>,
+    counters: &mut ProxyAttemptCounters,
+    retry_reason: &str,
+) {
+    Span::current().record("proxy.retry_reason", retry_reason);
+    counters.request_retries += 1;
+    context
+        .app
+        .metrics
+        .proxy_retries_total(context.routing_key(), context.model_id(), retry_reason)
+        .inc();
+}
+
+fn final_upstream_response_outcome(
+    context: &ProxyAttemptContext<'_>,
+    chosen: &RoutedInferenceServerSnapshot,
+    upstream: UpstreamStreamingResponse,
+) -> ProxyAttemptOutcome {
+    match final_upstream_response(
+        context.app.metrics.as_ref(),
+        context.routing_key(),
+        context.model_id(),
+        chosen,
+        upstream,
+    ) {
+        Ok(response) => ProxyAttemptOutcome::ReturnFinal(response),
+        Err(status) => ProxyAttemptOutcome::ProxyError(status),
+    }
+}
+
+fn final_proxy_error_outcome(
+    context: &ProxyAttemptContext<'_>,
     chosen: &RoutedInferenceServerSnapshot,
     status: StatusCode,
-) -> Result<Response<Body>, StatusCode> {
-    record_final_response_metrics(metrics, routing_key, model_id, chosen, status);
-    Err(status)
+) -> ProxyAttemptOutcome {
+    record_final_response_metrics(
+        context.app.metrics.as_ref(),
+        context.routing_key(),
+        context.model_id(),
+        chosen,
+        status,
+    );
+    ProxyAttemptOutcome::ProxyError(status)
 }
 
 fn build_proxy_response(
@@ -920,7 +1184,7 @@ struct RequestTraceFields<'a> {
     routing_key: Option<&'a str>,
     model_id: &'a str,
     request_path: &'a str,
-    input_tokens: Option<u64>,
+    input_tokens: u64,
     priority: u32,
     max_wait_ms: Option<u64>,
     request_slo_ms: Option<u64>,
@@ -930,7 +1194,7 @@ struct RequestTraceFields<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProxyRequestInputs {
     target: RoutingTargetKey,
-    input_tokens: Option<u64>,
+    input_tokens: u64,
     priority: u32,
     max_wait_ms: Option<u64>,
     request_slo_ms: Option<u64>,
@@ -949,7 +1213,7 @@ fn parse_proxy_request_inputs(headers: &HeaderMap) -> Result<ProxyRequestInputs,
     let routing_algorithm_override = parse_routing_algorithm_override(headers, &target)?;
     Ok(ProxyRequestInputs {
         target,
-        input_tokens: Some(input_tokens),
+        input_tokens,
         priority: parse_optional_u32_header(headers, HEADER_PRIORITY)?.unwrap_or(0),
         max_wait_ms: parse_optional_u64_header(headers, HEADER_MAX_WAIT_MS)?,
         request_slo_ms: parse_optional_u64_header(headers, HEADER_REQUEST_SLO_MS)?,
@@ -992,14 +1256,6 @@ fn validate_load_balancer_request_requirements(
         );
         return Err(StatusCode::BAD_REQUEST);
     }
-    if lb_config.requires_input_tokens() && request_inputs.input_tokens.is_none() {
-        warn!(
-            routing_key = ?target.routing_key,
-            model_id = %model_id,
-            "missing input tokens for load-balanced proxy request"
-        );
-        return Err(StatusCode::BAD_REQUEST);
-    }
     Ok(())
 }
 
@@ -1024,7 +1280,7 @@ fn record_request_to_span(span: &Span, fields: RequestTraceFields<'_>) {
     span.record("request.routing_key", fields.routing_key.unwrap_or(""));
     span.record("request.model_id", fields.model_id);
     span.record("request.path", fields.request_path);
-    span.record("request.input_tokens", fields.input_tokens.unwrap_or(0));
+    span.record("request.input_tokens", fields.input_tokens);
     span.record("request.priority", fields.priority);
     span.record("request.max_wait_ms", fields.max_wait_ms.unwrap_or(0));
     span.record("request.slo_ms", fields.request_slo_ms.unwrap_or(0));
@@ -1039,6 +1295,7 @@ struct RoutingTraceFields<'a> {
     requested_algorithm: Option<&'a str>,
     num_candidates: usize,
     rank_depth: usize,
+    selected_after_kv_free_tokens_skip: bool,
     cluster: &'a RoutedClusterSnapshot,
     chosen: &'a RoutedInferenceServerSnapshot,
 }
@@ -1052,6 +1309,10 @@ fn record_routing_to_span(span: &Span, routing: RoutingTraceFields<'_>) {
     );
     span.record("routing.num_candidates", routing.num_candidates);
     span.record("routing.rank_depth", routing.rank_depth as i64);
+    span.record(
+        "routing.selected_after_kv_free_tokens_skip",
+        routing.selected_after_kv_free_tokens_skip,
+    );
     span.record("selected_cluster.id", &routing.cluster.cluster_id);
     span.record("selected_inst.id", &fields.inference_server_id);
     span.record("selected_inst.output_tps", fields.output_tps);
@@ -1842,19 +2103,20 @@ mod tests {
     use opentelemetry::global;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use prometheus::Encoder;
     use std::collections::HashMap;
     use std::time::Instant;
 
     use axum::body::Bytes;
-    use stargate_proto::pb::ModelStats;
+    use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
     use crate::auth::OpenAuthenticator;
     use crate::load_balancer::{
         LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerConfig,
         LoadBalancerModelConfig,
     };
-    use crate::load_balancer_state::DeliveryTarget;
-    use crate::quic_tunnel::QuicTunnelConfig;
+    use crate::routing_state::DeliveryTarget;
+    use crate::tunnel::QuicTunnelConfig;
 
     fn test_proxy_app_state() -> ProxyAppState {
         test_proxy_app_state_with_lb_config(LoadBalancerConfig::default())
@@ -1872,7 +2134,7 @@ mod tests {
                         request_timeout: Duration::from_millis(10),
                         direct_quic_connections: 1,
                         tls_cert_pem: None,
-                        tls_key_pem: None,
+                        server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
                         quic_insecure: true,
                         tunnel_protocol: Default::default(),
                     },
@@ -1909,9 +2171,39 @@ mod tests {
             stats: ModelStats::default(),
             rtt: Duration::from_millis(1),
             snapshot_updated_at: Instant::now(),
-            status: 1,
+            status: InferenceServerStatus::Active,
             active_backend_count: 1,
         }
+    }
+
+    fn routed_instance_snapshot(
+        cluster_id: &str,
+        inference_server_id: &str,
+    ) -> RoutedInferenceServerSnapshot {
+        RoutedInferenceServerSnapshot {
+            cluster_id: cluster_id.to_string(),
+            inference_server_id: inference_server_id.to_string(),
+            inference_server_url: "quic://127.0.0.1:5000".to_string(),
+            stats: ModelStats::default(),
+            rtt: Duration::from_millis(1),
+            snapshot_updated_at: Instant::now(),
+            status: InferenceServerStatus::Active,
+            reverse_tunnel: false,
+            delivery_target: DeliveryTarget::Local {
+                inference_server_id: inference_server_id.to_string(),
+            },
+        }
+    }
+
+    fn metrics_text(metrics: &StargateMetrics) -> String {
+        let metric_families = metrics.registry().gather();
+        let mut buffer = Vec::new();
+        prometheus::TextEncoder::new()
+            .encode(&metric_families, &mut buffer)
+            .expect("metrics should encode");
+        std::str::from_utf8(&buffer)
+            .expect("Prometheus text should be UTF-8")
+            .to_string()
     }
 
     fn input_work_admission_request<'a>(
@@ -1927,6 +2219,64 @@ mod tests {
             request_slo: None,
             excluded_cluster_ids: None,
         }
+    }
+
+    #[tokio::test]
+    async fn routing_selection_duration_metric_preserves_routing_key_label() {
+        let app = test_proxy_app_state();
+        let target = RoutingTargetKey {
+            routing_key: Some("tenant-a".to_string()),
+            model_id: "model-a".to_string(),
+        };
+        let mut proxy_run = ProxyRequestRun::new(&app, &target, Instant::now(), None);
+        let cluster = cluster_candidate("cluster-a");
+        let chosen = routed_instance_snapshot("cluster-a", "inst-a");
+
+        proxy_run.record_routing_selection(RoutingTraceFields {
+            routing_algorithm: "round_robin",
+            requested_algorithm: None,
+            num_candidates: 1,
+            rank_depth: 0,
+            selected_after_kv_free_tokens_skip: false,
+            cluster: &cluster,
+            chosen: &chosen,
+        });
+
+        let body = metrics_text(&app.metrics);
+        assert!(
+            body.contains(
+                r#"stargate_routing_duration_seconds_count{model="model-a",routing_key="tenant-a"} 1"#
+            ),
+            "routing duration metric should include keyed route label, got:\n{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_balancer_request_excludes_failed_clusters() {
+        let app = test_proxy_app_state();
+        let target = RoutingTargetKey {
+            routing_key: Some("tenant-a".to_string()),
+            model_id: "model-a".to_string(),
+        };
+        let request_inputs = ProxyRequestInputs {
+            target: target.clone(),
+            input_tokens: 128,
+            priority: 0,
+            max_wait_ms: None,
+            request_slo_ms: None,
+            cache_affinity_key: None,
+            routing_algorithm_override: None,
+        };
+        let mut proxy_run = ProxyRequestRun::new(&app, &target, Instant::now(), None);
+
+        proxy_run.fail_cluster("cluster-a".to_string());
+        let request = proxy_run.load_balancer_request(&request_inputs);
+        let excluded = request
+            .excluded_cluster_ids
+            .expect("failed cluster should be excluded from subsequent routing");
+
+        assert_eq!(excluded.len(), 1);
+        assert!(excluded.contains("cluster-a"));
     }
 
     #[test]
@@ -1952,7 +2302,7 @@ mod tests {
             },
             rtt: Duration::from_millis(12),
             snapshot_updated_at: Instant::now(),
-            status: 1,
+            status: InferenceServerStatus::Active,
             reverse_tunnel: false,
             delivery_target: DeliveryTarget::Local {
                 inference_server_id: "inst-a".to_string(),
@@ -1973,7 +2323,7 @@ mod tests {
             },
             rtt: Duration::from_millis(12),
             snapshot_updated_at: Instant::now(),
-            status: 1,
+            status: InferenceServerStatus::Active,
             active_backend_count: 1,
         };
 
@@ -2424,7 +2774,7 @@ mod tests {
 
         assert_eq!(inputs.target.routing_key.as_deref(), Some("tenant-a"));
         assert_eq!(inputs.target.model_id, "model-a");
-        assert_eq!(inputs.input_tokens, Some(128));
+        assert_eq!(inputs.input_tokens, 128);
         assert_eq!(inputs.priority, 4);
         assert_eq!(inputs.max_wait_ms, Some(250));
         assert_eq!(inputs.request_slo_ms, Some(900));
@@ -2455,7 +2805,10 @@ mod tests {
             )
             .expect("missing routing method should use configured default");
 
-        assert_eq!(config.config().algorithm, LoadBalancerAlgorithm::RoundRobin);
+        assert_eq!(
+            config.config().algorithm(),
+            LoadBalancerAlgorithm::RoundRobin
+        );
     }
 
     #[test]
@@ -2488,7 +2841,10 @@ mod tests {
             )
             .expect("configured routing method should be available");
 
-        assert_eq!(config.config().algorithm, LoadBalancerAlgorithm::RoundRobin);
+        assert_eq!(
+            config.config().algorithm(),
+            LoadBalancerAlgorithm::RoundRobin
+        );
     }
 
     #[test]
@@ -2619,30 +2975,7 @@ mod tests {
         );
         let inputs = parse_proxy_request_inputs(&headers).expect("headers should parse");
         let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
-        config.require_cache_affinity_key = Some(true);
-
-        assert_eq!(
-            validate_load_balancer_request_requirements(&config, &inputs),
-            Err(StatusCode::BAD_REQUEST)
-        );
-    }
-
-    #[test]
-    fn load_balancer_request_requirements_reject_missing_input_tokens() {
-        let inputs = ProxyRequestInputs {
-            target: RoutingTargetKey {
-                routing_key: None,
-                model_id: "model-a".to_string(),
-            },
-            input_tokens: None,
-            priority: 0,
-            max_wait_ms: None,
-            request_slo_ms: None,
-            cache_affinity_key: Some("cache-key-a".to_string()),
-            routing_algorithm_override: None,
-        };
-        let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
-        config.require_input_tokens = Some(true);
+        config.request_policy_mut().require_cache_affinity_key = true;
 
         assert_eq!(
             validate_load_balancer_request_requirements(&config, &inputs),
@@ -2705,35 +3038,51 @@ mod tests {
     }
 
     #[test]
-    fn input_work_admission_for_pulsar_ignores_kv_infeasible_capacity() {
-        let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
-        config.require_kv_metrics = Some(true);
+    fn input_work_admission_for_pulsar_includes_low_free_kv_capacity() {
+        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
         let target = RoutingTargetKey {
             routing_key: None,
             model_id: "model-a".to_string(),
         };
         let request = input_work_admission_request(&target, 100);
-        let mut feasible = cluster_candidate("feasible");
-        feasible.stats.queued_input_size = 50;
-        feasible.stats.last_mean_input_tps = 100.0;
-        feasible.stats.kv_cache_capacity_tokens = 1024;
-        feasible.stats.kv_cache_used_tokens = 768;
-        feasible.stats.kv_cache_free_tokens = 256;
-        let mut kv_infeasible = cluster_candidate("kv-infeasible");
-        kv_infeasible.stats.queued_input_size = 900;
-        kv_infeasible.stats.last_mean_input_tps = 1000.0;
-        kv_infeasible.stats.kv_cache_capacity_tokens = 1024;
-        kv_infeasible.stats.kv_cache_used_tokens = 974;
-        kv_infeasible.stats.kv_cache_free_tokens = 50;
+        let mut free_kv = cluster_candidate("free-kv");
+        free_kv.stats.queued_input_size = 50;
+        free_kv.stats.last_mean_input_tps = 100.0;
+        free_kv.stats.kv_cache_capacity_tokens = 1024;
+        free_kv.stats.kv_cache_used_tokens = 768;
+        free_kv.stats.kv_cache_free_tokens = 256;
+        let mut likely_warm = cluster_candidate("likely-warm");
+        likely_warm.stats.queued_input_size = 900;
+        likely_warm.stats.last_mean_input_tps = 1000.0;
+        likely_warm.stats.kv_cache_capacity_tokens = 1024;
+        likely_warm.stats.kv_cache_used_tokens = 974;
+        likely_warm.stats.kv_cache_free_tokens = 50;
 
         assert_eq!(
-            input_work_admission_rejection_reason(
-                &config,
-                &request,
-                &[feasible, kv_infeasible],
-                1.0,
-            ),
-            Some(ADMISSION_REASON_INPUT_WORK_LIMIT_EXCEEDED)
+            input_work_admission_rejection_reason(&config, &request, &[free_kv, likely_warm], 1.0,),
+            None
+        );
+    }
+
+    #[test]
+    fn input_work_admission_for_pulsar_excludes_low_free_kv_when_considered() {
+        let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
+        config.request_policy_mut().consider_kv_free_tokens = true;
+        let target = RoutingTargetKey {
+            routing_key: None,
+            model_id: "model-a".to_string(),
+        };
+        let request = input_work_admission_request(&target, 100);
+        let mut low_free_kv = cluster_candidate("low-free-kv");
+        low_free_kv.stats.queued_input_size = 0;
+        low_free_kv.stats.last_mean_input_tps = 1000.0;
+        low_free_kv.stats.kv_cache_capacity_tokens = 1024;
+        low_free_kv.stats.kv_cache_used_tokens = 974;
+        low_free_kv.stats.kv_cache_free_tokens = 50;
+
+        assert_eq!(
+            input_work_admission_rejection_reason(&config, &request, &[low_free_kv], 1.0),
+            Some(ADMISSION_REASON_INPUT_WORK_CAPACITY_UNAVAILABLE)
         );
     }
 
@@ -2755,8 +3104,8 @@ mod tests {
         );
         let inputs = parse_proxy_request_inputs(&headers).expect("headers should parse");
         let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
-        config.require_cache_affinity_key = Some(true);
-        config.require_input_tokens = Some(true);
+        config.request_policy_mut().require_cache_affinity_key = true;
+        config.request_policy_mut().require_input_tokens = true;
 
         assert_eq!(
             validate_load_balancer_request_requirements(&config, &inputs),

@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "metrics",
+    srcs = [
+        "client_go_adapter.go",
+        "doc.go",
+        "leaderelection.go",
+        "registry.go",
+        "workqueue.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/metrics",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/metrics",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/prometheus/client_golang/prometheus",
+        "//vendor/k8s.io/client-go/tools/leaderelection",
+        "//vendor/k8s.io/client-go/tools/metrics",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":metrics",
+    visibility = ["//visibility:public"],
+)

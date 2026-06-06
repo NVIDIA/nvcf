@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "v1_17_0",
+    srcs = [
+        "doc.go",
+        "event.go",
+        "exception.go",
+        "http.go",
+        "resource.go",
+        "schema.go",
+        "trace.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.17.0",
+    importpath = "go.opentelemetry.io/otel/semconv/v1.17.0",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/go.opentelemetry.io/otel/attribute"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":v1_17_0",
+    visibility = ["//visibility:public"],
+)

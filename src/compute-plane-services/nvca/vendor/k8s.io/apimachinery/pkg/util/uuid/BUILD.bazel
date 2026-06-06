@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "uuid",
+    srcs = ["uuid.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/uuid",
+    importpath = "k8s.io/apimachinery/pkg/util/uuid",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/google/uuid",
+        "//vendor/k8s.io/apimachinery/pkg/types",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":uuid",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "imds",
+    srcs = [
+        "api_client.go",
+        "api_op_GetDynamicData.go",
+        "api_op_GetIAMInfo.go",
+        "api_op_GetInstanceIdentityDocument.go",
+        "api_op_GetMetadata.go",
+        "api_op_GetRegion.go",
+        "api_op_GetToken.go",
+        "api_op_GetUserData.go",
+        "auth.go",
+        "doc.go",
+        "endpoints.go",
+        "go_module_metadata.go",
+        "request_middleware.go",
+        "token_provider.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds",
+    importpath = "github.com/aws/aws-sdk-go-v2/feature/ec2/imds",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/middleware",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/retry",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/transport/http",
+        "//vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds/internal/config",
+        "//vendor/github.com/aws/smithy-go",
+        "//vendor/github.com/aws/smithy-go/io",
+        "//vendor/github.com/aws/smithy-go/logging",
+        "//vendor/github.com/aws/smithy-go/middleware",
+        "//vendor/github.com/aws/smithy-go/transport/http",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":imds",
+    visibility = ["//visibility:public"],
+)

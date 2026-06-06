@@ -9,7 +9,7 @@ go_library(
     deps = [
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret",
-        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
     ],
 )
 

@@ -1,12 +1,7 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
-
-package(
-    default_visibility = ["//visibility:public"],
-    licenses = ["notice"],  # Apache 2.0
-)
+load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
-    name = "go_default_library",
+    name = "common",
     srcs = [
         "cost.go",
         "doc.go",
@@ -15,22 +10,17 @@ go_library(
         "location.go",
         "source.go",
     ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common",
     importpath = "github.com/google/cel-go/common",
+    visibility = ["//visibility:public"],
     deps = [
-        "//common/runes:go_default_library",
-        "@org_golang_google_genproto_googleapis_api//expr/v1alpha1:go_default_library",
+        "//vendor/github.com/google/cel-go/common/runes",
+        "//vendor/google.golang.org/genproto/googleapis/api/expr/v1alpha1",
     ],
 )
 
-go_test(
-    name = "go_default_test",
-    size = "small",
-    srcs = [
-        "doc_test.go",
-        "errors_test.go",
-        "source_test.go",
-    ],
-    embed = [
-        ":go_default_library",
-    ],
+alias(
+    name = "go_default_library",
+    actual = ":common",
+    visibility = ["//visibility:public"],
 )

@@ -18,8 +18,10 @@ use std::fmt;
 use rand::Rng;
 use tracing::debug;
 
+#[cfg(test)]
+use super::LoadBalancerTestChoiceExt;
 use super::{LoadBalancer, LoadBalancerCandidateChoice, LoadBalancerRequest};
-use crate::load_balancer_state::RoutedClusterSnapshot;
+use crate::routing_state::RoutedClusterSnapshot;
 
 const EXCLUSION_REJECTION_ATTEMPTS: usize = 8;
 const REJECTION_SAMPLE_EXCLUSION_RATIO_DIVISOR: usize = 4;
@@ -242,13 +244,13 @@ mod tests {
             },
             rtt: Duration::from_millis(1),
             snapshot_updated_at: Instant::now(),
-            status: InferenceServerStatus::Active as i32,
+            status: InferenceServerStatus::Active,
             active_backend_count: 1,
         }
     }
 
     fn request<'a>(
-        target: &'a crate::load_balancer_state::RoutingTargetKey,
+        target: &'a crate::routing_state::RoutingTargetKey,
         excluded_cluster_ids: Option<&'a HashSet<String>>,
     ) -> LoadBalancerRequest<'a> {
         LoadBalancerRequest {
@@ -292,7 +294,7 @@ mod tests {
 
     #[test]
     fn power_of_two_never_selects_excluded_clusters() {
-        let target = crate::load_balancer_state::RoutingTargetKey {
+        let target = crate::routing_state::RoutingTargetKey {
             routing_key: None,
             model_id: "model-a".to_string(),
         };
@@ -306,7 +308,7 @@ mod tests {
 
         for _ in 0..64 {
             let choice = PowerOfTwoLoadBalancer
-                .choose(&request, &candidates)
+                .choose_for_test(&request, &candidates)
                 .expect("one eligible cluster should be selected");
             assert_eq!(choice.candidate.cluster_id, "eligible");
         }
@@ -314,7 +316,7 @@ mod tests {
 
     #[test]
     fn power_of_two_skips_single_excluded_cluster_in_retry_set() {
-        let target = crate::load_balancer_state::RoutingTargetKey {
+        let target = crate::routing_state::RoutingTargetKey {
             routing_key: None,
             model_id: "model-a".to_string(),
         };
@@ -326,7 +328,7 @@ mod tests {
 
         for _ in 0..512 {
             let choice = PowerOfTwoLoadBalancer
-                .choose(&request, &candidates)
+                .choose_for_test(&request, &candidates)
                 .expect("eligible cluster should be selected");
             assert_ne!(choice.candidate.cluster_id, "cluster-0000");
         }
@@ -334,7 +336,7 @@ mod tests {
 
     #[test]
     fn power_of_two_returns_none_when_all_candidates_are_excluded() {
-        let target = crate::load_balancer_state::RoutingTargetKey {
+        let target = crate::routing_state::RoutingTargetKey {
             routing_key: None,
             model_id: "model-a".to_string(),
         };
@@ -347,7 +349,7 @@ mod tests {
 
         assert!(
             PowerOfTwoLoadBalancer
-                .choose(&request, &candidates)
+                .choose_for_test(&request, &candidates)
                 .is_none()
         );
     }

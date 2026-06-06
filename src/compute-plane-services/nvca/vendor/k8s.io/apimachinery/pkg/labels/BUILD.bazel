@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "labels",
+    srcs = [
+        "doc.go",
+        "labels.go",
+        "selector.go",
+        "zz_generated.deepcopy.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/labels",
+    importpath = "k8s.io/apimachinery/pkg/labels",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/api/validate/content",
+        "//vendor/k8s.io/apimachinery/pkg/selection",
+        "//vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//vendor/k8s.io/apimachinery/pkg/util/validation",
+        "//vendor/k8s.io/apimachinery/pkg/util/validation/field",
+        "//vendor/k8s.io/klog/v2:klog",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":labels",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "stree",
+    srcs = [
+        "dump.go",
+        "leaf.go",
+        "node.go",
+        "node10.go",
+        "node16.go",
+        "node256.go",
+        "node4.go",
+        "node48.go",
+        "parts.go",
+        "stree.go",
+        "util.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/stree",
+    importpath = "github.com/nats-io/nats-server/v2/server/stree",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":stree",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "listers",
+    srcs = [
+        "doc.go",
+        "generic_helpers.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers",
+    importpath = "k8s.io/client-go/listers",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//vendor/k8s.io/apimachinery/pkg/labels",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/client-go/tools/cache",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":listers",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "accept-encoding",
+    srcs = [
+        "accept_encoding_gzip.go",
+        "doc.go",
+        "go_module_metadata.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding",
+    importpath = "github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2/service:__subpackages__"],
+    deps = [
+        "//vendor/github.com/aws/smithy-go",
+        "//vendor/github.com/aws/smithy-go/middleware",
+        "//vendor/github.com/aws/smithy-go/transport/http",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":accept-encoding",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2/service:__subpackages__"],
+)

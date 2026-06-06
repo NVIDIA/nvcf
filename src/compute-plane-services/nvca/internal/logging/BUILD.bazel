@@ -12,7 +12,7 @@ go_library(
         "//pkg/apis/nvca/v2beta1",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
-        "@com_github_sirupsen_logrus//:logrus",
+        "//vendor/github.com/sirupsen/logrus",
     ],
 )
 
@@ -32,8 +32,8 @@ go_test(
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task",
-        "@com_github_sirupsen_logrus//:logrus",
-        "@com_github_stretchr_testify//assert",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "//vendor/github.com/sirupsen/logrus",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
     ],
 )

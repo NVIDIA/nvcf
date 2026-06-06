@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "otelmux",
+    srcs = [
+        "config.go",
+        "doc.go",
+        "mux.go",
+        "version.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux",
+    importpath = "go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/felixge/httpsnoop",
+        "//vendor/github.com/gorilla/mux",
+        "//vendor/go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux/internal/request",
+        "//vendor/go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux/internal/semconv",
+        "//vendor/go.opentelemetry.io/otel",
+        "//vendor/go.opentelemetry.io/otel/attribute",
+        "//vendor/go.opentelemetry.io/otel/metric",
+        "//vendor/go.opentelemetry.io/otel/propagation",
+        "//vendor/go.opentelemetry.io/otel/trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":otelmux",
+    visibility = ["//visibility:public"],
+)

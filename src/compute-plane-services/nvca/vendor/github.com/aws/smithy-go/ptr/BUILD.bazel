@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "ptr",
+    srcs = [
+        "doc.go",
+        "from_ptr.go",
+        "to_ptr.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/ptr",
+    importpath = "github.com/aws/smithy-go/ptr",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ptr",
+    visibility = ["//visibility:public"],
+)

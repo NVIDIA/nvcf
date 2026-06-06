@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "le",
+    srcs = [
+        "le.go",
+        "unsafe_disabled.go",
+        "unsafe_enabled.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/klauspost/compress/internal/le",
+    importpath = "github.com/klauspost/compress/internal/le",
+    visibility = ["//vendor/github.com/klauspost/compress:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":le",
+    visibility = ["//vendor/github.com/klauspost/compress:__subpackages__"],
+)

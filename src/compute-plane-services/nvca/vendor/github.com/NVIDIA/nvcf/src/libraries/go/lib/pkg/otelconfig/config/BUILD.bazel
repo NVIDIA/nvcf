@@ -11,7 +11,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig",
-        "@in_gopkg_yaml_v3//:yaml_v3",
+        "//vendor/gopkg.in/yaml.v3:yaml_v3",
     ],
 )
 

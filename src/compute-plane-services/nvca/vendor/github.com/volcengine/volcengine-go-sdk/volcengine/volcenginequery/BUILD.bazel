@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "volcenginequery",
+    srcs = [
+        "build.go",
+        "unmarshal.go",
+        "unmarshal_error.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcenginequery",
+    importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/volcenginequery",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/custom",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/request",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/response",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/special",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcenginebody",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineutil",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":volcenginequery",
+    visibility = ["//visibility:public"],
+)

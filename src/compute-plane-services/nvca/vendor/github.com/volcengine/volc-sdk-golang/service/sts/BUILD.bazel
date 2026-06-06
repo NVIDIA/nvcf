@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "sts",
+    srcs = [
+        "config.go",
+        "model.go",
+        "wrapper.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volc-sdk-golang/service/sts",
+    importpath = "github.com/volcengine/volc-sdk-golang/service/sts",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/volcengine/volc-sdk-golang/base"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sts",
+    visibility = ["//visibility:public"],
+)

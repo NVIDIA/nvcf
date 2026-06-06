@@ -28,15 +28,16 @@ use tracing::{error, info};
 
 use tokio_util::sync::CancellationToken;
 
+use stargate_forwarding::{ForwardingResolver, render_hostname};
+
 use crate::auth::{OpenAuthenticator, WorkerAuthenticator};
 use crate::control_plane::{RegistrationConnectionConfig, StargateService, StargateServiceConfig};
 use crate::discovery::Discovery;
-use crate::forwarding::{ForwardingResolver, render_hostname};
-use crate::http_proxy::{ProxyTrafficState, ProxyTransportConfig, make_router};
+use crate::http_proxy::{ProxyAppState, ProxyTrafficState, ProxyTransportConfig, make_router};
 use crate::load_balancer::{LoadBalancerConfig, LoadBalancerRouter};
-use crate::load_balancer_state::StargateState;
 use crate::metrics::StargateMetrics;
-use crate::quic_tunnel::{QuicHttpProxy, QuicTunnelConfig};
+use crate::routing_state::StargateState;
+use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 
 const ACTIVE_MODELS_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -78,6 +79,12 @@ pub struct StargateRuntimeConfig {
     /// returned by those streams.
     pub remote_watch_stargate_urls: Vec<String>,
 
+    /// Optional pylon dial address for backend-facing gRPC registration/watch.
+    /// When set, `WatchStargates` preserves the per-pod `advertise_addr` as
+    /// gRPC authority/SNI identity and sends this as `grpc_pylon_dial_addr` so
+    /// pylons connect through a TCP load balancer.
+    pub grpc_pylon_dial_addr: Option<String>,
+
     /// Template for backend-facing advertised hostnames, supporting
     /// `{pod_name}` and `{namespace}`. The rendered value is used as gRPC
     /// authority and QUIC SNI so routers can identify the selected pod.
@@ -100,7 +107,7 @@ pub struct StargateRuntimeConfig {
     pub registration_update_idle_timeout: Duration,
 
     /// Hard cap for heartbeat-aware registration idle timeout and fallback for
-    /// legacy/no-heartbeat streams. A zero value disables idle enforcement.
+    /// streams that do not advertise heartbeat hints. A zero value disables idle enforcement.
     pub registration_update_max_idle_timeout: Duration,
 
     /// QUIC/TLS/tunnel-protocol and proxy retry configuration for backend
@@ -203,7 +210,7 @@ impl StargateRuntime {
                 connect_timeout: self.config.proxy_transport.quic_connect_timeout,
                 request_timeout: self.config.proxy_transport.quic_request_timeout,
                 tls_cert_pem: self.config.proxy_transport.tls_cert_pem.clone(),
-                tls_key_pem: self.config.proxy_transport.tls_key_pem.clone(),
+                server_tls_identity: self.config.proxy_transport.server_tls_identity.clone(),
                 quic_insecure: self.config.proxy_transport.quic_insecure,
                 tunnel_protocol: self.config.proxy_transport.tunnel_protocol,
                 direct_quic_connections: self.config.proxy_transport.direct_quic_connections,
@@ -257,7 +264,7 @@ impl StargateRuntime {
                 .as_ref()
                 .map(|addrs| addrs.routing_target_addr.clone()),
             reverse_tunnel_pylon_dial_addr: reverse_tunnel_ack_addrs
-                .and_then(|addrs| addrs.pylon_dial_addr),
+                .map(|addrs| addrs.pylon_dial_addr),
         };
 
         let lb_config = match &self.config.lb_config_path {
@@ -297,6 +304,7 @@ impl StargateRuntime {
             discovery_dns_name: self.config.stargate_discovery_dns_name.clone(),
             discovery: self.discovery,
             remote_watch_stargate_urls: self.config.remote_watch_stargate_urls.clone(),
+            grpc_pylon_dial_addr: self.config.grpc_pylon_dial_addr.clone(),
             discovery_poll_interval: self.config.dns_poll_interval,
             watch_heartbeat_interval: self.config.watch_heartbeat_interval,
             shutdown_token: shutdown_token.clone(),
@@ -309,17 +317,16 @@ impl StargateRuntime {
             authenticator: self.authenticator,
         });
 
-        let proxy_router = make_router(
-            service.state(),
-            ProxyTrafficState {
+        let proxy_router = make_router(ProxyAppState {
+            state: service.state(),
+            traffic: ProxyTrafficState {
                 is_draining: draining.clone(),
             },
-            quic_proxy.clone(),
+            quic_proxy: quic_proxy.clone(),
             lb_router,
-            metrics.clone(),
-            self.config.proxy_transport.retry.clone(),
-            self.config.stargate_id.clone(),
-        );
+            metrics: metrics.clone(),
+            retry: self.config.proxy_transport.retry.clone(),
+        });
 
         let grpc_listener = match self.grpc_listener {
             Some(listener) => {
@@ -545,7 +552,7 @@ fn derive_reverse_tunnel_target(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReverseTunnelAckAddrs {
     routing_target_addr: String,
-    pylon_dial_addr: Option<String>,
+    pylon_dial_addr: String,
 }
 
 fn derive_reverse_tunnel_ack_addrs(
@@ -555,17 +562,17 @@ fn derive_reverse_tunnel_ack_addrs(
     reverse_port: u16,
     reverse_tunnel_pylon_dial_addr: Option<&str>,
 ) -> ReverseTunnelAckAddrs {
+    let routing_target_addr =
+        derive_reverse_tunnel_target(hostname_template, namespace, pod_name, reverse_port);
+    let pylon_dial_addr = reverse_tunnel_pylon_dial_addr
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| routing_target_addr.clone());
+
     ReverseTunnelAckAddrs {
-        routing_target_addr: derive_reverse_tunnel_target(
-            hostname_template,
-            namespace,
-            pod_name,
-            reverse_port,
-        ),
-        pylon_dial_addr: reverse_tunnel_pylon_dial_addr
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
+        routing_target_addr,
+        pylon_dial_addr,
     }
 }
 
@@ -604,9 +611,26 @@ mod tests {
             "stargate-0.stargate-headless.stargate.svc.cluster.local:50072"
         );
         assert_eq!(
-            addrs.pylon_dial_addr.as_deref(),
-            Some("stargate-quic-lb.stargate.svc.cluster.local:50072")
+            addrs.pylon_dial_addr,
+            "stargate-quic-lb.stargate.svc.cluster.local:50072"
         );
+    }
+
+    #[test]
+    fn derive_reverse_tunnel_ack_addrs_uses_routing_target_as_default_pylon_dial_address() {
+        let addrs = derive_reverse_tunnel_ack_addrs(
+            "{pod_name}.stargate-headless.{namespace}.svc.cluster.local",
+            "stargate",
+            "stargate-0",
+            50072,
+            None,
+        );
+
+        assert_eq!(
+            addrs.routing_target_addr,
+            "stargate-0.stargate-headless.stargate.svc.cluster.local:50072"
+        );
+        assert_eq!(addrs.pylon_dial_addr, addrs.routing_target_addr);
     }
 
     struct CountingDiscovery {
@@ -687,6 +711,7 @@ mod tests {
                 stargate_id: "test-startup-cleanup".to_string(),
                 advertise_addr: grpc_addr.to_string(),
                 http_advertise_addr: http_addr.to_string(),
+                grpc_pylon_dial_addr: String::new(),
             },
         );
         let runtime = StargateRuntime::new(
@@ -698,6 +723,7 @@ mod tests {
                 advertise_addr: grpc_addr,
                 stargate_discovery_dns_name: "localhost".to_string(),
                 remote_watch_stargate_urls: Vec::new(),
+                grpc_pylon_dial_addr: None,
                 advertised_hostname_template: None,
                 pod_name: None,
                 pod_namespace: None,
@@ -711,7 +737,7 @@ mod tests {
                     quic_connect_timeout: Duration::from_secs(5),
                     quic_request_timeout: Duration::from_secs(10),
                     tls_cert_pem: None,
-                    tls_key_pem: None,
+                    server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
                     quic_insecure: true,
                     tunnel_protocol: Default::default(),
                     direct_quic_connections: 1,
@@ -751,6 +777,7 @@ mod tests {
                 advertise_addr: grpc_addr,
                 stargate_discovery_dns_name: "localhost".to_string(),
                 remote_watch_stargate_urls: Vec::new(),
+                grpc_pylon_dial_addr: None,
                 advertised_hostname_template: None,
                 pod_name: None,
                 pod_namespace: None,
@@ -764,7 +791,7 @@ mod tests {
                     quic_connect_timeout: Duration::from_secs(5),
                     quic_request_timeout: Duration::from_secs(10),
                     tls_cert_pem: None,
-                    tls_key_pem: None,
+                    server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
                     quic_insecure: true,
                     tunnel_protocol: Default::default(),
                     direct_quic_connections: 1,
@@ -782,6 +809,7 @@ mod tests {
                     stargate_id: "test-discovery-cancel".to_string(),
                     advertise_addr: grpc_addr.to_string(),
                     http_advertise_addr: http_addr.to_string(),
+                    grpc_pylon_dial_addr: String::new(),
                 },
             }),
         );

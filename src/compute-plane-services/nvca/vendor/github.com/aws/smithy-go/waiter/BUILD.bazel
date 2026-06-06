@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "waiter",
+    srcs = [
+        "logger.go",
+        "waiter.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/waiter",
+    importpath = "github.com/aws/smithy-go/waiter",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/smithy-go/logging",
+        "//vendor/github.com/aws/smithy-go/middleware",
+        "//vendor/github.com/aws/smithy-go/rand",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":waiter",
+    visibility = ["//visibility:public"],
+)

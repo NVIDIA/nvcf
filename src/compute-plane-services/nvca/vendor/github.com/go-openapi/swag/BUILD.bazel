@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "swag",
+    srcs = [
+        "cmdutils_iface.go",
+        "conv_iface.go",
+        "doc.go",
+        "fileutils_iface.go",
+        "jsonname_iface.go",
+        "jsonutils_iface.go",
+        "loading_iface.go",
+        "mangling_iface.go",
+        "netutils_iface.go",
+        "stringutils_iface.go",
+        "typeutils_iface.go",
+        "yamlutils_iface.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag",
+    importpath = "github.com/go-openapi/swag",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-openapi/swag/cmdutils",
+        "//vendor/github.com/go-openapi/swag/conv",
+        "//vendor/github.com/go-openapi/swag/fileutils",
+        "//vendor/github.com/go-openapi/swag/jsonname",
+        "//vendor/github.com/go-openapi/swag/jsonutils",
+        "//vendor/github.com/go-openapi/swag/loading",
+        "//vendor/github.com/go-openapi/swag/mangling",
+        "//vendor/github.com/go-openapi/swag/netutils",
+        "//vendor/github.com/go-openapi/swag/stringutils",
+        "//vendor/github.com/go-openapi/swag/typeutils",
+        "//vendor/github.com/go-openapi/swag/yamlutils",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":swag",
+    visibility = ["//visibility:public"],
+)

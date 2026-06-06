@@ -13,11 +13,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(not(test))]
+#[path = "src/build_plan.rs"]
+mod build_plan;
+#[cfg(test)]
+use crate::build_plan;
+
+#[cfg(not(test))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=quic.capnp");
+    let plan = build_plan::capnp_build_plan();
+    println!("cargo:rerun-if-changed={}", plan.rerun_if_changed);
     capnpc::CompilerCommand::new()
-        .file("quic.capnp")
-        .run()
-        .expect("compiling schema (quic.capnp)");
+        .file(plan.schema_file)
+        .run()?;
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn planned_capnp_schema_file() -> &'static str {
+    build_plan::capnp_build_plan().schema_file
 }

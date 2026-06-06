@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cast",
+    srcs = [
+        "alias.go",
+        "basic.go",
+        "cast.go",
+        "indirect.go",
+        "map.go",
+        "number.go",
+        "slice.go",
+        "time.go",
+        "zz_generated.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/cast",
+    importpath = "github.com/spf13/cast",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/spf13/cast/internal"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cast",
+    visibility = ["//visibility:public"],
+)

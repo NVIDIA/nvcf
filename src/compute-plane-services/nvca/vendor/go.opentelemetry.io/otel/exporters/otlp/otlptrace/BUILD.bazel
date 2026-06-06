@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "otlptrace",
+    srcs = [
+        "clients.go",
+        "doc.go",
+        "exporter.go",
+        "version.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace",
+    importpath = "go.opentelemetry.io/otel/exporters/otlp/otlptrace",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/internal/tracetransform",
+        "//vendor/go.opentelemetry.io/otel/sdk/trace",
+        "//vendor/go.opentelemetry.io/proto/otlp/trace/v1:trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":otlptrace",
+    visibility = ["//visibility:public"],
+)

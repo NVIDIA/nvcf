@@ -17,16 +17,17 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use stargate::control_plane::{
-    DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT, DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
-};
 use stargate::discovery::{
     Discovery, DnsDiscovery, HeadlessDnsDiscovery, HeadlessDnsDiscoveryConfig, SelfOnlyDiscovery,
 };
-use stargate::forwarding::HeadlessDnsResolver;
-use stargate::http_proxy::{ProxyRetryConfig, ProxyTransportConfig};
+use stargate::proxy::{ProxyRetryConfig, ProxyTransportConfig};
+use stargate::registration::{
+    DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT, DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
+};
 use stargate::runtime::{StargateRuntime, StargateRuntimeConfig};
+use stargate_forwarding::{ForwardingResolver, HeadlessDnsResolver};
 use stargate_protocol::TunnelTransportProtocol;
+use stargate_tls::ServerTlsIdentity;
 use tracing::info;
 
 const DEFAULT_PROXY_MAX_REPLAY_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -97,6 +98,14 @@ struct Args {
         value_name = "URL"
     )]
     remote_stargate_url: Vec<String>,
+
+    /// Optional pylon dial address for backend-facing gRPC registration/watch.
+    ///
+    /// Stargate still advertises per-pod addresses as gRPC authority/SNI
+    /// identity, and sends this address separately so pylons can connect
+    /// through a TCP load balancer.
+    #[arg(long, value_name = "ADDR")]
+    grpc_pylon_dial_addr: Option<String>,
 
     /// Backend-facing advertised hostname template.
     ///
@@ -282,7 +291,7 @@ struct Args {
 
 struct DiscoveryAndForwarding {
     discovery: Box<dyn Discovery>,
-    forwarding: Option<std::sync::Arc<dyn stargate::forwarding::ForwardingResolver>>,
+    forwarding: Option<std::sync::Arc<dyn ForwardingResolver>>,
 }
 
 async fn make_discovery(args: &Args) -> Result<DiscoveryAndForwarding> {
@@ -320,7 +329,7 @@ async fn make_discovery(args: &Args) -> Result<DiscoveryAndForwarding> {
             advertised_hostname_template: template,
             namespace: pod_namespace.clone(),
             headless_dns_suffix: args.stargate_discovery_dns_name.clone(),
-        }) as std::sync::Arc<dyn stargate::forwarding::ForwardingResolver>;
+        }) as std::sync::Arc<dyn ForwardingResolver>;
         Ok(DiscoveryAndForwarding {
             discovery,
             forwarding: Some(forwarding),
@@ -374,7 +383,10 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let args = <Args as clap::Parser>::parse();
+    run(args).await
+}
 
+async fn run(args: Args) -> Result<()> {
     let _telemetry_guard = stargate::telemetry::init_telemetry(
         args.otel_endpoint.as_deref(),
         &args.otel_service_name,
@@ -390,6 +402,7 @@ async fn main() -> Result<()> {
         advertise_addr = %args.advertise_addr,
         discovery_dns_name = %args.stargate_discovery_dns_name,
         remote_stargate_urls = ?args.remote_stargate_url,
+        grpc_pylon_dial_addr = ?args.grpc_pylon_dial_addr,
         advertised_hostname_template = ?args.advertised_hostname_template,
         disable_dns_discovery = args.disable_dns_discovery,
         dns_poll_ms = args.dns_poll_ms,
@@ -414,6 +427,11 @@ async fn main() -> Result<()> {
         .as_deref()
         .map(|s| s.parse())
         .transpose()?;
+    let server_tls_identity = server_tls_identity_for_reverse_listener(
+        reverse_tunnel_listen_addr.is_some(),
+        tls_cert_pem.clone(),
+        tls_key_pem,
+    )?;
 
     let DiscoveryAndForwarding {
         discovery,
@@ -430,6 +448,7 @@ async fn main() -> Result<()> {
             advertise_addr: args.advertise_addr,
             stargate_discovery_dns_name: args.stargate_discovery_dns_name,
             remote_watch_stargate_urls: args.remote_stargate_url,
+            grpc_pylon_dial_addr: args.grpc_pylon_dial_addr,
             advertised_hostname_template: args.advertised_hostname_template,
             pod_name: args.pod_name,
             pod_namespace: args.pod_namespace,
@@ -449,7 +468,7 @@ async fn main() -> Result<()> {
                     args.quic_request_timeout_ms,
                 ),
                 tls_cert_pem,
-                tls_key_pem,
+                server_tls_identity,
                 quic_insecure: args.quic_insecure,
                 tunnel_protocol: args.tunnel_protocol,
                 direct_quic_connections: args.direct_quic_connections,
@@ -526,6 +545,17 @@ async fn main() -> Result<()> {
 
     info!("stargate stopped cleanly");
     Ok(())
+}
+
+fn server_tls_identity_for_reverse_listener(
+    reverse_tunnel_enabled: bool,
+    cert_pem: Option<Vec<u8>>,
+    key_pem: Option<Vec<u8>>,
+) -> Result<ServerTlsIdentity, anyhow::Error> {
+    if reverse_tunnel_enabled {
+        return ServerTlsIdentity::from_optional_pem(cert_pem, key_pem);
+    }
+    Ok(ServerTlsIdentity::SelfSigned)
 }
 
 async fn wait_for_termination_signal() -> &'static str {
@@ -662,6 +692,39 @@ mod tests {
     }
 
     #[test]
+    fn otel_endpoint_help_matches_grpc_exporter_transport() {
+        let mut command = <Args as clap::CommandFactory>::command();
+        let mut help = Vec::new();
+        command
+            .write_long_help(&mut help)
+            .expect("help should render");
+        let help = std::str::from_utf8(&help).expect("help should be UTF-8");
+
+        assert!(help.contains("OTLP/gRPC trace export endpoint"));
+        assert!(!help.contains("OTLP/HTTP/protobuf trace export endpoint"));
+    }
+
+    #[test]
+    fn direct_quic_tls_trust_cert_does_not_require_server_key() {
+        let identity =
+            server_tls_identity_for_reverse_listener(false, Some(b"cert".to_vec()), None)
+                .expect("cert-only direct trust should not require a server key");
+
+        assert_eq!(identity, ServerTlsIdentity::SelfSigned);
+    }
+
+    #[test]
+    fn reverse_listener_tls_cert_still_requires_server_key() {
+        let err = server_tls_identity_for_reverse_listener(true, Some(b"cert".to_vec()), None)
+            .expect_err("reverse listener server TLS still needs a complete PEM pair");
+
+        assert!(
+            err.to_string().contains("TLS key PEM is required"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn registration_update_idle_timeout_cli_override_is_applied() {
         let args = parse_args(&[
             "--registration-update-idle-timeout-ms",
@@ -745,8 +808,11 @@ mod tests {
     fn reverse_tunnel_pylon_dial_addr_cli_is_optional_and_parseable() {
         let defaults = parse_args(&[]);
         assert_eq!(defaults.reverse_tunnel_pylon_dial_addr, None);
+        assert_eq!(defaults.grpc_pylon_dial_addr, None);
 
         let args = parse_args(&[
+            "--grpc-pylon-dial-addr",
+            "stargate-grpc-lb.stargate.svc.cluster.local:443",
             "--reverse-tunnel-listen-addr",
             "0.0.0.0:50072",
             "--reverse-tunnel-pylon-dial-addr",
@@ -756,6 +822,10 @@ mod tests {
         assert_eq!(
             args.reverse_tunnel_pylon_dial_addr.as_deref(),
             Some("stargate-quic-lb.stargate.svc.cluster.local:50072")
+        );
+        assert_eq!(
+            args.grpc_pylon_dial_addr.as_deref(),
+            Some("stargate-grpc-lb.stargate.svc.cluster.local:443")
         );
     }
 }

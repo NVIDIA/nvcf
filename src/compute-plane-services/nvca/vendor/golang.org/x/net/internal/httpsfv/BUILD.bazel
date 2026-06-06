@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "httpsfv",
+    srcs = ["httpsfv.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/net/internal/httpsfv",
+    importpath = "golang.org/x/net/internal/httpsfv",
+    visibility = ["//vendor/golang.org/x/net:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":httpsfv",
+    visibility = ["//vendor/golang.org/x/net:__subpackages__"],
+)

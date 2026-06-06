@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "descriptor",
+    srcs = ["descriptor.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/descriptor",
+    importpath = "oras.land/oras-go/v2/internal/descriptor",
+    visibility = ["//vendor/oras.land/oras-go/v2:__subpackages__"],
+    deps = [
+        "//vendor/github.com/opencontainers/go-digest",
+        "//vendor/github.com/opencontainers/image-spec/specs-go/v1:specs-go",
+        "//vendor/oras.land/oras-go/v2/internal/docker",
+        "//vendor/oras.land/oras-go/v2/internal/spec",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":descriptor",
+    visibility = ["//vendor/oras.land/oras-go/v2:__subpackages__"],
+)

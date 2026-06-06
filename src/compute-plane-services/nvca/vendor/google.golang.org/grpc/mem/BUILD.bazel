@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "mem",
+    srcs = [
+        "buffer_pool.go",
+        "buffer_slice.go",
+        "buffers.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/mem",
+    importpath = "google.golang.org/grpc/mem",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/google.golang.org/grpc/internal"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":mem",
+    visibility = ["//visibility:public"],
+)

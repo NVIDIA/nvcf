@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "bufferpool",
+    srcs = ["bufferpool.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal/bufferpool",
+    importpath = "go.uber.org/zap/internal/bufferpool",
+    visibility = ["//vendor/go.uber.org/zap:__subpackages__"],
+    deps = ["//vendor/go.uber.org/zap/buffer"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":bufferpool",
+    visibility = ["//vendor/go.uber.org/zap:__subpackages__"],
+)

@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "nats_go",
+    srcs = [
+        "context.go",
+        "enc.go",
+        "js.go",
+        "jserrors.go",
+        "jsm.go",
+        "kv.go",
+        "nats.go",
+        "nats_iter.go",
+        "netchan.go",
+        "object.go",
+        "parser.go",
+        "timer.go",
+        "ws.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go",
+    importpath = "github.com/nats-io/nats.go",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/klauspost/compress/flate",
+        "//vendor/github.com/nats-io/nats.go/encoders/builtin",
+        "//vendor/github.com/nats-io/nats.go/internal/parser",
+        "//vendor/github.com/nats-io/nats.go/util",
+        "//vendor/github.com/nats-io/nkeys",
+        "//vendor/github.com/nats-io/nuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":nats_go",
+    visibility = ["//visibility:public"],
+)

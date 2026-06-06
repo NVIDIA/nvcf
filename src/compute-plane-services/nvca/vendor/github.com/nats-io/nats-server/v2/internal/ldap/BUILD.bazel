@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "ldap",
+    srcs = ["dn.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/internal/ldap",
+    importpath = "github.com/nats-io/nats-server/v2/internal/ldap",
+    visibility = ["//vendor/github.com/nats-io/nats-server/v2:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ldap",
+    visibility = ["//vendor/github.com/nats-io/nats-server/v2:__subpackages__"],
+)

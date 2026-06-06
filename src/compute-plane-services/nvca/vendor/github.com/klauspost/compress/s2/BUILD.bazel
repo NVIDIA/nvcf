@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "s2",
+    srcs = [
+        "decode.go",
+        "decode_amd64.s",
+        "decode_arm64.s",
+        "decode_asm.go",
+        "decode_other.go",
+        "dict.go",
+        "encode.go",
+        "encode_all.go",
+        "encode_amd64.go",
+        "encode_best.go",
+        "encode_better.go",
+        "encode_go.go",
+        "encodeblock_amd64.go",
+        "encodeblock_amd64.s",
+        "index.go",
+        "lz4convert.go",
+        "lz4sconvert.go",
+        "reader.go",
+        "s2.go",
+        "writer.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/klauspost/compress/s2",
+    importpath = "github.com/klauspost/compress/s2",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/klauspost/compress/internal/le",
+        "//vendor/github.com/klauspost/compress/internal/race",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":s2",
+    visibility = ["//visibility:public"],
+)

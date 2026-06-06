@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "types",
+    srcs = [
+        "enums.go",
+        "errors.go",
+        "types.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/ecr/types",
+    importpath = "github.com/aws/aws-sdk-go-v2/service/ecr/types",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/smithy-go",
+        "//vendor/github.com/aws/smithy-go/document",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":types",
+    visibility = ["//visibility:public"],
+)

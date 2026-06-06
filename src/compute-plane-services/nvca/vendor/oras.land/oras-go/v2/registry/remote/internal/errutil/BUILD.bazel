@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "errutil",
+    srcs = ["errutil.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote/internal/errutil",
+    importpath = "oras.land/oras-go/v2/registry/remote/internal/errutil",
+    visibility = ["//vendor/oras.land/oras-go/v2/registry/remote:__subpackages__"],
+    deps = ["//vendor/oras.land/oras-go/v2/registry/remote/errcode"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":errutil",
+    visibility = ["//vendor/oras.land/oras-go/v2/registry/remote:__subpackages__"],
+)

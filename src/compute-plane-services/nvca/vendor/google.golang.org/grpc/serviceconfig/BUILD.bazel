@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "serviceconfig",
+    srcs = ["serviceconfig.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/serviceconfig",
+    importpath = "google.golang.org/grpc/serviceconfig",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":serviceconfig",
+    visibility = ["//visibility:public"],
+)

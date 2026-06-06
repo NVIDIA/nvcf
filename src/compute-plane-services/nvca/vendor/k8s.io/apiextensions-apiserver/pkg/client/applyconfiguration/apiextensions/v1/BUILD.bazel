@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "apiextensions",
+    srcs = [
+        "customresourcecolumndefinition.go",
+        "customresourceconversion.go",
+        "customresourcedefinition.go",
+        "customresourcedefinitioncondition.go",
+        "customresourcedefinitionnames.go",
+        "customresourcedefinitionspec.go",
+        "customresourcedefinitionstatus.go",
+        "customresourcedefinitionversion.go",
+        "customresourcesubresources.go",
+        "customresourcesubresourcescale.go",
+        "customresourcevalidation.go",
+        "externaldocumentation.go",
+        "jsonschemaprops.go",
+        "selectablefield.go",
+        "servicereference.go",
+        "validationrule.go",
+        "webhookclientconfig.go",
+        "webhookconversion.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/applyconfiguration/apiextensions/v1",
+    importpath = "k8s.io/apiextensions-apiserver/pkg/client/applyconfiguration/apiextensions/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1:apiextensions",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/types",
+        "//vendor/k8s.io/client-go/applyconfigurations/meta/v1:meta",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":apiextensions",
+    visibility = ["//visibility:public"],
+)

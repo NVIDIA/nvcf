@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "ifaces",
+    srcs = [
+        "doc.go",
+        "ifaces.go",
+        "registry_iface.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/jsonutils/adapters/ifaces",
+    importpath = "github.com/go-openapi/swag/jsonutils/adapters/ifaces",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ifaces",
+    visibility = ["//visibility:public"],
+)

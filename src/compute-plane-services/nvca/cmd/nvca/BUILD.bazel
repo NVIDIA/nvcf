@@ -9,13 +9,12 @@ MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
 go_library(
     name = "nvca_lib",
     srcs = ["main.go"],
-    importpath = MODULE_PATH + "/cmd/nvca",
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvca",
     visibility = ["//visibility:private"],
     deps = [
         "//pkg/nvca",
         "//pkg/nvca/errors",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
     ],
 )
 

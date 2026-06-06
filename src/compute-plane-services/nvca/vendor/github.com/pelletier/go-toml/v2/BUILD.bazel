@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go-toml",
+    srcs = [
+        "decode.go",
+        "doc.go",
+        "errors.go",
+        "localtime.go",
+        "marshaler.go",
+        "strict.go",
+        "types.go",
+        "unmarshaler.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/pelletier/go-toml/v2",
+    importpath = "github.com/pelletier/go-toml/v2",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/pelletier/go-toml/v2/internal/characters",
+        "//vendor/github.com/pelletier/go-toml/v2/internal/danger",
+        "//vendor/github.com/pelletier/go-toml/v2/internal/tracker",
+        "//vendor/github.com/pelletier/go-toml/v2/unstable",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":go-toml",
+    visibility = ["//visibility:public"],
+)

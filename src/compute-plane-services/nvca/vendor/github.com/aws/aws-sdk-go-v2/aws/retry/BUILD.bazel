@@ -1,0 +1,45 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "retry",
+    srcs = [
+        "adaptive.go",
+        "adaptive_ratelimit.go",
+        "adaptive_token_bucket.go",
+        "attempt_metrics.go",
+        "doc.go",
+        "errors.go",
+        "jitter_backoff.go",
+        "metadata.go",
+        "middleware.go",
+        "retry.go",
+        "retryable_error.go",
+        "standard.go",
+        "throttle_error.go",
+        "timeout_error.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/retry",
+    importpath = "github.com/aws/aws-sdk-go-v2/aws/retry",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/middleware",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/ratelimit",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/context",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/rand",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/sdk",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/timeconv",
+        "//vendor/github.com/aws/smithy-go",
+        "//vendor/github.com/aws/smithy-go/logging",
+        "//vendor/github.com/aws/smithy-go/metrics",
+        "//vendor/github.com/aws/smithy-go/middleware",
+        "//vendor/github.com/aws/smithy-go/tracing",
+        "//vendor/github.com/aws/smithy-go/transport/http",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":retry",
+    visibility = ["//visibility:public"],
+)

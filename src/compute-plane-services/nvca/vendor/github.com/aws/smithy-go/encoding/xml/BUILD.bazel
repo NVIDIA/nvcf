@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "xml",
+    srcs = [
+        "array.go",
+        "constants.go",
+        "doc.go",
+        "element.go",
+        "encoder.go",
+        "error_utils.go",
+        "escape.go",
+        "map.go",
+        "value.go",
+        "xml_decoder.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/encoding/xml",
+    importpath = "github.com/aws/smithy-go/encoding/xml",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/aws/smithy-go/encoding"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":xml",
+    visibility = ["//visibility:public"],
+)

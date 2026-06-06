@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "auth",
+    srcs = [
+        "auth.go",
+        "identity.go",
+        "option.go",
+        "scheme_id.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/auth",
+    importpath = "github.com/aws/smithy-go/auth",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/aws/smithy-go"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":auth",
+    visibility = ["//visibility:public"],
+)

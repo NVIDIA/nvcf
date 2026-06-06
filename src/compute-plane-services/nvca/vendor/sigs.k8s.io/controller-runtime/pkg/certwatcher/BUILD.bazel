@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "certwatcher",
+    srcs = [
+        "certwatcher.go",
+        "doc.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/certwatcher",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/certwatcher",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/fsnotify/fsnotify",
+        "//vendor/github.com/go-logr/logr",
+        "//vendor/k8s.io/apimachinery/pkg/util/errors",
+        "//vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//vendor/k8s.io/apimachinery/pkg/util/wait",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/certwatcher/metrics",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":certwatcher",
+    visibility = ["//visibility:public"],
+)

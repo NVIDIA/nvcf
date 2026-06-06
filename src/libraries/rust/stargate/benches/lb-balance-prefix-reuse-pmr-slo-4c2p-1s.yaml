@@ -1,0 +1,152 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: lb-balance-prefix-reuse-pmr-slo-4c2p-1s
+metadata:
+  description: Controlled coding-session run for measuring PULSAR-multiregion ranked fallback when an affine primary exceeds an explicit queue SLO.
+  tags: [load-balance, grouped-pylons, heterogeneous, cache, prefix-reuse, coding-session, pulsar, pmr-fallback]
+  expected_runtime: medium
+  expected_signal: At a controlled 8 req/s offered rate, PULSAR-multiregion must record nonzero fallback route choices under its 4000 ms queue SLO while pylon queue-mismatch admission is disabled; compare its TTFT, cache reuse, and cluster input-capacity balance with the same-ranking PULSAR control.
+model: dummy-model
+seed: 706
+request_count: 128
+max_concurrency: 48
+
+stargates:
+  count: 1
+
+backends:
+  count: 8
+  pylons_per_cluster: 2
+  cluster_id_template: cluster-{cluster_index}
+  profile:
+    name: balanced-prefix
+    weight: 1.0
+    max_concurrent_requests: 8
+    kv_cache_capacity_tokens: 1500000
+    service_time_ms:
+      ttft_mean: 35
+      ttft_jitter_ms: 4
+      decode_jitter_ms: 2
+      prefill_tokens_per_s: 32768
+      decode_tokens_per_s: 220
+    registration:
+      last_mean_input_tps: 32768
+  profiles:
+    - count: 2
+      profile:
+        name: fast-prefix-cluster
+        weight: 1.0
+        max_concurrent_requests: 12
+        kv_cache_capacity_tokens: 2000000
+        service_time_ms:
+          ttft_mean: 20
+          ttft_jitter_ms: 3
+          decode_jitter_ms: 1
+          prefill_tokens_per_s: 65536
+          decode_tokens_per_s: 320
+        registration:
+          last_mean_input_tps: 65536
+    - count: 4
+      profile:
+        name: balanced-prefix-cluster
+        weight: 1.0
+        max_concurrent_requests: 8
+        kv_cache_capacity_tokens: 1500000
+        service_time_ms:
+          ttft_mean: 35
+          ttft_jitter_ms: 4
+          decode_jitter_ms: 2
+          prefill_tokens_per_s: 32768
+          decode_tokens_per_s: 220
+        registration:
+          last_mean_input_tps: 32768
+    - count: 2
+      profile:
+        name: constrained-prefix-cluster
+        weight: 1.0
+        max_concurrent_requests: 4
+        kv_cache_capacity_tokens: 1000000
+        service_time_ms:
+          ttft_mean: 70
+          ttft_jitter_ms: 8
+          decode_jitter_ms: 4
+          prefill_tokens_per_s: 16384
+          decode_tokens_per_s: 120
+        registration:
+          last_mean_input_tps: 16384
+
+traffic_pattern:
+  kind: prefix_reuse
+  routing_keys: 0
+  cache_affinity_keys: 16
+  initial_input_tokens:
+    distribution: constant
+    value: 65536
+  incremental_input_tokens:
+    distribution: uniform
+    min: 256
+    max: 1024
+  output_tokens:
+    distribution: lognormal
+    mean: 96
+    sigma: 0.45
+    p99_cap: 384
+  arrival:
+    distribution: poisson
+    # Keep offered load near the sustainable cache-aware control rate so this
+    # measures fallback selection rather than all-candidate SLO rejection.
+    target_rps: 8
+
+algorithms:
+  - name: groq-multiregion-affinity
+    pylon_queue_admission:
+      enabled: false
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: groq-multiregion
+          seed: growing-prefix-pmr-slo-gmr-affinity-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true
+          cache_affinity_backend_selection_count: 1
+  - name: pulsar
+    pylon_queue_admission:
+      enabled: false
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: growing-prefix-pmr-slo-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true
+  - name: pulsar-multiregion
+    pylon_queue_admission:
+      enabled: false
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar-multiregion
+          seed: growing-prefix-pmr-slo-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true
+          # A full uncached prefill costs 1 s on the fast cluster, 2 s on a
+          # balanced cluster, and 4 s on the constrained cluster. This permits
+          # useful fallback capacity while rejecting deeper queued slow misses.
+          max_queue_time_floor_ms: 4000
+          max_queue_time_ceil_ms: 4000

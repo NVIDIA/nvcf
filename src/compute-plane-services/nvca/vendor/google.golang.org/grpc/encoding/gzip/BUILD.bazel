@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gzip",
+    srcs = ["gzip.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/encoding/gzip",
+    importpath = "google.golang.org/grpc/encoding/gzip",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/google.golang.org/grpc/encoding"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gzip",
+    visibility = ["//visibility:public"],
+)

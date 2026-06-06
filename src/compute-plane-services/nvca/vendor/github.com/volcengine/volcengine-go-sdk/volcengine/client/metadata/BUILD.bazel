@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "metadata",
+    srcs = ["client_info.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/client/metadata",
+    importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/client/metadata",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":metadata",
+    visibility = ["//visibility:public"],
+)

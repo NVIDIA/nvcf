@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "require",
+    srcs = [
+        "doc.go",
+        "forward_requirements.go",
+        "require.go",
+        "require_forward.go",
+        "requirements.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+    importpath = "github.com/stretchr/testify/require",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/stretchr/testify/assert"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":require",
+    visibility = ["//visibility:public"],
+)

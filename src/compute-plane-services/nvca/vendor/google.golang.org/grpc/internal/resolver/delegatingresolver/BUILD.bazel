@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "delegatingresolver",
+    srcs = ["delegatingresolver.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/resolver/delegatingresolver",
+    importpath = "google.golang.org/grpc/internal/resolver/delegatingresolver",
+    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+    deps = [
+        "//vendor/google.golang.org/grpc/grpclog",
+        "//vendor/google.golang.org/grpc/internal/envconfig",
+        "//vendor/google.golang.org/grpc/internal/proxyattributes",
+        "//vendor/google.golang.org/grpc/internal/transport",
+        "//vendor/google.golang.org/grpc/internal/transport/networktype",
+        "//vendor/google.golang.org/grpc/resolver",
+        "//vendor/google.golang.org/grpc/serviceconfig",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":delegatingresolver",
+    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+)

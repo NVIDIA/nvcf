@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "bcrypt",
+    srcs = [
+        "base64.go",
+        "bcrypt.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/bcrypt",
+    importpath = "golang.org/x/crypto/bcrypt",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/golang.org/x/crypto/blowfish"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":bcrypt",
+    visibility = ["//visibility:public"],
+)

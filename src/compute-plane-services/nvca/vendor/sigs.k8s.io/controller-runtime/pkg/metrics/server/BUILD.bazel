@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "server",
+    srcs = [
+        "doc.go",
+        "server.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/metrics/server",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/metrics/server",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-logr/logr",
+        "//vendor/github.com/prometheus/client_golang/prometheus/promhttp",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/util/cert",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/certwatcher",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/httpserver",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/metrics",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":server",
+    visibility = ["//visibility:public"],
+)

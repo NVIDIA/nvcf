@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "mock",
+    srcs = [
+        "doc.go",
+        "mock.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/mock",
+    importpath = "github.com/stretchr/testify/mock",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/davecgh/go-spew/spew",
+        "//vendor/github.com/pmezard/go-difflib/difflib",
+        "//vendor/github.com/stretchr/objx",
+        "//vendor/github.com/stretchr/testify/assert",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":mock",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "rulesfn",
+    srcs = [
+        "doc.go",
+        "strings.go",
+        "uri.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/endpoints/private/rulesfn",
+    importpath = "github.com/aws/smithy-go/endpoints/private/rulesfn",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/aws/smithy-go/transport/http"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":rulesfn",
+    visibility = ["//visibility:public"],
+)

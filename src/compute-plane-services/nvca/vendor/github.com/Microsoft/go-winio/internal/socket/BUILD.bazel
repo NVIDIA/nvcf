@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "socket",
+    srcs = [
+        "rawaddr.go",
+        "socket.go",
+        "zsyscall_windows.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio/internal/socket",
+    importpath = "github.com/Microsoft/go-winio/internal/socket",
+    visibility = ["//vendor/github.com/Microsoft/go-winio:__subpackages__"],
+    deps = select({
+        "@rules_go//go/platform:windows": [
+            "//vendor/github.com/Microsoft/go-winio/pkg/guid",
+            "//vendor/golang.org/x/sys/windows",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":socket",
+    visibility = ["//vendor/github.com/Microsoft/go-winio:__subpackages__"],
+)

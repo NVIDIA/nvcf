@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "json",
+    srcs = [
+        "arshal.go",
+        "arshal_any.go",
+        "arshal_default.go",
+        "arshal_funcs.go",
+        "arshal_inlined.go",
+        "arshal_methods.go",
+        "arshal_time.go",
+        "decode.go",
+        "doc.go",
+        "encode.go",
+        "errors.go",
+        "fields.go",
+        "fold.go",
+        "intern.go",
+        "pools.go",
+        "state.go",
+        "token.go",
+        "value.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/internal/third_party/go-json-experiment/json",
+    importpath = "k8s.io/kube-openapi/pkg/internal/third_party/go-json-experiment/json",
+    visibility = ["//vendor/k8s.io/kube-openapi/pkg:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":json",
+    visibility = ["//vendor/k8s.io/kube-openapi/pkg:__subpackages__"],
+)

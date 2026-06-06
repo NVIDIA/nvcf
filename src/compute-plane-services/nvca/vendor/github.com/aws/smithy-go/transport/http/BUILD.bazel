@@ -1,0 +1,50 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "http",
+    srcs = [
+        "auth.go",
+        "auth_schemes.go",
+        "checksum_middleware.go",
+        "client.go",
+        "doc.go",
+        "headerlist.go",
+        "host.go",
+        "interceptor.go",
+        "interceptor_middleware.go",
+        "md5_checksum.go",
+        "metrics.go",
+        "middleware_close_response_body.go",
+        "middleware_content_length.go",
+        "middleware_header_comment.go",
+        "middleware_headers.go",
+        "middleware_http_logging.go",
+        "middleware_metadata.go",
+        "middleware_min_proto.go",
+        "properties.go",
+        "request.go",
+        "response.go",
+        "time.go",
+        "url.go",
+        "user_agent.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/transport/http",
+    importpath = "github.com/aws/smithy-go/transport/http",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/smithy-go",
+        "//vendor/github.com/aws/smithy-go/auth",
+        "//vendor/github.com/aws/smithy-go/logging",
+        "//vendor/github.com/aws/smithy-go/metrics",
+        "//vendor/github.com/aws/smithy-go/middleware",
+        "//vendor/github.com/aws/smithy-go/time",
+        "//vendor/github.com/aws/smithy-go/tracing",
+        "//vendor/github.com/aws/smithy-go/transport/http/internal/io",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":http",
+    visibility = ["//visibility:public"],
+)

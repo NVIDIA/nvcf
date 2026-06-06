@@ -62,6 +62,7 @@ var (
 
 const (
 	defaultRequeueDelay                       = 100 * time.Millisecond
+	deletingStorageRequestRequeueDelay        = 5 * time.Second
 	ConditionTypeSMBCSIDriverInstalled        = "SMBCSIDriverInstalled"
 	ConditionTypeCleanupSuccessful            = "CleanupSuccessful"
 	ConditionReasonSomeObjectsPendingDeletion = "SomeObjectsPendingDeletion"
@@ -489,7 +490,29 @@ func (r *Reconciler) doReconcile(
 		}
 	}
 
+	nextRes := requeueDeletingStorageRequestWithFinalizer(res, rerr, stCopy)
+	if nextRes != res {
+		log.V(1).Info("StorageRequest is deleting with finalizer still present, will requeue")
+		res = nextRes
+	}
+
 	return res, rerr
+}
+
+func requeueDeletingStorageRequestWithFinalizer(
+	res reconcile.Result,
+	err error,
+	st *nvcav1new.StorageRequest,
+) reconcile.Result {
+	// Keep deletion-pending StorageRequests level-triggered so a later namespace
+	// cache update can run the terminating-namespace finalizer escape hatch.
+	if err != nil || res != (reconcile.Result{}) || st.DeletionTimestamp == nil {
+		return res
+	}
+	if !controllerutil.ContainsFinalizer(st, StorageRequestFinalizer) {
+		return res
+	}
+	return reconcile.Result{RequeueAfter: deletingStorageRequestRequeueDelay}
 }
 
 func (r *Reconciler) patchStorageRequest(ctx context.Context, oldObj, newObj *nvcav1new.StorageRequest) error {

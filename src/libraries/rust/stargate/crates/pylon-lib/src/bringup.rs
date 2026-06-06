@@ -13,16 +13,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::PylonMetrics;
-use crate::token_metrics::{SNAPSHOT_THRESHOLD, TpsDistribution};
+use crate::stats::PylonMetrics;
+use crate::stats::token_metrics::{SNAPSHOT_THRESHOLD, TpsDistribution};
 use futures::future::join_all;
 use reqwest::StatusCode;
 use serde::Deserialize;
+use stargate_protocol::tunnel_contract::{HEADER_INPUT_TOKENS, HEADER_MODEL, HEADER_REQUEST_ID};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -41,7 +41,6 @@ static BRINGUP_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Clone)]
 pub struct BringupConfig {
     pub enabled: bool,
-    pub coordinated_calibration: bool,
     pub active_canary_interval: Duration,
     pub canary_timeout: Duration,
     pub canary_max_generation_threshold: u32,
@@ -55,7 +54,6 @@ impl Default for BringupConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            coordinated_calibration: true,
             active_canary_interval: DEFAULT_ACTIVE_CANARY_INTERVAL,
             canary_timeout: DEFAULT_CANARY_TIMEOUT,
             canary_max_generation_threshold: DEFAULT_CANARY_MAX_GENERATION_THRESHOLD,
@@ -70,8 +68,6 @@ impl Default for BringupConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ModelBringupState {
     ConnectingUnavailable,
-    AwaitingClusterCalibration,
-    Calibrating,
     Recovering,
     AdvertisingActive,
 }
@@ -85,19 +81,11 @@ enum BringupLifecycleState {
 }
 
 impl BringupLifecycleState {
-    fn next_action(self, config: &BringupConfig) -> BringupLifecycleAction {
-        match (
-            self,
-            config.calibration_requests == 0,
-            config.coordinated_calibration,
-        ) {
-            (Self::Recovering, _, _) => BringupLifecycleAction::RunRecoveryCanary,
-            (Self::Active, _, _) => BringupLifecycleAction::AdvertiseActive,
-            (Self::Initializing, true, _) => {
-                BringupLifecycleAction::AdvertiseActiveWithoutCalibration
-            }
-            (Self::Initializing, false, true) => BringupLifecycleAction::AwaitClusterCalibration,
-            (Self::Initializing, false, false) => BringupLifecycleAction::RunLocalCalibration,
+    fn next_action(self) -> BringupLifecycleAction {
+        match self {
+            Self::Recovering => BringupLifecycleAction::RunRecoveryCanary,
+            Self::Active => BringupLifecycleAction::AdvertiseActive,
+            Self::Initializing => BringupLifecycleAction::AdvertiseInitialActive,
         }
     }
 
@@ -130,9 +118,7 @@ impl BringupLifecycleState {
 enum BringupLifecycleAction {
     RunRecoveryCanary,
     AdvertiseActive,
-    AdvertiseActiveWithoutCalibration,
-    AwaitClusterCalibration,
-    RunLocalCalibration,
+    AdvertiseInitialActive,
 }
 
 #[derive(Debug, Clone)]
@@ -149,55 +135,17 @@ pub(crate) struct BringupModelUpdate {
     pub state: ModelBringupState,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) enum BringupCalibrationUpdate {
-    Complete {
-        model_id: String,
-        last_mean_input_tps: f64,
-    },
-    Clear {
-        model_id: String,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ClusterCalibrationDirective {
-    pub model_id: String,
-    pub state: ClusterCalibrationDirectiveState,
-    pub last_mean_input_tps: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ClusterCalibrationDirectiveState {
-    Waiting,
-    Run,
-    Complete,
-}
-
 pub(crate) fn start_bringup_supervisor(
     task_configs: Vec<BringupTaskConfig>,
     lifecycle_tx: flume::Sender<BringupModelUpdate>,
-    calibration_tx: flume::Sender<BringupCalibrationUpdate>,
-    cluster_calibration_directive_rx: flume::Receiver<ClusterCalibrationDirective>,
     stop_rx: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let (cluster_calibration_directive_tx, cluster_calibration_directive_watch_rx) =
-            watch::channel(HashMap::new());
-        let directive_task = tokio::spawn(run_cluster_calibration_directive_router(
-            cluster_calibration_directive_rx,
-            cluster_calibration_directive_tx,
-            calibration_tx.clone(),
-            stop_rx.clone(),
-        ));
-
         let mut tasks = Vec::new();
         for task_config in task_configs {
             let task = tokio::spawn(run_bringup_task(
                 task_config,
                 lifecycle_tx.clone(),
-                calibration_tx.clone(),
-                cluster_calibration_directive_watch_rx.clone(),
                 stop_rx.clone(),
             ));
             tasks.push(task);
@@ -216,74 +164,19 @@ pub(crate) fn start_bringup_supervisor(
         for task in tasks {
             task.abort();
         }
-        directive_task.abort();
     })
-}
-
-async fn run_cluster_calibration_directive_router(
-    directive_rx: flume::Receiver<ClusterCalibrationDirective>,
-    directive_tx: watch::Sender<HashMap<String, ClusterCalibrationDirective>>,
-    calibration_tx: flume::Sender<BringupCalibrationUpdate>,
-    stop_rx: watch::Receiver<bool>,
-) {
-    let mut stop_rx = stop_rx;
-    loop {
-        tokio::select! {
-            directive = directive_rx.recv_async() => {
-                let Ok(directive) = directive else {
-                    return;
-                };
-                match directive.state {
-                    ClusterCalibrationDirectiveState::Waiting => {
-                        let _ = calibration_tx
-                            .send_async(BringupCalibrationUpdate::Clear {
-                                model_id: directive.model_id.clone(),
-                            })
-                            .await;
-                    }
-                    ClusterCalibrationDirectiveState::Run => {}
-                    ClusterCalibrationDirectiveState::Complete => {
-                        if valid_last_mean_input_tps(directive.last_mean_input_tps) {
-                            let _ = calibration_tx
-                                .send_async(BringupCalibrationUpdate::Complete {
-                                    model_id: directive.model_id.clone(),
-                                    last_mean_input_tps: directive.last_mean_input_tps,
-                                })
-                                .await;
-                        } else {
-                            let _ = calibration_tx
-                                .send_async(BringupCalibrationUpdate::Clear {
-                                    model_id: directive.model_id.clone(),
-                                })
-                                .await;
-                        }
-                    }
-                }
-                directive_tx.send_modify(|directives| {
-                    directives.insert(directive.model_id.clone(), directive);
-                });
-            }
-            _ = stop_rx.changed() => {
-                if *stop_rx.borrow() {
-                    return;
-                }
-            }
-        }
-    }
 }
 
 async fn run_bringup_task(
     task_config: BringupTaskConfig,
     lifecycle_tx: flume::Sender<BringupModelUpdate>,
-    calibration_tx: flume::Sender<BringupCalibrationUpdate>,
-    cluster_calibration_directive_rx: watch::Receiver<HashMap<String, ClusterCalibrationDirective>>,
     stop_rx: watch::Receiver<bool>,
 ) {
     let BringupTaskConfig {
         upstream_http_base_url,
         model_id,
         config,
-        metrics,
+        metrics: _,
     } = task_config;
     let http_client = reqwest::Client::new();
     let mut stop_rx = stop_rx;
@@ -319,7 +212,7 @@ async fn run_bringup_task(
             continue;
         }
 
-        match lifecycle.next_action(&config) {
+        match lifecycle.next_action() {
             BringupLifecycleAction::RunRecoveryCanary => {
                 let _ = lifecycle_tx
                     .send_async(BringupModelUpdate {
@@ -358,7 +251,7 @@ async fn run_bringup_task(
                     })
                     .await;
             }
-            BringupLifecycleAction::AdvertiseActiveWithoutCalibration => {
+            BringupLifecycleAction::AdvertiseInitialActive => {
                 let _ = lifecycle_tx
                     .send_async(BringupModelUpdate {
                         model_id: model_id.clone(),
@@ -366,150 +259,6 @@ async fn run_bringup_task(
                     })
                     .await;
                 lifecycle.complete_initial_bringup();
-            }
-            BringupLifecycleAction::AwaitClusterCalibration => {
-                let _ = lifecycle_tx
-                    .send_async(BringupModelUpdate {
-                        model_id: model_id.clone(),
-                        state: ModelBringupState::AwaitingClusterCalibration,
-                    })
-                    .await;
-
-                let mut directive_rx = cluster_calibration_directive_rx.clone();
-                match wait_for_cluster_calibration_decision(
-                    &model_id,
-                    &mut directive_rx,
-                    &mut stop_rx,
-                    &lifecycle_tx,
-                )
-                .await
-                {
-                    CalibrationDecision::Stop => return,
-                    CalibrationDecision::UseClusterCalibration {
-                        last_mean_input_tps,
-                    } => {
-                        if !check_upstream_health(
-                            &http_client,
-                            &upstream_http_base_url,
-                            config.canary_timeout,
-                        )
-                        .await
-                        {
-                            let _ = lifecycle_tx
-                                .send_async(BringupModelUpdate {
-                                    model_id: model_id.clone(),
-                                    state: ModelBringupState::ConnectingUnavailable,
-                                })
-                                .await;
-                            if wait_or_stop(&mut stop_rx, CONNECT_RETRY_INTERVAL).await {
-                                return;
-                            }
-                            continue;
-                        }
-                        if valid_last_mean_input_tps(last_mean_input_tps) {
-                            let _ = calibration_tx
-                                .send_async(BringupCalibrationUpdate::Complete {
-                                    model_id: model_id.clone(),
-                                    last_mean_input_tps,
-                                })
-                                .await;
-                        }
-                        let _ = lifecycle_tx
-                            .send_async(BringupModelUpdate {
-                                model_id: model_id.clone(),
-                                state: ModelBringupState::AdvertisingActive,
-                            })
-                            .await;
-                        lifecycle.complete_initial_bringup();
-                    }
-                    CalibrationDecision::RunLocalCalibration => {
-                        let _ = calibration_tx
-                            .send_async(BringupCalibrationUpdate::Clear {
-                                model_id: model_id.clone(),
-                            })
-                            .await;
-                        let _ = lifecycle_tx
-                            .send_async(BringupModelUpdate {
-                                model_id: model_id.clone(),
-                                state: ModelBringupState::Calibrating,
-                            })
-                            .await;
-
-                        match run_calibration_with_metrics(
-                            &http_client,
-                            &upstream_http_base_url,
-                            &model_id,
-                            &config,
-                            metrics.as_deref(),
-                        )
-                        .await
-                        {
-                            Ok(last_mean_input_tps) => {
-                                let _ = calibration_tx
-                                    .send_async(BringupCalibrationUpdate::Complete {
-                                        model_id: model_id.clone(),
-                                        last_mean_input_tps,
-                                    })
-                                    .await;
-                                let _ = lifecycle_tx
-                                    .send_async(BringupModelUpdate {
-                                        model_id: model_id.clone(),
-                                        state: ModelBringupState::AdvertisingActive,
-                                    })
-                                    .await;
-                                lifecycle.complete_initial_bringup();
-                            }
-                            Err(error) => {
-                                tracing::warn!(model_id, error = %error, "bringup calibration failed");
-                                if wait_or_stop(&mut stop_rx, CONNECT_RETRY_INTERVAL).await {
-                                    return;
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                }
-            }
-            BringupLifecycleAction::RunLocalCalibration => {
-                let _ = lifecycle_tx
-                    .send_async(BringupModelUpdate {
-                        model_id: model_id.clone(),
-                        state: ModelBringupState::Calibrating,
-                    })
-                    .await;
-
-                match run_calibration_with_metrics(
-                    &http_client,
-                    &upstream_http_base_url,
-                    &model_id,
-                    &config,
-                    metrics.as_deref(),
-                )
-                .await
-                {
-                    Ok(last_mean_input_tps) => {
-                        let _ = calibration_tx
-                            .send_async(BringupCalibrationUpdate::Complete {
-                                model_id: model_id.clone(),
-                                last_mean_input_tps,
-                            })
-                            .await;
-                        let _ = lifecycle_tx
-                            .send_async(BringupModelUpdate {
-                                model_id: model_id.clone(),
-                                state: ModelBringupState::AdvertisingActive,
-                            })
-                            .await;
-                        lifecycle.complete_initial_bringup();
-                    }
-                    Err(error) => {
-                        tracing::warn!(model_id, error = %error, "bringup calibration failed");
-                        if wait_or_stop(&mut stop_rx, CONNECT_RETRY_INTERVAL).await {
-                            return;
-                        }
-                        continue;
-                    }
-                }
             }
         }
 
@@ -571,66 +320,6 @@ async fn run_bringup_task(
     }
 }
 
-enum CalibrationDecision {
-    RunLocalCalibration,
-    UseClusterCalibration { last_mean_input_tps: f64 },
-    Stop,
-}
-
-async fn wait_for_cluster_calibration_decision(
-    model_id: &str,
-    directive_rx: &mut watch::Receiver<HashMap<String, ClusterCalibrationDirective>>,
-    stop_rx: &mut watch::Receiver<bool>,
-    lifecycle_tx: &flume::Sender<BringupModelUpdate>,
-) -> CalibrationDecision {
-    let mut advertised_active_while_not_owner = false;
-    loop {
-        if *stop_rx.borrow() {
-            return CalibrationDecision::Stop;
-        }
-        let directive = {
-            let directives = directive_rx.borrow();
-            directives.get(model_id).cloned()
-        };
-        if let Some(directive) = directive {
-            match directive.state {
-                ClusterCalibrationDirectiveState::Waiting => {
-                    if !advertised_active_while_not_owner {
-                        let _ = lifecycle_tx
-                            .send_async(BringupModelUpdate {
-                                model_id: model_id.to_string(),
-                                state: ModelBringupState::AdvertisingActive,
-                            })
-                            .await;
-                        advertised_active_while_not_owner = true;
-                    }
-                }
-                ClusterCalibrationDirectiveState::Run => {
-                    return CalibrationDecision::RunLocalCalibration;
-                }
-                ClusterCalibrationDirectiveState::Complete => {
-                    return CalibrationDecision::UseClusterCalibration {
-                        last_mean_input_tps: directive.last_mean_input_tps,
-                    };
-                }
-            }
-        }
-
-        tokio::select! {
-            _ = stop_rx.changed() => {
-                if *stop_rx.borrow() {
-                    return CalibrationDecision::Stop;
-                }
-            }
-            changed = directive_rx.changed() => {
-                if changed.is_err() {
-                    return CalibrationDecision::Stop;
-                }
-            }
-        }
-    }
-}
-
 async fn wait_or_stop(stop_rx: &mut watch::Receiver<bool>, duration: Duration) -> bool {
     tokio::select! {
         _ = stop_rx.changed() => *stop_rx.borrow(),
@@ -638,17 +327,34 @@ async fn wait_or_stop(stop_rx: &mut watch::Receiver<bool>, duration: Duration) -
     }
 }
 
-async fn run_calibration_with_metrics(
-    http_client: &reqwest::Client,
-    upstream_http_base_url: &str,
-    model_id: &str,
-    config: &BringupConfig,
-    metrics: Option<&PylonMetrics>,
+pub(crate) async fn run_assigned_cluster_calibration(
+    task_config: &BringupTaskConfig,
 ) -> Result<f64, BringupError> {
+    let client = reqwest::Client::new();
     let started_at = Instant::now();
-    let result = run_calibration(http_client, upstream_http_base_url, model_id, config).await;
-    if let Some(metrics) = metrics {
-        metrics.observe_model_calibration_duration(model_id, started_at.elapsed(), result.is_ok());
+    let result = if check_upstream_health(
+        &client,
+        &task_config.upstream_http_base_url,
+        task_config.config.canary_timeout,
+    )
+    .await
+    {
+        run_calibration(
+            &client,
+            &task_config.upstream_http_base_url,
+            &task_config.model_id,
+            &task_config.config,
+        )
+        .await
+    } else {
+        Err(BringupError::UnhealthyUpstream)
+    };
+    if let Some(metrics) = task_config.metrics.as_deref() {
+        metrics.observe_model_calibration_duration(
+            &task_config.model_id,
+            started_at.elapsed(),
+            result.is_ok(),
+        );
     }
     result
 }
@@ -896,16 +602,16 @@ async fn send_completion_request(
     let response = http_client
         .post(request_url)
         .timeout(timeout)
-        .header("x-request-id", format!("bringup-{request_id}"))
+        .header(HEADER_REQUEST_ID, format!("bringup-{request_id}"))
         .header(
-            "x-model",
+            HEADER_MODEL,
             request
                 .get("model")
                 .and_then(|value| value.as_str())
                 .unwrap_or_default(),
         )
         .header(
-            "x-input-tokens",
+            HEADER_INPUT_TOKENS,
             request
                 .get("messages")
                 .and_then(|value| value.as_array())
@@ -955,14 +661,12 @@ fn is_prompt_too_long(status: StatusCode, message: &Option<String>) -> bool {
         || message.contains("maximum context")
 }
 
-fn valid_last_mean_input_tps(last_mean_input_tps: f64) -> bool {
-    last_mean_input_tps > 0.0 && last_mean_input_tps.is_finite()
-}
-
 #[derive(Debug, thiserror::Error)]
-enum BringupError {
+pub(crate) enum BringupError {
     #[error("http request failed: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("upstream health check failed before assigned calibration")]
+    UnhealthyUpstream,
     #[error("upstream rejected request ({status}): {message}")]
     Api { status: StatusCode, message: String },
     #[error("calibration prompt too long")]
@@ -1024,47 +728,23 @@ mod tests {
 
     #[test]
     fn bringup_lifecycle_state_classifies_actions() {
-        let coordinated = BringupConfig {
-            coordinated_calibration: true,
-            calibration_requests: 1,
-            ..BringupConfig::default()
-        };
         let mut lifecycle = BringupLifecycleState::default();
         assert_eq!(
-            lifecycle.next_action(&coordinated),
-            BringupLifecycleAction::AwaitClusterCalibration
-        );
-
-        let local = BringupConfig {
-            coordinated_calibration: false,
-            calibration_requests: 1,
-            ..BringupConfig::default()
-        };
-        assert_eq!(
-            BringupLifecycleState::default().next_action(&local),
-            BringupLifecycleAction::RunLocalCalibration
-        );
-
-        let skip_calibration = BringupConfig {
-            calibration_requests: 0,
-            ..BringupConfig::default()
-        };
-        assert_eq!(
-            BringupLifecycleState::default().next_action(&skip_calibration),
-            BringupLifecycleAction::AdvertiseActiveWithoutCalibration
+            lifecycle.next_action(),
+            BringupLifecycleAction::AdvertiseInitialActive
         );
 
         lifecycle.complete_initial_bringup();
         assert_eq!(lifecycle, BringupLifecycleState::Active);
         assert_eq!(
-            lifecycle.next_action(&coordinated),
+            lifecycle.next_action(),
             BringupLifecycleAction::AdvertiseActive
         );
 
         lifecycle.require_recovery_canary();
         assert_eq!(lifecycle, BringupLifecycleState::Recovering);
         assert_eq!(
-            lifecycle.next_action(&coordinated),
+            lifecycle.next_action(),
             BringupLifecycleAction::RunRecoveryCanary
         );
 
@@ -1324,7 +1004,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_bringup_calibration_records_duration_metric() {
+    async fn assigned_cluster_calibration_records_duration_metric() {
         let metrics = PylonMetrics::new().expect("metrics should initialize");
         let base_url = spawn_test_server(TestServerState {
             completion_tokens: 1,
@@ -1337,42 +1017,20 @@ mod tests {
             health_ok: None,
         })
         .await;
-        let (lifecycle_tx, _lifecycle_rx) = flume::bounded(8);
-        let (calibration_tx, calibration_rx) = flume::bounded(8);
-        let (_directive_tx, directive_rx) = watch::channel(HashMap::new());
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let task = tokio::spawn(run_bringup_task(
-            BringupTaskConfig {
-                upstream_http_base_url: base_url,
-                model_id: "test-model".to_string(),
-                config: BringupConfig {
-                    coordinated_calibration: false,
-                    calibration_requests: 5,
-                    active_canary_interval: Duration::ZERO,
-                    canary_timeout: Duration::from_secs(1),
-                    calibration_timeout: Duration::from_secs(1),
-                    ..BringupConfig::default()
-                },
-                metrics: Some(metrics.clone()),
+        let last_mean_input_tps = run_assigned_cluster_calibration(&BringupTaskConfig {
+            upstream_http_base_url: base_url,
+            model_id: "test-model".to_string(),
+            config: BringupConfig {
+                calibration_requests: 5,
+                active_canary_interval: Duration::ZERO,
+                canary_timeout: Duration::from_secs(1),
+                calibration_timeout: Duration::from_secs(1),
+                ..BringupConfig::default()
             },
-            lifecycle_tx,
-            calibration_tx,
-            directive_rx,
-            stop_rx,
-        ));
-
-        let calibration = tokio::time::timeout(Duration::from_secs(2), calibration_rx.recv_async())
-            .await
-            .expect("bringup should publish calibration")
-            .expect("calibration channel should stay open");
-        let BringupCalibrationUpdate::Complete {
-            model_id,
-            last_mean_input_tps,
-        } = calibration
-        else {
-            panic!("local calibration should publish a complete update");
-        };
-        assert_eq!(model_id, "test-model");
+            metrics: Some(metrics.clone()),
+        })
+        .await
+        .expect("assigned calibration should produce a local measurement");
         assert!(last_mean_input_tps > 0.0);
 
         let body = metrics.gather_text().expect("metrics should encode");
@@ -1382,13 +1040,49 @@ mod tests {
         assert!(!body.contains(
             r#"pylon_model_calibration_duration_ms_count{model="test-model",outcome="failure"}"#
         ));
-
-        let _ = stop_tx.send(true);
-        task.await.unwrap();
     }
 
     #[tokio::test]
-    async fn coordinated_recovery_canary_runs_before_reusing_completed_calibration() {
+    async fn assigned_cluster_calibration_does_not_measure_unhealthy_upstream() {
+        let health_ok = Arc::new(AtomicBool::new(false));
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let base_url = spawn_test_server(TestServerState {
+            completion_tokens: 1,
+            prompt_too_long_above: None,
+            calibration_barrier: None,
+            completion_delay: None,
+            in_flight: Some(in_flight),
+            max_in_flight: Some(max_in_flight.clone()),
+            canary_failures_remaining: None,
+            health_ok: Some(health_ok),
+        })
+        .await;
+
+        let error = run_assigned_cluster_calibration(&BringupTaskConfig {
+            upstream_http_base_url: base_url,
+            model_id: "test-model".to_string(),
+            config: BringupConfig {
+                calibration_requests: 1,
+                canary_timeout: Duration::from_secs(1),
+                calibration_timeout: Duration::from_secs(1),
+                ..BringupConfig::default()
+            },
+            metrics: None,
+        })
+        .await
+        .expect_err("unhealthy upstream must not be measured for an assignment");
+
+        assert!(matches!(error, BringupError::UnhealthyUpstream));
+        assert_eq!(
+            max_in_flight.load(Ordering::SeqCst),
+            0,
+            "calibration requests must wait until upstream health succeeds"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_canary_runs_after_initial_health_activation() {
         let canary_failures_remaining = Arc::new(AtomicUsize::new(1));
         let base_url = spawn_test_server(TestServerState {
             completion_tokens: 1,
@@ -1402,23 +1096,13 @@ mod tests {
         })
         .await;
         let (lifecycle_tx, lifecycle_rx) = flume::bounded(32);
-        let (calibration_tx, _calibration_rx) = flume::bounded(32);
-        let (_directive_tx, directive_rx) = watch::channel(HashMap::from([(
-            "test-model".to_string(),
-            ClusterCalibrationDirective {
-                model_id: "test-model".to_string(),
-                state: ClusterCalibrationDirectiveState::Complete,
-                last_mean_input_tps: 123.0,
-            },
-        )]));
         let (stop_tx, stop_rx) = watch::channel(false);
         let task = tokio::spawn(run_bringup_task(
             BringupTaskConfig {
                 upstream_http_base_url: base_url,
                 model_id: "test-model".to_string(),
                 config: BringupConfig {
-                    coordinated_calibration: true,
-                    calibration_requests: 5,
+                    calibration_requests: 0,
                     active_canary_interval: Duration::from_millis(10),
                     canary_timeout: Duration::from_secs(1),
                     canary_max_generation_threshold: 7,
@@ -1427,8 +1111,6 @@ mod tests {
                 metrics: None,
             },
             lifecycle_tx,
-            calibration_tx,
-            directive_rx,
             stop_rx,
         ));
 
@@ -1450,7 +1132,6 @@ mod tests {
         .await
         .expect("bringup task should recover after one canary failure");
 
-        assert!(observed.contains(&ModelBringupState::AwaitingClusterCalibration));
         assert!(observed.contains(&ModelBringupState::Recovering));
         assert!(
             observed
@@ -1459,331 +1140,6 @@ mod tests {
                 .count()
                 >= 2
         );
-
-        let _ = stop_tx.send(true);
-        task.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn coordinated_complete_rechecks_health_before_advertising_active() {
-        let health_ok = Arc::new(AtomicBool::new(true));
-        let base_url = spawn_test_server(TestServerState {
-            completion_tokens: 1,
-            prompt_too_long_above: None,
-            calibration_barrier: None,
-            completion_delay: None,
-            in_flight: None,
-            max_in_flight: None,
-            canary_failures_remaining: None,
-            health_ok: Some(health_ok.clone()),
-        })
-        .await;
-        let (lifecycle_tx, lifecycle_rx) = flume::bounded(16);
-        let (calibration_tx, calibration_rx) = flume::bounded(8);
-        let (directive_tx, directive_rx) = watch::channel(HashMap::new());
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let task = tokio::spawn(run_bringup_task(
-            BringupTaskConfig {
-                upstream_http_base_url: base_url,
-                model_id: "test-model".to_string(),
-                config: BringupConfig {
-                    coordinated_calibration: true,
-                    calibration_requests: 1,
-                    active_canary_interval: Duration::ZERO,
-                    canary_timeout: Duration::from_secs(1),
-                    ..BringupConfig::default()
-                },
-                metrics: None,
-            },
-            lifecycle_tx,
-            calibration_tx,
-            directive_rx,
-            stop_rx,
-        ));
-
-        let awaiting = lifecycle_rx
-            .recv_async()
-            .await
-            .expect("bringup should wait for cluster calibration");
-        assert_eq!(
-            awaiting.state,
-            ModelBringupState::AwaitingClusterCalibration
-        );
-
-        health_ok.store(false, Ordering::SeqCst);
-        directive_tx
-            .send(HashMap::from([(
-                "test-model".to_string(),
-                ClusterCalibrationDirective {
-                    model_id: "test-model".to_string(),
-                    state: ClusterCalibrationDirectiveState::Complete,
-                    last_mean_input_tps: 123.0,
-                },
-            )]))
-            .unwrap();
-
-        let unavailable = tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let update = lifecycle_rx.recv_async().await.unwrap();
-                assert_ne!(update.state, ModelBringupState::AdvertisingActive);
-                if update.state == ModelBringupState::ConnectingUnavailable {
-                    break update;
-                }
-            }
-        })
-        .await
-        .expect("completed cluster calibration should recheck health before active");
-        assert_eq!(unavailable.state, ModelBringupState::ConnectingUnavailable);
-        assert!(calibration_rx.is_empty());
-
-        let _ = stop_tx.send(true);
-        task.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn coordinated_waiting_directive_advertises_backend_active() {
-        let base_url = spawn_test_server(TestServerState {
-            completion_tokens: 1,
-            prompt_too_long_above: None,
-            calibration_barrier: None,
-            completion_delay: None,
-            in_flight: None,
-            max_in_flight: None,
-            canary_failures_remaining: None,
-            health_ok: None,
-        })
-        .await;
-        let (lifecycle_tx, lifecycle_rx) = flume::bounded(8);
-        let (calibration_tx, calibration_rx) = flume::bounded(8);
-        let (_directive_tx, directive_rx) = watch::channel(HashMap::from([(
-            "test-model".to_string(),
-            ClusterCalibrationDirective {
-                model_id: "test-model".to_string(),
-                state: ClusterCalibrationDirectiveState::Waiting,
-                last_mean_input_tps: 0.0,
-            },
-        )]));
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let task = tokio::spawn(run_bringup_task(
-            BringupTaskConfig {
-                upstream_http_base_url: base_url,
-                model_id: "test-model".to_string(),
-                config: BringupConfig {
-                    coordinated_calibration: true,
-                    calibration_requests: 1,
-                    active_canary_interval: Duration::ZERO,
-                    canary_timeout: Duration::from_secs(1),
-                    ..BringupConfig::default()
-                },
-                metrics: None,
-            },
-            lifecycle_tx,
-            calibration_tx,
-            directive_rx,
-            stop_rx,
-        ));
-
-        let mut states = Vec::new();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let update = lifecycle_rx.recv_async().await.unwrap();
-                states.push(update.state);
-                if update.state == ModelBringupState::AdvertisingActive {
-                    break;
-                }
-            }
-        })
-        .await
-        .expect("waiting directive should not hold backend inactive");
-
-        assert_eq!(
-            states,
-            vec![
-                ModelBringupState::AwaitingClusterCalibration,
-                ModelBringupState::AdvertisingActive,
-            ]
-        );
-        assert!(calibration_rx.is_empty());
-
-        let _ = stop_tx.send(true);
-        task.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn coordinated_waiting_backend_runs_calibration_when_reassigned() {
-        let base_url = spawn_test_server(TestServerState {
-            completion_tokens: 1,
-            prompt_too_long_above: None,
-            calibration_barrier: None,
-            completion_delay: None,
-            in_flight: None,
-            max_in_flight: None,
-            canary_failures_remaining: None,
-            health_ok: None,
-        })
-        .await;
-        let (lifecycle_tx, lifecycle_rx) = flume::bounded(16);
-        let (calibration_tx, calibration_rx) = flume::bounded(8);
-        let (directive_tx, directive_rx) = watch::channel(HashMap::from([(
-            "test-model".to_string(),
-            ClusterCalibrationDirective {
-                model_id: "test-model".to_string(),
-                state: ClusterCalibrationDirectiveState::Waiting,
-                last_mean_input_tps: 0.0,
-            },
-        )]));
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let task = tokio::spawn(run_bringup_task(
-            BringupTaskConfig {
-                upstream_http_base_url: base_url,
-                model_id: "test-model".to_string(),
-                config: BringupConfig {
-                    coordinated_calibration: true,
-                    calibration_requests: 5,
-                    active_canary_interval: Duration::ZERO,
-                    canary_timeout: Duration::from_secs(1),
-                    calibration_timeout: Duration::from_secs(1),
-                    ..BringupConfig::default()
-                },
-                metrics: None,
-            },
-            lifecycle_tx,
-            calibration_tx,
-            directive_rx,
-            stop_rx,
-        ));
-
-        let mut states = Vec::new();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let update = lifecycle_rx.recv_async().await.unwrap();
-                states.push(update.state);
-                if update.state == ModelBringupState::AdvertisingActive {
-                    break;
-                }
-            }
-        })
-        .await
-        .expect("waiting backend should advertise active while not owner");
-
-        directive_tx
-            .send(HashMap::from([(
-                "test-model".to_string(),
-                ClusterCalibrationDirective {
-                    model_id: "test-model".to_string(),
-                    state: ClusterCalibrationDirectiveState::Run,
-                    last_mean_input_tps: 0.0,
-                },
-            )]))
-            .unwrap();
-
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let update = lifecycle_rx.recv_async().await.unwrap();
-                states.push(update.state);
-                if states.contains(&ModelBringupState::Calibrating)
-                    && states
-                        .iter()
-                        .filter(|state| **state == ModelBringupState::AdvertisingActive)
-                        .count()
-                        >= 2
-                {
-                    break;
-                }
-            }
-        })
-        .await
-        .expect("waiting backend should react to reassignment");
-
-        let reset = calibration_rx
-            .recv_async()
-            .await
-            .expect("reassigned backend should clear stale calibration");
-        assert!(matches!(
-            reset,
-            BringupCalibrationUpdate::Clear { model_id } if model_id == "test-model"
-        ));
-
-        let calibration = calibration_rx
-            .recv_async()
-            .await
-            .expect("reassigned backend should publish calibration");
-        assert!(matches!(
-            calibration,
-            BringupCalibrationUpdate::Complete {
-                model_id,
-                last_mean_input_tps,
-            } if model_id == "test-model" && valid_last_mean_input_tps(last_mean_input_tps)
-        ));
-        assert_eq!(
-            states,
-            vec![
-                ModelBringupState::AwaitingClusterCalibration,
-                ModelBringupState::AdvertisingActive,
-                ModelBringupState::Calibrating,
-                ModelBringupState::AdvertisingActive,
-            ]
-        );
-
-        let _ = stop_tx.send(true);
-        task.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn directive_router_does_not_clear_local_completion_on_repeated_run() {
-        let (directive_tx, directive_rx) = flume::bounded(4);
-        let (directive_watch_tx, _directive_watch_rx) = watch::channel(HashMap::new());
-        let (calibration_tx, calibration_rx) = flume::bounded(4);
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let task = tokio::spawn(run_cluster_calibration_directive_router(
-            directive_rx,
-            directive_watch_tx,
-            calibration_tx,
-            stop_rx,
-        ));
-
-        directive_tx
-            .send_async(ClusterCalibrationDirective {
-                model_id: "test-model".to_string(),
-                state: ClusterCalibrationDirectiveState::Complete,
-                last_mean_input_tps: 123.0,
-            })
-            .await
-            .unwrap();
-        let calibration = calibration_rx.recv_async().await.unwrap();
-        assert!(matches!(
-            calibration,
-            BringupCalibrationUpdate::Complete {
-                model_id,
-                last_mean_input_tps,
-            } if model_id == "test-model" && last_mean_input_tps == 123.0
-        ));
-
-        directive_tx
-            .send_async(ClusterCalibrationDirective {
-                model_id: "test-model".to_string(),
-                state: ClusterCalibrationDirectiveState::Run,
-                last_mean_input_tps: 0.0,
-            })
-            .await
-            .unwrap();
-        tokio::time::timeout(Duration::from_millis(50), calibration_rx.recv_async())
-            .await
-            .expect_err("repeated Run should not clear completed local calibration");
-
-        directive_tx
-            .send_async(ClusterCalibrationDirective {
-                model_id: "test-model".to_string(),
-                state: ClusterCalibrationDirectiveState::Waiting,
-                last_mean_input_tps: 0.0,
-            })
-            .await
-            .unwrap();
-        let calibration = calibration_rx.recv_async().await.unwrap();
-        assert!(matches!(
-            calibration,
-            BringupCalibrationUpdate::Clear { model_id } if model_id == "test-model"
-        ));
 
         let _ = stop_tx.send(true);
         task.await.unwrap();

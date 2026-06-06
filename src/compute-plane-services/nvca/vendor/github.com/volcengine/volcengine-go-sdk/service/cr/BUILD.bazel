@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cr",
+    srcs = [
+        "api_create_endpoint_acl_policies.go",
+        "api_create_namespace.go",
+        "api_create_registry.go",
+        "api_create_repository.go",
+        "api_delete_endpoint_acl_policies.go",
+        "api_delete_namespace.go",
+        "api_delete_registry.go",
+        "api_delete_repository.go",
+        "api_delete_tags.go",
+        "api_get_authorization_token.go",
+        "api_get_public_endpoint.go",
+        "api_get_user.go",
+        "api_get_vpc_endpoint.go",
+        "api_list_domains.go",
+        "api_list_namespaces.go",
+        "api_list_registries.go",
+        "api_list_repositories.go",
+        "api_list_tags.go",
+        "api_set_user.go",
+        "api_start_registry.go",
+        "api_update_public_endpoint.go",
+        "api_update_repository.go",
+        "api_update_vpc_endpoint.go",
+        "interface_cr.go",
+        "service_cr.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/service/cr",
+    importpath = "github.com/volcengine/volcengine-go-sdk/service/cr",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/client",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/client/metadata",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/corehandlers",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/request",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/response",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/signer/volc",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcenginequery",
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineutil",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cr",
+    visibility = ["//visibility:public"],
+)

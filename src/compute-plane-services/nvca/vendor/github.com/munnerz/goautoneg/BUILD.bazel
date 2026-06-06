@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "goautoneg",
+    srcs = ["autoneg.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/munnerz/goautoneg",
+    importpath = "github.com/munnerz/goautoneg",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":goautoneg",
+    visibility = ["//visibility:public"],
+)

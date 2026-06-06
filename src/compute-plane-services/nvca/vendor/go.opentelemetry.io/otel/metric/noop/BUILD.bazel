@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "noop",
+    srcs = ["noop.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric/noop",
+    importpath = "go.opentelemetry.io/otel/metric/noop",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/go.opentelemetry.io/otel/metric",
+        "//vendor/go.opentelemetry.io/otel/metric/embedded",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":noop",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "config",
+    srcs = [
+        "auth_scheme_preference.go",
+        "config.go",
+        "defaultsmode.go",
+        "doc.go",
+        "env_config.go",
+        "generate.go",
+        "go_module_metadata.go",
+        "load_options.go",
+        "local.go",
+        "provider.go",
+        "resolve.go",
+        "resolve_bearer_token.go",
+        "resolve_credentials.go",
+        "shared_config.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/config",
+    importpath = "github.com/aws/aws-sdk-go-v2/config",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/transport/http",
+        "//vendor/github.com/aws/aws-sdk-go-v2/credentials",
+        "//vendor/github.com/aws/aws-sdk-go-v2/credentials/ec2rolecreds",
+        "//vendor/github.com/aws/aws-sdk-go-v2/credentials/endpointcreds",
+        "//vendor/github.com/aws/aws-sdk-go-v2/credentials/logincreds",
+        "//vendor/github.com/aws/aws-sdk-go-v2/credentials/processcreds",
+        "//vendor/github.com/aws/aws-sdk-go-v2/credentials/ssocreds",
+        "//vendor/github.com/aws/aws-sdk-go-v2/credentials/stscreds",
+        "//vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/ini",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/shareddefaults",
+        "//vendor/github.com/aws/aws-sdk-go-v2/service/signin",
+        "//vendor/github.com/aws/aws-sdk-go-v2/service/sso",
+        "//vendor/github.com/aws/aws-sdk-go-v2/service/ssooidc",
+        "//vendor/github.com/aws/aws-sdk-go-v2/service/sts",
+        "//vendor/github.com/aws/smithy-go/auth/bearer",
+        "//vendor/github.com/aws/smithy-go/logging",
+        "//vendor/github.com/aws/smithy-go/middleware",
+        "//vendor/github.com/aws/smithy-go/private/requestcompression",
+        "//vendor/github.com/aws/smithy-go/transport/http",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":config",
+    visibility = ["//visibility:public"],
+)

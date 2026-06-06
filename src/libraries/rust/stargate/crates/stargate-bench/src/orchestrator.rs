@@ -21,6 +21,7 @@ use serde::Serialize;
 
 use crate::config::{AlgorithmConfig, BenchmarkConfig};
 use crate::manifest::{Manifest, write_manifest_json};
+use crate::runtime::{BackendRuntimeSpec, PylonRuntimeSpec, slugify};
 
 const STARGATE_GRPC_PORT: u16 = 50071;
 const STARGATE_HTTP_PORT: u16 = 8000;
@@ -99,7 +100,7 @@ pub fn prepare_suite(
         )?;
         let compose_path = run_dir.join("docker-compose.yaml");
         let compose_yaml =
-            serde_yaml::to_string(&compose).context("failed to serialize compose yaml")?;
+            serde_yaml_ng::to_string(&compose).context("failed to serialize compose yaml")?;
         std::fs::write(&compose_path, compose_yaml)
             .with_context(|| format!("failed to write {}", compose_path.display()))?;
 
@@ -216,7 +217,7 @@ fn build_compose_spec(
                 "--lb-config-path".to_string(),
                 stargate_lb_config_container_path.to_string(),
                 "--tunnel-protocol".to_string(),
-                config.tunnel_protocol.as_arg().to_string(),
+                config.tunnel_protocol.to_string(),
             ],
             ports: vec![
                 format!("{stargate_grpc_host_port}:{STARGATE_GRPC_PORT}"),
@@ -233,52 +234,46 @@ fn build_compose_spec(
     );
 
     for backend_index in 0..config.backends.count {
-        let profile = config.backends.profile_for_index(backend_index);
-        let backend_name = format!("backend-{backend_index}");
+        let pylon = PylonRuntimeSpec::for_backend(config, backend_index);
         let client_name = format!("client-{backend_index}");
-        let backend_id = format!("bench-inst-{backend_index}");
-        let cluster_id = config.backends.cluster_id_for_index(backend_index);
-        let max_concurrent_requests = profile.max_concurrent_requests.unwrap_or(0);
-
-        services.insert(
-            backend_name.clone(),
-            ComposeService {
-                build: ComposeBuild {
-                    context: repo_root.display().to_string(),
-                    dockerfile: dockerfile.display().to_string(),
-                    target: "mock-dynamo-runtime".to_string(),
+        if pylon.owns_upstream_backend() {
+            let backend = BackendRuntimeSpec::for_upstream(config, pylon.upstream_index);
+            services.insert(
+                backend.name.clone(),
+                ComposeService {
+                    build: ComposeBuild {
+                        context: repo_root.display().to_string(),
+                        dockerfile: dockerfile.display().to_string(),
+                        target: "mock-dynamo-runtime".to_string(),
+                    },
+                    command: vec![
+                        "--http-listen-addr".to_string(),
+                        format!("0.0.0.0:{MOCK_DYNAMO_HTTP_PORT}"),
+                        "--model-name".to_string(),
+                        config.model.clone(),
+                        "--num-tokens".to_string(),
+                        "32".to_string(),
+                        "--token-delay-ms".to_string(),
+                        backend.per_token_delay_ms.to_string(),
+                        "--decode-jitter-ms".to_string(),
+                        backend.decode_jitter_ms.to_string(),
+                        "--ttft-ms".to_string(),
+                        backend.ttft_ms.to_string(),
+                        "--ttft-jitter-ms".to_string(),
+                        backend.ttft_jitter_ms.to_string(),
+                        "--prefill-tokens-per-s".to_string(),
+                        backend.prefill_tokens_per_s.to_string(),
+                        "--max-concurrent-requests".to_string(),
+                        backend.max_concurrent_requests.to_string(),
+                        "--kv-cache-capacity-tokens".to_string(),
+                        backend.kv_cache_capacity_tokens.to_string(),
+                    ],
+                    ports: Vec::new(),
+                    volumes: Vec::new(),
+                    depends_on: BTreeMap::new(),
                 },
-                command: vec![
-                    "--http-listen-addr".to_string(),
-                    format!("0.0.0.0:{MOCK_DYNAMO_HTTP_PORT}"),
-                    "--model-name".to_string(),
-                    config.model.clone(),
-                    "--num-tokens".to_string(),
-                    "32".to_string(),
-                    "--token-delay-ms".to_string(),
-                    per_token_delay_ms(profile),
-                    "--decode-jitter-ms".to_string(),
-                    profile.service_time_ms.decode_jitter_ms.to_string(),
-                    "--ttft-ms".to_string(),
-                    profile.service_time_ms.ttft_mean.to_string(),
-                    "--ttft-jitter-ms".to_string(),
-                    profile.service_time_ms.ttft_jitter_ms.to_string(),
-                    "--prefill-tokens-per-s".to_string(),
-                    profile
-                        .service_time_ms
-                        .prefill_tokens_per_s
-                        .unwrap_or(0.0)
-                        .to_string(),
-                    "--max-concurrent-requests".to_string(),
-                    max_concurrent_requests.to_string(),
-                    "--kv-cache-capacity-tokens".to_string(),
-                    profile.kv_cache_capacity_tokens.to_string(),
-                ],
-                ports: Vec::new(),
-                volumes: Vec::new(),
-                depends_on: BTreeMap::new(),
-            },
-        );
+            );
+        }
 
         let mut depends_on = BTreeMap::new();
         depends_on.insert(
@@ -288,7 +283,7 @@ fn build_compose_spec(
             },
         );
         depends_on.insert(
-            backend_name.clone(),
+            pylon.upstream_backend_name.clone(),
             ComposeDependency {
                 condition: "service_started".to_string(),
             },
@@ -296,22 +291,25 @@ fn build_compose_spec(
 
         let mut client_command = vec![
             "--upstream-http-base-url".to_string(),
-            format!("http://{backend_name}:{MOCK_DYNAMO_HTTP_PORT}"),
+            format!(
+                "http://{}:{MOCK_DYNAMO_HTTP_PORT}",
+                pylon.upstream_backend_name
+            ),
             "--model-name".to_string(),
             config.model.clone(),
             "--stargate-address".to_string(),
             format!("stargate:{STARGATE_GRPC_PORT}"),
             "--inference-server-id".to_string(),
-            backend_id,
+            pylon.inference_server_id,
         ];
-        if let Some(cluster_id) = cluster_id {
+        if let Some(cluster_id) = pylon.cluster_id {
             client_command.extend(["--cluster-id".to_string(), cluster_id]);
         }
         client_command.extend([
             "--reverse-tunnel".to_string(),
             "--quic-insecure".to_string(),
             "--tunnel-protocol".to_string(),
-            config.tunnel_protocol.as_arg().to_string(),
+            config.tunnel_protocol.to_string(),
             "--kv-cache-stats-path".to_string(),
             "/kv-cache/stats".to_string(),
             "--min-update-interval-ms".to_string(),
@@ -319,7 +317,7 @@ fn build_compose_spec(
             "--disable-bringup".to_string(),
             "--active-canary-interval-ms=0".to_string(),
             "--benchmark-fixed-last-mean-input-tps".to_string(),
-            profile.registration.last_mean_input_tps.to_string(),
+            pylon.last_mean_input_tps.to_string(),
         ]);
         if let Some(pylon_queue_admission) = &algorithm.pylon_queue_admission {
             client_command.extend(pylon_queue_admission.pylon_args());
@@ -353,32 +351,12 @@ fn absolute_bind_path(path: &Path) -> anyhow::Result<PathBuf> {
         .join(path))
 }
 
-fn per_token_delay_ms(profile: &crate::config::BackendProfile) -> String {
-    let decode_tps = profile.service_time_ms.decode_tokens_per_s;
-    // The mock backend delay is millisecond-granular, so rates above 1000 TPS floor at 1 ms.
-    (1000 / decode_tps).max(1).to_string()
-}
-
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .expect("crate should live under repo_root/crates/stargate-bench")
         .to_path_buf()
-}
-
-fn slugify(value: &str) -> String {
-    let slug: String = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    slug.trim_matches('-').to_string()
 }
 
 #[cfg(test)]
@@ -399,11 +377,12 @@ mod tests {
             seed: Some(42),
             request_count: 5,
             max_concurrency: 2,
-            tunnel_protocol: crate::config::TunnelProtocol::Custom,
+            tunnel_protocol: stargate_protocol::TunnelTransportProtocol::Custom,
             stargates: StargateConfig { count: 1 },
             backends: BackendConfig {
                 count: 2,
                 cluster_id_template: None,
+                pylons_per_cluster: 1,
                 profiles: Vec::new(),
                 profile: BackendProfile {
                     name: "balanced".to_string(),
@@ -551,9 +530,54 @@ mod tests {
     }
 
     #[test]
+    fn compose_grouped_pylons_share_one_scaled_mock_backend() {
+        let mut config = config();
+        config.backends.cluster_id_template = Some("cluster-{cluster_index}".to_string());
+        config.backends.pylons_per_cluster = 2;
+        config.backends.profile.max_concurrent_requests = Some(3);
+        config.backends.profile.kv_cache_capacity_tokens = 11;
+        let compose = build_compose_spec(
+            &config,
+            &config.algorithms[0],
+            Path::new("/tmp/lb-config.json"),
+            STARGATE_GRPC_PORT,
+            STARGATE_HTTP_PORT,
+            STARGATE_METRICS_PORT,
+        )
+        .expect("compose spec should build");
+
+        let backend = compose
+            .services
+            .get("backend-0")
+            .expect("shared backend service should exist");
+        assert!(!compose.services.contains_key("backend-1"));
+        assert!(
+            backend
+                .command
+                .windows(2)
+                .any(|args| { args[0] == "--max-concurrent-requests" && args[1] == "6" })
+        );
+        assert!(
+            backend
+                .command
+                .windows(2)
+                .any(|args| { args[0] == "--kv-cache-capacity-tokens" && args[1] == "22" })
+        );
+
+        let second_client = compose
+            .services
+            .get("client-1")
+            .expect("both pylons should still be rendered");
+        assert!(second_client.command.windows(2).any(|args| {
+            args[0] == "--upstream-http-base-url"
+                && args[1] == format!("http://backend-0:{MOCK_DYNAMO_HTTP_PORT}")
+        }));
+    }
+
+    #[test]
     fn compose_services_include_tunnel_protocol() {
         let mut config = config();
-        config.tunnel_protocol = crate::config::TunnelProtocol::WebTransport;
+        config.tunnel_protocol = stargate_protocol::TunnelTransportProtocol::WebTransport;
         let compose = build_compose_spec(
             &config,
             &config.algorithms[0],

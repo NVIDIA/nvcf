@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "jwtsvid",
+    srcs = [
+        "source.go",
+        "svid.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/svid/jwtsvid",
+    importpath = "github.com/spiffe/go-spiffe/v2/svid/jwtsvid",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//vendor/github.com/go-jose/go-jose/v4/jwt",
+        "//vendor/github.com/spiffe/go-spiffe/v2/bundle/jwtbundle",
+        "//vendor/github.com/spiffe/go-spiffe/v2/spiffeid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jwtsvid",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "admission",
+    srcs = [
+        "decode.go",
+        "defaulter_custom.go",
+        "doc.go",
+        "http.go",
+        "multi.go",
+        "response.go",
+        "validator_custom.go",
+        "webhook.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/admission",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/webhook/admission",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-logr/logr",
+        "//vendor/gomodules.xyz/jsonpatch/v2:jsonpatch",
+        "//vendor/k8s.io/api/admission/v1:admission",
+        "//vendor/k8s.io/api/admission/v1beta1",
+        "//vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/serializer",
+        "//vendor/k8s.io/apimachinery/pkg/util/json",
+        "//vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//vendor/k8s.io/klog/v2:klog",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/log",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/webhook/admission/metrics",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/webhook/internal/metrics",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":admission",
+    visibility = ["//visibility:public"],
+)

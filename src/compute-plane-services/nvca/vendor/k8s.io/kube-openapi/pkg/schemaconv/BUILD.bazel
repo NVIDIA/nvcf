@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "schemaconv",
+    srcs = [
+        "openapi.go",
+        "proto_models.go",
+        "smd.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/schemaconv",
+    importpath = "k8s.io/kube-openapi/pkg/schemaconv",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/kube-openapi/pkg/util/proto",
+        "//vendor/k8s.io/kube-openapi/pkg/validation/spec",
+        "//vendor/sigs.k8s.io/structured-merge-diff/v6/schema",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":schemaconv",
+    visibility = ["//visibility:public"],
+)

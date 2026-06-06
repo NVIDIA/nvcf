@@ -1,12 +1,7 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
-
-package(
-    default_visibility = ["//:__subpackages__"],
-    licenses = ["notice"],  # Apache 2.0
-)
+load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
-    name = "go_default_library",
+    name = "gen",
     srcs = [
         "cel_base_listener.go",
         "cel_base_visitor.go",
@@ -14,13 +9,16 @@ go_library(
         "cel_listener.go",
         "cel_parser.go",
         "cel_visitor.go",
+        "doc.go",
     ],
-    data = [
-        "CEL.tokens",
-        "CELLexer.tokens",
-    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/parser/gen",
     importpath = "github.com/google/cel-go/parser/gen",
-    deps = [
-        "@com_github_antlr4_go_antlr_v4//:go_default_library",
-    ],
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/antlr4-go/antlr/v4:antlr"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gen",
+    visibility = ["//visibility:public"],
 )

@@ -35,6 +35,9 @@ common --enable_platform_specific_config
 # service does not need.
 common --incompatible_enable_proto_toolchain_resolution
 
+# Set so DRA driver lib doesn't panic when building binaries for testing.
+build --@rules_go//go/config:gc_linkopts=-X,github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version=v25.8.0
+
 test --test_output=errors
 test --test_env=HOME=/tmp
 test --test_env=XDG_CACHE_HOME=/tmp/.cache

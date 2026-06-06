@@ -242,6 +242,18 @@ fn quic_varint_len_from_first(first: u8) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn webtransport_bidi_header_roundtrips_any_valid_session_id(
+            session_id in 0..=MAX_QUIC_VARINT,
+        ) {
+            let header = WebTransportBidiHeader::new(session_id).unwrap();
+            let decoded = decode_webtransport_bidi_header_bytes(header.as_slice()).unwrap();
+            prop_assert_eq!(decoded, Some((session_id, header.as_slice().len())));
+        }
+    }
 
     #[test]
     fn webtransport_bidi_header_varints_match_expected_wire_bytes() {

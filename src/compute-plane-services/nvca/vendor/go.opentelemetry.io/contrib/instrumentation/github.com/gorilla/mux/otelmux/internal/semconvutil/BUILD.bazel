@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "semconvutil",
+    srcs = [
+        "gen.go",
+        "httpconv.go",
+        "netconv.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux/internal/semconvutil",
+    importpath = "go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux/internal/semconvutil",
+    visibility = ["//vendor/go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux:__subpackages__"],
+    deps = [
+        "//vendor/go.opentelemetry.io/otel/attribute",
+        "//vendor/go.opentelemetry.io/otel/codes",
+        "//vendor/go.opentelemetry.io/otel/semconv/v1.20.0:v1_20_0",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":semconvutil",
+    visibility = ["//vendor/go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux:__subpackages__"],
+)

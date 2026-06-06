@@ -39,6 +39,8 @@ pub struct StargateMetrics {
     requests_total: IntCounterVec,
     proxy_attempts_total: IntCounterVec,
     proxy_retries_total: IntCounterVec,
+    routing_selections_total: IntCounterVec,
+    routing_kv_free_token_fallback_selections_total: IntCounterVec,
     proxy_retry_exhausted_total: IntCounterVec,
     admission_rejections_total: IntCounterVec,
     quic_connection_evictions_total: IntCounterVec,
@@ -47,6 +49,28 @@ pub struct StargateMetrics {
     proxy_duration_seconds: HistogramVec,
     routing_duration_seconds: HistogramVec,
     active_inference_servers: IntGaugeVec,
+}
+
+fn register_int_counter_vec(
+    registry: &Registry,
+    name: String,
+    help: &str,
+    labels: &[&str],
+) -> anyhow::Result<IntCounterVec> {
+    let metric = IntCounterVec::new(Opts::new(name, help), labels)?;
+    registry.register(Box::new(metric.clone()))?;
+    Ok(metric)
+}
+
+fn register_int_gauge_vec(
+    registry: &Registry,
+    name: String,
+    help: &str,
+    labels: &[&str],
+) -> anyhow::Result<IntGaugeVec> {
+    let metric = IntGaugeVec::new(Opts::new(name, help), labels)?;
+    registry.register(Box::new(metric.clone()))?;
+    Ok(metric)
 }
 
 impl StargateMetrics {
@@ -58,68 +82,68 @@ impl StargateMetrics {
         let registry = Arc::new(Registry::new());
         let metric_name = |suffix: &str| format!("{prefix}{suffix}");
 
-        let requests_total = IntCounterVec::new(
-            Opts::new(
-                metric_name("requests_total"),
-                "Total number of proxied requests",
-            ),
+        let requests_total = register_int_counter_vec(
+            &registry,
+            metric_name("requests_total"),
+            "Total number of proxied requests",
             &["routing_key", "model", "inference_server_id", "status"],
         )?;
-        registry.register(Box::new(requests_total.clone()))?;
 
-        let proxy_attempts_total = IntCounterVec::new(
-            Opts::new(
-                metric_name("proxy_attempts_total"),
-                "Total number of upstream proxy attempts",
-            ),
+        let proxy_attempts_total = register_int_counter_vec(
+            &registry,
+            metric_name("proxy_attempts_total"),
+            "Total number of upstream proxy attempts",
             &["routing_key", "model", "inference_server_id", "result"],
         )?;
-        registry.register(Box::new(proxy_attempts_total.clone()))?;
 
-        let proxy_retries_total = IntCounterVec::new(
-            Opts::new(
-                metric_name("proxy_retries_total"),
-                "Total number of proxy retries",
-            ),
+        let proxy_retries_total = register_int_counter_vec(
+            &registry,
+            metric_name("proxy_retries_total"),
+            "Total number of proxy retries",
             &["routing_key", "model", "reason"],
         )?;
-        registry.register(Box::new(proxy_retries_total.clone()))?;
 
-        let proxy_retry_exhausted_total = IntCounterVec::new(
-            Opts::new(
-                metric_name("proxy_retry_exhausted_total"),
-                "Total number of proxy requests that exhausted retry options",
-            ),
+        let routing_selections_total = register_int_counter_vec(
+            &registry,
+            metric_name("routing_selections_total"),
+            "Total number of primary and ranked fallback cluster choices used for upstream attempts",
+            &["routing_key", "model", "algorithm", "selection"],
+        )?;
+
+        let routing_kv_free_token_fallback_selections_total = register_int_counter_vec(
+            &registry,
+            metric_name("routing_kv_free_token_fallback_selections_total"),
+            "Total number of selected routes reached after a higher-ranked candidate was skipped by KV free-token eligibility",
+            &["routing_key", "model", "algorithm"],
+        )?;
+
+        let proxy_retry_exhausted_total = register_int_counter_vec(
+            &registry,
+            metric_name("proxy_retry_exhausted_total"),
+            "Total number of proxy requests that exhausted retry options",
             &["routing_key", "model", "reason"],
         )?;
-        registry.register(Box::new(proxy_retry_exhausted_total.clone()))?;
 
-        let admission_rejections_total = IntCounterVec::new(
-            Opts::new(
-                metric_name("admission_rejections_total"),
-                "Total number of requests rejected by local admission control",
-            ),
+        let admission_rejections_total = register_int_counter_vec(
+            &registry,
+            metric_name("admission_rejections_total"),
+            "Total number of requests rejected by local admission control",
             &["routing_key", "model", "reason"],
         )?;
-        registry.register(Box::new(admission_rejections_total.clone()))?;
 
-        let quic_connection_evictions_total = IntCounterVec::new(
-            Opts::new(
-                metric_name("quic_connection_evictions_total"),
-                "Total number of QUIC connection pool evictions",
-            ),
+        let quic_connection_evictions_total = register_int_counter_vec(
+            &registry,
+            metric_name("quic_connection_evictions_total"),
+            "Total number of QUIC connection pool evictions",
             &["inference_server_id", "reason"],
         )?;
-        registry.register(Box::new(quic_connection_evictions_total.clone()))?;
 
-        let quic_hot_path_reconnect_total = IntCounterVec::new(
-            Opts::new(
-                metric_name("quic_hot_path_reconnect_total"),
-                "Total number of direct QUIC reconnects attempted on the proxy hot path",
-            ),
+        let quic_hot_path_reconnect_total = register_int_counter_vec(
+            &registry,
+            metric_name("quic_hot_path_reconnect_total"),
+            "Total number of direct QUIC reconnects attempted on the proxy hot path",
             &["inference_server_id", "result"],
         )?;
-        registry.register(Box::new(quic_hot_path_reconnect_total.clone()))?;
 
         let proxy_replay_buffer_bytes = HistogramVec::new(
             HistogramOpts::new(
@@ -164,20 +188,20 @@ impl StargateMetrics {
         )?;
         registry.register(Box::new(routing_duration_seconds.clone()))?;
 
-        let active_inference_servers = IntGaugeVec::new(
-            Opts::new(
-                metric_name("active_inference_servers"),
-                "Active inference servers available for a routing target",
-            ),
+        let active_inference_servers = register_int_gauge_vec(
+            &registry,
+            metric_name("active_inference_servers"),
+            "Active inference servers available for a routing target",
             &["routing_key", "model"],
         )?;
-        registry.register(Box::new(active_inference_servers.clone()))?;
 
         Ok(Arc::new(Self {
             registry,
             requests_total,
             proxy_attempts_total,
             proxy_retries_total,
+            routing_selections_total,
+            routing_kv_free_token_fallback_selections_total,
             proxy_retry_exhausted_total,
             admission_rejections_total,
             quic_connection_evictions_total,
@@ -242,6 +266,33 @@ impl StargateMetrics {
     ) -> GenericCounter<AtomicU64> {
         self.proxy_retries_total
             .with_label_values(&[routing_key.unwrap_or(""), model, reason])
+    }
+
+    #[inline]
+    pub fn routing_selections_total(
+        &self,
+        routing_key: Option<&str>,
+        model: &str,
+        algorithm: &str,
+        selection: &str,
+    ) -> GenericCounter<AtomicU64> {
+        self.routing_selections_total.with_label_values(&[
+            routing_key.unwrap_or(""),
+            model,
+            algorithm,
+            selection,
+        ])
+    }
+
+    #[inline]
+    pub fn routing_kv_free_token_fallback_selections_total(
+        &self,
+        routing_key: Option<&str>,
+        model: &str,
+        algorithm: &str,
+    ) -> GenericCounter<AtomicU64> {
+        self.routing_kv_free_token_fallback_selections_total
+            .with_label_values(&[routing_key.unwrap_or(""), model, algorithm])
     }
 
     #[inline]
@@ -380,6 +431,21 @@ mod tests {
         metrics
             .proxy_retries_total(Some("routing-a"), "model-a", "retryable_status")
             .inc();
+        metrics
+            .routing_selections_total(
+                Some("routing-a"),
+                "model-a",
+                "pulsar-multiregion",
+                "fallback",
+            )
+            .inc();
+        metrics
+            .routing_kv_free_token_fallback_selections_total(
+                Some("routing-a"),
+                "model-a",
+                "pulsar-multiregion",
+            )
+            .inc();
 
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(
@@ -389,6 +455,18 @@ mod tests {
         assert!(
             body.contains("llm_request_router_proxy_retries_total"),
             "custom retry counter prefix missing:\n{body}"
+        );
+        assert!(
+            body.contains("llm_request_router_routing_selections_total"),
+            "custom routing-selection counter prefix missing:\n{body}"
+        );
+        assert!(
+            body.contains(r#"selection="fallback""#),
+            "routing-selection class label missing:\n{body}"
+        );
+        assert!(
+            body.contains("llm_request_router_routing_kv_free_token_fallback_selections_total"),
+            "custom KV-free-token fallback counter prefix missing:\n{body}"
         );
         assert!(
             !body.contains("stargate_requests_total"),

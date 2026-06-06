@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fake",
+    srcs = [
+        "doc.go",
+        "fake_eviction.go",
+        "fake_eviction_expansion.go",
+        "fake_poddisruptionbudget.go",
+        "fake_policy_client.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/policy/v1beta1/fake",
+    importpath = "k8s.io/client-go/kubernetes/typed/policy/v1beta1/fake",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/policy/v1beta1",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/client-go/applyconfigurations/policy/v1beta1",
+        "//vendor/k8s.io/client-go/gentype",
+        "//vendor/k8s.io/client-go/kubernetes/typed/policy/v1beta1",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/testing",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fake",
+    visibility = ["//visibility:public"],
+)

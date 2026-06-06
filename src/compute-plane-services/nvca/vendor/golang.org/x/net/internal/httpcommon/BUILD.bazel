@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "httpcommon",
+    srcs = [
+        "ascii.go",
+        "headermap.go",
+        "request.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/net/internal/httpcommon",
+    importpath = "golang.org/x/net/internal/httpcommon",
+    visibility = ["//vendor/golang.org/x/net:__subpackages__"],
+    deps = [
+        "//vendor/golang.org/x/net/http/httpguts",
+        "//vendor/golang.org/x/net/http2/hpack",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":httpcommon",
+    visibility = ["//vendor/golang.org/x/net:__subpackages__"],
+)

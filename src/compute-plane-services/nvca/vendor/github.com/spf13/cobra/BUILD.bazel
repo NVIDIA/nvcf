@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cobra",
+    srcs = [
+        "active_help.go",
+        "args.go",
+        "bash_completions.go",
+        "bash_completionsV2.go",
+        "cobra.go",
+        "command.go",
+        "command_notwin.go",
+        "command_win.go",
+        "completions.go",
+        "fish_completions.go",
+        "flag_groups.go",
+        "powershell_completions.go",
+        "shell_completions.go",
+        "zsh_completions.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/cobra",
+    importpath = "github.com/spf13/cobra",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/spf13/pflag",
+    ] + select({
+        "@rules_go//go/platform:windows": [
+            "//vendor/github.com/inconshreveable/mousetrap",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cobra",
+    visibility = ["//visibility:public"],
+)

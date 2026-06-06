@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, ensure};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -20,8 +22,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{
     ArrivalPatternConfig, BenchmarkConfig, BurstyTrafficConfig, HotsetTrafficConfig,
-    MixedSizeClassConfig, MixedSizeTrafficConfig, ScenarioMetadata, StairStepTrafficConfig,
-    TokenDistributionConfig, TrafficPatternConfig, UniformTrafficConfig,
+    MixedSizeClassConfig, MixedSizeTrafficConfig, PrefixReuseTrafficConfig, ScenarioMetadata,
+    StairStepTrafficConfig, TokenDistributionConfig, TrafficPatternConfig, UniformTrafficConfig,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,7 +38,15 @@ pub struct Manifest {
     pub max_concurrency: usize,
     pub stargate_count: usize,
     pub backend_count: usize,
+    #[serde(default)]
+    pub cluster_count: usize,
+    #[serde(default = "default_pylons_per_cluster")]
+    pub pylons_per_cluster: usize,
     pub requests: Vec<ManifestRequest>,
+}
+
+fn default_pylons_per_cluster() -> usize {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +74,7 @@ pub fn generate_manifest(
     let mut rng = StdRng::seed_from_u64(seed);
     let mut scheduled_offset_ms = 0u64;
     let mut requests = Vec::with_capacity(config.request_count);
+    let mut prior_prefix_tokens = HashMap::new();
 
     for request_index in 0..config.request_count {
         if request_index > 0 {
@@ -76,7 +87,8 @@ pub fn generate_manifest(
                 .context("scheduled benchmark offsets overflowed u64 milliseconds")?;
         }
 
-        let request_shape = sample_request_shape(&config.traffic_pattern, &mut rng)?;
+        let request_shape =
+            sample_request_shape(&config.traffic_pattern, &mut prior_prefix_tokens, &mut rng)?;
         requests.push(ManifestRequest {
             request_index,
             request_id: format!("{}-{seed}-{request_index:06}", sanitize_name(&config.name)),
@@ -99,6 +111,8 @@ pub fn generate_manifest(
         max_concurrency: config.max_concurrency,
         stargate_count: config.stargates.count,
         backend_count: config.backends.count,
+        cluster_count: config.backends.cluster_count(),
+        pylons_per_cluster: config.backends.pylons_per_cluster,
         requests,
     })
 }
@@ -113,6 +127,7 @@ struct RequestShape {
 
 fn sample_request_shape(
     pattern: &TrafficPatternConfig,
+    prior_prefix_tokens: &mut HashMap<usize, u64>,
     rng: &mut StdRng,
 ) -> anyhow::Result<RequestShape> {
     match pattern {
@@ -121,6 +136,9 @@ fn sample_request_shape(
         TrafficPatternConfig::Bursty(config) => sample_bursty(config, rng),
         TrafficPatternConfig::StairStep(config) => sample_stair_step(config, rng),
         TrafficPatternConfig::MixedSize(config) => sample_mixed_size(config, rng),
+        TrafficPatternConfig::PrefixReuse(config) => {
+            sample_prefix_reuse(config, prior_prefix_tokens, rng)
+        }
     }
 }
 
@@ -218,6 +236,32 @@ fn sample_mixed_size(
     })
 }
 
+fn sample_prefix_reuse(
+    config: &PrefixReuseTrafficConfig,
+    prior_prefix_tokens: &mut HashMap<usize, u64>,
+    rng: &mut StdRng,
+) -> anyhow::Result<RequestShape> {
+    ensure!(
+        config.cache_affinity_keys > 0,
+        "prefix_reuse cache_affinity_keys must be > 0"
+    );
+    let cache_affinity_key_index = rng.random_range(0..config.cache_affinity_keys);
+    let input_tokens = match prior_prefix_tokens.get(&cache_affinity_key_index).copied() {
+        Some(previous) => previous
+            .checked_add(sample_tokens(&config.incremental_input_tokens, rng)?)
+            .context("prefix_reuse input token count overflowed u64")?,
+        None => sample_tokens(&config.initial_input_tokens, rng)?,
+    };
+    prior_prefix_tokens.insert(cache_affinity_key_index, input_tokens);
+    Ok(RequestShape {
+        routing_key_index: sample_optional_index(config.routing_keys, rng),
+        cache_affinity_key_index: Some(cache_affinity_key_index),
+        input_tokens,
+        output_tokens: sample_tokens(&config.output_tokens, rng)?,
+        backend_behavior_class: "prefix_reuse".to_string(),
+    })
+}
+
 fn sample_class_tokens(
     class: &MixedSizeClassConfig,
     input: bool,
@@ -239,6 +283,7 @@ fn next_arrival_ms(
         TrafficPatternConfig::Uniform(config) => &config.arrival,
         TrafficPatternConfig::ZipfHotset(config) => &config.arrival,
         TrafficPatternConfig::MixedSize(config) => &config.arrival,
+        TrafficPatternConfig::PrefixReuse(config) => &config.arrival,
         TrafficPatternConfig::Bursty(config) => {
             let in_burst = (request_index / config.burst_period_requests).is_multiple_of(2);
             let target_rps = if in_burst {
@@ -351,8 +396,9 @@ pub fn write_manifest_json(path: &std::path::Path, manifest: &Manifest) -> anyho
 mod tests {
     use super::*;
     use crate::config::{
-        AlgorithmConfig, ArrivalPatternConfig, BackendConfig, BackendProfile, RegistrationConfig,
-        ServiceTimeConfig, StargateConfig, TokenDistributionConfig, UniformTrafficConfig,
+        AlgorithmConfig, ArrivalPatternConfig, BackendConfig, BackendProfile,
+        PrefixReuseTrafficConfig, RegistrationConfig, ServiceTimeConfig, StargateConfig,
+        TokenDistributionConfig, UniformTrafficConfig,
     };
 
     fn base_config() -> BenchmarkConfig {
@@ -363,11 +409,12 @@ mod tests {
             seed: Some(7),
             request_count: 10,
             max_concurrency: 2,
-            tunnel_protocol: crate::config::TunnelProtocol::Custom,
+            tunnel_protocol: stargate_protocol::TunnelTransportProtocol::Custom,
             stargates: StargateConfig { count: 1 },
             backends: BackendConfig {
                 count: 3,
                 cluster_id_template: None,
+                pylons_per_cluster: 1,
                 profiles: Vec::new(),
                 profile: BackendProfile {
                     name: "default".to_string(),
@@ -420,5 +467,36 @@ mod tests {
         let json_a = serde_json::to_string(&manifest_a).expect("json should serialize");
         let json_b = serde_json::to_string(&manifest_b).expect("json should serialize");
         assert_ne!(json_a, json_b);
+    }
+
+    #[test]
+    fn prefix_reuse_manifest_grows_each_session_by_only_its_new_suffix() {
+        let mut config = base_config();
+        config.request_count = 3;
+        config.traffic_pattern = TrafficPatternConfig::PrefixReuse(PrefixReuseTrafficConfig {
+            routing_keys: 0,
+            cache_affinity_keys: 1,
+            initial_input_tokens: TokenDistributionConfig::Constant { value: 100_000 },
+            incremental_input_tokens: TokenDistributionConfig::Constant { value: 2_000 },
+            output_tokens: TokenDistributionConfig::Constant { value: 64 },
+            arrival: ArrivalPatternConfig::Constant { interval_ms: 1 },
+        });
+
+        let manifest = generate_manifest(&config, None).expect("manifest should generate");
+
+        assert_eq!(
+            manifest
+                .requests
+                .iter()
+                .map(|request| request.input_tokens)
+                .collect::<Vec<_>>(),
+            vec![100_000, 102_000, 104_000]
+        );
+        assert!(
+            manifest
+                .requests
+                .iter()
+                .all(|request| request.cache_affinity_key.as_deref() == Some("cak-0000"))
+        );
     }
 }

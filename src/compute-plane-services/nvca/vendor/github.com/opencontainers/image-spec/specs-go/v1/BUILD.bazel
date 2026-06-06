@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "specs-go",
+    srcs = [
+        "annotations.go",
+        "config.go",
+        "descriptor.go",
+        "index.go",
+        "layout.go",
+        "manifest.go",
+        "mediatype.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/opencontainers/image-spec/specs-go/v1",
+    importpath = "github.com/opencontainers/image-spec/specs-go/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/opencontainers/go-digest",
+        "//vendor/github.com/opencontainers/image-spec/specs-go",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":specs-go",
+    visibility = ["//visibility:public"],
+)

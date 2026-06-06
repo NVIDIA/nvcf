@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "recorder",
+    srcs = ["recorder.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/recorder",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/recorder",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/k8s.io/client-go/tools/record"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":recorder",
+    visibility = ["//visibility:public"],
+)

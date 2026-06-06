@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "dotenv",
+    srcs = [
+        "codec.go",
+        "map_utils.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/viper/internal/encoding/dotenv",
+    importpath = "github.com/spf13/viper/internal/encoding/dotenv",
+    visibility = ["//vendor/github.com/spf13/viper:__subpackages__"],
+    deps = [
+        "//vendor/github.com/spf13/cast",
+        "//vendor/github.com/subosito/gotenv",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":dotenv",
+    visibility = ["//vendor/github.com/spf13/viper:__subpackages__"],
+)

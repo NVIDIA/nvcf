@@ -9,8 +9,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/utils",
     visibility = ["//:__subpackages__"],
     deps = [
-        "@com_github_gorilla_handlers//:handlers",
-        "@com_github_sirupsen_logrus//:logrus",
+        "//vendor/github.com/gorilla/handlers",
+        "//vendor/github.com/sirupsen/logrus",
     ],
 )
 

@@ -246,7 +246,7 @@ async fn backend_discovers_remote_region_watch_url_and_registers_globally() {
 }
 
 #[tokio::test]
-async fn global_watch_coordinated_calibration_uses_one_owner_then_fans_out() {
+async fn global_watch_coordinated_calibration_completes_independently_on_each_stargate() {
     init_crypto();
 
     let region_a = Arc::new(Mutex::new(Vec::new()));
@@ -287,7 +287,6 @@ async fn global_watch_coordinated_calibration_uses_one_owner_then_fans_out() {
 
     let bringup = BringupConfig {
         enabled: true,
-        coordinated_calibration: true,
         active_canary_interval: Duration::ZERO,
         calibration_requests: 5,
         calibration_prompt_units: 256,
@@ -359,8 +358,8 @@ async fn global_watch_coordinated_calibration_uses_one_owner_then_fans_out() {
     let calibration_requests =
         backend_a.bringup_chat_requests() + backend_b.bringup_chat_requests();
     assert_eq!(
-        calibration_requests, 5,
-        "coordinated global fanout should run exactly one five-request calibration sweep"
+        calibration_requests, 15,
+        "each of the three Stargates must obtain its own five-request local calibration result"
     );
     assert!(
         backend_a.proxy_chat_requests() + backend_b.proxy_chat_requests() > 0,

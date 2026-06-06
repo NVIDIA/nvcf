@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "autoscaling",
+    srcs = ["interface.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/autoscaling",
+    importpath = "k8s.io/client-go/informers/autoscaling",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/client-go/informers/autoscaling/v1:autoscaling",
+        "//vendor/k8s.io/client-go/informers/autoscaling/v2:autoscaling",
+        "//vendor/k8s.io/client-go/informers/autoscaling/v2beta1",
+        "//vendor/k8s.io/client-go/informers/autoscaling/v2beta2",
+        "//vendor/k8s.io/client-go/informers/internalinterfaces",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":autoscaling",
+    visibility = ["//visibility:public"],
+)

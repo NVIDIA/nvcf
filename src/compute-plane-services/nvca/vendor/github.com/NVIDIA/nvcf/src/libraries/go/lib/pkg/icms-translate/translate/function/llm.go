@@ -15,7 +15,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// TODO(NVCF-9201): unit-test coverage is below the lib module threshold; add tests for this package.
 package function
 
 import (
@@ -35,7 +34,7 @@ const (
 	//nolint:gosec
 	llmCredentialManagerImageDefault = "nvcr.io/0651155215864979/ncp-dev/nvcf_worker_llm_credentials:2.109.0"
 	llmRouterClientImageEnv          = "LLM_ROUTER_CLIENT_IMAGE"
-	llmRouterClientImageDefault      = "nvcr.io/0651155215864979/ncp-dev/llm-router-client:a9556d67"
+	llmRouterClientImageDefault      = "nvcr.io/0651155215864979/ncp-dev/stargate-client:0.4.0"
 
 	llmDirMountPath    = "/var/run/llm"
 	llmWorkerTokenPath = llmDirMountPath + "/worker-token"
@@ -81,7 +80,11 @@ func newLLMRouterClientContainer(
 	svcPort := allEnvSet["INFERENCE_PORT"]
 	if isHelm {
 		svcName := allEnvSet["HELM_CHART_INFERENCE_SERVICE_NAME"]
-		upstreamHttpBaseUrl = fmt.Sprintf("http://%s.%s.svc.cluster.local:%s", svcName, tcfg.Namespace, svcPort)
+		if tcfg.Namespace == "" {
+			upstreamHttpBaseUrl = fmt.Sprintf("http://%s:%s", svcName, svcPort)
+		} else {
+			upstreamHttpBaseUrl = fmt.Sprintf("http://%s.%s.svc.cluster.local:%s", svcName, tcfg.Namespace, svcPort)
+		}
 	} else {
 		upstreamHttpBaseUrl = fmt.Sprintf("http://127.0.0.1:%s", svcPort)
 	}

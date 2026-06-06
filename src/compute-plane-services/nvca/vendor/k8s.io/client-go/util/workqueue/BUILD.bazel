@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "workqueue",
+    srcs = [
+        "default_rate_limiters.go",
+        "delaying_queue.go",
+        "doc.go",
+        "metrics.go",
+        "parallelizer.go",
+        "queue.go",
+        "rate_limiting_queue.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/workqueue",
+    importpath = "k8s.io/client-go/util/workqueue",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/golang.org/x/time/rate",
+        "//vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//vendor/k8s.io/klog/v2:klog",
+        "//vendor/k8s.io/utils/clock",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":workqueue",
+    visibility = ["//visibility:public"],
+)

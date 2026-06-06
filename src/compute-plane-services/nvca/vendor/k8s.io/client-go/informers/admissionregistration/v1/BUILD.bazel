@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "admissionregistration",
+    srcs = [
+        "interface.go",
+        "mutatingwebhookconfiguration.go",
+        "validatingadmissionpolicy.go",
+        "validatingadmissionpolicybinding.go",
+        "validatingwebhookconfiguration.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/admissionregistration/v1",
+    importpath = "k8s.io/client-go/informers/admissionregistration/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/admissionregistration/v1:admissionregistration",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/watch",
+        "//vendor/k8s.io/client-go/informers/internalinterfaces",
+        "//vendor/k8s.io/client-go/kubernetes",
+        "//vendor/k8s.io/client-go/listers/admissionregistration/v1:admissionregistration",
+        "//vendor/k8s.io/client-go/tools/cache",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":admissionregistration",
+    visibility = ["//visibility:public"],
+)

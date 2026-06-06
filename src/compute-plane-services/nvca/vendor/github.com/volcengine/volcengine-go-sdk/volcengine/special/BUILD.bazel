@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "special",
+    srcs = [
+        "iot_response.go",
+        "special_conf.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/special",
+    importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/special",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/response"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":special",
+    visibility = ["//visibility:public"],
+)

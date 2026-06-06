@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "recognizer",
+    srcs = ["recognizer.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer/recognizer",
+    importpath = "k8s.io/apimachinery/pkg/runtime/serializer/recognizer",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":recognizer",
+    visibility = ["//visibility:public"],
+)

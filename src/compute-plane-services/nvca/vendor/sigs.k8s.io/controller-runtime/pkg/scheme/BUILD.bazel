@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "scheme",
+    srcs = ["scheme.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/scheme",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/scheme",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":scheme",
+    visibility = ["//visibility:public"],
+)

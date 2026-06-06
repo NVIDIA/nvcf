@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "svc",
+    srcs = [
+        "security.go",
+        "service.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/sys/windows/svc",
+    importpath = "golang.org/x/sys/windows/svc",
+    visibility = ["//visibility:public"],
+    deps = select({
+        "@rules_go//go/platform:windows": [
+            "//vendor/golang.org/x/sys/windows",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":svc",
+    visibility = ["//visibility:public"],
+)

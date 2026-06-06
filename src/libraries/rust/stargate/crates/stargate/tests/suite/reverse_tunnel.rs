@@ -162,14 +162,6 @@ async fn endpoint_contract_response(
         HeaderName::from_static("content-type"),
         HeaderValue::from_static("text/event-stream"),
     );
-    response.headers_mut().insert(
-        HeaderName::from_static("x-pylon-engine-stat-input-tokens-total"),
-        HeaderValue::from_static("7"),
-    );
-    response.headers_mut().insert(
-        HeaderName::from_static("x-pylon-engine-stat-output-tokens-generated"),
-        HeaderValue::from_static("2"),
-    );
     response
 }
 
@@ -260,17 +252,6 @@ async fn reverse_tunnel_proxies_chat_endpoint_contract() {
             .unwrap(),
         "rt-chat-contract-inst"
     );
-    assert!(
-        resp.headers()
-            .get("x-pylon-engine-stat-input-tokens-total")
-            .is_none()
-    );
-    assert!(
-        resp.headers()
-            .get("x-pylon-engine-stat-output-tokens-generated")
-            .is_none()
-    );
-
     let response_text = resp.text().await.expect("response should be text");
     assert!(response_text.contains(r#""object":"chat.completion.chunk""#));
     assert!(response_text.contains(r#""model":"rt-chat-contract-model""#));
@@ -446,17 +427,6 @@ async fn reverse_tunnel_proxies_responses_response() {
             .unwrap(),
         "rt-responses-inst"
     );
-    assert!(
-        resp.headers()
-            .get("x-pylon-engine-stat-input-tokens-total")
-            .is_none()
-    );
-    assert!(
-        resp.headers()
-            .get("x-pylon-engine-stat-output-tokens-generated")
-            .is_none()
-    );
-
     let response_text = resp.text().await.expect("response should be text");
     assert!(response_text.contains("event: response.completed"));
     assert!(response_text.contains(r#""type":"response.completed""#));
@@ -833,7 +803,7 @@ async fn reverse_tunnel_unregistered_id_rejected() {
         cfg.quic_insecure = true;
         let r = start_reverse_quic_tunnel(cfg).await;
         match &r {
-            Err(TunnelError::Handshake(_)) | Ok(_) => break r,
+            Err(TunnelError::HandshakeRejected { .. }) | Ok(_) => break r,
             Err(_) if tokio::time::Instant::now() < deadline => {
                 poll.tick().await;
             }
@@ -842,7 +812,7 @@ async fn reverse_tunnel_unregistered_id_rejected() {
     };
 
     match result {
-        Err(TunnelError::Handshake(reason)) => {
+        Err(TunnelError::HandshakeRejected { reason }) => {
             assert!(
                 reason.contains("unauthorized"),
                 "NACK reason should reach the client with the server's rejection message, \

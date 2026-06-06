@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "internalinterfaces",
+    srcs = ["factory_interfaces.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/internalinterfaces",
+    importpath = "github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/internalinterfaces",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/clientset/versioned",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/client-go/tools/cache",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":internalinterfaces",
+    visibility = ["//visibility:public"],
+)

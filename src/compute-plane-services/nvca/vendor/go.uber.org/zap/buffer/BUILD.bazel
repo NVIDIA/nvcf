@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "buffer",
+    srcs = [
+        "buffer.go",
+        "pool.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap/buffer",
+    importpath = "go.uber.org/zap/buffer",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/go.uber.org/zap/internal/pool"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":buffer",
+    visibility = ["//visibility:public"],
+)

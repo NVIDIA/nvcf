@@ -20,6 +20,7 @@ package stargate;
 service StargateControlPlane {
   rpc WatchStargates(WatchStargatesRequest) returns (stream WatchStargatesResponse);
   rpc RegisterInferenceServer(stream InferenceServerRegistration) returns (stream InferenceServerAck);
+  rpc SubmitClusterCalibration(SubmitClusterCalibrationRequest) returns (SubmitClusterCalibrationResponse);
 }
 
 // Frontend-facing model discovery service. Stargate serves this on a dedicated
@@ -34,6 +35,10 @@ message StargateInfo {
   string stargate_id = 1;
   string advertise_addr = 2;
   string http_advertise_addr = 3;
+  // Optional backend-facing gRPC dial target for pylons. When set, pylons dial
+  // this address but keep `advertise_addr` as the gRPC authority/SNI routing
+  // identity so a load balancer can route to the selected Stargate pod.
+  string grpc_pylon_dial_addr = 4;
 }
 
 message WatchStargatesResponse {
@@ -77,8 +82,8 @@ message ModelStats {
   // between sections if the reported semantics change.
 
   // Sticky last valid mean input TPS for this backend observation. Stargate
-  // never receives live/raw input TPS. For shared clusters, Stargate sums
-  // positive/finite backend reports to estimate total cluster input capacity.
+  // never receives live/raw input TPS. For shared clusters, active backend
+  // reports are summed as runtime capacity.
   double last_mean_input_tps = 1;
   double output_tps = 2;
   // Number of live requests that have not produced first output yet. For pylon
@@ -136,39 +141,47 @@ message InferenceServerRegistration {
   map<string, InferenceServerModelRegistration> models = 3;
   bool reverse_tunnel = 4;
   string cluster_id = 5;
-  // When true, this client waits for Stargate's initial cluster-calibration
-  // directive before advertising models active. A non-owner may advertise
-  // active after WAITING while Stargate keeps routing gated until COMPLETE.
+  // When true, each receiving Stargate gates its local cluster route until
+  // one assigned pylon submits an initial cluster calibration result.
+  // Backend activity remains independent runtime state, not calibration proof.
   bool coordinated_calibration = 6;
 }
 
 message InferenceServerModelRegistration {
   ModelStats stats = 1;
   InferenceServerStatus status = 2;
-  // Set to CALIBRATION_STATE_COMPLETE only when this client is reporting a
-  // cluster calibration result it ran locally or learned from Stargate.
-  CalibrationState calibration_state = 3;
 }
 
 message InferenceServerAck {
   // Stable Stargate routing identity for this registration stream's reverse
-  // tunnel. Pylons use this as the default dial address when
-  // `reverse_tunnel_pylon_dial_addr` is empty, and as QUIC SNI when the dial
-  // address differs from the routing target.
+  // tunnel. Pylons use this as QUIC SNI when the dial address differs from the
+  // routing target.
   string reverse_tunnel_target = 1;
   repeated ModelCalibrationDirective model_calibration_directives = 2;
-  // Optional address pylons should dial for reverse QUIC tunnels. This lets
-  // Stargate bind locally on `--reverse-tunnel-listen-addr`, preserve a
-  // per-pod `reverse_tunnel_target` for routing/SNI identity, and still route
-  // UDP through a separate load balancer.
+  // Non-empty address pylons should dial for reverse QUIC tunnels. This equals
+  // `reverse_tunnel_target` unless Stargate is configured to preserve a per-pod
+  // routing/SNI identity while routing UDP through a separate load balancer.
   string reverse_tunnel_pylon_dial_addr = 3;
 }
 
 message ModelCalibrationDirective {
   string model_id = 1;
   CalibrationState state = 2;
-  // Populated when state is CALIBRATION_STATE_COMPLETE.
-  double last_mean_input_tps = 3;
+  // Present only for RUN. The assigned pylon must return this opaque token
+  // through SubmitClusterCalibration; siblings never receive capacity values.
+  string assignment_token = 3;
+}
+
+message SubmitClusterCalibrationRequest {
+  string inference_server_id = 1;
+  string cluster_id = 2;
+  string model_id = 3;
+  string assignment_token = 4;
+  double measured_last_mean_input_tps = 5;
+}
+
+message SubmitClusterCalibrationResponse {
+  CalibrationState state = 1;
 }
 
 enum CalibrationState {

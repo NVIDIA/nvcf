@@ -79,4 +79,30 @@ algorithms:
           seed: cache-thrash-v1
           require_cache_affinity_key: true
           require_input_tokens: true
-          require_kv_metrics: true
+  - name: pulsar-consider-kv-free-tokens
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: cache-thrash-v1
+          require_cache_affinity_key: true
+          consider_kv_free_tokens: true
+  - name: pulsar-multiregion
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar-multiregion
+          seed: cache-thrash-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true
+  - name: pulsar-multiregion-consider-kv-free-tokens
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar-multiregion
+          seed: cache-thrash-v1
+          require_cache_affinity_key: true
+          consider_kv_free_tokens: true

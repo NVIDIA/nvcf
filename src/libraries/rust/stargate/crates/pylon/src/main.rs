@@ -30,10 +30,11 @@ use pylon_lib::{
 };
 use reqwest::header::HeaderName;
 use stargate_proto::pb::InferenceServerStatus;
+use stargate_protocol::tunnel_contract::HEADER_STARGATE_UPSTREAM_RETRYABLE;
 use tracing::info;
 
 const DEFAULT_PYLON_RETRYABLE_UPSTREAM_STATUS_CODES: &str = "429,503";
-const DEFAULT_PYLON_UPSTREAM_RETRY_HEADER: &str = "x-stargate-upstream-retryable";
+const DEFAULT_PYLON_UPSTREAM_RETRY_HEADER: &str = HEADER_STARGATE_UPSTREAM_RETRYABLE;
 
 mod telemetry;
 
@@ -83,14 +84,9 @@ fn stats_collector_config_from_args(
         queue_tracker,
         ..Default::default()
     };
-    let kv_cache_stats_path = args
-        .kv_cache_stats_path
-        .as_deref()
-        .or(args.engine_stats_contract.then_some("/kv-cache/stats"));
-    if let Some(path) = kv_cache_stats_path {
-        // Mock benchmark backends expose live KV-cache occupancy over HTTP; real
-        // upstreams usually do not, so polling can be disabled with
-        // --engine-stats-contract=false when using a legacy/no-stats engine.
+    if let Some(path) = args.kv_cache_stats_path.as_deref() {
+        // Mock benchmark backends can expose live KV-cache occupancy over HTTP;
+        // real upstreams usually do not, so polling is explicit.
         metrics_config.kv_cache_stats_url = Some(join_base_url_path(upstream, path));
     }
     metrics_config
@@ -155,10 +151,6 @@ struct Args {
     #[arg(long, default_value_t = false)]
     disable_bringup: bool,
 
-    /// Run calibration locally without waiting for Stargate cluster-calibration assignment
-    #[arg(long, default_value_t = false)]
-    disable_coordinated_calibration: bool,
-
     /// Interval between active canary requests in milliseconds. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
@@ -190,10 +182,6 @@ struct Args {
     /// Upstream HTTP path to poll for KV-cache stats. Omit to disable KV metric polling
     #[arg(long, value_name = "PATH")]
     kv_cache_stats_path: Option<String>,
-
-    /// Use the default mock/test engine stats contract, including /kv-cache/stats polling
-    #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
-    engine_stats_contract: bool,
 
     /// Engine stats stream source selection mode
     #[arg(long, default_value_t = EngineStatsStreamMode::Auto, value_name = "MODE")]
@@ -356,6 +344,10 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = <Args as clap::Parser>::parse();
+    run(args).await
+}
+
+async fn run(args: Args) -> Result<()> {
     let _telemetry_guard =
         telemetry::init_telemetry(args.otel_endpoint.as_deref(), &args.otel_service_name)?;
     let upstream = normalize_base_url(&args.upstream_http_base_url);
@@ -472,7 +464,6 @@ async fn main() -> Result<()> {
             tunnel_protocol: args.tunnel_protocol,
             bringup: BringupConfig {
                 enabled: !args.disable_bringup,
-                coordinated_calibration: !args.disable_coordinated_calibration,
                 active_canary_interval: Duration::from_millis(args.active_canary_interval_ms),
                 canary_timeout: Duration::from_millis(args.bringup_canary_timeout_ms),
                 canary_max_generation_threshold: args.canary_max_generation_threshold,
@@ -642,6 +633,19 @@ mod tests {
     }
 
     #[test]
+    fn otel_endpoint_help_matches_grpc_exporter_transport() {
+        let mut command = <Args as clap::CommandFactory>::command();
+        let mut help = Vec::new();
+        command
+            .write_long_help(&mut help)
+            .expect("help should render");
+        let help = std::str::from_utf8(&help).expect("help should be UTF-8");
+
+        assert!(help.contains("OTLP/gRPC endpoint for trace export"));
+        assert!(!help.contains("OTLP/HTTP/protobuf endpoint for trace export"));
+    }
+
+    #[test]
     fn inference_server_id_defaults_to_pylon() {
         let args = parse_args(&[]);
 
@@ -787,10 +791,7 @@ mod tests {
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Auto);
         assert_eq!(args.engine_stats_stream_path, "/pylon/v1/stats/stream");
-        assert_eq!(
-            metrics_config.kv_cache_stats_url,
-            Some("http://127.0.0.1:8090/kv-cache/stats".to_string())
-        );
+        assert!(metrics_config.kv_cache_stats_url.is_none());
         assert!(
             !metrics_config.openai_fallback_stats_enabled,
             "auto mode should wait for a permanent unsupported stream response before fallback stats"
@@ -811,16 +812,13 @@ mod tests {
         );
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Off);
-        assert_eq!(
-            metrics_config.kv_cache_stats_url,
-            Some("http://127.0.0.1:8090/kv-cache/stats".to_string())
-        );
+        assert!(metrics_config.kv_cache_stats_url.is_none());
         assert!(metrics_config.openai_fallback_stats_enabled);
     }
 
     #[test]
-    fn mock_stats_contract_can_disable_default_kv_cache_polling() {
-        let args = parse_args(&["--engine-stats-contract=false"]);
+    fn kv_cache_stats_path_enables_explicit_kv_cache_polling() {
+        let args = parse_args(&["--kv-cache-stats-path", "/kv-cache/stats"]);
         let upstream = normalize_base_url(&args.upstream_http_base_url);
         let metrics = PylonMetrics::new().expect("metrics should initialize");
         let metrics_config = stats_collector_config_from_args(
@@ -831,8 +829,10 @@ mod tests {
             None,
         );
 
-        assert!(!args.engine_stats_contract);
-        assert!(metrics_config.kv_cache_stats_url.is_none());
+        assert_eq!(
+            metrics_config.kv_cache_stats_url,
+            Some("http://127.0.0.1:8090/kv-cache/stats".to_string())
+        );
     }
 
     #[test]

@@ -13,9 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use quinn::ClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -35,6 +36,44 @@ pub fn generate_self_signed_cert_for_names(names: Vec<String>) -> Result<(Vec<u8
     let cert_pem = cert.cert.pem().into_bytes();
     let key_pem = cert.key_pair.serialize_pem().into_bytes();
     Ok((cert_pem, key_pem))
+}
+
+pub type ServerTlsPemPair<'a> = (Cow<'a, [u8]>, Cow<'a, [u8]>);
+
+/// TLS identity used by QUIC tunnel servers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ServerTlsIdentity {
+    #[default]
+    SelfSigned,
+    Provided {
+        cert_pem: Vec<u8>,
+        key_pem: Vec<u8>,
+    },
+}
+
+impl ServerTlsIdentity {
+    /// Builds a server identity from optional certificate/key PEM inputs.
+    pub fn from_optional_pem(cert_pem: Option<Vec<u8>>, key_pem: Option<Vec<u8>>) -> Result<Self> {
+        match (cert_pem, key_pem) {
+            (Some(cert_pem), Some(key_pem)) => Ok(Self::Provided { cert_pem, key_pem }),
+            (None, None) => Ok(Self::SelfSigned),
+            (Some(_), None) => bail!("TLS key PEM is required when TLS cert PEM is provided"),
+            (None, Some(_)) => bail!("TLS cert PEM is required when TLS key PEM is provided"),
+        }
+    }
+
+    /// Returns the PEM pair to parse when building a server config.
+    pub fn pem_pair(&self) -> Result<ServerTlsPemPair<'_>> {
+        match self {
+            Self::SelfSigned => {
+                let (cert_pem, key_pem) = generate_self_signed_cert()?;
+                Ok((Cow::Owned(cert_pem), Cow::Owned(key_pem)))
+            }
+            Self::Provided { cert_pem, key_pem } => {
+                Ok((Cow::Borrowed(cert_pem), Cow::Borrowed(key_pem)))
+            }
+        }
+    }
 }
 
 /// Builds a QUIC client config that skips server certificate verification.
@@ -129,5 +168,26 @@ mod tests {
     fn insecure_client_config_with_alpn_succeeds() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let _config = build_insecure_quic_client_config_with_alpn(vec![b"h3".to_vec()]).unwrap();
+    }
+
+    #[test]
+    fn server_tls_identity_requires_complete_pem_pair() {
+        let cert_pem = b"cert".to_vec();
+        let key_pem = b"key".to_vec();
+
+        assert!(matches!(
+            ServerTlsIdentity::from_optional_pem(None, None).unwrap(),
+            ServerTlsIdentity::SelfSigned
+        ));
+        assert_eq!(
+            ServerTlsIdentity::from_optional_pem(Some(cert_pem.clone()), Some(key_pem.clone()))
+                .unwrap(),
+            ServerTlsIdentity::Provided {
+                cert_pem: cert_pem.clone(),
+                key_pem: key_pem.clone(),
+            }
+        );
+        assert!(ServerTlsIdentity::from_optional_pem(Some(cert_pem), None).is_err());
+        assert!(ServerTlsIdentity::from_optional_pem(None, Some(key_pem)).is_err());
     }
 }

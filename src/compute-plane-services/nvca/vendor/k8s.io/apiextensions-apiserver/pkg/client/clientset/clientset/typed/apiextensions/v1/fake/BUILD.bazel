@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fake",
+    srcs = [
+        "doc.go",
+        "fake_apiextensions_client.go",
+        "fake_customresourcedefinition.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1/fake",
+    importpath = "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1/fake",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1:apiextensions",
+        "//vendor/k8s.io/apiextensions-apiserver/pkg/client/applyconfiguration/apiextensions/v1:apiextensions",
+        "//vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1:apiextensions",
+        "//vendor/k8s.io/client-go/gentype",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/testing",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fake",
+    visibility = ["//visibility:public"],
+)

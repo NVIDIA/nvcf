@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cmpopts",
+    srcs = [
+        "equate.go",
+        "ignore.go",
+        "sort.go",
+        "struct_filter.go",
+        "xform.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-cmp/cmp/cmpopts",
+    importpath = "github.com/google/go-cmp/cmp/cmpopts",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/google/go-cmp/cmp",
+        "//vendor/github.com/google/go-cmp/cmp/internal/function",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cmpopts",
+    visibility = ["//visibility:public"],
+)

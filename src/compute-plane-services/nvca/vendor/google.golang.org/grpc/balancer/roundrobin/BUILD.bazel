@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "roundrobin",
+    srcs = ["roundrobin.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/balancer/roundrobin",
+    importpath = "google.golang.org/grpc/balancer/roundrobin",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/google.golang.org/grpc/balancer",
+        "//vendor/google.golang.org/grpc/balancer/endpointsharding",
+        "//vendor/google.golang.org/grpc/balancer/pickfirst",
+        "//vendor/google.golang.org/grpc/grpclog",
+        "//vendor/google.golang.org/grpc/internal/grpclog",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":roundrobin",
+    visibility = ["//visibility:public"],
+)

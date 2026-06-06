@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "priorityqueue",
+    srcs = [
+        "metrics.go",
+        "priorityqueue.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/controller/priorityqueue",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/controller/priorityqueue",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-logr/logr",
+        "//vendor/github.com/google/btree",
+        "//vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//vendor/k8s.io/client-go/util/workqueue",
+        "//vendor/k8s.io/utils/clock",
+        "//vendor/k8s.io/utils/ptr",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/metrics",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":priorityqueue",
+    visibility = ["//visibility:public"],
+)

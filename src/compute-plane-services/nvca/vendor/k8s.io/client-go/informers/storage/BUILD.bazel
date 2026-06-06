@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "storage",
+    srcs = ["interface.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/storage",
+    importpath = "k8s.io/client-go/informers/storage",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/client-go/informers/internalinterfaces",
+        "//vendor/k8s.io/client-go/informers/storage/v1:storage",
+        "//vendor/k8s.io/client-go/informers/storage/v1alpha1",
+        "//vendor/k8s.io/client-go/informers/storage/v1beta1",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":storage",
+    visibility = ["//visibility:public"],
+)

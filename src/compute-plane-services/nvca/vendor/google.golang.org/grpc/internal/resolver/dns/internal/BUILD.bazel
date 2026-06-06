@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "internal",
+    srcs = ["internal.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/resolver/dns/internal",
+    importpath = "google.golang.org/grpc/internal/resolver/dns/internal",
+    visibility = ["//vendor/google.golang.org/grpc/internal/resolver/dns:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":internal",
+    visibility = ["//vendor/google.golang.org/grpc/internal/resolver/dns:__subpackages__"],
+)

@@ -70,6 +70,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
 	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
@@ -590,6 +591,12 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	// Apply custom annotations from BackendK8sCache
 	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.HelmCustomAnnotations) {
 		k8sutil.ApplyCustomAnnotations(utilsPod, r.CustomAnnotations)
+	}
+
+	// All Pods created by NVCA must use the same scheduler.
+	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
+		utilsPod.Spec.SchedulerName = kaischeduler.SchedulerName
+		utilsPod.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.GetQName()
 	}
 
 	// Set required worker env vars.

@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "middleware",
+    srcs = [
+        "metadata.go",
+        "middleware.go",
+        "osname.go",
+        "osname_go115.go",
+        "recursion_detection.go",
+        "request_id.go",
+        "request_id_retriever.go",
+        "user_agent.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/middleware",
+    importpath = "github.com/aws/aws-sdk-go-v2/aws/middleware",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/rand",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/sdk",
+        "//vendor/github.com/aws/smithy-go/logging",
+        "//vendor/github.com/aws/smithy-go/middleware",
+        "//vendor/github.com/aws/smithy-go/rand",
+        "//vendor/github.com/aws/smithy-go/tracing",
+        "//vendor/github.com/aws/smithy-go/transport/http",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":middleware",
+    visibility = ["//visibility:public"],
+)

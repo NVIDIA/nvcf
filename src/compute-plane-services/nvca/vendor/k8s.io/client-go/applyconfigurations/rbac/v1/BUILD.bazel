@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "rbac",
+    srcs = [
+        "aggregationrule.go",
+        "clusterrole.go",
+        "clusterrolebinding.go",
+        "policyrule.go",
+        "role.go",
+        "rolebinding.go",
+        "roleref.go",
+        "subject.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/rbac/v1",
+    importpath = "k8s.io/client-go/applyconfigurations/rbac/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/rbac/v1:rbac",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/types",
+        "//vendor/k8s.io/apimachinery/pkg/util/managedfields",
+        "//vendor/k8s.io/client-go/applyconfigurations/internal",
+        "//vendor/k8s.io/client-go/applyconfigurations/meta/v1:meta",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":rbac",
+    visibility = ["//visibility:public"],
+)

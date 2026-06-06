@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "predicate",
+    srcs = [
+        "doc.go",
+        "predicate.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/predicate",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/predicate",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/labels",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/event",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":predicate",
+    visibility = ["//visibility:public"],
+)

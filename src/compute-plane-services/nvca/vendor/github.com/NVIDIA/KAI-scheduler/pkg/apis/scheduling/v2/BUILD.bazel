@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "scheduling",
+    srcs = [
+        "doc.go",
+        "groupversion_info.go",
+        "queue_types.go",
+        "queue_webhook.go",
+        "resources.go",
+        "status.go",
+        "zz_generated.deepcopy.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2",
+    importpath = "github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/sigs.k8s.io/controller-runtime",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/log",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/scheme",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/webhook/admission",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":scheduling",
+    visibility = ["//visibility:public"],
+)

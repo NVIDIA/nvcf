@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fake",
+    srcs = [
+        "doc.go",
+        "fake_node_client.go",
+        "fake_runtimeclass.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/node/v1/fake",
+    importpath = "k8s.io/client-go/kubernetes/typed/node/v1/fake",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/node/v1:node",
+        "//vendor/k8s.io/client-go/applyconfigurations/node/v1:node",
+        "//vendor/k8s.io/client-go/gentype",
+        "//vendor/k8s.io/client-go/kubernetes/typed/node/v1:node",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/testing",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fake",
+    visibility = ["//visibility:public"],
+)

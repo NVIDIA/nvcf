@@ -36,9 +36,9 @@ use pylon_lib::{
 use serde::{Deserialize, Serialize};
 use stargate::auth::{AuthResult, WorkerAuthenticator};
 use stargate::discovery::Discovery;
-use stargate::forwarding::{ForwardingResolver, PeerResolution, PeerTarget};
-use stargate::http_proxy::ProxyTransportConfig;
+use stargate::proxy::ProxyTransportConfig;
 use stargate::runtime::{StargateRuntime, StargateRuntimeConfig};
+use stargate_forwarding::{ForwardingResolver, PeerResolution, PeerTarget};
 use stargate_proto::pb::{InferenceServerStatus, StargateInfo};
 use tokio::net::TcpListener;
 
@@ -93,6 +93,7 @@ impl SelfDiscovery {
                 stargate_id: id.to_string(),
                 advertise_addr: grpc_addr.to_string(),
                 http_advertise_addr: http_addr.to_string(),
+                grpc_pylon_dial_addr: String::new(),
             },
         }
     }
@@ -127,6 +128,7 @@ impl SharedDiscovery {
             stargate_id: id.to_string(),
             advertise_addr: grpc_addr.to_string(),
             http_advertise_addr: http_addr.to_string(),
+            grpc_pylon_dial_addr: String::new(),
         };
         peers.lock().unwrap().push(self_info.clone());
         Self { self_info, peers }
@@ -571,20 +573,21 @@ pub fn base_config(
         advertise_addr: grpc_addr,
         stargate_discovery_dns_name: "localhost".to_string(),
         remote_watch_stargate_urls: Vec::new(),
+        grpc_pylon_dial_addr: None,
         advertised_hostname_template: None,
         pod_name: None,
         pod_namespace: None,
         dns_poll_interval: Duration::from_secs(60),
         watch_heartbeat_interval: Duration::from_secs(60),
         registration_update_idle_timeout:
-            stargate::control_plane::DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT,
+            stargate::registration::DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT,
         registration_update_max_idle_timeout:
-            stargate::control_plane::DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
+            stargate::registration::DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
         proxy_transport: ProxyTransportConfig {
             quic_connect_timeout: Duration::from_secs(5),
             quic_request_timeout: Duration::from_secs(10),
             tls_cert_pem: None,
-            tls_key_pem: None,
+            server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
             quic_insecure: true,
             tunnel_protocol: Default::default(),
             direct_quic_connections: 1,

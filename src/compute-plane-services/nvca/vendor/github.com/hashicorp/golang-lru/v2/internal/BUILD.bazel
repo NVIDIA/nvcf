@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "internal",
+    srcs = ["list.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/hashicorp/golang-lru/v2/internal",
+    importpath = "github.com/hashicorp/golang-lru/v2/internal",
+    visibility = ["//vendor/github.com/hashicorp/golang-lru/v2:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":internal",
+    visibility = ["//vendor/github.com/hashicorp/golang-lru/v2:__subpackages__"],
+)

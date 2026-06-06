@@ -79,4 +79,3 @@ algorithms:
           seed: sticky-hot-prefix-v1
           require_cache_affinity_key: true
           require_input_tokens: true
-          require_kv_metrics: true

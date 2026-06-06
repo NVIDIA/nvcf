@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "interceptor",
+    srcs = ["intercept.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client/interceptor",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/client/interceptor",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/apimachinery/pkg/watch",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":interceptor",
+    visibility = ["//visibility:public"],
+)

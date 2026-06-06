@@ -227,6 +227,7 @@ func TestSetupNVCADeployment(t *testing.T) {
 		clients:              clients,
 		ngcServiceKeyFetcher: &mockTokenFetcher{token: "randomkey"},
 		envType:              nvidiaiov1.EnvTypeStage,
+		identitySource:       IdentitySourcePSAT,
 	}
 
 	inNVCFBackend := &nvidiaiov1.NVCFBackend{
@@ -326,9 +327,11 @@ func TestSetupNVCADeployment(t *testing.T) {
 			TLSSecretName: "nvca-webhook-tls-server-certs",
 		},
 		Authz: nvcaconfig.AuthzConfig{
-			PublicKeysetEndpoint: "https://stage-oauth.example.test/.well-known/jwks.json",
-			TokenURL:             "https://stg.icms.nvcf.nvidia.com/token",
-			NGCServiceAPIKeyFile: "/var/run/secrets/ngc-service-api-key/ngc-service-api-key",
+			PublicKeysetEndpoint:       "https://stage-oauth.example.test/.well-known/jwks.json",
+			TokenURL:                   "https://stg.icms.nvcf.nvidia.com/token",
+			NGCServiceAPIKeyFile:       "/var/run/secrets/ngc-service-api-key/ngc-service-api-key",
+			ClusterIssuedTokenSource:   nvcaconfig.ClusterIssuedTokenSourcePSAT,
+			ClusterIssuedTokenFilePath: clusterIssuedTokenFilePath,
 		},
 		Tracing: nvcaconfig.TracingConfig{
 			Exporter: nvcaconfig.LightstepExporter,
@@ -1161,13 +1164,6 @@ func TestSetupNVCADeployment_SelfHosted(t *testing.T) {
 	// Check feature flags.
 	assert.Empty(t, nvcaContainer.Command)
 	assert.Equal(t, []string{"/usr/bin/nvca", "--config", "/var/run/nvca/config.yaml"}, nvcaContainer.Args)
-	// PSAT identity threads NVCF_TOKEN_FILE_PATH + NVCF_IDENTITY_SOURCE so the
-	// agent reads its bearer token from the projected SA volume and knows which
-	// code paths apply (e.g. JWKS-pusher is PSAT-only).
-	assert.Equal(t, []corev1.EnvVar{
-		{Name: "NVCF_TOKEN_FILE_PATH", Value: "/var/run/secrets/tokens/token"},
-		{Name: "NVCF_IDENTITY_SOURCE", Value: IdentitySourcePSAT},
-	}, nvcaContainer.Env)
 	assert.Equal(t, []corev1.VolumeMount{
 		{
 			Name:      NGCServiceAPIKeySecretName,

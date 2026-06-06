@@ -30,7 +30,7 @@ testdata-update:
 
 .PHONY: vendor-update
 vendor-update:
-	nv_ci_vendor_update
+	./scripts/go_update
 
 .PHONY: gitlab-ci-update
 gitlab-ci-update:

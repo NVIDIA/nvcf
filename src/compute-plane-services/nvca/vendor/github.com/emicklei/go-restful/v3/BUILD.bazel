@@ -1,0 +1,48 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go-restful",
+    srcs = [
+        "compress.go",
+        "compressor_cache.go",
+        "compressor_pools.go",
+        "compressors.go",
+        "constants.go",
+        "container.go",
+        "cors_filter.go",
+        "curly.go",
+        "curly_route.go",
+        "custom_verb.go",
+        "doc.go",
+        "entity_accessors.go",
+        "extensions.go",
+        "filter.go",
+        "filter_adapter.go",
+        "jsr311.go",
+        "logger.go",
+        "mime.go",
+        "options_filter.go",
+        "parameter.go",
+        "path_expression.go",
+        "path_processor.go",
+        "request.go",
+        "response.go",
+        "route.go",
+        "route_builder.go",
+        "route_reader.go",
+        "router.go",
+        "service_error.go",
+        "web_service.go",
+        "web_service_container.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/emicklei/go-restful/v3",
+    importpath = "github.com/emicklei/go-restful/v3",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/emicklei/go-restful/v3/log"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":go-restful",
+    visibility = ["//visibility:public"],
+)

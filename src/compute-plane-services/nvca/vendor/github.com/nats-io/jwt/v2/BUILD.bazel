@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "jwt",
+    srcs = [
+        "account_claims.go",
+        "activation_claims.go",
+        "authorization_claims.go",
+        "claims.go",
+        "creds_utils.go",
+        "decoder.go",
+        "decoder_account.go",
+        "decoder_activation.go",
+        "decoder_authorization.go",
+        "decoder_operator.go",
+        "decoder_user.go",
+        "exports.go",
+        "genericlaims.go",
+        "header.go",
+        "imports.go",
+        "operator_claims.go",
+        "revocation_list.go",
+        "signingkeys.go",
+        "types.go",
+        "user_claims.go",
+        "validation.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/jwt/v2",
+    importpath = "github.com/nats-io/jwt/v2",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/nats-io/nkeys"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jwt",
+    visibility = ["//visibility:public"],
+)

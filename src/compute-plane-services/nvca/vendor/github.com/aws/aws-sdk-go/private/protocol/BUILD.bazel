@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "protocol",
+    srcs = [
+        "host.go",
+        "host_prefix.go",
+        "idempotency.go",
+        "jsonvalue.go",
+        "payload.go",
+        "protocol.go",
+        "timestamp.go",
+        "unmarshal.go",
+        "unmarshal_error.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/private/protocol",
+    importpath = "github.com/aws/aws-sdk-go/private/protocol",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go/aws",
+        "//vendor/github.com/aws/aws-sdk-go/aws/awserr",
+        "//vendor/github.com/aws/aws-sdk-go/aws/client/metadata",
+        "//vendor/github.com/aws/aws-sdk-go/aws/request",
+        "//vendor/github.com/aws/aws-sdk-go/internal/sdkmath",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":protocol",
+    visibility = ["//visibility:public"],
+)

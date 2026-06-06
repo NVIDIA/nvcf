@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "bidirule",
+    srcs = ["bidirule.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/text/secure/bidirule",
+    importpath = "golang.org/x/text/secure/bidirule",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/golang.org/x/text/transform",
+        "//vendor/golang.org/x/text/unicode/bidi",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":bidirule",
+    visibility = ["//visibility:public"],
+)

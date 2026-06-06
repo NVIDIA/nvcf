@@ -23,7 +23,7 @@ go_test(
     embed = [":envutil"],
     deps = [
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
     ],
 )

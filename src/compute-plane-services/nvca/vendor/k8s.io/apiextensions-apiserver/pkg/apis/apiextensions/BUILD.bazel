@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "apiextensions",
+    srcs = [
+        "deepcopy.go",
+        "doc.go",
+        "helpers.go",
+        "register.go",
+        "types.go",
+        "types_jsonschema.go",
+        "zz_generated.deepcopy.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions",
+    importpath = "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":apiextensions",
+    visibility = ["//visibility:public"],
+)

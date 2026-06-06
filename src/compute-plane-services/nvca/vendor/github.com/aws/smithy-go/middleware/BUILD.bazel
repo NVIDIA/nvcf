@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "middleware",
+    srcs = [
+        "context.go",
+        "doc.go",
+        "eventstream_middleware.go",
+        "logging.go",
+        "metadata.go",
+        "middleware.go",
+        "ordered_group.go",
+        "stack.go",
+        "stack_values.go",
+        "step_build.go",
+        "step_deserialize.go",
+        "step_finalize.go",
+        "step_initialize.go",
+        "step_serialize.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/middleware",
+    importpath = "github.com/aws/smithy-go/middleware",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/aws/smithy-go/logging"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":middleware",
+    visibility = ["//visibility:public"],
+)

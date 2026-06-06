@@ -18,14 +18,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use futures::{Stream, StreamExt, future};
-use stargate::forwarding::HostnameMatcher;
+use futures::{Stream, StreamExt};
+use stargate_forwarding::HostnameMatcher;
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::stargate_control_plane_server::{
     StargateControlPlane, StargateControlPlaneServer,
 };
 use stargate_proto::pb::{
-    InferenceServerAck, InferenceServerRegistration, WatchStargatesRequest, WatchStargatesResponse,
+    InferenceServerAck, InferenceServerRegistration, SubmitClusterCalibrationRequest,
+    SubmitClusterCalibrationResponse, WatchStargatesRequest, WatchStargatesResponse,
 };
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -42,6 +43,7 @@ type WatchStargatesStream =
     Pin<Box<dyn Stream<Item = Result<WatchStargatesResponse, Status>> + Send + 'static>>;
 type RegisterInferenceServerStream =
     Pin<Box<dyn Stream<Item = Result<InferenceServerAck, Status>> + Send + 'static>>;
+type RegistrationStreamErrorRx = tokio::sync::mpsc::Receiver<Status>;
 
 enum WatchTarget<'a> {
     Ready(&'a PodTarget),
@@ -176,6 +178,42 @@ impl RouterControlPlane {
     }
 }
 
+fn registration_message_stream<S>(
+    inbound: S,
+) -> (
+    impl Stream<Item = InferenceServerRegistration>,
+    RegistrationStreamErrorRx,
+)
+where
+    S: Stream<Item = Result<InferenceServerRegistration, Status>> + Send + 'static,
+{
+    let (stream_error_tx, stream_error_rx) = tokio::sync::mpsc::channel(1);
+    let messages = inbound.filter_map(move |result| {
+        let stream_error_tx = stream_error_tx.clone();
+        async move {
+            match result {
+                Ok(message) => Some(message),
+                Err(error) => {
+                    warn!(%error, "registration stream read error, forwarding stream error");
+                    let _ = stream_error_tx.send(error).await;
+                    None
+                }
+            }
+        }
+    });
+    (messages, stream_error_rx)
+}
+
+async fn pending_registration_stream_error(
+    stream_error_rx: &mut RegistrationStreamErrorRx,
+) -> Option<Status> {
+    match stream_error_rx.try_recv() {
+        Ok(error) => Some(error),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => stream_error_rx.recv().await,
+        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
+    }
+}
+
 #[tonic::async_trait]
 impl StargateControlPlane for RouterControlPlane {
     type WatchStargatesStream = WatchStargatesStream;
@@ -236,15 +274,7 @@ impl StargateControlPlane for RouterControlPlane {
         );
 
         let metadata = request.metadata().clone();
-        let inbound = request
-            .into_inner()
-            .take_while(|r| {
-                if let Err(error) = r {
-                    warn!(%error, "registration stream read error, stopping forwarded stream");
-                }
-                future::ready(r.is_ok())
-            })
-            .filter_map(|r| future::ready(r.ok()));
+        let (inbound, mut stream_error_rx) = registration_message_stream(request.into_inner());
         let mut forwarded = Request::new(inbound);
         *forwarded.metadata_mut() = metadata;
         let mut peer_client = self.connect_target_addr(&target.grpc_addr).await?;
@@ -252,11 +282,68 @@ impl StargateControlPlane for RouterControlPlane {
         let mut inner = resp.into_inner();
         let stream = async_stream::stream! {
             let _client = peer_client;
-            while let Some(msg) = inner.message().await.transpose() {
-                yield msg;
+            let mut stream_error_rx_open = true;
+            loop {
+                tokio::select! {
+                    error = stream_error_rx.recv(), if stream_error_rx_open => {
+                        match error {
+                            Some(error) => {
+                                yield Err(error);
+                                break;
+                            }
+                            None => stream_error_rx_open = false,
+                        }
+                    }
+                    message = inner.message() => {
+                        match message {
+                            Ok(Some(message)) => yield Ok(message),
+                            Ok(None) => {
+                                if let Some(error) =
+                                    pending_registration_stream_error(&mut stream_error_rx).await
+                                {
+                                    yield Err(error);
+                                }
+                                break;
+                            }
+                            Err(error) => {
+                                yield Err(error);
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         };
         Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn submit_cluster_calibration(
+        &self,
+        request: Request<SubmitClusterCalibrationRequest>,
+    ) -> Result<Response<SubmitClusterCalibrationResponse>, Status> {
+        let target = {
+            let snapshot = self.targets.borrow();
+            match self.target_for_registration(&request, &snapshot) {
+                RegistrationTarget::Ready(target) => GrpcTarget::from(target),
+                RegistrationTarget::InvalidAuthority(message) => {
+                    return Err(Status::invalid_argument(message));
+                }
+                RegistrationTarget::Unavailable(message) => {
+                    return Err(Status::unavailable(message));
+                }
+            }
+        };
+        info!(
+            target_pod = %target.pod_name,
+            target_addr = %target.grpc_addr,
+            "forwarding SubmitClusterCalibration to stargate target"
+        );
+
+        let metadata = request.metadata().clone();
+        let mut peer_client = self.connect_target_addr(&target.grpc_addr).await?;
+        let mut forwarded = Request::new(request.into_inner());
+        *forwarded.metadata_mut() = metadata;
+        peer_client.submit_cluster_calibration(forwarded).await
     }
 }
 
@@ -297,7 +384,10 @@ mod tests {
     use stargate_proto::REGISTRATION_HEARTBEAT_MS_METADATA;
     use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
     use stargate_proto::pb::stargate_control_plane_server::StargateControlPlaneServer;
-    use stargate_proto::pb::{InferenceServerAck, StargateInfo};
+    use stargate_proto::pb::{
+        CalibrationState, InferenceServerAck, StargateInfo, SubmitClusterCalibrationRequest,
+        SubmitClusterCalibrationResponse,
+    };
     use tokio_stream::wrappers::TcpListenerStream;
 
     use super::*;
@@ -308,7 +398,10 @@ mod tests {
     struct Recorder {
         watch_hits: Arc<AtomicUsize>,
         register_hits: Arc<AtomicUsize>,
+        submit_hits: Arc<AtomicUsize>,
         metadata: MetadataRecords,
+        submissions: Arc<Mutex<Vec<SubmitClusterCalibrationRequest>>>,
+        registration_errors: Arc<Mutex<Vec<(tonic::Code, String)>>>,
     }
 
     #[derive(Clone)]
@@ -332,6 +425,7 @@ mod tests {
                     stargate_id: self.stargate_id.clone(),
                     advertise_addr: format!("{}.stargate.external:50071", self.stargate_id),
                     http_advertise_addr: String::new(),
+                    grpc_pylon_dial_addr: String::new(),
                 }],
                 watch_stargate_urls: vec![],
             };
@@ -362,18 +456,55 @@ mod tests {
                 .push((auth, heartbeat));
 
             let stargate_id = self.stargate_id.clone();
+            let recorder = self.recorder.clone();
             let mut inbound = request.into_inner();
             let stream = async_stream::stream! {
                 if let Some(message) = inbound.next().await {
-                    message?;
-                    yield Ok(InferenceServerAck {
-                        reverse_tunnel_target: stargate_id,
-                        reverse_tunnel_pylon_dial_addr: String::new(),
-                        model_calibration_directives: vec![],
-                    });
+                    match message {
+                        Ok(_registration) => {
+                            yield Ok(InferenceServerAck {
+                                reverse_tunnel_target: stargate_id,
+                                reverse_tunnel_pylon_dial_addr: String::new(),
+                                model_calibration_directives: vec![],
+                            });
+                        }
+                        Err(error) => {
+                            recorder
+                                .registration_errors
+                                .lock()
+                                .expect("registration errors lock poisoned")
+                                .push((error.code(), error.message().to_string()));
+                            yield Err(error);
+                        }
+                    }
                 }
             };
             Ok(Response::new(Box::pin(stream)))
+        }
+
+        async fn submit_cluster_calibration(
+            &self,
+            request: Request<SubmitClusterCalibrationRequest>,
+        ) -> Result<Response<SubmitClusterCalibrationResponse>, Status> {
+            self.recorder.submit_hits.fetch_add(1, Ordering::Relaxed);
+            let auth = request
+                .metadata()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            self.recorder
+                .metadata
+                .lock()
+                .expect("metadata lock poisoned")
+                .push((auth, None));
+            self.recorder
+                .submissions
+                .lock()
+                .expect("submissions lock poisoned")
+                .push(request.into_inner());
+            Ok(Response::new(SubmitClusterCalibrationResponse {
+                state: CalibrationState::Complete as i32,
+            }))
         }
     }
 
@@ -499,6 +630,20 @@ mod tests {
             cluster_id: String::new(),
             coordinated_calibration: false,
         }
+    }
+
+    fn calibration_submission() -> SubmitClusterCalibrationRequest {
+        SubmitClusterCalibrationRequest {
+            inference_server_id: "backend-1".to_string(),
+            cluster_id: "cluster-1".to_string(),
+            model_id: "model-1".to_string(),
+            assignment_token: calibration_assignment(1),
+            measured_last_mean_input_tps: 123.0,
+        }
+    }
+
+    fn calibration_assignment(id: u32) -> String {
+        format!("assignment-{id}")
     }
 
     #[test]
@@ -736,6 +881,69 @@ mod tests {
                 .expect("metadata lock poisoned")
                 .as_slice(),
             &[(Some("Bearer token".to_string()), Some("1000".to_string()))]
+        );
+
+        shutdown.cancel();
+        router.abort();
+        fake_b.abort();
+    }
+
+    #[tokio::test]
+    async fn registration_message_stream_reports_inbound_stream_errors() {
+        let (messages, mut errors) = registration_message_stream(futures::stream::iter([Err(
+            Status::cancelled("client cancelled registration stream"),
+        )]));
+        futures::pin_mut!(messages);
+
+        assert!(
+            messages.next().await.is_none(),
+            "stream errors must not be converted into registration messages"
+        );
+        let error = errors
+            .recv()
+            .await
+            .expect("inbound stream error should be retained for response termination");
+        assert_eq!(error.code(), tonic::Code::Cancelled);
+        assert_eq!(error.message(), "client cancelled registration stream");
+    }
+
+    #[tokio::test]
+    async fn calibration_submission_with_target_authority_forwards_request_and_metadata() {
+        let recorder_b = Recorder::default();
+        let (addr_b, fake_b) = start_fake_stargate("stargate-1", recorder_b.clone()).await;
+        let (router_addr, shutdown, router) =
+            start_router(snapshot(&[("stargate-1", addr_b)])).await;
+
+        let mut client =
+            connect_with_authority(router_addr, "stargate-1.stargate.external", 50071).await;
+        let mut request = Request::new(calibration_submission());
+        request.metadata_mut().insert(
+            "authorization",
+            "Bearer calibration-token".parse().expect("valid metadata"),
+        );
+        let response = client
+            .submit_cluster_calibration(request)
+            .await
+            .expect("calibration submission should route")
+            .into_inner();
+
+        assert_eq!(response.state, CalibrationState::Complete as i32);
+        assert_eq!(recorder_b.submit_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            recorder_b
+                .metadata
+                .lock()
+                .expect("metadata lock poisoned")
+                .as_slice(),
+            &[(Some("Bearer calibration-token".to_string()), None)]
+        );
+        assert_eq!(
+            recorder_b
+                .submissions
+                .lock()
+                .expect("submissions lock poisoned")
+                .as_slice(),
+            &[calibration_submission()]
         );
 
         shutdown.cancel();

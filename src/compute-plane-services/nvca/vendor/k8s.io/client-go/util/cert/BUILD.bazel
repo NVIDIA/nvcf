@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cert",
+    srcs = [
+        "cert.go",
+        "csr.go",
+        "io.go",
+        "pem.go",
+        "server_inspection.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/cert",
+    importpath = "k8s.io/client-go/util/cert",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/client-go/util/keyutil",
+        "//vendor/k8s.io/utils/net",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cert",
+    visibility = ["//visibility:public"],
+)

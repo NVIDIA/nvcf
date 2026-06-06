@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "featuregates",
+    srcs = ["featuregates.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/featuregates",
+    importpath = "github.com/NVIDIA/k8s-dra-driver-gpu/pkg/featuregates",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/NVIDIA/k8s-dra-driver-gpu/internal/info",
+        "//vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/util/version",
+        "//vendor/k8s.io/component-base/featuregate",
+        "//vendor/k8s.io/component-base/logs/api/v1:api",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":featuregates",
+    visibility = ["//visibility:public"],
+)

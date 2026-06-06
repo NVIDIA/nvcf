@@ -24,12 +24,12 @@ use http::{HeaderMap, Method, Request, Response, StatusCode};
 use quinn::{ClientConfig, Endpoint, ServerConfig};
 use rustls::pki_types::CertificateDer;
 use stargate_protocol::TunnelTransportProtocol;
+use stargate_protocol::tunnel_contract::WEBTRANSPORT_TUNNEL_PATH;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-const WEBTRANSPORT_TUNNEL_PATH: &str = "/_stargate/webtransport";
 const WEBTRANSPORT_STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Parser, Debug)]

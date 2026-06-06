@@ -12,11 +12,11 @@ go_library(
         "//internal/kubeclients",
         "//internal/metrics",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "@com_github_sirupsen_logrus//:logrus",
-        "@io_k8s_api//core/v1:core",
-        "@io_k8s_api//storage/v1:storage",
-        "@io_k8s_apimachinery//pkg/api/errors",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "//vendor/github.com/sirupsen/logrus",
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/api/storage/v1:storage",
+        "//vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
     ],
 )
 
@@ -32,9 +32,9 @@ go_test(
     embed = [":encryption"],
     deps = [
         "//internal/kubeclients",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//mock",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
-        "@io_k8s_client_go//kubernetes/fake",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/mock",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/client-go/kubernetes/fake",
     ],
 )

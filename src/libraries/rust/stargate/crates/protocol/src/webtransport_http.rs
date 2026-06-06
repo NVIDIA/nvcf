@@ -389,11 +389,12 @@ impl<'a> PayloadCursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tunnel_contract::{HEADER_MODEL, HEADER_STARGATE_RETRYABLE};
 
     #[test]
     fn request_head_roundtrips_http_semantics() {
         let mut headers = HeaderMap::new();
-        headers.append("x-model", "llama".parse().unwrap());
+        headers.append(HEADER_MODEL, "llama".parse().unwrap());
         headers.append("set-cookie", "a=1".parse().unwrap());
         headers.append("set-cookie", "b=2".parse().unwrap());
         let head = WebTransportHttpRequestHead {
@@ -416,7 +417,7 @@ mod tests {
 
         assert_eq!(decoded.method, Method::POST);
         assert_eq!(decoded.path_and_query, "/v1/chat/completions?trace=1");
-        assert_eq!(decoded.headers.get("x-model").unwrap(), "llama");
+        assert_eq!(decoded.headers.get(HEADER_MODEL).unwrap(), "llama");
         let cookies: Vec<_> = decoded
             .headers
             .get_all("set-cookie")
@@ -430,7 +431,7 @@ mod tests {
     fn response_head_roundtrips_status_and_headers() {
         let mut headers = HeaderMap::new();
         headers.append("content-type", "text/event-stream".parse().unwrap());
-        headers.append("x-stargate-retryable", "false".parse().unwrap());
+        headers.append(HEADER_STARGATE_RETRYABLE, "false".parse().unwrap());
         let head = WebTransportHttpResponseHead {
             status: StatusCode::SERVICE_UNAVAILABLE,
             headers,
@@ -454,7 +455,7 @@ mod tests {
             "text/event-stream"
         );
         assert_eq!(
-            decoded.headers.get("x-stargate-retryable").unwrap(),
+            decoded.headers.get(HEADER_STARGATE_RETRYABLE).unwrap(),
             "false"
         );
     }

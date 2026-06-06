@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cache",
+    srcs = [
+        "build.go",
+        "credentials.go",
+        "file.go",
+        "null.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cache",
+    importpath = "github.com/awslabs/amazon-ecr-credential-helper/ecr-login/cache",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//vendor/github.com/awslabs/amazon-ecr-credential-helper/ecr-login/config",
+        "//vendor/github.com/mitchellh/go-homedir",
+        "//vendor/github.com/sirupsen/logrus",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cache",
+    visibility = ["//visibility:public"],
+)

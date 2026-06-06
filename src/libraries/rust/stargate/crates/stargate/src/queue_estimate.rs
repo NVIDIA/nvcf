@@ -14,6 +14,7 @@
 // limitations under the License.
 
 use stargate_proto::pb::ModelStats;
+use stargate_protocol::common::queue_time_delta_ms;
 
 pub(crate) fn queue_time_estimate_ms_for_priority(
     stats: &ModelStats,
@@ -40,23 +41,4 @@ pub(crate) fn priority_map_estimate_ms_for_priority(
 
 pub(crate) fn aggregate_queue_time_estimate_ms(stats: &ModelStats) -> Option<u64> {
     queue_time_delta_ms(stats.queued_input_size, stats.last_mean_input_tps)
-}
-
-pub(crate) fn queue_time_delta_ms(input_tokens: u64, last_mean_input_tps: f64) -> Option<u64> {
-    if input_tokens == 0 {
-        return Some(0);
-    }
-    if !valid_last_mean_input_tps(last_mean_input_tps) {
-        return None;
-    }
-    let delta_ms = ((input_tokens as f64 / last_mean_input_tps) * 1000.0).ceil();
-    if delta_ms.is_finite() && delta_ms >= 0.0 && delta_ms <= u64::MAX as f64 {
-        Some(delta_ms as u64)
-    } else {
-        None
-    }
-}
-
-fn valid_last_mean_input_tps(last_mean_input_tps: f64) -> bool {
-    last_mean_input_tps > 0.0 && last_mean_input_tps.is_finite()
 }

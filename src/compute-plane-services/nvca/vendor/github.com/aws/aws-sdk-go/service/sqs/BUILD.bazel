@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "sqs",
+    srcs = [
+        "api.go",
+        "checksums.go",
+        "customizations.go",
+        "doc.go",
+        "errors.go",
+        "service.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/service/sqs",
+    importpath = "github.com/aws/aws-sdk-go/service/sqs",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go/aws",
+        "//vendor/github.com/aws/aws-sdk-go/aws/awserr",
+        "//vendor/github.com/aws/aws-sdk-go/aws/awsutil",
+        "//vendor/github.com/aws/aws-sdk-go/aws/client",
+        "//vendor/github.com/aws/aws-sdk-go/aws/client/metadata",
+        "//vendor/github.com/aws/aws-sdk-go/aws/request",
+        "//vendor/github.com/aws/aws-sdk-go/aws/signer/v4:signer",
+        "//vendor/github.com/aws/aws-sdk-go/private/protocol",
+        "//vendor/github.com/aws/aws-sdk-go/private/protocol/jsonrpc",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sqs",
+    visibility = ["//visibility:public"],
+)

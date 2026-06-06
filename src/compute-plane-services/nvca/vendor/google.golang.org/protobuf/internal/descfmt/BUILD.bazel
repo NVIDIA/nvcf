@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "descfmt",
+    srcs = ["stringer.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/internal/descfmt",
+    importpath = "google.golang.org/protobuf/internal/descfmt",
+    visibility = ["//vendor/google.golang.org/protobuf:__subpackages__"],
+    deps = [
+        "//vendor/google.golang.org/protobuf/internal/detrand",
+        "//vendor/google.golang.org/protobuf/internal/pragma",
+        "//vendor/google.golang.org/protobuf/reflect/protoreflect",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":descfmt",
+    visibility = ["//vendor/google.golang.org/protobuf:__subpackages__"],
+)

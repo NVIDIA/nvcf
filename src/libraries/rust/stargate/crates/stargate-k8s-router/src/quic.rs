@@ -20,7 +20,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use quinn::{ClientConfig, Endpoint};
 use rustls::RootCertStore;
-use stargate::forwarding::{
+use stargate_forwarding::{
     HostnameMatcher, PeerTarget, RelayEndpointConfig, RelayEndpoints, build_relay_endpoints,
     build_relay_transport_config, forward_quic_connection,
 };

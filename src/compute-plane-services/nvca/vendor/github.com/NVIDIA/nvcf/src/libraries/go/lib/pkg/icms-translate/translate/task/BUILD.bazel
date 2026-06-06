@@ -17,9 +17,9 @@ go_library(
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig",
-        "@com_github_google_shlex//:shlex",
-        "@io_k8s_api//core/v1:core",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "//vendor/github.com/google/shlex",
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
     ],
 )
 

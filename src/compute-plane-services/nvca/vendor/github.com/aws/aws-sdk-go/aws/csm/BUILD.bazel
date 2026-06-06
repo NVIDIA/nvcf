@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "csm",
+    srcs = [
+        "doc.go",
+        "enable.go",
+        "metric.go",
+        "metric_chan.go",
+        "metric_exception.go",
+        "reporter.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/csm",
+    importpath = "github.com/aws/aws-sdk-go/aws/csm",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go/aws",
+        "//vendor/github.com/aws/aws-sdk-go/aws/awserr",
+        "//vendor/github.com/aws/aws-sdk-go/aws/request",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":csm",
+    visibility = ["//visibility:public"],
+)

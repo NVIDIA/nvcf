@@ -97,7 +97,7 @@ cert-manager:
     image:
       repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-startupapicheck
 
-{{- $openbaoServerTag := dig "openbao" "server" "image" "tag" "2.5.1-nv-1.2.1" .Values }}
+{{- $openbaoServerTag := dig "openbao" "server" "image" "tag" "2.5.4-nv-1.3.0" .Values }}
 openbao:
   {{- if .Values.global.imagePullSecrets }}
   global:
@@ -199,15 +199,18 @@ nats:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
+      tag: 2.11.17-alpine3.22
   reloader:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
+      tag: "0.23.0"
   natsBox:
     container:
       image:
         registry: {{ .Values.global.image.registry }}
         repository: {{ .Values.global.image.repository }}/nats-box
+        tag: 0.19.7-nonroot
   nkeyJob:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -250,9 +253,19 @@ apikeys:
   {{- . | nindent 2 }}
   {{- end }}
 
+natsAuthCalloutService:
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
+
 {{- $apiEnvOverrides := dig "api" "env" dict .Values }}
 {{- $llmRouterClientImageDefault := printf "%s/%s/stargate-client:0.3.0" .Values.global.image.registry .Values.global.image.repository }}
 {{- $llmRouterClientImage := dig "NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE" $llmRouterClientImageDefault $apiEnvOverrides }}
+{{- $essWorkerBaseURL := dig "global" "workerEndpoints" "essServiceURL" "" .Values }}
 api:
   fullnameOverride: nvcf-api
   {{- if .Values.global.imagePullSecrets }}
@@ -312,6 +325,9 @@ api:
     NVCF_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
     NVCF_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
     NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: {{ $llmRouterClientImage | quote }}
+    {{- with $essWorkerBaseURL }}
+    NVCF_ESS_WORKER_BASE_URL: {{ . | quote }}
+    {{- end }}
     NVCF_REGISTRIES_NGC_CONTAINER_REGISTRY_URL: "https://nvcr.io"
     NVCF_REGISTRIES_NGC_BASE_URL: "https://api.ngc.nvidia.com"
     NVCF_REGISTRIES_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
@@ -353,6 +369,10 @@ invocation:
     {{- else }}
     SERVER__ENVFILTER_DIRECTIVE: "otel::tracing=off,otel=off,server=trace,info"
     {{- end }}
+    {{- if .Values.rateLimiter.enabled }}
+    RATE_LIMIT_ENABLED: "true"
+    RATE_LIMIT_ADDRESS: "http://ratelimiter.nvcf.svc.cluster.local:7777"
+    {{- end }}
   
 nvctApi:
   fullnameOverride: nvct-api
@@ -367,6 +387,9 @@ nvctApi:
   env:
     NVCT_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
     NVCT_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
+    {{- with $essWorkerBaseURL }}
+    NVCT_ESS_WORKER_BASE_URL: {{ . | quote }}
+    {{- end }}
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled }}
     {{- if .Values.global.observability.tracing.enabled }}
@@ -396,6 +419,28 @@ grpcproxy:
     {{- else }}
     TRACING: "none" # this is ineffective, but the env list must be non-empty
     {{- end }}
+    {{- if .Values.rateLimiter.enabled }}
+    RATE_LIMIT_ENABLED: "true"
+    RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
+    {{- end }}
+
+rateLimiter:
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+  replicaCount: {{ .Values.rateLimiter.replicaCount }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  env:
+    OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+  {{- end }}
 
 ess:
   fullnameOverride: ess-api

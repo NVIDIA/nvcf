@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "xxhash",
+    srcs = [
+        "xxhash.go",
+        "xxhash_amd64.s",
+        "xxhash_arm64.s",
+        "xxhash_asm.go",
+        "xxhash_other.go",
+        "xxhash_unsafe.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/cespare/xxhash/v2",
+    importpath = "github.com/cespare/xxhash/v2",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":xxhash",
+    visibility = ["//visibility:public"],
+)

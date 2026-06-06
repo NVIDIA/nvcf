@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "envconfig",
+    srcs = [
+        "envconfig.go",
+        "observability.go",
+        "xds.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/envconfig",
+    importpath = "google.golang.org/grpc/internal/envconfig",
+    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":envconfig",
+    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+)

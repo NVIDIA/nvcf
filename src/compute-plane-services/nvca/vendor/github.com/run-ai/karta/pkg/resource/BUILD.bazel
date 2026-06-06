@@ -16,12 +16,12 @@ go_library(
         "//vendor/github.com/run-ai/karta/pkg/api/runai/v1alpha1",
         "//vendor/github.com/run-ai/karta/pkg/jq/execution",
         "//vendor/github.com/samber/lo",
-        "@io_k8s_api//core/v1:core",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
-        "@io_k8s_sigs_controller_runtime//pkg/client",
-        "@io_k8s_utils//ptr",
-        "@org_uber_go_mock//gomock",
+        "//vendor/go.uber.org/mock/gomock",
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//vendor/k8s.io/utils/ptr",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
     ],
 )
 

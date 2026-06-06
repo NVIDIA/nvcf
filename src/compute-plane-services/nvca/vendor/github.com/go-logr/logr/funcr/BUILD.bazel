@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "funcr",
+    srcs = [
+        "funcr.go",
+        "slogsink.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-logr/logr/funcr",
+    importpath = "github.com/go-logr/logr/funcr",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/go-logr/logr"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":funcr",
+    visibility = ["//visibility:public"],
+)

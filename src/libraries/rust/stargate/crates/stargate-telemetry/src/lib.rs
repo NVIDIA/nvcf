@@ -23,6 +23,7 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing::warn;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::prelude::*;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, filter, fmt};
 
 pub struct TelemetryGuard {
@@ -44,12 +45,12 @@ pub fn init_telemetry(
     service_name: &str,
     traced_root_span: &'static str,
 ) -> anyhow::Result<TelemetryGuard> {
+    global::set_text_map_propagator(TraceContextPropagator::new());
+
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let fmt_layer = fmt::layer().with_target(false).compact();
 
     if let Some(endpoint) = otel_endpoint {
-        global::set_text_map_propagator(TraceContextPropagator::new());
-
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
             .with_endpoint(endpoint.trim().to_string())
@@ -76,23 +77,38 @@ pub fn init_telemetry(
             },
         ));
 
-        tracing_subscriber::registry()
-            .with(fmt_layer.with_filter(env_filter))
-            .with(otel_layer)
-            .init();
+        if let Err(err) = install_subscriber(
+            tracing_subscriber::registry()
+                .with(fmt_layer.with_filter(env_filter))
+                .with(otel_layer),
+        ) {
+            if let Err(shutdown_err) = provider.shutdown() {
+                warn!(
+                    "failed to shutdown tracer provider after telemetry init failure: {shutdown_err}"
+                );
+            }
+            return Err(err);
+        }
 
         Ok(TelemetryGuard {
             tracer_provider: Some(provider),
         })
     } else {
-        tracing_subscriber::registry()
-            .with(fmt_layer.with_filter(env_filter))
-            .init();
+        install_subscriber(tracing_subscriber::registry().with(fmt_layer.with_filter(env_filter)))?;
 
         Ok(TelemetryGuard {
             tracer_provider: None,
         })
     }
+}
+
+fn install_subscriber<S>(subscriber: S) -> anyhow::Result<()>
+where
+    S: tracing::Subscriber + Send + Sync + 'static,
+{
+    subscriber
+        .try_init()
+        .map_err(|err| anyhow::anyhow!("failed to initialize telemetry subscriber: {err}"))
 }
 
 pub fn telemetry_resource(service_name: &str) -> Resource {
@@ -128,7 +144,10 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::header::{HeaderName, HeaderValue};
     use opentelemetry::Key;
+    use opentelemetry::trace::TraceContextExt;
+    use opentelemetry::trace::noop::NoopTextMapPropagator;
 
     #[test]
     fn telemetry_resource_uses_configured_service_name() {
@@ -139,6 +158,73 @@ mod tests {
                 .get(&Key::new("service.name"))
                 .map(|value| value.to_string()),
             Some("llm-request-router".to_string())
+        );
+    }
+
+    #[test]
+    fn init_telemetry_reports_existing_global_subscriber_as_error() {
+        let _ = tracing_subscriber::registry().try_init();
+
+        let result = init_telemetry(None, "llm-request-router", "request");
+        let err = match result {
+            Ok(_) => panic!("init_telemetry should fail when a global subscriber already exists"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("failed to initialize telemetry subscriber"),
+            "unexpected telemetry initialization error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_telemetry_with_exporter_reports_existing_global_subscriber_as_error() {
+        let _ = tracing_subscriber::registry().try_init();
+
+        let result = init_telemetry(
+            Some("http://127.0.0.1:4317"),
+            "llm-request-router",
+            "request",
+        );
+        let err = match result {
+            Ok(_) => panic!("init_telemetry should fail when a global subscriber already exists"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("failed to initialize telemetry subscriber"),
+            "unexpected telemetry initialization error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn init_telemetry_without_export_installs_trace_context_propagator() {
+        global::set_text_map_propagator(NoopTextMapPropagator::new());
+
+        let _guard = init_telemetry(None, "llm-request-router", "request").ok();
+        let mut source_headers = HeaderMap::new();
+        source_headers.insert(
+            HeaderName::from_static("traceparent"),
+            HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+        );
+
+        let parent_context = parent_context_from_headers(&source_headers);
+        let span_context = parent_context.span().span_context().clone();
+        assert!(span_context.is_valid());
+        assert!(span_context.is_remote());
+        assert_eq!(
+            span_context.trace_id().to_string(),
+            "4bf92f3577b34da6a3ce929d0e0e4736"
+        );
+
+        let mut forwarded_headers = HeaderMap::new();
+        inject_trace_context(&mut forwarded_headers, &parent_context);
+
+        assert_eq!(
+            forwarded_headers.get("traceparent"),
+            source_headers.get("traceparent")
         );
     }
 

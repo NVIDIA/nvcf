@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "httpconv",
+    srcs = ["metric.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.39.0/httpconv",
+    importpath = "go.opentelemetry.io/otel/semconv/v1.39.0/httpconv",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/go.opentelemetry.io/otel/attribute",
+        "//vendor/go.opentelemetry.io/otel/metric",
+        "//vendor/go.opentelemetry.io/otel/metric/noop",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":httpconv",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fake",
+    srcs = [
+        "doc.go",
+        "fake_admissionregistration_client.go",
+        "fake_mutatingwebhookconfiguration.go",
+        "fake_validatingadmissionpolicy.go",
+        "fake_validatingadmissionpolicybinding.go",
+        "fake_validatingwebhookconfiguration.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/admissionregistration/v1/fake",
+    importpath = "k8s.io/client-go/kubernetes/typed/admissionregistration/v1/fake",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/api/admissionregistration/v1:admissionregistration",
+        "//vendor/k8s.io/client-go/applyconfigurations/admissionregistration/v1:admissionregistration",
+        "//vendor/k8s.io/client-go/gentype",
+        "//vendor/k8s.io/client-go/kubernetes/typed/admissionregistration/v1:admissionregistration",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/k8s.io/client-go/testing",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fake",
+    visibility = ["//visibility:public"],
+)

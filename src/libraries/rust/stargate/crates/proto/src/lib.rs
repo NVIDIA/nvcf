@@ -97,8 +97,46 @@ pub mod pb {
 }
 
 #[cfg(test)]
+mod build_plan;
+
+#[cfg(test)]
+#[path = "../build.rs"]
+mod build_script;
+
+#[cfg(test)]
 mod tests {
+    use crate::build_plan::{PROTO_SERDE_DERIVE, proto_compile_plans};
     use crate::pb::{StargateInfo, WatchStargatesResponse};
+
+    #[test]
+    fn proto_build_plan_covers_stargate_and_gateway_generation() {
+        let plans = proto_compile_plans();
+
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].protos, ["proto/stargate.proto"]);
+        assert_eq!(plans[0].includes, ["proto"]);
+        assert!(plans[0].build_server);
+        assert_eq!(plans[0].type_attributes, [(".", PROTO_SERDE_DERIVE)]);
+        assert_eq!(
+            plans[0].field_attributes,
+            [
+                (
+                    "stargate.WatchStargatesResponse.stargates",
+                    "#[serde(default, serialize_with = \"crate::pb::serde_stargates_set::serialize\", deserialize_with = \"crate::pb::serde_stargates_set::deserialize\")]",
+                ),
+                (
+                    "stargate.WatchStargatesResponse.watch_stargate_urls",
+                    "#[serde(default, serialize_with = \"crate::pb::serde_string_set::serialize\", deserialize_with = \"crate::pb::serde_string_set::deserialize\")]",
+                ),
+            ]
+        );
+        assert_eq!(plans[1].protos, ["proto/llm_gateway.proto"]);
+        assert_eq!(plans[1].includes, ["proto"]);
+        assert!(!plans[1].build_server);
+        assert!(plans[1].type_attributes.is_empty());
+        assert!(plans[1].field_attributes.is_empty());
+        assert_eq!(crate::build_script::planned_proto_compile_count(), 2);
+    }
 
     #[test]
     fn watch_stargates_response_json_serde_normalizes_set_fields() {
@@ -108,16 +146,19 @@ mod tests {
                     stargate_id: "stargate-1".to_string(),
                     advertise_addr: "10.0.0.2:50071".to_string(),
                     http_advertise_addr: String::new(),
+                    grpc_pylon_dial_addr: String::new(),
                 },
                 StargateInfo {
                     stargate_id: "stargate-0".to_string(),
                     advertise_addr: "10.0.0.1:50071".to_string(),
                     http_advertise_addr: String::new(),
+                    grpc_pylon_dial_addr: String::new(),
                 },
                 StargateInfo {
                     stargate_id: "stargate-1".to_string(),
                     advertise_addr: "duplicate-should-be-dropped:50071".to_string(),
                     http_advertise_addr: String::new(),
+                    grpc_pylon_dial_addr: String::new(),
                 },
             ],
             watch_stargate_urls: vec![

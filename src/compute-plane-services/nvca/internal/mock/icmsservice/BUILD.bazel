@@ -17,11 +17,11 @@ go_library(
         "//pkg/queue",
         "//pkg/types",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "@com_github_go_jose_go_jose_v3//jwt",
-        "@com_github_google_uuid//:uuid",
-        "@com_github_gorilla_handlers//:handlers",
-        "@com_github_gorilla_mux//:mux",
-        "@com_github_sirupsen_logrus//:logrus",
+        "//vendor/github.com/go-jose/go-jose/v3/jwt",
+        "//vendor/github.com/google/uuid",
+        "//vendor/github.com/gorilla/handlers",
+        "//vendor/github.com/gorilla/mux",
+        "//vendor/github.com/sirupsen/logrus",
     ],
 )
 

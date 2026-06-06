@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "jsonreference",
+    srcs = ["reference.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/jsonreference",
+    importpath = "github.com/go-openapi/jsonreference",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-openapi/jsonpointer",
+        "//vendor/github.com/go-openapi/jsonreference/internal",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jsonreference",
+    visibility = ["//visibility:public"],
+)

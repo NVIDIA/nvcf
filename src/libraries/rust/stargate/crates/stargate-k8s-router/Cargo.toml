@@ -39,7 +39,7 @@ prometheus = { workspace = true }
 quinn = { workspace = true }
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
-stargate = { workspace = true }
+stargate-forwarding = { workspace = true }
 stargate-proto = { workspace = true }
 stargate-tls = { workspace = true }
 tokio = { workspace = true }

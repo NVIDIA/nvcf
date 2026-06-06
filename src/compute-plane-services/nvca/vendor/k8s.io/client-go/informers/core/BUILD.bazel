@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "core",
+    srcs = ["interface.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/core",
+    importpath = "k8s.io/client-go/informers/core",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/client-go/informers/core/v1:core",
+        "//vendor/k8s.io/client-go/informers/internalinterfaces",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":core",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "resolver",
+    srcs = [
+        "map.go",
+        "resolver.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/resolver",
+    importpath = "google.golang.org/grpc/resolver",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/google.golang.org/grpc/attributes",
+        "//vendor/google.golang.org/grpc/credentials",
+        "//vendor/google.golang.org/grpc/experimental/stats",
+        "//vendor/google.golang.org/grpc/internal",
+        "//vendor/google.golang.org/grpc/serviceconfig",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":resolver",
+    visibility = ["//visibility:public"],
+)

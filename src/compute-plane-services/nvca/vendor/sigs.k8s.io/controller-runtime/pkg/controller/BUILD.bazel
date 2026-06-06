@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "controller",
+    srcs = [
+        "controller.go",
+        "doc.go",
+        "name.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/controller",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/controller",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-logr/logr",
+        "//vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//vendor/k8s.io/client-go/util/workqueue",
+        "//vendor/k8s.io/klog/v2:klog",
+        "//vendor/k8s.io/utils/ptr",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/config",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/controller/priorityqueue",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/controller",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/manager",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/reconcile",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/source",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":controller",
+    visibility = ["//visibility:public"],
+)

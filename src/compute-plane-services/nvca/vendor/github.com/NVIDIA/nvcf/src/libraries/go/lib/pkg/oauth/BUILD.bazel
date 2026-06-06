@@ -12,8 +12,8 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "@com_github_go_jose_go_jose_v4//:go-jose",
-        "@com_github_go_jose_go_jose_v4//jwt",
+        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//vendor/github.com/go-jose/go-jose/v4/jwt",
     ],
 )
 

@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "internal",
+    srcs = ["compression.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promhttp/internal",
+    importpath = "github.com/prometheus/client_golang/prometheus/promhttp/internal",
+    visibility = ["//vendor/github.com/prometheus/client_golang/prometheus/promhttp:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":internal",
+    visibility = ["//vendor/github.com/prometheus/client_golang/prometheus/promhttp:__subpackages__"],
+)

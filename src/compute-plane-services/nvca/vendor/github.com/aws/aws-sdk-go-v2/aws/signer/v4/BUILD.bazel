@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "signer",
+    srcs = [
+        "middleware.go",
+        "presign_middleware.go",
+        "stream.go",
+        "v4.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/signer/v4",
+    importpath = "github.com/aws/aws-sdk-go-v2/aws/signer/v4",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/middleware",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/signer/internal/v4:internal",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/auth",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/sdk",
+        "//vendor/github.com/aws/smithy-go/encoding/httpbinding",
+        "//vendor/github.com/aws/smithy-go/logging",
+        "//vendor/github.com/aws/smithy-go/middleware",
+        "//vendor/github.com/aws/smithy-go/tracing",
+        "//vendor/github.com/aws/smithy-go/transport/http",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":signer",
+    visibility = ["//visibility:public"],
+)

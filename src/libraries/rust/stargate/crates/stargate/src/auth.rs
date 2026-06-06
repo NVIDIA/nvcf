@@ -58,7 +58,7 @@ impl WorkerAuthenticator for GrpcWorkerAuthenticator {
             worker_token: token.unwrap_or("").to_string(),
         });
         if let Some(provider) = &self.token_provider {
-            let auth_token = provider.get_token().await?;
+            let auth_token = provider.resolve_token().await?;
             let header_value: tonic::metadata::MetadataValue<tonic::metadata::Ascii> =
                 format!("Bearer {auth_token}")
                     .parse()
@@ -90,7 +90,7 @@ mod tests {
     #[tokio::test]
     async fn bearer_metadata_attached_with_static_provider() {
         let provider = Arc::new(AuthTokenProvider::Static("test-token".to_string()));
-        let auth_token = provider.get_token().await.unwrap();
+        let auth_token = provider.resolve_token().await.unwrap();
         let header_value: tonic::metadata::MetadataValue<tonic::metadata::Ascii> =
             format!("Bearer {auth_token}").parse().unwrap();
 

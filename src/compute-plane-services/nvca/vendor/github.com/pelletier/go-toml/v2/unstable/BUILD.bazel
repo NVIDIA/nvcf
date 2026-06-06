@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "unstable",
+    srcs = [
+        "ast.go",
+        "builder.go",
+        "doc.go",
+        "kind.go",
+        "parser.go",
+        "scanner.go",
+        "unmarshaler.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/pelletier/go-toml/v2/unstable",
+    importpath = "github.com/pelletier/go-toml/v2/unstable",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/pelletier/go-toml/v2/internal/characters",
+        "//vendor/github.com/pelletier/go-toml/v2/internal/danger",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":unstable",
+    visibility = ["//visibility:public"],
+)

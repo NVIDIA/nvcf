@@ -14,14 +14,33 @@
 // limitations under the License.
 
 pub mod auth;
-pub mod control_plane;
+pub(crate) mod control_plane;
 pub mod discovery;
-pub mod forwarding;
-pub mod http_proxy;
+pub(crate) mod http_proxy;
 pub mod load_balancer;
-pub mod load_balancer_state;
 pub mod metrics;
 pub(crate) mod queue_estimate;
-pub mod quic_tunnel;
+pub(crate) mod routing_state;
 pub mod runtime;
 pub mod telemetry;
+pub(crate) mod tunnel;
+
+pub mod proxy {
+    pub use crate::http_proxy::{ProxyRetryConfig, ProxyTransportConfig};
+}
+
+pub mod registration {
+    pub use crate::control_plane::{
+        DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT, DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
+    };
+}
+
+pub mod routing {
+    pub use crate::routing_state::{
+        RoutedClusterSnapshot, RoutedInferenceServerSnapshot, RoutingTargetKey,
+    };
+}
+
+pub mod test_support {
+    pub use crate::routing_state::StargateState;
+}

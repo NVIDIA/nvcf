@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "setverbositylevel",
+    srcs = ["setverbositylevel.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/component-base/logs/internal/setverbositylevel",
+    importpath = "k8s.io/component-base/logs/internal/setverbositylevel",
+    visibility = ["//vendor/k8s.io/component-base/logs:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":setverbositylevel",
+    visibility = ["//vendor/k8s.io/component-base/logs:__subpackages__"],
+)

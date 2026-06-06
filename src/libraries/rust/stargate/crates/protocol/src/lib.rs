@@ -18,9 +18,12 @@ mod quic_capnp {
     include!(concat!(env!("OUT_DIR"), "/quic_capnp.rs"));
 }
 
+use serde::{Deserialize, Serialize};
+
 pub mod common;
 pub mod protocol;
 pub mod stream;
+pub mod tunnel_contract;
 pub mod webtransport;
 pub mod webtransport_http;
 
@@ -28,7 +31,7 @@ pub use protocol::{
     HandshakeAck, HandshakeRequest, StreamStopCode, read_handshake, read_handshake_ack,
     write_handshake, write_handshake_ack,
 };
-pub use stream::{RecvStream, SendStream};
+pub use stream::{RecvBodyFrame, RecvStream, SendStream};
 pub use webtransport::{
     WebTransportBidiHeader, read_webtransport_bidi_header,
     write_precomputed_webtransport_bidi_header, write_webtransport_bidi_header,
@@ -58,6 +61,25 @@ impl std::fmt::Display for TunnelTransportProtocol {
             Self::Http3 => f.write_str("http3"),
             Self::WebTransport => f.write_str("webtransport"),
         }
+    }
+}
+
+impl Serialize for TunnelTransportProtocol {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for TunnelTransportProtocol {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <&str>::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -98,8 +120,28 @@ pub enum ProtocolError {
 }
 
 #[cfg(test)]
+mod build_plan;
+
+#[cfg(test)]
+#[path = "../build.rs"]
+mod build_script;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build_plan::capnp_build_plan;
+
+    #[test]
+    fn capnp_build_plan_tracks_schema_and_rerun_trigger() {
+        let plan = capnp_build_plan();
+
+        assert_eq!(plan.schema_file, "quic.capnp");
+        assert_eq!(plan.rerun_if_changed, "quic.capnp");
+        assert_eq!(
+            crate::build_script::planned_capnp_schema_file(),
+            "quic.capnp"
+        );
+    }
 
     #[test]
     fn tunnel_protocol_accepts_webtransport_aliases() {
@@ -122,6 +164,26 @@ mod tests {
         assert_eq!(
             TunnelTransportProtocol::WebTransport.alpn_protocols(),
             vec![HTTP3_ALPN.to_vec()]
+        );
+    }
+
+    #[test]
+    fn tunnel_protocol_serde_uses_canonical_display_strings() {
+        assert_eq!(
+            serde_json::to_string(&TunnelTransportProtocol::Http3).unwrap(),
+            "\"http3\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TunnelTransportProtocol::WebTransport).unwrap(),
+            "\"webtransport\""
+        );
+        assert_eq!(
+            serde_json::from_str::<TunnelTransportProtocol>("\"h3\"").unwrap(),
+            TunnelTransportProtocol::Http3
+        );
+        assert_eq!(
+            serde_json::from_str::<TunnelTransportProtocol>("\"web-transport\"").unwrap(),
+            TunnelTransportProtocol::WebTransport
         );
     }
 }

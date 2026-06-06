@@ -13,9 +13,9 @@ go_library(
     deps = [
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
-        "@com_github_hashicorp_go_retryablehttp//:go-retryablehttp",
-        "@com_github_sirupsen_logrus//:logrus",
-        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "//vendor/github.com/hashicorp/go-retryablehttp",
+        "//vendor/github.com/sirupsen/logrus",
+        "//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
     ],
 )
 

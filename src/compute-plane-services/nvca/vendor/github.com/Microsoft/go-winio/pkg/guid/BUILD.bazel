@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "guid",
+    srcs = [
+        "guid.go",
+        "guid_nonwindows.go",
+        "guid_windows.go",
+        "variant_string.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio/pkg/guid",
+    importpath = "github.com/Microsoft/go-winio/pkg/guid",
+    visibility = ["//visibility:public"],
+    deps = select({
+        "@rules_go//go/platform:windows": [
+            "//vendor/golang.org/x/sys/windows",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":guid",
+    visibility = ["//visibility:public"],
+)

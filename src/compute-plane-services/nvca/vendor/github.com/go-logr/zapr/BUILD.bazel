@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "zapr",
+    srcs = [
+        "slogzapr.go",
+        "zapr.go",
+        "zapr_noslog.go",
+        "zapr_slog.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-logr/zapr",
+    importpath = "github.com/go-logr/zapr",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-logr/logr",
+        "//vendor/github.com/go-logr/logr/slogr",
+        "//vendor/go.uber.org/zap",
+        "//vendor/go.uber.org/zap/zapcore",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":zapr",
+    visibility = ["//visibility:public"],
+)

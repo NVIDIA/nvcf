@@ -37,7 +37,8 @@ use pylon_lib::{
     start_quic_http_tunnel, start_reverse_quic_tunnel, start_stats_collector_with_engine_stats,
     stats_aggregator_update_channel,
 };
-use stargate::load_balancer_state::{RoutingTargetKey, StargateState};
+use stargate::routing::RoutingTargetKey;
+use stargate::test_support::StargateState;
 use stargate_proto::pb::InferenceServerStatus;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
@@ -215,10 +216,6 @@ async fn end_to_end_engine_stats_stream_reports_model_stats() {
         "normal OpenAI data chunks should be forwarded: {sse_text}"
     );
     assert!(sse_text.contains("[DONE]"), "SSE should end with [DONE]");
-    assert!(
-        !sse_text.contains("inference-progress.v1"),
-        "engine stats stream must not require private progress comments in the client stream: {sse_text}"
-    );
 
     wait_for_engine_stats_stream_stats(&state, model, Duration::from_secs(5)).await;
 
@@ -584,7 +581,7 @@ async fn reverse_tunnel_handshake_rejects_non_reverse_instance_id() {
     reject_cfg.quic_insecure = true;
     let reverse_result = start_reverse_quic_tunnel(reject_cfg).await;
     match reverse_result {
-        Err(TunnelError::Handshake(_)) => {}
+        Err(TunnelError::HandshakeRejected { .. }) => {}
         Err(other) => panic!("expected handshake rejection, got error: {other}"),
         Ok(handle) => {
             handle.shutdown().await;

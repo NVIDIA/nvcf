@@ -1,0 +1,63 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "term",
+    srcs = [
+        "term.go",
+        "term_plan9.go",
+        "term_unix.go",
+        "term_unix_bsd.go",
+        "term_unix_other.go",
+        "term_unsupported.go",
+        "term_windows.go",
+        "terminal.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/term",
+    importpath = "golang.org/x/term",
+    visibility = ["//visibility:public"],
+    deps = select({
+        "@rules_go//go/platform:aix": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:android": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "//vendor/golang.org/x/sys/plan9",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:windows": [
+            "//vendor/golang.org/x/sys/windows",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":term",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "randfill",
+    srcs = ["randfill.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/randfill",
+    importpath = "sigs.k8s.io/randfill",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/sigs.k8s.io/randfill/bytesource"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":randfill",
+    visibility = ["//visibility:public"],
+)

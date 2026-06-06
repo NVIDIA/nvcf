@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "diff",
+    srcs = [
+        "diff.go",
+        "legacy_diff.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/diff",
+    importpath = "k8s.io/apimachinery/pkg/util/diff",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/pmezard/go-difflib/difflib",
+        "//vendor/k8s.io/apimachinery/pkg/util/dump",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":diff",
+    visibility = ["//visibility:public"],
+)

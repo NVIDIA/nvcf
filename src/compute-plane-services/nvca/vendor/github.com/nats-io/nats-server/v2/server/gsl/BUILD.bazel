@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gsl",
+    srcs = ["gsl.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/gsl",
+    importpath = "github.com/nats-io/nats-server/v2/server/gsl",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/nats-io/nats-server/v2/server/stree"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gsl",
+    visibility = ["//visibility:public"],
+)

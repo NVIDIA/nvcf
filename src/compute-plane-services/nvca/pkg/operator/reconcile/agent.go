@@ -492,6 +492,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		WithNVCAOTELConfig(a.NVCAOTELConfig).
 		WithEnvOverrides(a.FunctionEnvOverridesB64, a.TaskEnvOverridesB64).
 		WithIdentitySource(a.IdentitySource).
+		WithClusterSource(a.ClusterSource).
 		Start(ctx)
 
 	if err != nil {

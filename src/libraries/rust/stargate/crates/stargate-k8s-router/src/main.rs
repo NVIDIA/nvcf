@@ -20,7 +20,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use kube::Client;
-use stargate::forwarding::RelayEndpointConfig;
+use stargate_forwarding::RelayEndpointConfig;
 use stargate_k8s_router::endpoints::{TargetBuildConfig, TargetSnapshot};
 use stargate_k8s_router::grpc::{GrpcRouterConfig, serve_grpc_router};
 use stargate_k8s_router::health::serve_health;

@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "endpoints",
+    srcs = [
+        "endpoint_config_resolver.go",
+        "endpoints.go",
+        "model.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/endpoints",
+    importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/endpoints",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
+        "//vendor/gopkg.in/yaml.v2:yaml_v2",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":endpoints",
+    visibility = ["//visibility:public"],
+)

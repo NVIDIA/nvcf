@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "jetstream",
+    srcs = [
+        "api.go",
+        "consumer.go",
+        "consumer_config.go",
+        "errors.go",
+        "jetstream.go",
+        "jetstream_options.go",
+        "kv.go",
+        "kv_options.go",
+        "message.go",
+        "object.go",
+        "object_options.go",
+        "ordered.go",
+        "publish.go",
+        "pull.go",
+        "push.go",
+        "stream.go",
+        "stream_config.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go/jetstream",
+    importpath = "github.com/nats-io/nats.go/jetstream",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/nats-io/nats.go:nats_go",
+        "//vendor/github.com/nats-io/nats.go/internal/parser",
+        "//vendor/github.com/nats-io/nats.go/internal/syncx",
+        "//vendor/github.com/nats-io/nuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jetstream",
+    visibility = ["//visibility:public"],
+)

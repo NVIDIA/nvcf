@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "pse",
+    srcs = [
+        "pse_darwin.go",
+        "pse_dragonfly.go",
+        "pse_freebsd_cgo.go",
+        "pse_freebsd_sysctl.go",
+        "pse_linux.go",
+        "pse_netbsd.go",
+        "pse_openbsd.go",
+        "pse_solaris.go",
+        "pse_wasm.go",
+        "pse_windows.go",
+    ],
+    cgo = True,
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/pse",
+    importpath = "github.com/nats-io/nats-server/v2/server/pse",
+    visibility = ["//visibility:public"],
+    deps = select({
+        "@rules_go//go/platform:windows": [
+            "//vendor/golang.org/x/sys/windows",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "@rules_go//go/platform:freebsd_amd64": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "@rules_go//go/platform:freebsd_arm64": [
+            "//vendor/golang.org/x/sys/unix",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":pse",
+    visibility = ["//visibility:public"],
+)

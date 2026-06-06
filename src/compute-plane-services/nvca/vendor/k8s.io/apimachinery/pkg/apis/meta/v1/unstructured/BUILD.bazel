@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "unstructured",
+    srcs = [
+        "helpers.go",
+        "unstructured.go",
+        "unstructured_list.go",
+        "zz_generated.deepcopy.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+    importpath = "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/apimachinery/pkg/types",
+        "//vendor/k8s.io/apimachinery/pkg/util/json",
+        "//vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//vendor/k8s.io/klog/v2:klog",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":unstructured",
+    visibility = ["//visibility:public"],
+)

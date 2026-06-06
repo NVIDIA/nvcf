@@ -9,10 +9,10 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/spiffe-token-fetcher",
     visibility = ["//visibility:private"],
     deps = [
-        "@com_github_go_jose_go_jose_v4//:go-jose",
-        "@com_github_go_jose_go_jose_v4//jwt",
-        "@com_github_spiffe_go_spiffe_v2//svid/jwtsvid",
-        "@com_github_spiffe_go_spiffe_v2//workloadapi",
+        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//vendor/github.com/go-jose/go-jose/v4/jwt",
+        "//vendor/github.com/spiffe/go-spiffe/v2/svid/jwtsvid",
+        "//vendor/github.com/spiffe/go-spiffe/v2/workloadapi",
     ],
 )
 
@@ -27,10 +27,10 @@ go_test(
     srcs = ["main_test.go"],
     embed = [":spiffe-token-fetcher_lib"],
     deps = [
-        "@com_github_go_jose_go_jose_v4//:go-jose",
-        "@com_github_go_jose_go_jose_v4//jwt",
-        "@com_github_spiffe_go_spiffe_v2//svid/jwtsvid",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
+        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//vendor/github.com/go-jose/go-jose/v4/jwt",
+        "//vendor/github.com/spiffe/go-spiffe/v2/svid/jwtsvid",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
     ],
 )

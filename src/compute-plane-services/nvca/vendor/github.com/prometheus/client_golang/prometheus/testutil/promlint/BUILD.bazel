@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "promlint",
+    srcs = [
+        "problem.go",
+        "promlint.go",
+        "validation.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/testutil/promlint",
+    importpath = "github.com/prometheus/client_golang/prometheus/testutil/promlint",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/prometheus/client_golang/prometheus/testutil/promlint/validations",
+        "//vendor/github.com/prometheus/client_model/go",
+        "//vendor/github.com/prometheus/common/expfmt",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":promlint",
+    visibility = ["//visibility:public"],
+)

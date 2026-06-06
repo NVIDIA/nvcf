@@ -8,16 +8,16 @@ MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
 go_library(
     name = "export-cluster-pubkeys_lib",
     srcs = ["main.go"],
-    importpath = MODULE_PATH + "/cmd/export-cluster-pubkeys",
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/export-cluster-pubkeys",
     visibility = ["//visibility:private"],
     deps = [
         "//cmd/internal",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
-        "@com_github_go_jose_go_jose_v3//:go-jose",
-        "@com_github_urfave_cli_v2//:cli",
-        "@in_gopkg_yaml_v3//:yaml_v3",
-        "@io_k8s_client_go//rest",
+        "//vendor/github.com/go-jose/go-jose/v3:go-jose",
+        "//vendor/github.com/urfave/cli/v2:cli",
+        "//vendor/gopkg.in/yaml.v3:yaml_v3",
+        "//vendor/k8s.io/client-go/rest",
     ],
 )
 
@@ -38,11 +38,11 @@ go_test(
     srcs = ["main_test.go"],
     embed = [":export-cluster-pubkeys_lib"],
     deps = [
-        "@com_github_go_jose_go_jose_v3//:go-jose",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
-        "@io_k8s_apimachinery//pkg/runtime/schema",
-        "@io_k8s_client_go//kubernetes/scheme",
-        "@io_k8s_client_go//rest",
+        "//vendor/github.com/go-jose/go-jose/v3:go-jose",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/client-go/kubernetes/scheme",
+        "//vendor/k8s.io/client-go/rest",
     ],
 )

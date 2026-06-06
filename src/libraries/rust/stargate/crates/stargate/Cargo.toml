@@ -54,6 +54,7 @@ tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 stargate-auth = { workspace = true }
+stargate-forwarding = { workspace = true }
 stargate-proto = { workspace = true }
 stargate-protocol = { workspace = true }
 stargate-telemetry = { workspace = true }
@@ -69,6 +70,6 @@ xxhash-rust = { workspace = true }
 hyper-util = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 reqwest = { workspace = true }
-serde_yaml = "0.9"
+serde_yaml_ng = { workspace = true }
 pylon-lib = { workspace = true }
 tempfile = { workspace = true }

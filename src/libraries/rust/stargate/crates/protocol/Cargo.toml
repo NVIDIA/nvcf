@@ -32,8 +32,18 @@ capnp = { workspace = true }
 capnp-futures = { workspace = true }
 http = { workspace = true }
 quinn = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [build-dependencies]
 capnpc = { workspace = true }
+
+[dev-dependencies]
+capnpc = { workspace = true }
+proptest = "=1.11.0"
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+serde_json = { workspace = true }
+stargate-tls = { workspace = true }
+tokio = { workspace = true }

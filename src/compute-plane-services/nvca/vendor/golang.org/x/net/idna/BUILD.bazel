@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "idna",
+    srcs = [
+        "go118.go",
+        "idna10.0.0.go",
+        "idna9.0.0.go",
+        "pre_go118.go",
+        "punycode.go",
+        "tables10.0.0.go",
+        "tables11.0.0.go",
+        "tables12.0.0.go",
+        "tables13.0.0.go",
+        "tables15.0.0.go",
+        "tables9.0.0.go",
+        "trie.go",
+        "trie12.0.0.go",
+        "trie13.0.0.go",
+        "trieval.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/net/idna",
+    importpath = "golang.org/x/net/idna",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/golang.org/x/text/secure/bidirule",
+        "//vendor/golang.org/x/text/unicode/bidi",
+        "//vendor/golang.org/x/text/unicode/norm",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":idna",
+    visibility = ["//visibility:public"],
+)

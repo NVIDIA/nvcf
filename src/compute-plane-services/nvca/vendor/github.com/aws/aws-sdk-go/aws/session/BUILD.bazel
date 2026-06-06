@@ -1,0 +1,43 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "session",
+    srcs = [
+        "credentials.go",
+        "custom_transport.go",
+        "custom_transport_go1.12.go",
+        "custom_transport_go1.5.go",
+        "custom_transport_go1.6.go",
+        "doc.go",
+        "env_config.go",
+        "session.go",
+        "shared_config.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/session",
+    importpath = "github.com/aws/aws-sdk-go/aws/session",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go/aws",
+        "//vendor/github.com/aws/aws-sdk-go/aws/awserr",
+        "//vendor/github.com/aws/aws-sdk-go/aws/client",
+        "//vendor/github.com/aws/aws-sdk-go/aws/corehandlers",
+        "//vendor/github.com/aws/aws-sdk-go/aws/credentials",
+        "//vendor/github.com/aws/aws-sdk-go/aws/credentials/processcreds",
+        "//vendor/github.com/aws/aws-sdk-go/aws/credentials/ssocreds",
+        "//vendor/github.com/aws/aws-sdk-go/aws/credentials/stscreds",
+        "//vendor/github.com/aws/aws-sdk-go/aws/csm",
+        "//vendor/github.com/aws/aws-sdk-go/aws/defaults",
+        "//vendor/github.com/aws/aws-sdk-go/aws/endpoints",
+        "//vendor/github.com/aws/aws-sdk-go/aws/request",
+        "//vendor/github.com/aws/aws-sdk-go/internal/ini",
+        "//vendor/github.com/aws/aws-sdk-go/internal/shareddefaults",
+        "//vendor/github.com/aws/aws-sdk-go/service/ssooidc",
+        "//vendor/github.com/aws/aws-sdk-go/service/sts",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":session",
+    visibility = ["//visibility:public"],
+)

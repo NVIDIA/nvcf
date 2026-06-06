@@ -10,9 +10,9 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/client/clientset/versioned",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
-        "@io_k8s_apimachinery//pkg/runtime",
-        "@io_k8s_client_go//tools/cache",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/client-go/tools/cache",
     ],
 )
 

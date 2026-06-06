@@ -25,6 +25,10 @@ use crate::driver::RequestResult;
 pub struct RunSummary {
     pub request_count: usize,
     pub success_rate: f64,
+    #[serde(default)]
+    pub successful_requests_per_second: Option<f64>,
+    #[serde(default)]
+    pub successful_output_tokens_per_second: Option<f64>,
     pub avg_ttft_ms: Option<f64>,
     pub p50_ttft_ms: Option<u64>,
     pub p95_ttft_ms: Option<u64>,
@@ -39,6 +43,10 @@ pub struct RunSummary {
     pub balance_score: Option<f64>,
     #[serde(default)]
     pub capacity_balance_score: Option<f64>,
+    #[serde(default)]
+    pub cluster_balance_score: Option<f64>,
+    #[serde(default)]
+    pub cluster_capacity_balance_score: Option<f64>,
     pub backend_request_shares: BTreeMap<String, f64>,
     #[serde(default)]
     pub backend_capacity_shares: BTreeMap<String, f64>,
@@ -49,13 +57,23 @@ pub struct RunSummary {
     #[serde(default)]
     pub backend_summaries: BTreeMap<String, BackendSummary>,
     #[serde(default)]
+    pub cluster_request_shares: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub cluster_capacity_shares: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub cluster_input_token_shares: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub cluster_output_token_shares: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub cluster_summaries: BTreeMap<String, BackendSummary>,
+    #[serde(default)]
     pub cache_summary: CacheSummary,
     #[serde(default)]
     pub stickiness_summary: StickinessSummary,
     #[serde(default)]
     pub failure_summary: Vec<FailureSummary>,
-    #[serde(default)]
     pub queue_admission_summary: QueueAdmissionSummary,
+    pub routing_selection_summary: RoutingSelectionSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -67,6 +85,12 @@ pub struct CacheSummary {
     pub hit_rate: Option<f64>,
     pub eviction_count: u64,
     pub evicted_tokens: u64,
+    #[serde(default)]
+    pub reused_input_tokens: u64,
+    #[serde(default)]
+    pub uncached_input_tokens: u64,
+    #[serde(default)]
+    pub input_reuse_rate: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -81,6 +105,15 @@ pub struct QueueAdmissionSummary {
     pub stargate_retry_exhausted_count: f64,
     #[serde(default)]
     pub stargate_retry_exhausted_by_reason: BTreeMap<String, f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingSelectionSummary {
+    pub primary_count: f64,
+    pub fallback_count: f64,
+    #[serde(default)]
+    pub kv_free_token_fallback_count: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -115,9 +148,32 @@ pub struct FailureSummary {
     pub count: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct RoutingTopology {
+    pub backend_capacity_shares: BTreeMap<String, f64>,
+    pub cluster_capacity_shares: BTreeMap<String, f64>,
+    pub backend_cluster_ids: BTreeMap<String, String>,
+}
+
+#[cfg(test)]
 pub fn summarize_with_capacity(
     results: &[RequestResult],
     backend_capacity_shares: BTreeMap<String, f64>,
+) -> RunSummary {
+    let topology = RoutingTopology {
+        cluster_capacity_shares: backend_capacity_shares.clone(),
+        backend_cluster_ids: backend_capacity_shares
+            .keys()
+            .map(|backend_id| (backend_id.clone(), backend_id.clone()))
+            .collect(),
+        backend_capacity_shares,
+    };
+    summarize_with_topology(results, &topology)
+}
+
+pub fn summarize_with_topology(
+    results: &[RequestResult],
+    topology: &RoutingTopology,
 ) -> RunSummary {
     let request_count = results.len();
     let successes = results.iter().filter(|result| result.ok).count();
@@ -144,28 +200,59 @@ pub fn summarize_with_capacity(
     let backend_request_shares = backend_request_shares(results);
     let backend_input_token_shares = backend_token_shares(results, TokenKind::Input);
     let backend_output_token_shares = backend_token_shares(results, TokenKind::Output);
+    let cluster_request_shares = cluster_request_shares(results, &topology.backend_cluster_ids);
+    let cluster_input_token_shares =
+        cluster_token_shares(results, TokenKind::Input, &topology.backend_cluster_ids);
+    let cluster_output_token_shares =
+        cluster_token_shares(results, TokenKind::Output, &topology.backend_cluster_ids);
     let balance_score = if backend_request_shares.is_empty() {
         None
     } else {
         Some(equal_share_balance_score(&backend_request_shares))
     };
     let capacity_balance_score =
-        if backend_request_shares.is_empty() || backend_capacity_shares.is_empty() {
+        if backend_request_shares.is_empty() || topology.backend_capacity_shares.is_empty() {
             None
         } else {
             Some(expected_share_balance_score(
                 &backend_request_shares,
-                &backend_capacity_shares,
+                &topology.backend_capacity_shares,
             ))
         };
+    let cluster_balance_score = (!cluster_request_shares.is_empty()
+        && !topology.cluster_capacity_shares.is_empty())
+    .then(|| {
+        equal_expected_share_balance_score(
+            &cluster_request_shares,
+            topology.cluster_capacity_shares.keys(),
+        )
+    });
+    let cluster_capacity_balance_score = (!cluster_input_token_shares.is_empty()
+        && !topology.cluster_capacity_shares.is_empty())
+    .then(|| {
+        expected_share_balance_score(
+            &cluster_input_token_shares,
+            &topology.cluster_capacity_shares,
+        )
+    });
     let cache_summary = cache_summary(results);
     let backend_summaries = backend_summaries(results);
-    let stickiness_summary = stickiness_summary(results);
+    let cluster_summaries = cluster_summaries(results, &topology.backend_cluster_ids);
+    let stickiness_summary = stickiness_summary(results, &topology.backend_cluster_ids);
     let failure_summary = failure_summary(results);
 
     RunSummary {
         request_count,
         success_rate,
+        successful_requests_per_second: per_second(successes as u64, total_length_ms),
+        successful_output_tokens_per_second: per_second(
+            results
+                .iter()
+                .filter(|result| result.ok)
+                .map(|result| result.output_tokens)
+                .sum(),
+            total_length_ms,
+        ),
         avg_ttft_ms: average(&ttft),
         p50_ttft_ms: percentile(&ttft, 0.50),
         p95_ttft_ms: percentile(&ttft, 0.95),
@@ -178,15 +265,23 @@ pub fn summarize_with_capacity(
         total_length_ms,
         balance_score,
         capacity_balance_score,
+        cluster_balance_score,
+        cluster_capacity_balance_score,
         backend_request_shares,
-        backend_capacity_shares,
+        backend_capacity_shares: topology.backend_capacity_shares.clone(),
         backend_input_token_shares,
         backend_output_token_shares,
         backend_summaries,
+        cluster_request_shares,
+        cluster_capacity_shares: topology.cluster_capacity_shares.clone(),
+        cluster_input_token_shares,
+        cluster_output_token_shares,
+        cluster_summaries,
         cache_summary,
         stickiness_summary,
         failure_summary,
         queue_admission_summary: QueueAdmissionSummary::default(),
+        routing_selection_summary: RoutingSelectionSummary::default(),
     }
 }
 
@@ -286,6 +381,47 @@ pub fn queue_admission_summary_delta_from_prometheus(
     }
 }
 
+pub fn routing_selection_summary_from_prometheus(metrics: &str) -> RoutingSelectionSummary {
+    let mut summary = RoutingSelectionSummary::default();
+    for line in metrics.lines() {
+        let Some((series, value)) = prometheus_counter_sample(line) else {
+            continue;
+        };
+        let name = series.split_once('{').map_or(series, |(name, _)| name);
+        match name {
+            "stargate_routing_selections_total" | "stargate_routing_selections_total_total" => {
+                match prometheus_label_value(series, "selection") {
+                    Some("primary") => summary.primary_count += value,
+                    Some("fallback") => summary.fallback_count += value,
+                    _ => {}
+                }
+            }
+            "stargate_routing_kv_free_token_fallback_selections_total"
+            | "stargate_routing_kv_free_token_fallback_selections_total_total" => {
+                summary.kv_free_token_fallback_count += value;
+            }
+            _ => {}
+        }
+    }
+    summary
+}
+
+pub fn routing_selection_summary_delta_from_prometheus(
+    baseline_metrics: &str,
+    post_replay_metrics: &str,
+) -> RoutingSelectionSummary {
+    let baseline = routing_selection_summary_from_prometheus(baseline_metrics);
+    let post_replay = routing_selection_summary_from_prometheus(post_replay_metrics);
+    RoutingSelectionSummary {
+        primary_count: counter_delta(post_replay.primary_count, baseline.primary_count),
+        fallback_count: counter_delta(post_replay.fallback_count, baseline.fallback_count),
+        kv_free_token_fallback_count: counter_delta(
+            post_replay.kv_free_token_fallback_count,
+            baseline.kv_free_token_fallback_count,
+        ),
+    }
+}
+
 fn counter_delta(post_replay: f64, baseline: f64) -> f64 {
     (post_replay - baseline).max(0.0)
 }
@@ -308,8 +444,10 @@ fn prometheus_label_value<'a>(series: &'a str, label: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
-pub fn backend_capacity_shares(backends: &BackendConfig) -> BTreeMap<String, f64> {
-    let mut capacities = BTreeMap::new();
+pub fn topology_for(backends: &BackendConfig) -> RoutingTopology {
+    let mut backend_capacities = BTreeMap::new();
+    let mut cluster_capacities = BTreeMap::new();
+    let mut backend_cluster_ids = BTreeMap::new();
     let mut total_capacity = 0.0f64;
     for index in 0..backends.count {
         let capacity = backends
@@ -317,16 +455,31 @@ pub fn backend_capacity_shares(backends: &BackendConfig) -> BTreeMap<String, f64
             .registration
             .last_mean_input_tps;
         if capacity > 0.0 && capacity.is_finite() {
-            capacities.insert(format!("backend-{index}"), capacity);
+            let backend_id = format!("backend-{index}");
+            let cluster_id = backends.effective_cluster_id_for_index(index);
+            backend_capacities.insert(backend_id.clone(), capacity);
+            *cluster_capacities.entry(cluster_id.clone()).or_default() += capacity;
+            backend_cluster_ids.insert(backend_id, cluster_id);
             total_capacity += capacity;
         }
     }
     if total_capacity <= 0.0 {
-        return BTreeMap::new();
+        return RoutingTopology::default();
     }
+    RoutingTopology {
+        backend_capacity_shares: normalized_shares(backend_capacities, total_capacity),
+        cluster_capacity_shares: normalized_shares(cluster_capacities, total_capacity),
+        backend_cluster_ids,
+    }
+}
+
+fn normalized_shares(
+    capacities: BTreeMap<String, f64>,
+    total_capacity: f64,
+) -> BTreeMap<String, f64> {
     capacities
         .into_iter()
-        .map(|(backend_id, capacity)| (backend_id, capacity / total_capacity))
+        .map(|(id, capacity)| (id, capacity / total_capacity))
         .collect()
 }
 
@@ -372,17 +525,61 @@ fn backend_request_shares(results: &[RequestResult]) -> BTreeMap<String, f64> {
         .collect()
 }
 
+fn cluster_request_shares(
+    results: &[RequestResult],
+    backend_cluster_ids: &BTreeMap<String, String>,
+) -> BTreeMap<String, f64> {
+    request_shares_by_group(results, |backend_id| {
+        backend_cluster_ids
+            .get(backend_id)
+            .map(String::as_str)
+            .unwrap_or(backend_id)
+    })
+}
+
+fn request_shares_by_group<'a>(
+    results: &'a [RequestResult],
+    group_for_backend: impl Fn(&'a str) -> &'a str,
+) -> BTreeMap<String, f64> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut total = 0usize;
+    for result in results {
+        if !result.ok {
+            continue;
+        }
+        if let Some(backend_id) = &result.selected_backend_id {
+            *counts
+                .entry(group_for_backend(backend_id).to_string())
+                .or_default() += 1;
+            total += 1;
+        }
+    }
+    if total == 0 {
+        return BTreeMap::new();
+    }
+    counts
+        .into_iter()
+        .map(|(id, count)| (id, count as f64 / total as f64))
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy)]
 enum TokenKind {
     Input,
     Output,
 }
 
+impl TokenKind {
+    fn includes_failed_routed_work(self) -> bool {
+        matches!(self, Self::Input)
+    }
+}
+
 fn backend_token_shares(results: &[RequestResult], token_kind: TokenKind) -> BTreeMap<String, f64> {
     let mut totals: BTreeMap<String, u64> = BTreeMap::new();
     let mut total = 0u64;
     for result in results {
-        if !result.ok {
+        if !result.ok && !token_kind.includes_failed_routed_work() {
             continue;
         }
         let Some(backend_id) = &result.selected_backend_id else {
@@ -407,13 +604,80 @@ fn backend_token_shares(results: &[RequestResult], token_kind: TokenKind) -> BTr
         .collect()
 }
 
+fn cluster_token_shares(
+    results: &[RequestResult],
+    token_kind: TokenKind,
+    backend_cluster_ids: &BTreeMap<String, String>,
+) -> BTreeMap<String, f64> {
+    token_shares_by_group(results, token_kind, |backend_id| {
+        backend_cluster_ids
+            .get(backend_id)
+            .map(String::as_str)
+            .unwrap_or(backend_id)
+    })
+}
+
+fn token_shares_by_group<'a>(
+    results: &'a [RequestResult],
+    token_kind: TokenKind,
+    group_for_backend: impl Fn(&'a str) -> &'a str,
+) -> BTreeMap<String, f64> {
+    let mut totals: BTreeMap<String, u64> = BTreeMap::new();
+    let mut total = 0u64;
+    for result in results {
+        if !result.ok && !token_kind.includes_failed_routed_work() {
+            continue;
+        }
+        let Some(backend_id) = &result.selected_backend_id else {
+            continue;
+        };
+        let tokens = match token_kind {
+            TokenKind::Input => result.input_tokens,
+            TokenKind::Output => result.output_tokens,
+        };
+        *totals
+            .entry(group_for_backend(backend_id).to_string())
+            .or_default() += tokens;
+        total = total.saturating_add(tokens);
+    }
+    if total == 0 {
+        return BTreeMap::new();
+    }
+    totals
+        .into_iter()
+        .map(|(id, tokens)| (id, tokens as f64 / total as f64))
+        .collect()
+}
+
 fn backend_summaries(results: &[RequestResult]) -> BTreeMap<String, BackendSummary> {
+    summaries_by_group(results, |backend_id| backend_id)
+}
+
+fn cluster_summaries(
+    results: &[RequestResult],
+    backend_cluster_ids: &BTreeMap<String, String>,
+) -> BTreeMap<String, BackendSummary> {
+    summaries_by_group(results, |backend_id| {
+        backend_cluster_ids
+            .get(backend_id)
+            .map(String::as_str)
+            .unwrap_or(backend_id)
+    })
+}
+
+fn summaries_by_group<'a>(
+    results: &'a [RequestResult],
+    group_for_backend: impl Fn(&'a str) -> &'a str,
+) -> BTreeMap<String, BackendSummary> {
     let mut grouped: BTreeMap<String, Vec<&RequestResult>> = BTreeMap::new();
     for result in results {
         let Some(backend_id) = &result.selected_backend_id else {
             continue;
         };
-        grouped.entry(backend_id.clone()).or_default().push(result);
+        grouped
+            .entry(group_for_backend(backend_id).to_string())
+            .or_default()
+            .push(result);
     }
 
     grouped
@@ -470,8 +734,11 @@ fn backend_summaries(results: &[RequestResult]) -> BTreeMap<String, BackendSumma
         .collect()
 }
 
-fn stickiness_summary(results: &[RequestResult]) -> StickinessSummary {
-    let mut backends_by_cache_key = BTreeMap::<String, BTreeSet<String>>::new();
+fn stickiness_summary(
+    results: &[RequestResult],
+    backend_cluster_ids: &BTreeMap<String, String>,
+) -> StickinessSummary {
+    let mut clusters_by_cache_key = BTreeMap::<String, BTreeSet<String>>::new();
     for result in results {
         if !result.ok {
             continue;
@@ -481,15 +748,20 @@ fn stickiness_summary(results: &[RequestResult]) -> StickinessSummary {
         else {
             continue;
         };
-        backends_by_cache_key
+        clusters_by_cache_key
             .entry(cache_affinity_key.clone())
             .or_default()
-            .insert(backend_id.clone());
+            .insert(
+                backend_cluster_ids
+                    .get(backend_id)
+                    .unwrap_or(backend_id)
+                    .clone(),
+            );
     }
-    let observed_cache_key_count = backends_by_cache_key.len();
-    let moved_cache_key_count = backends_by_cache_key
+    let observed_cache_key_count = clusters_by_cache_key.len();
+    let moved_cache_key_count = clusters_by_cache_key
         .values()
-        .filter(|backends| backends.len() > 1)
+        .filter(|clusters| clusters.len() > 1)
         .count();
     let sticky_cache_key_count = observed_cache_key_count - moved_cache_key_count;
     let movement_rate = (observed_cache_key_count > 0)
@@ -538,6 +810,19 @@ fn equal_share_balance_score(shares: &BTreeMap<String, f64>) -> f64 {
     (1.0 - mean_abs_error / expected).clamp(0.0, 1.0)
 }
 
+fn equal_expected_share_balance_score<'a>(
+    observed: &BTreeMap<String, f64>,
+    ids: impl Iterator<Item = &'a String>,
+) -> f64 {
+    let ids = ids.collect::<Vec<_>>();
+    let expected_share = 1.0 / ids.len() as f64;
+    let expected = ids
+        .into_iter()
+        .map(|id| (id.clone(), expected_share))
+        .collect();
+    expected_share_balance_score(observed, &expected)
+}
+
 fn expected_share_balance_score(
     observed: &BTreeMap<String, f64>,
     expected: &BTreeMap<String, f64>,
@@ -580,6 +865,17 @@ fn cache_summary(results: &[RequestResult]) -> CacheSummary {
         .iter()
         .filter_map(|result| result.kv_cache_evicted_tokens)
         .sum();
+    let reused_input_tokens = results
+        .iter()
+        .filter_map(|result| result.kv_cache_reused_input_tokens)
+        .sum();
+    let uncached_input_tokens = results
+        .iter()
+        .filter_map(|result| result.kv_cache_uncached_input_tokens)
+        .sum();
+    let observed_input_tokens = reused_input_tokens + uncached_input_tokens;
+    let input_reuse_rate = (observed_input_tokens > 0)
+        .then_some(reused_input_tokens as f64 / observed_input_tokens as f64);
     CacheSummary {
         observed_request_count,
         hit_count,
@@ -587,7 +883,14 @@ fn cache_summary(results: &[RequestResult]) -> CacheSummary {
         hit_rate,
         eviction_count,
         evicted_tokens,
+        reused_input_tokens,
+        uncached_input_tokens,
+        input_reuse_rate,
     }
+}
+
+fn per_second(value: u64, total_length_ms: u64) -> Option<f64> {
+    (total_length_ms > 0).then_some(value as f64 * 1000.0 / total_length_ms as f64)
 }
 
 fn average(values: &[u64]) -> Option<f64> {
@@ -626,6 +929,8 @@ mod tests {
             first_output_ms: Some(ttft),
             completion_ms: ttlt,
             kv_cache_hit: None,
+            kv_cache_reused_input_tokens: None,
+            kv_cache_uncached_input_tokens: None,
             kv_cache_evicted_entries: None,
             kv_cache_evicted_tokens: None,
             ok: true,
@@ -686,11 +991,151 @@ mod tests {
     }
 
     #[test]
+    fn summary_computes_grouped_cluster_balance_and_goodput() {
+        let backends = BackendConfig {
+            count: 4,
+            cluster_id_template: Some("cluster-{cluster_index}".to_string()),
+            pylons_per_cluster: 2,
+            profile: crate::config::BackendProfile {
+                name: "unused".to_string(),
+                weight: 1.0,
+                max_concurrent_requests: None,
+                kv_cache_capacity_tokens: 0,
+                service_time_ms: crate::config::ServiceTimeConfig {
+                    ttft_mean: 1,
+                    ttft_jitter_ms: 0,
+                    decode_tokens_per_s: 1,
+                    decode_jitter_ms: 0,
+                    prefill_tokens_per_s: None,
+                },
+                registration: crate::config::RegistrationConfig {
+                    last_mean_input_tps: 1.0,
+                },
+            },
+            profiles: vec![
+                crate::config::BackendProfileGroup {
+                    count: 2,
+                    profile: crate::config::BackendProfile {
+                        name: "fast".to_string(),
+                        weight: 1.0,
+                        max_concurrent_requests: None,
+                        kv_cache_capacity_tokens: 0,
+                        service_time_ms: crate::config::ServiceTimeConfig {
+                            ttft_mean: 1,
+                            ttft_jitter_ms: 0,
+                            decode_tokens_per_s: 1,
+                            decode_jitter_ms: 0,
+                            prefill_tokens_per_s: None,
+                        },
+                        registration: crate::config::RegistrationConfig {
+                            last_mean_input_tps: 100.0,
+                        },
+                    },
+                },
+                crate::config::BackendProfileGroup {
+                    count: 2,
+                    profile: crate::config::BackendProfile {
+                        name: "slow".to_string(),
+                        weight: 1.0,
+                        max_concurrent_requests: None,
+                        kv_cache_capacity_tokens: 0,
+                        service_time_ms: crate::config::ServiceTimeConfig {
+                            ttft_mean: 1,
+                            ttft_jitter_ms: 0,
+                            decode_tokens_per_s: 1,
+                            decode_jitter_ms: 0,
+                            prefill_tokens_per_s: None,
+                        },
+                        registration: crate::config::RegistrationConfig {
+                            last_mean_input_tps: 50.0,
+                        },
+                    },
+                },
+            ],
+        };
+        let mut first = result(0, "backend-0", 10, 1000);
+        first.input_tokens = 100;
+        first.output_tokens = 10;
+        first.cache_affinity_key = Some("shared-prefix".to_string());
+        let mut second = result(1, "backend-1", 10, 1000);
+        second.input_tokens = 100;
+        second.output_tokens = 10;
+        second.cache_affinity_key = Some("shared-prefix".to_string());
+        let mut third = result(2, "backend-2", 10, 1000);
+        third.input_tokens = 50;
+        third.output_tokens = 10;
+        let mut fourth = result(3, "backend-3", 10, 1000);
+        fourth.input_tokens = 50;
+        fourth.output_tokens = 10;
+
+        let summary =
+            summarize_with_topology(&[first, second, third, fourth], &topology_for(&backends));
+
+        assert_eq!(summary.cluster_request_shares["cluster-0"], 0.5);
+        assert_eq!(summary.cluster_request_shares["cluster-1"], 0.5);
+        assert_eq!(summary.cluster_input_token_shares["cluster-0"], 2.0 / 3.0);
+        assert_eq!(summary.cluster_input_token_shares["cluster-1"], 1.0 / 3.0);
+        assert_eq!(summary.cluster_capacity_balance_score, Some(1.0));
+        assert_eq!(summary.cluster_summaries["cluster-0"].request_count, 2);
+        assert_eq!(summary.successful_requests_per_second, Some(4.0));
+        assert_eq!(summary.successful_output_tokens_per_second, Some(40.0));
+        assert_eq!(summary.stickiness_summary.moved_cache_key_count, 0);
+        assert_eq!(summary.stickiness_summary.movement_rate, Some(0.0));
+    }
+
+    #[test]
+    fn input_capacity_balance_includes_failed_work_routed_to_a_cluster() {
+        let backends = BackendConfig {
+            count: 2,
+            cluster_id_template: Some("cluster-{cluster_index}".to_string()),
+            pylons_per_cluster: 1,
+            profile: crate::config::BackendProfile {
+                name: "equal".to_string(),
+                weight: 1.0,
+                max_concurrent_requests: None,
+                kv_cache_capacity_tokens: 0,
+                service_time_ms: crate::config::ServiceTimeConfig {
+                    ttft_mean: 1,
+                    ttft_jitter_ms: 0,
+                    decode_tokens_per_s: 1,
+                    decode_jitter_ms: 0,
+                    prefill_tokens_per_s: None,
+                },
+                registration: crate::config::RegistrationConfig {
+                    last_mean_input_tps: 100.0,
+                },
+            },
+            profiles: Vec::new(),
+        };
+        let mut served = result(0, "backend-0", 10, 1000);
+        served.input_tokens = 100;
+        served.output_tokens = 10;
+        let mut rejected = result(1, "backend-1", 10, 1000);
+        rejected.input_tokens = 100;
+        rejected.output_tokens = 0;
+        rejected.status_code = 429;
+        rejected.ok = false;
+
+        let summary = summarize_with_topology(&[served, rejected], &topology_for(&backends));
+
+        assert_eq!(summary.backend_input_token_shares["backend-0"], 0.5);
+        assert_eq!(summary.backend_input_token_shares["backend-1"], 0.5);
+        assert_eq!(summary.cluster_input_token_shares["cluster-0"], 0.5);
+        assert_eq!(summary.cluster_input_token_shares["cluster-1"], 0.5);
+        assert_eq!(summary.cluster_capacity_balance_score, Some(1.0));
+        assert_eq!(summary.backend_output_token_shares.len(), 1);
+    }
+
+    #[test]
     fn summary_computes_cache_metrics() {
         let mut hit = result(0, "a", 10, 20);
         hit.kv_cache_hit = Some(true);
+        hit.kv_cache_reused_input_tokens = Some(100_000);
+        hit.kv_cache_uncached_input_tokens = Some(2_000);
         let mut miss = result(1, "a", 10, 20);
         miss.kv_cache_hit = Some(false);
+        miss.kv_cache_reused_input_tokens = Some(0);
+        miss.kv_cache_uncached_input_tokens = Some(100_000);
         miss.kv_cache_evicted_entries = Some(2);
         miss.kv_cache_evicted_tokens = Some(150);
 
@@ -705,6 +1150,9 @@ mod tests {
                 hit_rate: Some(0.5),
                 eviction_count: 2,
                 evicted_tokens: 150,
+                reused_input_tokens: 100_000,
+                uncached_input_tokens: 102_000,
+                input_reuse_rate: Some(100_000.0 / 202_000.0),
             }
         );
     }
@@ -817,19 +1265,22 @@ stargate_proxy_retry_exhausted_total_total{model="dummy-model",reason="retry_bud
     }
 
     #[test]
-    fn legacy_summary_without_queue_admission_metrics_defaults_cleanly() {
-        let summary = summarize_with_capacity(&[], BTreeMap::new());
-        let mut json = serde_json::to_value(&summary).expect("summary should serialize");
-        json.as_object_mut()
-            .expect("summary should be an object")
-            .remove("queue_admission_summary");
+    fn routing_selection_delta_excludes_pre_replay_probe_counters() {
+        let baseline = r#"
+stargate_routing_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key="",selection="primary"} 3
+stargate_routing_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key="",selection="fallback"} 1
+stargate_routing_kv_free_token_fallback_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key=""} 1
+"#;
+        let post_replay = r#"
+stargate_routing_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key="",selection="primary"} 13
+stargate_routing_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key="",selection="fallback"} 5
+stargate_routing_kv_free_token_fallback_selections_total_total{algorithm="pulsar-multiregion",model="dummy-model",routing_key=""} 4
+"#;
 
-        let parsed: RunSummary =
-            serde_json::from_value(json).expect("legacy summary should deserialize");
+        let summary = routing_selection_summary_delta_from_prometheus(baseline, post_replay);
 
-        assert_eq!(
-            parsed.queue_admission_summary,
-            QueueAdmissionSummary::default()
-        );
+        assert_eq!(summary.primary_count, 10.0);
+        assert_eq!(summary.fallback_count, 4.0);
+        assert_eq!(summary.kv_free_token_fallback_count, 3.0);
     }
 }

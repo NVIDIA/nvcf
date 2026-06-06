@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "errors",
+    srcs = [
+        "doc.go",
+        "errors.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/errors",
+    importpath = "k8s.io/apimachinery/pkg/util/errors",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/k8s.io/apimachinery/pkg/util/sets"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":errors",
+    visibility = ["//visibility:public"],
+)

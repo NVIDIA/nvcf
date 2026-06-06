@@ -27,8 +27,8 @@ use crate::common::{
     bind_ephemeral_udp, init_crypto, start_and_register_backend, wait_for_routing,
     wait_for_unroutable, with_proxy_headers,
 };
-use stargate::forwarding::ForwardingResolver;
 use stargate::runtime::{StargateHandle, StargateRuntime};
+use stargate_forwarding::ForwardingResolver;
 use stargate_proto::pb::StargateInfo;
 
 // ---------------------------------------------------------------------------

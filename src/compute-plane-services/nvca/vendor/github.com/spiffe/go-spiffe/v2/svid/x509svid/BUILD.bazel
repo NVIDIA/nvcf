@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "x509svid",
+    srcs = [
+        "source.go",
+        "svid.go",
+        "verify.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/svid/x509svid",
+    importpath = "github.com/spiffe/go-spiffe/v2/svid/x509svid",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/spiffe/go-spiffe/v2/bundle/x509bundle",
+        "//vendor/github.com/spiffe/go-spiffe/v2/internal/pemutil",
+        "//vendor/github.com/spiffe/go-spiffe/v2/internal/x509util",
+        "//vendor/github.com/spiffe/go-spiffe/v2/spiffeid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":x509svid",
+    visibility = ["//visibility:public"],
+)

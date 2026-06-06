@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 use std::str;
 
+use anyhow::Context;
 use sonic_rs::JsonValueTrait;
 
 /// Provides an authentication token from a configured source.
@@ -39,29 +40,28 @@ pub enum AuthTokenProvider {
 }
 
 impl AuthTokenProvider {
-    /// Returns the current token value.
+    /// Resolves the current token value from the configured source.
     ///
     /// For file-backed variants the file is read on every call. Tokens are
     /// opaque -- expiry management is the responsibility of whatever process
     /// writes the backing file (typically a vault-agent sidecar).
-    pub async fn get_token(&self) -> anyhow::Result<String> {
+    pub async fn resolve_token(&self) -> anyhow::Result<String> {
         match self {
             Self::Static(token) => Ok(token.clone()),
             Self::File(path) => {
-                let bytes = tokio::fs::read(path).await.map_err(|source| {
-                    anyhow::anyhow!("failed to read {}: {source}", path.display())
-                })?;
-                let contents = str::from_utf8(&bytes).map_err(|source| {
-                    anyhow::anyhow!("token file {} is not UTF-8: {source}", path.display())
-                })?;
+                let bytes = tokio::fs::read(path)
+                    .await
+                    .with_context(|| format!("failed to read {}", path.display()))?;
+                let contents = str::from_utf8(&bytes)
+                    .with_context(|| format!("token file {} is not UTF-8", path.display()))?;
                 Ok(contents.trim().to_owned())
             }
             Self::JsonFile { path, key } => {
-                let bytes = tokio::fs::read(path).await.map_err(|source| {
-                    anyhow::anyhow!("failed to read {}: {source}", path.display())
-                })?;
+                let bytes = tokio::fs::read(path)
+                    .await
+                    .with_context(|| format!("failed to read {}", path.display()))?;
                 let value = sonic_rs::get(&*bytes, key.iter().map(String::as_str))
-                    .map_err(|e| anyhow::anyhow!("failed to extract key from secrets file: {e}"))?;
+                    .context("failed to extract key from secrets file")?;
                 let s: &str = value
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("token value at key path is not a string"))?;
@@ -79,7 +79,7 @@ mod tests {
     #[tokio::test]
     async fn static_returns_literal() {
         let provider = AuthTokenProvider::Static("my-token".to_string());
-        assert_eq!(provider.get_token().await.unwrap(), "my-token");
+        assert_eq!(provider.resolve_token().await.unwrap(), "my-token");
     }
 
     #[tokio::test]
@@ -87,7 +87,7 @@ mod tests {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         writeln!(tmp, "  file-token  ").unwrap();
         let provider = AuthTokenProvider::File(tmp.path().to_path_buf());
-        assert_eq!(provider.get_token().await.unwrap(), "file-token");
+        assert_eq!(provider.resolve_token().await.unwrap(), "file-token");
     }
 
     #[tokio::test]
@@ -98,7 +98,7 @@ mod tests {
             path: tmp.path().to_path_buf(),
             key: vec!["authToken".to_string()],
         };
-        assert_eq!(provider.get_token().await.unwrap(), "abc123");
+        assert_eq!(provider.resolve_token().await.unwrap(), "abc123");
     }
 
     #[tokio::test]
@@ -109,7 +109,7 @@ mod tests {
             path: tmp.path().to_path_buf(),
             key: vec!["auth".to_string(), "token".to_string()],
         };
-        assert_eq!(provider.get_token().await.unwrap(), "nested_val");
+        assert_eq!(provider.resolve_token().await.unwrap(), "nested_val");
     }
 
     #[tokio::test]
@@ -120,7 +120,7 @@ mod tests {
             path: tmp.path().to_path_buf(),
             key: vec!["authToken".to_string()],
         };
-        assert!(provider.get_token().await.is_err());
+        assert!(provider.resolve_token().await.is_err());
     }
 
     #[tokio::test]
@@ -131,6 +131,50 @@ mod tests {
             path: tmp.path().to_path_buf(),
             key: vec!["authToken".to_string()],
         };
-        assert!(provider.get_token().await.is_err());
+        assert!(provider.resolve_token().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn missing_token_file_preserves_io_error_source() {
+        let path = tempfile::tempdir().unwrap().path().join("missing-token");
+        let provider = AuthTokenProvider::File(path);
+
+        let error = provider.resolve_token().await.unwrap_err();
+
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<std::io::Error>().is_some())
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_token_file_preserves_utf8_error_source() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(&[0xff]).unwrap();
+        let provider = AuthTokenProvider::File(tmp.path().to_path_buf());
+
+        let error = provider.resolve_token().await.unwrap_err();
+
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<str::Utf8Error>().is_some())
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_json_token_file_preserves_parse_error_source() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        write!(tmp, "not-json").unwrap();
+        let provider = AuthTokenProvider::JsonFile {
+            path: tmp.path().to_path_buf(),
+            key: vec!["authToken".to_string()],
+        };
+
+        let error = provider.resolve_token().await.unwrap_err();
+
+        assert!(error.to_string().contains("failed to extract key"));
+        assert!(error.chain().nth(1).is_some());
     }
 }

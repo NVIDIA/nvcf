@@ -16,16 +16,9 @@
 use std::time::{Duration, Instant};
 
 use reqwest::header::HeaderMap;
-
-const HEADER_MODEL: &str = "x-model";
-const HEADER_ROUTING_KEY: &str = "x-routing-key";
-const HEADER_INPUT_TOKENS: &str = "x-input-tokens";
-const HEADER_PRIORITY: &str = "x-priority";
-pub(crate) const HEADER_REQUEST_ID: &str = "x-request-id";
-pub(crate) const ENGINE_STAT_HEADER_PREFIX: &str = "x-pylon-engine-stat-";
-const HEADER_ENGINE_INPUT_TOKENS_TOTAL: &str = "x-pylon-engine-stat-input-tokens-total";
-const HEADER_ENGINE_INPUT_TOKENS_PROCESSED: &str = "x-pylon-engine-stat-input-tokens-processed";
-const HEADER_ENGINE_OUTPUT_TOKENS_GENERATED: &str = "x-pylon-engine-stat-output-tokens-generated";
+use stargate_protocol::tunnel_contract::{
+    HEADER_INPUT_TOKENS, HEADER_MODEL, HEADER_PRIORITY, HEADER_REQUEST_ID, HEADER_ROUTING_KEY,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestObservationState {
@@ -108,20 +101,13 @@ pub struct RequestObservation {
     pub input_tokens: u64,
     pub embedding_items: u64,
     pub embedding_items_observed: bool,
-    pub input_tokens_processed: u64,
-    pub input_tokens_processed_from_inference_progress: bool,
-    pub engine_reported_input_tokens_total: Option<u64>,
-    pub input_tokens_total_mismatch: bool,
     pub upstream_status: Option<u16>,
     pub output_messages: u64,
     pub output_tokens: u64,
     pub output_tokens_explicit: bool,
     pub output_tokens_from_chunk_usage: bool,
-    pub has_engine_request_stats: bool,
-    pub has_inference_progress_stats: bool,
     pub state: RequestObservationState,
     pub time_to_response_headers: Option<Duration>,
-    pub time_to_input_tokens_processed: Option<Duration>,
     pub time_to_first_output: Option<Duration>,
     pub time_to_first_token: Option<Duration>,
     pub total_duration: Duration,
@@ -142,16 +128,10 @@ impl RequestObservation {
 struct ResponsePhaseData {
     upstream_status: u16,
     response_headers_at: Instant,
-    input_tokens_processed: u64,
-    input_tokens_processed_at: Option<Instant>,
-    input_tokens_processed_from_inference_progress: bool,
-    engine_reported_input_tokens_total: Option<u64>,
     output_messages: u64,
     output_tokens: u64,
     output_tokens_explicit: bool,
     output_tokens_from_chunk_usage: bool,
-    has_engine_request_stats: bool,
-    has_inference_progress_stats: bool,
 }
 
 pub(crate) struct RequestObserver {
@@ -209,40 +189,32 @@ impl RequestObserver {
 
     pub(crate) fn on_upstream_response_headers(
         &mut self,
-        response_headers: &HeaderMap,
+        _response_headers: &HeaderMap,
         status: u16,
     ) {
-        let engine_stats = EngineRequestStats::from_headers(response_headers);
+        match self.state {
+            RequestLifecycleState::UpstreamConnecting => {}
+            RequestLifecycleState::Queued
+            | RequestLifecycleState::InputProcessing(_)
+            | RequestLifecycleState::OutputGeneration { .. }
+            | RequestLifecycleState::Complete { .. }
+            | RequestLifecycleState::Failed { .. }
+            | RequestLifecycleState::Cancelled { .. } => panic!(
+                "invalid response-header transition for request_id={} from state={}",
+                self.request_id,
+                self.state.observation_state_name()
+            ),
+        }
+
         let response_headers_at = Instant::now();
         self.state = RequestLifecycleState::InputProcessing(ResponsePhaseData {
             upstream_status: status,
             response_headers_at,
-            input_tokens_processed: engine_stats.input_tokens_processed.unwrap_or_default(),
-            input_tokens_processed_at: engine_stats
-                .input_tokens_processed
-                .filter(|input_tokens_processed| *input_tokens_processed > 0)
-                .map(|_| response_headers_at),
-            input_tokens_processed_from_inference_progress: false,
-            engine_reported_input_tokens_total: engine_stats.input_tokens_total,
             output_messages: 0,
-            output_tokens: engine_stats.output_tokens_generated.unwrap_or_default(),
-            output_tokens_explicit: engine_stats
-                .output_tokens_generated
-                .is_some_and(|output_tokens| output_tokens > 0),
+            output_tokens: 0,
+            output_tokens_explicit: false,
             output_tokens_from_chunk_usage: false,
-            has_engine_request_stats: engine_stats.has_any(),
-            has_inference_progress_stats: false,
         });
-        if let Some(engine_total) = engine_stats.input_tokens_total
-            && engine_total != self.input_tokens
-        {
-            tracing::warn!(
-                request_id = self.request_id,
-                x_input_tokens = self.input_tokens,
-                engine_input_tokens_total = engine_total,
-                "engine-reported input token total differs from request header"
-            );
-        }
         self.emit();
     }
 
@@ -668,17 +640,6 @@ impl RequestObserver {
             input_tokens: self.input_tokens,
             embedding_items: 0,
             embedding_items_observed: false,
-            input_tokens_processed: response
-                .map(|response| response.input_tokens_processed)
-                .unwrap_or(0),
-            input_tokens_processed_from_inference_progress: response
-                .map(|response| response.input_tokens_processed_from_inference_progress)
-                .unwrap_or(false),
-            engine_reported_input_tokens_total: response
-                .and_then(|response| response.engine_reported_input_tokens_total),
-            input_tokens_total_mismatch: response
-                .and_then(|response| response.engine_reported_input_tokens_total)
-                .is_some_and(|engine_total| engine_total != self.input_tokens),
             upstream_status: response.map(|response| response.upstream_status),
             output_messages: response
                 .map(|response| response.output_messages)
@@ -690,12 +651,6 @@ impl RequestObserver {
             output_tokens_from_chunk_usage: response
                 .map(|response| response.output_tokens_from_chunk_usage)
                 .unwrap_or(false),
-            has_engine_request_stats: response
-                .map(|response| response.has_engine_request_stats)
-                .unwrap_or(false),
-            has_inference_progress_stats: response
-                .map(|response| response.has_inference_progress_stats)
-                .unwrap_or(false),
             state: self.state.observation_state(),
             // Observation timestamps can be coarser than event sequencing; never underflow
             // durations when two instants collapse to the same clock tick.
@@ -703,11 +658,6 @@ impl RequestObserver {
                 response
                     .response_headers_at
                     .saturating_duration_since(self.started_at)
-            }),
-            time_to_input_tokens_processed: response.and_then(|response| {
-                response
-                    .input_tokens_processed_at
-                    .map(|instant| instant.saturating_duration_since(self.started_at))
             }),
             time_to_first_output: first_output_at
                 .map(|instant| instant.saturating_duration_since(self.started_at)),
@@ -723,23 +673,14 @@ impl RequestObserver {
             model_id = observation.model_id.as_str(),
             priority = observation.priority,
             input_tokens = observation.input_tokens,
-            input_tokens_processed = observation.input_tokens_processed,
-            input_tokens_processed_from_inference_progress = observation
-                .input_tokens_processed_from_inference_progress,
             upstream_status = observation.upstream_status.unwrap_or_default(),
             output_messages = observation.output_messages,
             output_tokens = observation.output_tokens,
             output_tokens_explicit = observation.output_tokens_explicit,
             output_tokens_from_chunk_usage = observation.output_tokens_from_chunk_usage,
-            has_engine_request_stats = observation.has_engine_request_stats,
-            has_inference_progress_stats = observation.has_inference_progress_stats,
             state = ?observation.state,
             time_to_response_headers_ms = observation
                 .time_to_response_headers
-                .map(|d| d.as_secs_f64() * 1000.0)
-                .unwrap_or_default(),
-            time_to_input_tokens_processed_ms = observation
-                .time_to_input_tokens_processed
                 .map(|d| d.as_secs_f64() * 1000.0)
                 .unwrap_or_default(),
             time_to_first_output_ms = observation
@@ -891,22 +832,15 @@ impl EmbeddingsRequestObserver {
             input_tokens: self.required.input_tokens,
             embedding_items: self.embedding_items.unwrap_or_default(),
             embedding_items_observed: self.embedding_items.is_some(),
-            input_tokens_processed: 0,
-            input_tokens_processed_from_inference_progress: false,
-            engine_reported_input_tokens_total: None,
-            input_tokens_total_mismatch: false,
             upstream_status: self.upstream_status,
             output_messages: 0,
             output_tokens: 0,
             output_tokens_explicit: false,
             output_tokens_from_chunk_usage: false,
-            has_engine_request_stats: false,
-            has_inference_progress_stats: false,
             state: self.state,
             time_to_response_headers: self
                 .response_headers_at
                 .map(|instant| instant.saturating_duration_since(self.started_at)),
-            time_to_input_tokens_processed: None,
             time_to_first_output: None,
             time_to_first_token: None,
             total_duration: self.started_at.elapsed(),
@@ -952,46 +886,40 @@ impl Drop for EmbeddingsRequestObserver {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct EngineRequestStats {
-    input_tokens_total: Option<u64>,
-    input_tokens_processed: Option<u64>,
-    output_tokens_generated: Option<u64>,
-}
-
-impl EngineRequestStats {
-    fn from_headers(headers: &HeaderMap) -> Self {
-        Self {
-            input_tokens_total: parse_optional_u64_header(
-                headers,
-                HEADER_ENGINE_INPUT_TOKENS_TOTAL,
-            ),
-            input_tokens_processed: parse_optional_u64_header(
-                headers,
-                HEADER_ENGINE_INPUT_TOKENS_PROCESSED,
-            ),
-            output_tokens_generated: parse_optional_u64_header(
-                headers,
-                HEADER_ENGINE_OUTPUT_TOKENS_GENERATED,
-            ),
-        }
-    }
-
-    fn has_any(self) -> bool {
-        self.input_tokens_total.is_some()
-            || self.input_tokens_processed.is_some()
-            || self.output_tokens_generated.is_some()
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct MissingRequiredHeaderError {
     pub header_name: &'static str,
+    pub kind: RequiredHeaderErrorKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequiredHeaderErrorKind {
+    Missing,
+    Invalid,
 }
 
 impl MissingRequiredHeaderError {
     pub(crate) fn new(header_name: &'static str) -> Self {
-        Self { header_name }
+        Self {
+            header_name,
+            kind: RequiredHeaderErrorKind::Missing,
+        }
+    }
+
+    pub(crate) fn invalid(header_name: &'static str) -> Self {
+        Self {
+            header_name,
+            kind: RequiredHeaderErrorKind::Invalid,
+        }
+    }
+
+    pub(crate) fn message(&self) -> String {
+        match self.kind {
+            RequiredHeaderErrorKind::Missing => {
+                format!("missing required {} header", self.header_name)
+            }
+            RequiredHeaderErrorKind::Invalid => format!("invalid {} header", self.header_name),
+        }
     }
 }
 
@@ -1013,7 +941,7 @@ pub(crate) fn validate_required_tunnel_headers(
     let routing_key = get_optional_header(request_headers, HEADER_ROUTING_KEY);
     let model_id = get_optional_header(request_headers, HEADER_MODEL)
         .ok_or_else(|| MissingRequiredHeaderError::new(HEADER_MODEL))?;
-    let input_tokens = parse_optional_u64_header(request_headers, HEADER_INPUT_TOKENS)
+    let input_tokens = parse_optional_u64_header(request_headers, HEADER_INPUT_TOKENS)?
         .ok_or_else(|| MissingRequiredHeaderError::new(HEADER_INPUT_TOKENS))?;
     let priority = parse_optional_u32_header(request_headers, HEADER_PRIORITY)?.unwrap_or_default();
     Ok(RequiredTunnelHeaders {
@@ -1045,11 +973,24 @@ pub(crate) fn embedding_items_from_request_body(body_bytes: &[u8]) -> Option<u64
     }
 }
 
-fn parse_optional_u64_header(headers: &HeaderMap, name: &'static str) -> Option<u64> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
+fn parse_optional_u64_header(
+    headers: &HeaderMap,
+    name: &'static str,
+) -> Result<Option<u64>, MissingRequiredHeaderError> {
+    let Some(value) = headers.get(name) else {
+        return Ok(None);
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| MissingRequiredHeaderError::invalid(name))?
+        .trim();
+    if value.is_empty() {
+        return Err(MissingRequiredHeaderError::invalid(name));
+    }
+    value
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_| MissingRequiredHeaderError::invalid(name))
 }
 
 fn parse_optional_u32_header(
@@ -1061,15 +1002,15 @@ fn parse_optional_u32_header(
     };
     let value = value
         .to_str()
-        .map_err(|_| MissingRequiredHeaderError::new(name))?
+        .map_err(|_| MissingRequiredHeaderError::invalid(name))?
         .trim();
     if value.is_empty() {
-        return Err(MissingRequiredHeaderError::new(name));
+        return Err(MissingRequiredHeaderError::invalid(name));
     }
     value
         .parse::<u32>()
         .map(Some)
-        .map_err(|_| MissingRequiredHeaderError::new(name))
+        .map_err(|_| MissingRequiredHeaderError::invalid(name))
 }
 
 fn get_optional_header(headers: &HeaderMap, name: &'static str) -> Option<String> {
@@ -1084,6 +1025,23 @@ fn get_optional_header(headers: &HeaderMap, name: &'static str) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn recv_observation(
+        rx: &flume::Receiver<RequestObservation>,
+        context: &'static str,
+    ) -> RequestObservation {
+        tokio::time::timeout(Duration::from_secs(1), rx.recv_async())
+            .await
+            .expect(context)
+            .expect("observation channel should remain open")
+    }
+
+    fn recv_observation_blocking(
+        rx: &flume::Receiver<RequestObservation>,
+        context: &'static str,
+    ) -> RequestObservation {
+        rx.try_recv().expect(context)
+    }
 
     #[test]
     fn validate_required_tunnel_headers_accepts_required_values() {
@@ -1126,6 +1084,27 @@ mod tests {
         let error = validate_required_tunnel_headers(&headers).unwrap_err();
 
         assert_eq!(error.header_name, "x-priority");
+        assert_eq!(error.kind, RequiredHeaderErrorKind::Invalid);
+    }
+
+    #[test]
+    fn validate_required_tunnel_headers_rejects_malformed_input_tokens() {
+        for value in [
+            "not-a-token-count".parse().unwrap(),
+            "".parse().unwrap(),
+            " ".parse().unwrap(),
+            reqwest::header::HeaderValue::from_bytes(&[0xff]).unwrap(),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(HEADER_REQUEST_ID, "req-1".parse().unwrap());
+            headers.insert(HEADER_MODEL, "model-a".parse().unwrap());
+            headers.insert(HEADER_INPUT_TOKENS, value);
+
+            let error = validate_required_tunnel_headers(&headers).unwrap_err();
+
+            assert_eq!(error.header_name, HEADER_INPUT_TOKENS);
+            assert_eq!(error.kind, RequiredHeaderErrorKind::Invalid);
+        }
     }
 
     #[test]
@@ -1140,6 +1119,7 @@ mod tests {
             let error = validate_required_tunnel_headers(&headers).unwrap_err();
 
             assert_eq!(error.header_name, missing);
+            assert_eq!(error.kind, RequiredHeaderErrorKind::Missing);
         }
     }
 
@@ -1188,7 +1168,7 @@ mod tests {
         let (tx, rx) = flume::bounded(4);
 
         let _observer = EmbeddingsRequestObserver::accepted(required, Some(tx));
-        let observation = rx.recv().unwrap();
+        let observation = recv_observation_blocking(&rx, "accepted embeddings observation");
 
         assert!(observation.total_duration >= Duration::from_millis(40));
     }
@@ -1199,12 +1179,12 @@ mod tests {
         let mut observer =
             EmbeddingsRequestObserver::accepted(embeddings_required_headers(), Some(tx));
 
-        let accepted = rx.recv().unwrap();
+        let accepted = recv_observation_blocking(&rx, "accepted embeddings observation");
         assert_eq!(accepted.embedding_items, 0);
         assert!(!accepted.embedding_items_observed);
 
         observer.update_embedding_items(Some(0));
-        let parsed = rx.recv().unwrap();
+        let parsed = recv_observation_blocking(&rx, "parsed embeddings observation");
         assert_eq!(parsed.embedding_items, 0);
         assert!(parsed.embedding_items_observed);
     }
@@ -1276,17 +1256,17 @@ mod tests {
         let (tx, rx) = flume::bounded(8);
         let mut observer = RequestObserver::new(&headers, Some(tx)).unwrap();
 
-        let initial = rx.recv().unwrap();
+        let initial = recv_observation(&rx, "initial observation should be emitted").await;
         assert_eq!(initial.state, RequestObservationState::UpstreamConnecting);
         assert!(!initial.is_terminal());
 
         observer.on_upstream_response_headers(&response_headers, 200);
-        let first = rx.recv().unwrap();
+        let first = recv_observation(&rx, "response-header observation should be emitted").await;
         assert_eq!(first.state, RequestObservationState::InputProcessing);
         assert!(!first.is_terminal());
 
         observer.observe_output_message();
-        let second = rx.recv().unwrap();
+        let second = recv_observation(&rx, "output observation should be emitted").await;
         assert_eq!(second.state, RequestObservationState::OutputGeneration);
         assert_eq!(second.output_messages, 1);
         assert!(!second.is_terminal());
@@ -1303,7 +1283,7 @@ mod tests {
         let (tx, rx) = flume::bounded(8);
         let _observer = RequestObserver::new(&headers, Some(tx)).unwrap();
 
-        let observation = rx.recv().unwrap();
+        let observation = recv_observation(&rx, "initial observation should be emitted").await;
         assert_eq!(observation.request_id, "req-connect");
         assert_eq!(
             observation.state,
@@ -1323,12 +1303,12 @@ mod tests {
 
         let (tx, rx) = flume::bounded(8);
         let observer = RequestObserver::new(&headers, Some(tx)).unwrap();
-        let initial = rx.recv().unwrap();
+        let initial = recv_observation(&rx, "initial observation should be emitted").await;
         assert_eq!(initial.state, RequestObservationState::UpstreamConnecting);
 
         drop(observer);
 
-        let terminal = rx.recv().unwrap();
+        let terminal = recv_observation(&rx, "drop should emit terminal observation").await;
         assert_eq!(terminal.state, RequestObservationState::Cancelled);
         assert!(terminal.is_terminal());
     }
@@ -1377,12 +1357,12 @@ mod tests {
 
         let (tx, rx) = flume::bounded(8);
         let mut observer = RequestObserver::new(&headers, Some(tx)).unwrap();
-        let _ = rx.recv().unwrap();
+        let _ = recv_observation(&rx, "initial observation should be emitted").await;
         observer.on_upstream_response_headers(&response_headers, 200);
-        let _ = rx.recv().unwrap();
+        let _ = recv_observation(&rx, "response-header observation should be emitted").await;
 
         observer.observe_output_tokens(3);
-        let token_observation = rx.recv().unwrap();
+        let token_observation = recv_observation(&rx, "token observation should be emitted").await;
         assert_eq!(
             token_observation.state,
             RequestObservationState::OutputGeneration
@@ -1393,86 +1373,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_headers_record_engine_request_stats_without_replacing_input_total() {
-        let mut headers = HeaderMap::new();
-        headers.insert(HEADER_REQUEST_ID, "req-engine-stats".parse().unwrap());
-        headers.insert(HEADER_ROUTING_KEY, "rk-1".parse().unwrap());
-        headers.insert(HEADER_MODEL, "model-a".parse().unwrap());
-        headers.insert(HEADER_INPUT_TOKENS, "42".parse().unwrap());
-
-        let mut response_headers = HeaderMap::new();
-        response_headers.insert(HEADER_ENGINE_INPUT_TOKENS_TOTAL, "41".parse().unwrap());
-        response_headers.insert(HEADER_ENGINE_INPUT_TOKENS_PROCESSED, "39".parse().unwrap());
-        response_headers.insert(HEADER_ENGINE_OUTPUT_TOKENS_GENERATED, "7".parse().unwrap());
-
-        let (tx, rx) = flume::bounded(8);
-        let mut observer = RequestObserver::new(&headers, Some(tx)).unwrap();
-        let _ = rx.recv().unwrap();
-        observer.on_upstream_response_headers(&response_headers, 200);
-        let observation = rx.recv().unwrap();
-
-        assert_eq!(observation.input_tokens, 42);
-        assert_eq!(observation.input_tokens_processed, 39);
-        assert_eq!(observation.engine_reported_input_tokens_total, Some(41));
-        assert!(observation.input_tokens_total_mismatch);
-        assert_eq!(observation.output_tokens, 7);
-        assert!(observation.output_tokens_explicit);
-        assert!(!observation.output_tokens_from_chunk_usage);
-        assert!(observation.has_engine_request_stats);
-        assert!(!observation.input_tokens_processed_from_inference_progress);
-        assert_eq!(
-            observation.time_to_input_tokens_processed,
-            observation.time_to_response_headers
-        );
-
-        observer.observe_output_tokens(3);
-        assert!(
-            rx.is_empty(),
-            "fallback token estimates should not emit after header counters"
-        );
-
-        observer.observe_output_tokens_generated_so_far(7);
-        let chunk_equal = rx.recv().unwrap();
-        assert_eq!(chunk_equal.output_tokens, 7);
-        assert!(chunk_equal.output_tokens_explicit);
-        assert!(chunk_equal.output_tokens_from_chunk_usage);
-        assert!(chunk_equal.has_engine_request_stats);
-
-        observer.observe_output_tokens_generated_so_far(7);
-        assert!(
-            rx.is_empty(),
-            "repeated chunk counters with no value change should not emit"
-        );
-
-        observer.observe_output_tokens_generated_so_far(3);
-        assert!(
-            rx.is_empty(),
-            "regressing explicit chunk counters should not emit unchanged state"
-        );
-    }
-
-    #[tokio::test]
-    async fn zero_header_output_counter_does_not_disable_text_fallback() {
+    async fn response_headers_do_not_disable_text_fallback() {
         let mut headers = HeaderMap::new();
         headers.insert(HEADER_REQUEST_ID, "req-zero-header-output".parse().unwrap());
         headers.insert(HEADER_ROUTING_KEY, "rk-1".parse().unwrap());
         headers.insert(HEADER_MODEL, "model-a".parse().unwrap());
         headers.insert(HEADER_INPUT_TOKENS, "42".parse().unwrap());
 
-        let mut response_headers = HeaderMap::new();
-        response_headers.insert(HEADER_ENGINE_OUTPUT_TOKENS_GENERATED, "0".parse().unwrap());
+        let response_headers = HeaderMap::new();
 
         let (tx, rx) = flume::bounded(8);
         let mut observer = RequestObserver::new(&headers, Some(tx)).unwrap();
-        let _ = rx.recv().unwrap();
+        let _ = recv_observation(&rx, "initial observation should be emitted").await;
         observer.on_upstream_response_headers(&response_headers, 200);
-        let header_observation = rx.recv().unwrap();
+        let header_observation =
+            recv_observation(&rx, "response-header observation should be emitted").await;
         assert_eq!(header_observation.output_tokens, 0);
         assert!(!header_observation.output_tokens_explicit);
-        assert!(header_observation.has_engine_request_stats);
 
         observer.observe_output_tokens(3);
-        let estimated_observation = rx.recv().unwrap();
+        let estimated_observation =
+            recv_observation(&rx, "fallback token observation should be emitted").await;
         assert_eq!(
             estimated_observation.state,
             RequestObservationState::OutputGeneration
@@ -1498,21 +1419,21 @@ mod tests {
 
         let (tx, rx) = flume::bounded(8);
         let mut observer = RequestObserver::new(&headers, Some(tx)).unwrap();
-        let _ = rx.recv().unwrap();
+        let _ = recv_observation(&rx, "initial observation should be emitted").await;
         observer.on_upstream_response_headers(&response_headers, 200);
-        let _ = rx.recv().unwrap();
+        let _ = recv_observation(&rx, "response-header observation should be emitted").await;
 
         observer.observe_output_tokens(5);
-        let estimated = rx.recv().unwrap();
+        let estimated =
+            recv_observation(&rx, "estimated token observation should be emitted").await;
         assert_eq!(estimated.output_tokens, 5);
         assert!(!estimated.output_tokens_explicit);
 
         observer.observe_output_tokens_generated_so_far(3);
-        let explicit = rx.recv().unwrap();
+        let explicit = recv_observation(&rx, "explicit token observation should be emitted").await;
         assert_eq!(explicit.output_tokens, 3);
         assert!(explicit.output_tokens_explicit);
         assert!(explicit.output_tokens_from_chunk_usage);
-        assert!(!explicit.has_engine_request_stats);
 
         observer.observe_output_tokens_generated_so_far(3);
         assert!(
@@ -1543,12 +1464,13 @@ mod tests {
 
         let (tx, rx) = flume::bounded(8);
         let mut observer = RequestObserver::new(&headers, Some(tx)).unwrap();
-        let _ = rx.recv().unwrap();
+        let _ = recv_observation(&rx, "initial observation should be emitted").await;
         observer.on_upstream_response_headers(&response_headers, 200);
-        let _ = rx.recv().unwrap();
+        let _ = recv_observation(&rx, "response-header observation should be emitted").await;
 
         observer.observe_output_message();
-        let output_observation = rx.recv().unwrap();
+        let output_observation =
+            recv_observation(&rx, "output observation should be emitted").await;
         assert_eq!(
             output_observation.state,
             RequestObservationState::OutputGeneration
@@ -1563,11 +1485,89 @@ mod tests {
         );
 
         observer.finish();
-        let terminal_observation = rx.recv().unwrap();
+        let terminal_observation =
+            recv_observation(&rx, "terminal observation should be emitted").await;
         assert!(terminal_observation.is_terminal());
         assert_eq!(terminal_observation.output_tokens, 0);
         assert!(terminal_observation.output_tokens_explicit);
         assert!(terminal_observation.output_tokens_from_chunk_usage);
+    }
+
+    #[tokio::test]
+    async fn chunk_usage_counter_before_output_controls_live_token_accounting() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HEADER_REQUEST_ID, "req-early-chunk-usage".parse().unwrap());
+        headers.insert(HEADER_ROUTING_KEY, "rk-1".parse().unwrap());
+        headers.insert(HEADER_MODEL, "model-a".parse().unwrap());
+        headers.insert(HEADER_INPUT_TOKENS, "42".parse().unwrap());
+
+        let (tx, rx) = flume::bounded(8);
+        let mut observer = RequestObserver::new(&headers, Some(tx)).unwrap();
+        let _ = recv_observation(&rx, "initial observation should be emitted").await;
+        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        let _ = recv_observation(&rx, "response-header observation should be emitted").await;
+
+        observer.observe_output_tokens_generated_so_far(0);
+        assert!(
+            rx.is_empty(),
+            "zero-token chunk usage before output should not emit a duplicate live update"
+        );
+
+        observer.observe_output_tokens(3);
+        assert!(
+            rx.is_empty(),
+            "fallback token estimates should not emit after chunk usage becomes explicit"
+        );
+
+        observer.observe_output_tokens_generated_so_far(4);
+        let explicit = recv_observation(&rx, "positive chunk usage should be emitted").await;
+        assert_eq!(explicit.state, RequestObservationState::OutputGeneration);
+        assert_eq!(explicit.output_tokens, 4);
+        assert!(explicit.output_tokens_explicit);
+        assert!(explicit.output_tokens_from_chunk_usage);
+        assert!(explicit.time_to_first_output.is_some());
+        assert!(explicit.time_to_first_token.is_some());
+
+        observer.observe_output_tokens_generated_so_far(4);
+        assert!(
+            rx.is_empty(),
+            "repeated chunk usage counters with no value change should not emit"
+        );
+
+        observer.observe_output_tokens_generated_so_far(2);
+        assert!(
+            rx.is_empty(),
+            "regressing chunk usage counters should not emit"
+        );
+    }
+
+    #[test]
+    fn input_processing_chunk_usage_counter_rejects_regression() {
+        let mut observer = make_test_observer();
+        let started_at = Instant::now() - Duration::from_secs(1);
+        observer.started_at = started_at;
+        observer.state = RequestLifecycleState::InputProcessing(ResponsePhaseData {
+            upstream_status: 200,
+            response_headers_at: started_at + Duration::from_millis(10),
+            output_messages: 0,
+            output_tokens: 5,
+            output_tokens_explicit: true,
+            output_tokens_from_chunk_usage: true,
+        });
+
+        observer.observe_output_tokens_generated_so_far(3);
+
+        let (response, first_output_at, first_token_at) = observer.response_snapshot();
+        let response = response.unwrap();
+        assert_eq!(response.output_tokens, 5);
+        assert!(response.output_tokens_explicit);
+        assert!(response.output_tokens_from_chunk_usage);
+        assert_eq!(
+            observer.state.observation_state(),
+            RequestObservationState::InputProcessing
+        );
+        assert_eq!(first_output_at, None);
+        assert_eq!(first_token_at, None);
     }
 
     #[test]
@@ -1580,16 +1580,10 @@ mod tests {
             response: ResponsePhaseData {
                 upstream_status: 200,
                 response_headers_at: started_at + Duration::from_millis(50),
-                input_tokens_processed: 0,
-                input_tokens_processed_at: None,
-                input_tokens_processed_from_inference_progress: false,
-                engine_reported_input_tokens_total: None,
                 output_messages: 2,
                 output_tokens: 0,
                 output_tokens_explicit: false,
                 output_tokens_from_chunk_usage: false,
-                has_engine_request_stats: false,
-                has_inference_progress_stats: false,
             },
             first_output_at,
             first_token_at: None,
@@ -1634,6 +1628,48 @@ mod tests {
         observer.fail();
     }
 
+    #[test]
+    fn response_headers_after_terminal_state_panics() {
+        fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+            if let Some(message) = panic.downcast_ref::<String>() {
+                return message.clone();
+            }
+            if let Some(message) = panic.downcast_ref::<&'static str>() {
+                return (*message).to_string();
+            }
+            panic!("unexpected non-string panic payload");
+        }
+
+        fn assert_terminal_response_header_panic(
+            terminalize: impl FnOnce(&mut RequestObserver),
+            expected_state: &str,
+        ) {
+            let mut observer = make_test_observer();
+            terminalize(&mut observer);
+
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+            }))
+            .expect_err("response headers after terminal state should panic");
+
+            let message = panic_message(panic);
+            assert!(message.contains("invalid response-header transition"));
+            assert!(message.contains("request_id=req-inv"));
+            assert!(message.contains(expected_state));
+        }
+
+        assert_terminal_response_header_panic(
+            |observer| {
+                observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+                observer.observe_output_message();
+                observer.finish();
+            },
+            "state=Complete",
+        );
+        assert_terminal_response_header_panic(|observer| observer.fail(), "state=Failed");
+        assert_terminal_response_header_panic(|observer| observer.cancel(), "state=Cancelled");
+    }
+
     #[tokio::test]
     async fn failed_response_stays_failed() {
         let mut headers = HeaderMap::new();
@@ -1667,7 +1703,8 @@ mod tests {
         assert!(matches!(
             result,
             Err(MissingRequiredHeaderError {
-                header_name: HEADER_REQUEST_ID
+                header_name: HEADER_REQUEST_ID,
+                kind: RequiredHeaderErrorKind::Missing,
             })
         ));
     }
@@ -1681,7 +1718,8 @@ mod tests {
         assert!(matches!(
             result,
             Err(MissingRequiredHeaderError {
-                header_name: HEADER_MODEL
+                header_name: HEADER_MODEL,
+                kind: RequiredHeaderErrorKind::Missing,
             })
         ));
     }
@@ -1696,7 +1734,8 @@ mod tests {
         assert!(matches!(
             result,
             Err(MissingRequiredHeaderError {
-                header_name: HEADER_INPUT_TOKENS
+                header_name: HEADER_INPUT_TOKENS,
+                kind: RequiredHeaderErrorKind::Missing,
             })
         ));
     }

@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "anypb",
+    srcs = ["any.pb.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/anypb",
+    importpath = "google.golang.org/protobuf/types/known/anypb",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/google.golang.org/protobuf/proto",
+        "//vendor/google.golang.org/protobuf/reflect/protoreflect",
+        "//vendor/google.golang.org/protobuf/reflect/protoregistry",
+        "//vendor/google.golang.org/protobuf/runtime/protoimpl",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":anypb",
+    visibility = ["//visibility:public"],
+)

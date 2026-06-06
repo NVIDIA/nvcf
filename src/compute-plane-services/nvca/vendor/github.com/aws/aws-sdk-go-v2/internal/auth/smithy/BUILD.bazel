@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "smithy",
+    srcs = [
+        "bearer_token_adapter.go",
+        "bearer_token_signer_adapter.go",
+        "credentials_adapter.go",
+        "smithy.go",
+        "v4signer_adapter.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/auth/smithy",
+    importpath = "github.com/aws/aws-sdk-go-v2/internal/auth/smithy",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
+    deps = [
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//vendor/github.com/aws/aws-sdk-go-v2/aws/signer/v4:signer",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/context",
+        "//vendor/github.com/aws/aws-sdk-go-v2/internal/sdk",
+        "//vendor/github.com/aws/smithy-go",
+        "//vendor/github.com/aws/smithy-go/auth",
+        "//vendor/github.com/aws/smithy-go/auth/bearer",
+        "//vendor/github.com/aws/smithy-go/logging",
+        "//vendor/github.com/aws/smithy-go/transport/http",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":smithy",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
+)

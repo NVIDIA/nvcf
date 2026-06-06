@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "verbosity",
+    srcs = ["verbosity.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/klog/v2/internal/verbosity",
+    importpath = "k8s.io/klog/v2/internal/verbosity",
+    visibility = ["//vendor/k8s.io/klog/v2:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":verbosity",
+    visibility = ["//vendor/k8s.io/klog/v2:__subpackages__"],
+)

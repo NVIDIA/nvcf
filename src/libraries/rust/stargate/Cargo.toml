@@ -21,6 +21,7 @@ members = [
   "crates/stargate-auth",
   "crates/pylon-lib",
   "crates/stargate-tls",
+  "crates/stargate-forwarding",
   "crates/stargate",
   "crates/stargate-k8s-router",
   "crates/mock-dynamo",
@@ -49,36 +50,35 @@ flume = "=0.12.0"
 h3 = "=0.0.8"
 h3-quinn = "=0.0.10"
 hickory-resolver = "=0.24.4"
-hyper = "=1.9.0"
-memchr = "=2.8.0"
+hyper = "=1.10.1"
+memchr = "=2.8.1"
 parking_lot = "=0.12.5"
-prost = "=0.13.5"
+prost = "=0.14.3"
 rand = "=0.9.3"
-reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "rustls-tls"] }
-scc = "=3.6.5"
+reqwest = { version = "=0.13.4", default-features = false, features = ["json", "stream", "rustls"] }
+scc = "=3.7.1"
 serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.149"
+serde_json = "=1.0.150"
+serde_yaml_ng = "=0.10.0"
 sonic-rs = "=0.5.8"
 thiserror = "=2.0.18"
-tokio = { version = "=1.49.0", features = ["full"] }
+tokio = { version = "=1.52.3", features = ["full"] }
 tokio-stream = "=0.1.18"
 tokio-util = { version = "=0.7.18", features = ["rt"] }
-tonic = "=0.13.1"
-opentelemetry = "=0.28.0"
-opentelemetry-http = "=0.28.0"
-opentelemetry_sdk = { version = "=0.28.0", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "=0.28.0", default-features = false, features = ["grpc-tonic", "tls-roots", "trace"] }
-prometheus = "=0.13.4"
+tonic = "=0.14.6"
+opentelemetry = "=0.32.0"
+opentelemetry-http = "=0.32.0"
+opentelemetry_sdk = { version = "=0.32.1", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "=0.32.0", default-features = false, features = ["grpc-tonic", "tls-roots", "trace"] }
+prometheus = "=0.14.0"
 tracing = "=0.1.44"
-tracing-opentelemetry = "=0.29.0"
+tracing-opentelemetry = "=0.33.0"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt", "registry"] }
 quinn = { version = "=0.11.9", features = ["futures-io"] }
 rustls = "=0.23.40"
-rustls-native-certs = "=0.8.3"
 rcgen = "=0.13.2"
 rustls-pemfile = "=2.2.0"
 url = "=2.5.8"
-httparse = "=1.10.1"
 k8s-openapi = { version = "=0.27.1", features = ["v1_33"] }
 kube = { version = "=3.1.0", default-features = false, features = ["aws-lc-rs", "client", "runtime", "rustls-tls"] }
 
@@ -87,14 +87,17 @@ capnp-futures = "=0.23.1"
 capnpc = "=0.23.3"
 hyper-util = "=0.1.20"
 httpdate = "=1.0.3"
-tempfile = "=3.26.0"
-tonic-build = "=0.13.1"
+tempfile = "=3.27.0"
+tonic-build = "=0.14.6"
+tonic-prost = "=0.14.6"
+tonic-prost-build = "=0.14.6"
 tower = { version = "=0.5.3", features = ["util"] }
-http = "=1.4.0"
+http = "=1.4.1"
 async-trait = "=0.1.89"
 xxhash-rust = { version = "=0.8.15", features = ["xxh3"] }
 
 stargate-auth = { path = "crates/stargate-auth" }
+stargate-forwarding = { path = "crates/stargate-forwarding" }
 stargate-telemetry = { path = "crates/stargate-telemetry" }
 stargate-tls = { path = "crates/stargate-tls" }
 stargate = { path = "crates/stargate" }

@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "binarylog",
+    srcs = [
+        "binarylog.go",
+        "binarylog_testutil.go",
+        "env_config.go",
+        "method_logger.go",
+        "sink.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/binarylog",
+    importpath = "google.golang.org/grpc/internal/binarylog",
+    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+    deps = [
+        "//vendor/google.golang.org/grpc/binarylog/grpc_binarylog_v1",
+        "//vendor/google.golang.org/grpc/grpclog",
+        "//vendor/google.golang.org/grpc/internal/grpcutil",
+        "//vendor/google.golang.org/grpc/metadata",
+        "//vendor/google.golang.org/grpc/status",
+        "//vendor/google.golang.org/protobuf/proto",
+        "//vendor/google.golang.org/protobuf/types/known/durationpb",
+        "//vendor/google.golang.org/protobuf/types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":binarylog",
+    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+)

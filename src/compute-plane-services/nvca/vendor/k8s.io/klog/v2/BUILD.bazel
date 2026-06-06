@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "klog",
+    srcs = [
+        "contextual.go",
+        "contextual_slog.go",
+        "exit.go",
+        "format.go",
+        "imports.go",
+        "k8s_references.go",
+        "k8s_references_slog.go",
+        "klog.go",
+        "klog_file.go",
+        "klog_file_others.go",
+        "klog_file_windows.go",
+        "klogr.go",
+        "klogr_slog.go",
+        "safeptr.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/klog/v2",
+    importpath = "k8s.io/klog/v2",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-logr/logr",
+        "//vendor/k8s.io/klog/v2/internal/buffer",
+        "//vendor/k8s.io/klog/v2/internal/clock",
+        "//vendor/k8s.io/klog/v2/internal/dbg",
+        "//vendor/k8s.io/klog/v2/internal/serialize",
+        "//vendor/k8s.io/klog/v2/internal/severity",
+        "//vendor/k8s.io/klog/v2/internal/sloghandler",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":klog",
+    visibility = ["//visibility:public"],
+)

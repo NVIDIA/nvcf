@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "shareddefaults",
+    srcs = [
+        "ecs_container.go",
+        "shared_config.go",
+        "shared_config_resolve_home.go",
+        "shared_config_resolve_home_go1.12.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/internal/shareddefaults",
+    importpath = "github.com/aws/aws-sdk-go/internal/shareddefaults",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":shareddefaults",
+    visibility = ["//vendor/github.com/aws/aws-sdk-go:__subpackages__"],
+)

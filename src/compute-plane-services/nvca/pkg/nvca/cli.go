@@ -94,9 +94,7 @@ func newCobraCommand(
 	initLogger func(log *logrus.Entry) logr.Logger,
 ) *cobra.Command {
 	var (
-		configFile     string
-		tokenFilePath  string
-		identitySource string
+		configFile string
 	)
 	cmd := &cobra.Command{
 		Use:     types.AppName,
@@ -160,9 +158,8 @@ func newCobraCommand(
 					NGCServiceAPIKeyFile:            cfg.Authz.NGCServiceAPIKeyFile,
 					SelfHostedEnabled:               featureflag.SelfHosted.Enabled(),
 					SelfHostedVaultSecretsJSONPath:  cfg.Authz.SelfManagedVaultSecretsJSONPath,
-					PSATTokenFilePath:               tokenFilePath,
+					PSATTokenFilePath:               cfg.Authz.ClusterIssuedTokenFilePath,
 				},
-				IdentitySource:                          identitySource,
 				NATSURL:                                 cfg.Agent.NATSURL,
 				NATSHostOverride:                        hostOverrides.NATSHostOverride,
 				NCAId:                                   cfg.Cluster.NCAID,
@@ -299,27 +296,7 @@ func newCobraCommand(
 		panic(err)
 	}
 
-	// Identity-related plumbing. Bound here as proper Cobra flags (rather than
-	// looked up via os.Getenv at runtime) so they appear in --help, follow the
-	// standard CLI > env > default precedence, and are introspectable for
-	// tests. The vendored nvcaconfig.AuthzConfig doesn't carry these yet; once
-	// it does they should move under cfg.Authz / cfg.Cluster like their peers.
-	cmd.PersistentFlags().StringVar(&tokenFilePath, "token-file-path", os.Getenv("NVCF_TOKEN_FILE_PATH"),
-		"Path to the projected ServiceAccount token (PSAT) used by the agent for ICMS auth, NATS auth-callout, and ReVal token fetching")
-	cmd.PersistentFlags().StringVar(&identitySource, "identity-source", defaultIdentitySource(),
-		"Identity source the agent runs under: 'psat' (default; projected SA token). Empty/unset is treated as 'psat'")
-
 	return cmd
-}
-
-// defaultIdentitySource resolves the env var fallback for --identity-source so
-// the operator's existing env-based injection (NVCF_IDENTITY_SOURCE) continues
-// to work for charts that haven't been updated to pass the flag explicitly.
-func defaultIdentitySource() string {
-	if v := os.Getenv("NVCF_IDENTITY_SOURCE"); v != "" {
-		return v
-	}
-	return "psat"
 }
 
 func setDefaults(cfg *nvcaconfig.Config) error {

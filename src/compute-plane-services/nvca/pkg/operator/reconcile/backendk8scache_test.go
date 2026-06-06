@@ -630,12 +630,15 @@ func TestBackendK8sSyncMinimal(t *testing.T) {
 		WithGXCache(clustermgmt.DefaultGXCacheNamespace, false).
 		WithK8sClusterNetworkCIDRs([]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/12"}).
 		WithNGCServiceKeyFetcher(ag.TokenFetcher).
-		WithClients(clients)
+		WithClients(clients).
+		WithClusterSource(ag.ClusterSource)
 
 	bc, _, err := b.Start(ctx)
 	require.NoError(t, err)
 
 	ag.backendk8scache = bc
+
+	assert.Equal(t, nvcaoptypes.ClusterSourceNGCManaged, bc.clusterSource)
 
 	nb := getTestNVCFBackendMinimal()
 
@@ -2382,6 +2385,78 @@ func TestOperator_mergeOverrides(t *testing.T) {
 	}
 }
 
+func TestFormatFeatureGateChangeSummary(t *testing.T) {
+	tests := []struct {
+		name     string
+		previous nvidiaiov1.FeatureGate
+		desired  nvidiaiov1.FeatureGate
+		want     string
+	}{
+		{
+			name: "reports added gates from status to spec",
+			previous: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability", "LogPosting"},
+			},
+			desired: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability", "KAIScheduler", "LogPosting"},
+			},
+			want: "feature gates: added=[KAIScheduler] removed=[]",
+		},
+		{
+			name: "sorts added and removed gates for stable logs",
+			previous: nvidiaiov1.FeatureGate{
+				Values: []string{"Zeta", "Alpha", "Stale"},
+			},
+			desired: nvidiaiov1.FeatureGate{
+				Values: []string{"Beta", "Alpha", "Gamma"},
+			},
+			want: "feature gates: added=[Beta Gamma] removed=[Stale Zeta]",
+		},
+		{
+			name: "reports shared storage changes",
+			previous: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability"},
+			},
+			desired: nvidiaiov1.FeatureGate{
+				Values:        []string{"BYOObservability"},
+				SharedStorage: &nvidiaiov1.SharedStorageSpec{},
+			},
+			want: "feature gates: added=[] removed=[] sharedStorageChanged=true",
+		},
+		{
+			name: "reports internal persistent storage changes",
+			previous: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability"},
+			},
+			desired: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability"},
+				InternalPersistentStorage: &nvidiaiov1.InternalPersistentStorageSpec{
+					Enabled: true,
+				},
+			},
+			want: "feature gates: added=[] removed=[] internalPersistentStorageChanged=true",
+		},
+		{
+			name: "reports otel config changes",
+			previous: nvidiaiov1.FeatureGate{
+				Values: []string{"BYOObservability"},
+			},
+			desired: nvidiaiov1.FeatureGate{
+				Values:     []string{"BYOObservability"},
+				OTELConfig: &nvidiaiov1.OTELConfig{ServiceName: "nvcf-nvca"},
+			},
+			want: "feature gates: added=[] removed=[] otelConfigChanged=true",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatFeatureGateChangeSummary(tt.previous, tt.desired)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestOperator_mergeOverrides_MaintenanceModes(t *testing.T) {
 	tests := []struct {
 		name                    string
@@ -3155,6 +3230,7 @@ func TestValidateNVCFBackend(t *testing.T) {
 	tests := []struct {
 		name           string
 		setupConfigMap func(clients *kubeclients.KubeClients) error
+		bc             *BackendK8sCache
 		expectedError  bool
 		errorContains  string
 	}{
@@ -3193,6 +3269,14 @@ spec:
 				return nil
 			},
 			expectedError: false,
+		},
+		{
+			name: "failure when cluster source is changed after initial deployment",
+			bc: &BackendK8sCache{
+				clusterSource: nvcaoptypes.ClusterSourceSelfHosted,
+			},
+			expectedError: true,
+			errorContains: "cluster source cannot be changed after initial deployment",
 		},
 		{
 			name: "failure when custom network policy yaml is malformed",
@@ -3239,16 +3323,27 @@ spec:
 				require.NoError(t, err, "Failed to setup test configmap")
 			}
 
-			bc := &BackendK8sCache{
-				clients:           clients,
-				operatorNamespace: NVCAOperatorNamespace,
+			var bc *BackendK8sCache
+			if tt.bc != nil {
+				bc = tt.bc
+			} else {
+				bc = &BackendK8sCache{}
+				bc.clusterSource = nvcaoptypes.ClusterSourceNGCManaged
 			}
+
+			bc.clients = clients
+			bc.operatorNamespace = NVCAOperatorNamespace
 
 			// Create a test NVCFBackend
 			nb := &nvidiaiov1.NVCFBackend{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-backend",
 					Namespace: NVCAOperatorNamespace,
+				},
+				Spec: nvidiaiov1.NVCFBackendSpec{
+					NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+						ClusterSource: nvcaoptypes.ClusterSourceNGCManaged,
+					},
 				},
 			}
 

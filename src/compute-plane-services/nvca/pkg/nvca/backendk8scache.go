@@ -78,6 +78,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures/sharedcluster"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/fnds"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
@@ -2852,6 +2853,17 @@ func (c *BackendK8sCache) ensureImageCredentialUpdaterCronJob(ctx context.Contex
 	// Use NVCA's service account to run the job for API access and image pull secrets.
 	cj.Namespace = c.systemNamespace
 	cj.Spec.JobTemplate.Spec.Template.Spec.ServiceAccountName = "nvca"
+
+	// All Pods created by NVCA must use the same scheduler.
+	if c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
+		cj.Spec.JobTemplate.Spec.Template.Spec.SchedulerName = kaischeduler.SchedulerName
+		labels := cj.Spec.JobTemplate.Spec.Template.GetLabels()
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.GetQName()
+		cj.Spec.JobTemplate.Spec.Template.SetLabels(labels)
+	}
 
 	cjClient := c.clients.K8s.BatchV1().CronJobs(cj.Namespace)
 	if _, err := cjClient.Get(ctx, cj.Name, metav1.GetOptions{}); err != nil {

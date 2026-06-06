@@ -17,9 +17,9 @@ go_library(
     deps = [
         "//pkg/apis/nvca/v1:nvca",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "@com_github_urfave_cli_v2//:cli",
-        "@io_k8s_api//core/v1:core",
-        "@io_k8s_apimachinery//pkg/api/resource",
+        "//vendor/github.com/urfave/cli/v2:cli",
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/api/resource",
     ],
 )
 
@@ -41,9 +41,9 @@ go_test(
     embed = [":featureflag"],
     deps = [
         "//pkg/apis/nvca/v1:nvca",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
-        "@io_k8s_api//core/v1:core",
-        "@io_k8s_apimachinery//pkg/api/resource",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/api/resource",
     ],
 )

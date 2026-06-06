@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "source",
+    srcs = [
+        "event_handler.go",
+        "kind.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/source",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/internal/source",
+    visibility = ["//vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
+    deps = [
+        "//vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/util/wait",
+        "//vendor/k8s.io/client-go/tools/cache",
+        "//vendor/k8s.io/client-go/util/workqueue",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/cache",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/event",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/handler",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/predicate",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":source",
+    visibility = ["//vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
+)

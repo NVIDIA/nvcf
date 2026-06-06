@@ -11,15 +11,15 @@ go_library(
     deps = [
         "//pkg/apis/nvca/v1alpha1",
         "//pkg/client/clientset/versioned",
+        "//vendor/github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2:scheduling",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "@com_github_nvidia_kai_scheduler//pkg/apis/scheduling/v2:scheduling",
-        "@io_k8s_apimachinery//pkg/runtime",
-        "@io_k8s_apimachinery//pkg/util/runtime",
-        "@io_k8s_client_go//discovery",
-        "@io_k8s_client_go//dynamic",
-        "@io_k8s_client_go//kubernetes",
-        "@io_k8s_client_go//rest",
-        "@io_k8s_sigs_controller_runtime//pkg/client",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//vendor/k8s.io/client-go/discovery",
+        "//vendor/k8s.io/client-go/dynamic",
+        "//vendor/k8s.io/client-go/kubernetes",
+        "//vendor/k8s.io/client-go/rest",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
     ],
 )
 

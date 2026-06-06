@@ -16,11 +16,11 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/apis/nvca/internal/compat",
-        "@io_k8s_api//core/v1:core",
-        "@io_k8s_apimachinery//pkg/api/resource",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
-        "@io_k8s_apimachinery//pkg/runtime",
-        "@io_k8s_apimachinery//pkg/runtime/schema",
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/api/resource",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
     ],
 )
 
@@ -36,7 +36,7 @@ go_test(
     embed = [":nvca"],
     deps = [
         "//pkg/apis/nvca/internal/compat",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
     ],
 )

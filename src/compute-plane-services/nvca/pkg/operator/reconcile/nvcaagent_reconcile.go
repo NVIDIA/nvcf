@@ -2326,6 +2326,17 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 		cfg.Authz.ClientSecretsEnvFile = getClientSecretsEnvFile(vaultSecretFilePath, nb.Spec.Version)
 	}
 
+	// TODO: add SPIRE once it is supported in NVCA
+	switch bc.identitySource {
+	case IdentitySourcePSAT:
+		cfg.Authz.ClusterIssuedTokenSource = nvcaconfig.ClusterIssuedTokenSourcePSAT
+		cfg.Authz.ClusterIssuedTokenFilePath = clusterIssuedTokenFilePath
+	case "":
+		// No identity source set, no need to set paths.
+	default:
+		return cfg, fmt.Errorf("unsupported identity source: %s", bc.identitySource)
+	}
+
 	// Add environment variable overrides for function and task workloads to agent config
 	if bc.functionEnvOverridesB64 != "" {
 		envOverrides, err := decodeEnvOverrides(bc.functionEnvOverridesB64)

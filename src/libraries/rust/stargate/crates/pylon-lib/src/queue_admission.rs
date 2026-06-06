@@ -18,10 +18,11 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use reqwest::header::HeaderMap;
+use stargate_protocol::common::{queue_time_delta_ms, valid_last_mean_input_tps};
+use stargate_protocol::tunnel_contract::HEADER_STARGATE_EXPECTED_QUEUE_MS;
 
 use crate::request_observer::{RequestObservation, RequestObservationState, RequiredTunnelHeaders};
 
-pub(crate) const HEADER_STARGATE_EXPECTED_QUEUE_MS: &str = "x-stargate-expected-queue-ms";
 pub(crate) const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
 const FINISHED_REQUEST_TOMBSTONE_CAPACITY: usize = 4_096;
 
@@ -53,7 +54,6 @@ pub struct QueueAdmissionTracker {
 struct QueueAdmissionState {
     requests: HashMap<String, TrackedPromptRequest>,
     model_input_tps: HashMap<String, f64>,
-    calibrated_model_input_tps: HashMap<String, f64>,
     finished_request_ids: HashSet<String>,
     finished_request_order: VecDeque<String>,
 }
@@ -63,7 +63,6 @@ struct TrackedPromptRequest {
     model_id: String,
     priority: u32,
     input_tokens: u64,
-    input_tokens_processed: u64,
     phase: TrackedPromptPhase,
 }
 
@@ -161,21 +160,6 @@ impl QueueAdmissionTracker {
         }
     }
 
-    pub(crate) fn update_calibrated_model_throughput(
-        &self,
-        model_id: &str,
-        last_mean_input_tps: f64,
-    ) {
-        let mut state = self.inner.lock();
-        if valid_last_mean_input_tps(last_mean_input_tps) {
-            state
-                .calibrated_model_input_tps
-                .insert(model_id.to_string(), last_mean_input_tps);
-        } else {
-            state.calibrated_model_input_tps.remove(model_id);
-        }
-    }
-
     pub(crate) fn evaluate(
         &self,
         config: &PylonQueueMismatchRetryConfig,
@@ -220,7 +204,6 @@ impl QueueAdmissionTracker {
             model_id: required.model_id.clone(),
             priority: required.priority,
             input_tokens: required.input_tokens,
-            input_tokens_processed: 0,
             phase: TrackedPromptPhase::Pending,
         };
         self.inner
@@ -259,13 +242,11 @@ impl QueueAdmissionTracker {
             // observations drain asynchronously. Never resurrect removed work.
             return;
         }
-        let processed = trusted_observed_input_tokens_processed(observation);
         if let Some(request) = state.requests.get_mut(&observation.request_id) {
             if phase < request.phase {
                 return;
             }
             request.phase = phase;
-            request.input_tokens_processed = request.input_tokens_processed.max(processed);
         } else {
             state.requests.insert(
                 observation.request_id.clone(),
@@ -273,7 +254,6 @@ impl QueueAdmissionTracker {
                     model_id: observation.model_id.clone(),
                     priority: observation.priority,
                     input_tokens: observation.input_tokens,
-                    input_tokens_processed: processed,
                     phase,
                 },
             );
@@ -415,18 +395,10 @@ impl QueueAdmissionState {
     }
 
     fn effective_model_input_tps(&self, model_id: &str) -> Option<f64> {
-        // Runtime observations describe newer local reality; calibration is the
-        // fallback that makes admission usable before those observations arrive.
         self.model_input_tps
             .get(model_id)
             .copied()
             .filter(|value| valid_last_mean_input_tps(*value))
-            .or_else(|| {
-                self.calibrated_model_input_tps
-                    .get(model_id)
-                    .copied()
-                    .filter(|value| valid_last_mean_input_tps(*value))
-            })
     }
 }
 
@@ -434,27 +406,17 @@ impl TrackedPromptRequest {
     fn prompt_work(&self) -> Option<(u32, u64)> {
         match self.phase {
             TrackedPromptPhase::OutputGeneration => None,
-            TrackedPromptPhase::Pending => Some((
-                self.priority,
-                self.input_tokens
-                    .saturating_sub(self.input_tokens_processed),
-            )),
-            TrackedPromptPhase::InputProcessing => Some((
-                0,
-                self.input_tokens
-                    .saturating_sub(self.input_tokens_processed),
-            )),
+            TrackedPromptPhase::Pending => Some((self.priority, self.input_tokens)),
+            TrackedPromptPhase::InputProcessing => Some((0, self.input_tokens)),
         }
         .filter(|(_, remaining)| *remaining > 0)
     }
 }
 
 impl QueueTrackedRequestGuard {
-    pub(crate) fn on_upstream_response_headers(&mut self, headers: &HeaderMap) {
+    pub(crate) fn on_upstream_response_headers(&mut self) {
         self.tracker.update_request(&self.request_id, |request| {
             request.phase = TrackedPromptPhase::InputProcessing;
-            request.input_tokens_processed =
-                trusted_input_tokens_processed(headers, request.input_tokens);
         });
     }
 
@@ -485,42 +447,6 @@ fn parse_expected_queue_ms(headers: &HeaderMap) -> Option<u64> {
         .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
-fn trusted_input_tokens_processed(headers: &HeaderMap, request_input_tokens: u64) -> u64 {
-    let Some(processed) = parse_u64_header(headers, "x-pylon-engine-stat-input-tokens-processed")
-    else {
-        return 0;
-    };
-    if parse_u64_header(headers, "x-pylon-engine-stat-input-tokens-total")
-        != Some(request_input_tokens)
-    {
-        return 0;
-    }
-    processed.min(request_input_tokens)
-}
-
-fn trusted_observed_input_tokens_processed(observation: &RequestObservation) -> u64 {
-    if observation.input_tokens_processed == 0 || observation.input_tokens_total_mismatch {
-        return 0;
-    }
-    let engine_total_matches =
-        observation.engine_reported_input_tokens_total == Some(observation.input_tokens);
-    let progress_without_total = observation.input_tokens_processed_from_inference_progress
-        && observation.engine_reported_input_tokens_total.is_none();
-    if !engine_total_matches && !progress_without_total {
-        return 0;
-    }
-    observation
-        .input_tokens_processed
-        .min(observation.input_tokens)
-}
-
-fn parse_u64_header(headers: &HeaderMap, name: &'static str) -> Option<u64> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-}
-
 pub(crate) fn mismatch_threshold_ms(
     expected_ms: u64,
     config: &PylonQueueMismatchRetryConfig,
@@ -539,25 +465,6 @@ pub(crate) fn mismatch_threshold_ms(
             u64::MAX
         };
     additive_threshold.max(multiplicative_threshold)
-}
-
-pub(crate) fn queue_time_delta_ms(input_tokens: u64, last_mean_input_tps: f64) -> Option<u64> {
-    if input_tokens == 0 {
-        return Some(0);
-    }
-    if !valid_last_mean_input_tps(last_mean_input_tps) {
-        return None;
-    }
-    let delta_ms = ((input_tokens as f64 / last_mean_input_tps) * 1000.0).ceil();
-    if delta_ms.is_finite() && delta_ms >= 0.0 && delta_ms <= u64::MAX as f64 {
-        Some(delta_ms as u64)
-    } else {
-        None
-    }
-}
-
-fn valid_last_mean_input_tps(last_mean_input_tps: f64) -> bool {
-    last_mean_input_tps > 0.0 && last_mean_input_tps.is_finite()
 }
 
 #[cfg(test)]
@@ -597,20 +504,13 @@ mod tests {
             input_tokens: 100,
             embedding_items: 0,
             embedding_items_observed: false,
-            input_tokens_processed: 0,
-            input_tokens_processed_from_inference_progress: false,
-            engine_reported_input_tokens_total: None,
-            input_tokens_total_mismatch: false,
             upstream_status: None,
             output_messages: 0,
             output_tokens: 0,
             output_tokens_explicit: false,
             output_tokens_from_chunk_usage: false,
-            has_engine_request_stats: false,
-            has_inference_progress_stats: false,
             state,
             time_to_response_headers: None,
-            time_to_input_tokens_processed: None,
             time_to_first_output: None,
             time_to_first_token: None,
             total_duration: Duration::ZERO,
@@ -632,7 +532,7 @@ mod tests {
         tracker.update_model_throughput("model-a", 100.0);
         let _priority_two = tracker.track_request(&required("req-p2", 2, 20));
         let mut priority_four = tracker.track_request(&required("req-p4", 4, 30));
-        priority_four.on_upstream_response_headers(&HeaderMap::new());
+        priority_four.on_upstream_response_headers();
 
         let snapshot = tracker.snapshot_model("model-a");
 
@@ -713,41 +613,15 @@ mod tests {
     }
 
     #[test]
-    fn upstream_response_progress_requires_matching_request_total() {
+    fn upstream_response_headers_do_not_apply_retired_progress_contract() {
         let tracker = QueueAdmissionTracker::default();
         let mut request = tracker.track_request(&required("req-progress", 0, 100));
 
-        let mut missing_total = HeaderMap::new();
-        missing_total.insert(
-            "x-pylon-engine-stat-input-tokens-processed",
-            HeaderValue::from_static("1000"),
-        );
-        request.on_upstream_response_headers(&missing_total);
-        assert_eq!(tracker.snapshot_model("model-a").queued_input_size, 100);
+        request.on_upstream_response_headers();
 
-        let mut mismatched_total = HeaderMap::new();
-        mismatched_total.insert(
-            "x-pylon-engine-stat-input-tokens-processed",
-            HeaderValue::from_static("100"),
-        );
-        mismatched_total.insert(
-            "x-pylon-engine-stat-input-tokens-total",
-            HeaderValue::from_static("1000"),
-        );
-        request.on_upstream_response_headers(&mismatched_total);
-        assert_eq!(tracker.snapshot_model("model-a").queued_input_size, 100);
-
-        let mut matching_total = HeaderMap::new();
-        matching_total.insert(
-            "x-pylon-engine-stat-input-tokens-processed",
-            HeaderValue::from_static("25"),
-        );
-        matching_total.insert(
-            "x-pylon-engine-stat-input-tokens-total",
-            HeaderValue::from_static("100"),
-        );
-        request.on_upstream_response_headers(&matching_total);
-        assert_eq!(tracker.snapshot_model("model-a").queued_input_size, 75);
+        let snapshot = tracker.snapshot_model("model-a");
+        assert_eq!(snapshot.queued_input_size, 100);
+        assert_eq!(snapshot.input_processing_queries, 1);
     }
 
     #[test]
@@ -770,48 +644,6 @@ mod tests {
             QueueAdmissionDecision::Rejected {
                 expected_ms: 0,
                 actual_ms: 1000,
-                threshold_ms: 25,
-                retry_after_ms: None,
-            }
-        );
-    }
-
-    #[test]
-    fn calibrated_throughput_seeds_admission_without_overriding_runtime_stats() {
-        let tracker = QueueAdmissionTracker::default();
-        let config = PylonQueueMismatchRetryConfig::default();
-        let _guard = tracker.track_request(&required("req-inflight", 0, 100));
-        let incoming = required("req-new", 0, 1);
-        let headers = headers_with_expected("0");
-
-        tracker.update_calibrated_model_throughput("model-a", 100.0);
-        assert_eq!(
-            tracker.evaluate(&config, &incoming, &headers),
-            QueueAdmissionDecision::Rejected {
-                expected_ms: 0,
-                actual_ms: 1000,
-                threshold_ms: 25,
-                retry_after_ms: None,
-            }
-        );
-
-        tracker.update_model_throughput("model-a", 200.0);
-        assert_eq!(
-            tracker.evaluate(&config, &incoming, &headers),
-            QueueAdmissionDecision::Rejected {
-                expected_ms: 0,
-                actual_ms: 500,
-                threshold_ms: 25,
-                retry_after_ms: None,
-            }
-        );
-
-        tracker.update_calibrated_model_throughput("model-a", 0.0);
-        assert_eq!(
-            tracker.evaluate(&config, &incoming, &headers),
-            QueueAdmissionDecision::Rejected {
-                expected_ms: 0,
-                actual_ms: 500,
                 threshold_ms: 25,
                 retry_after_ms: None,
             }

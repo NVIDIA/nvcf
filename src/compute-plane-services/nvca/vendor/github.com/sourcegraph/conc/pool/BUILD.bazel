@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "pool",
+    srcs = [
+        "context_pool.go",
+        "error_pool.go",
+        "pool.go",
+        "result_context_pool.go",
+        "result_error_pool.go",
+        "result_pool.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/sourcegraph/conc/pool",
+    importpath = "github.com/sourcegraph/conc/pool",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/sourcegraph/conc"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":pool",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "asn1",
+    srcs = ["asn1.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/cryptobyte/asn1",
+    importpath = "golang.org/x/crypto/cryptobyte/asn1",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":asn1",
+    visibility = ["//visibility:public"],
+)

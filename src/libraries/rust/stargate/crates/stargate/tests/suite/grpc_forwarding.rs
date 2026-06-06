@@ -21,14 +21,14 @@ use crate::common::{
     wait_for_unroutable, with_proxy_headers,
 };
 use futures::StreamExt;
-use stargate::forwarding::ForwardingResolver;
+use stargate_forwarding::ForwardingResolver;
 use stargate_proto::REGISTRATION_HEARTBEAT_MS_METADATA;
 use stargate_proto::pb::StargateInfo;
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::stargate_model_discovery_client::StargateModelDiscoveryClient;
 use stargate_proto::pb::{
-    CalibrationState, InferenceServerModelRegistration, InferenceServerRegistration,
-    InferenceServerStatus, ListModelsRequest, ModelStats, WatchStargatesRequest,
+    InferenceServerModelRegistration, InferenceServerRegistration, InferenceServerStatus,
+    ListModelsRequest, ModelStats, WatchStargatesRequest,
 };
 
 /// Builds a tonic channel whose TCP connection goes to `actual_addr` but
@@ -94,7 +94,6 @@ fn make_registration(
                 ..ModelStats::default()
             }),
             status: status.into(),
-            calibration_state: CalibrationState::Unknown as i32,
         },
     );
     InferenceServerRegistration {
@@ -146,7 +145,7 @@ impl TwoStargates {
 /// locally.
 async fn start_two_stargates() -> TwoStargates {
     start_two_stargates_with_registration_idle_timeout(
-        stargate::control_plane::DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT,
+        stargate::registration::DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT,
     )
     .await
 }

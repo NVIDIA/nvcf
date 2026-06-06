@@ -16,8 +16,10 @@
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(test)]
+use super::LoadBalancerTestChoiceExt;
 use super::{LoadBalancer, LoadBalancerCandidateChoice, LoadBalancerRequest};
-use crate::load_balancer_state::RoutedClusterSnapshot;
+use crate::routing_state::RoutedClusterSnapshot;
 
 pub(super) struct RoundRobinLoadBalancer {
     counter: AtomicUsize,
@@ -186,10 +188,10 @@ mod tests {
     use std::collections::HashSet;
     use std::time::{Duration, Instant};
 
-    use stargate_proto::pb::ModelStats;
+    use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
     use super::*;
-    use crate::load_balancer_state::RoutingTargetKey;
+    use crate::routing_state::RoutingTargetKey;
 
     fn candidate(cluster_id: &str) -> RoutedClusterSnapshot {
         RoutedClusterSnapshot {
@@ -197,7 +199,7 @@ mod tests {
             stats: ModelStats::default(),
             rtt: Duration::from_millis(1),
             snapshot_updated_at: Instant::now(),
-            status: 1,
+            status: InferenceServerStatus::Active,
             active_backend_count: 1,
         }
     }
@@ -236,7 +238,7 @@ mod tests {
         let selected = (0..6)
             .map(|_| {
                 load_balancer
-                    .choose(&request, &candidates)
+                    .choose_for_test(&request, &candidates)
                     .expect("eligible candidate should be selected")
                     .candidate
                     .cluster_id
@@ -276,7 +278,7 @@ mod tests {
         let selected = (0..7)
             .map(|_| {
                 load_balancer
-                    .choose(&request, &candidates)
+                    .choose_for_test(&request, &candidates)
                     .expect("eligible candidate should be selected")
                     .candidate
                     .cluster_id
@@ -309,7 +311,7 @@ mod tests {
 
         assert!(
             RoundRobinLoadBalancer::new()
-                .choose(&request, &candidates)
+                .choose_for_test(&request, &candidates)
                 .is_none()
         );
     }

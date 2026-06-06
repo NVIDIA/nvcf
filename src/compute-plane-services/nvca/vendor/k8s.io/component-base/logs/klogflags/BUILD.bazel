@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "klogflags",
+    srcs = ["klogflags.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/component-base/logs/klogflags",
+    importpath = "k8s.io/component-base/logs/klogflags",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/k8s.io/klog/v2:klog"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":klogflags",
+    visibility = ["//visibility:public"],
+)

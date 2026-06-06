@@ -19,7 +19,7 @@
 
 - Bringup calibration runs against the local upstream HTTP server, not the advertised `inference_server_url`.
 - When the advertised URL is `quic://...`, callers must also supply the direct local HTTP base URL.
-- Calibration runs only after Stargate assigns this pylon as the cluster calibration owner, then seeds the sticky published `last_mean_input_tps`; `CalibrationState` remains the proof of coordinated completion.
+- Calibration runs only after a Stargate assigns this pylon as that Stargate's local cluster calibration owner and the local upstream health check succeeds. The assigned pylon submits its result only to the assigning Stargate through the owner-only RPC; completion never populates backend runtime `last_mean_input_tps` or local admission state. Each Stargate coordinates its local state independently, and calibration or submission work must not block registration heartbeats.
 - Active canaries begin only after active advertisement.
 - The built-in canary is the deterministic `1+1=` chat request. Completion exactly at `canary_max_generation_threshold` is treated as runaway generation and demotes the model.
 

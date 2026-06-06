@@ -11,10 +11,10 @@ go_library(
     deps = [
         "//pkg/nvca/health",
         "//pkg/types",
+        "//vendor/github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2:scheduling",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "@com_github_nvidia_kai_scheduler//pkg/apis/scheduling/v2:scheduling",
-        "@io_k8s_apimachinery//pkg/api/meta",
-        "@io_k8s_sigs_controller_runtime//pkg/client",
+        "//vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
     ],
 )
 
@@ -30,14 +30,14 @@ go_test(
     embed = [":kaischeduler"],
     deps = [
         "//pkg/types",
-        "@com_github_nvidia_kai_scheduler//pkg/apis/scheduling/v2:scheduling",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
-        "@io_k8s_apimachinery//pkg/api/meta",
-        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
-        "@io_k8s_apimachinery//pkg/runtime",
-        "@io_k8s_apimachinery//pkg/runtime/schema",
-        "@io_k8s_sigs_controller_runtime//pkg/client",
-        "@io_k8s_sigs_controller_runtime//pkg/client/fake",
+        "//vendor/github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2:scheduling",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
+        "//vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/client/fake",
     ],
 )

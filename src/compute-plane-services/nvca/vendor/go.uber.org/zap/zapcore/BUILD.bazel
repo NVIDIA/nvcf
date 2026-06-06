@@ -1,0 +1,45 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "zapcore",
+    srcs = [
+        "buffered_write_syncer.go",
+        "clock.go",
+        "console_encoder.go",
+        "core.go",
+        "doc.go",
+        "encoder.go",
+        "entry.go",
+        "error.go",
+        "field.go",
+        "hook.go",
+        "increase_level.go",
+        "json_encoder.go",
+        "lazy_with.go",
+        "level.go",
+        "level_strings.go",
+        "marshaler.go",
+        "memory_encoder.go",
+        "reflected_encoder.go",
+        "sampler.go",
+        "tee.go",
+        "write_syncer.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap/zapcore",
+    importpath = "go.uber.org/zap/zapcore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/go.uber.org/multierr",
+        "//vendor/go.uber.org/zap/buffer",
+        "//vendor/go.uber.org/zap/internal/bufferpool",
+        "//vendor/go.uber.org/zap/internal/color",
+        "//vendor/go.uber.org/zap/internal/exit",
+        "//vendor/go.uber.org/zap/internal/pool",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":zapcore",
+    visibility = ["//visibility:public"],
+)

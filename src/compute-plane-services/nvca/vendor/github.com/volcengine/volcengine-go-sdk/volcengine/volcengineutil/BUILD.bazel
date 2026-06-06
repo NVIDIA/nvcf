@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "volcengineutil",
+    srcs = [
+        "copy.go",
+        "equal.go",
+        "path_value.go",
+        "prettify.go",
+        "string_value.go",
+        "tools.go",
+        "trans.go",
+        "url.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineutil",
+    importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/volcengineutil",
+    visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/jmespath/go-jmespath"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":volcengineutil",
+    visibility = ["//visibility:public"],
+)

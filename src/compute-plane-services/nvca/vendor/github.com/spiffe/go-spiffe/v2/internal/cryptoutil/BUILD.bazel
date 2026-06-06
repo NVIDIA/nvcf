@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cryptoutil",
+    srcs = ["keys.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/internal/cryptoutil",
+    importpath = "github.com/spiffe/go-spiffe/v2/internal/cryptoutil",
+    visibility = ["//vendor/github.com/spiffe/go-spiffe/v2:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cryptoutil",
+    visibility = ["//vendor/github.com/spiffe/go-spiffe/v2:__subpackages__"],
+)

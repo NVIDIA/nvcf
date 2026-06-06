@@ -7,9 +7,9 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//internal/context",
-        "@com_github_prometheus_client_golang//prometheus",
-        "@com_github_prometheus_client_golang//prometheus/promauto",
-        "@com_github_prometheus_client_golang//prometheus/promhttp",
+        "//vendor/github.com/prometheus/client_golang/prometheus",
+        "//vendor/github.com/prometheus/client_golang/prometheus/promauto",
+        "//vendor/github.com/prometheus/client_golang/prometheus/promhttp",
     ],
 )
 
@@ -24,9 +24,9 @@ go_test(
     srcs = ["metrics_test.go"],
     embed = [":metrics"],
     deps = [
-        "@com_github_prometheus_client_golang//prometheus",
-        "@com_github_prometheus_client_model//go",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
+        "//vendor/github.com/prometheus/client_golang/prometheus",
+        "//vendor/github.com/prometheus/client_model/go",
+        "//vendor/github.com/stretchr/testify/assert",
+        "//vendor/github.com/stretchr/testify/require",
     ],
 )
