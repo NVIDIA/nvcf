@@ -152,6 +152,7 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 **ALWAYS do these:**
 - Run `nvcf-cli self-hosted status` before assuming a cluster exists / is healthy.
 - Show the planned action (cluster name, function name, GPU type, cost if known) before creating.
+- Before creating or deploying a container or LLM function, confirm the exact function name and container image with the user. For LLM functions, also confirm the exact model name used in `models[].name` and OpenAI `model: "<function-id>/<model-name>"`. If any value is missing, ask the user instead of guessing or submitting example placeholders.
 - Confirm exact resource names before deletion — match against `cluster list` / `function list` output.
 - In CI / non-interactive contexts, use `--non-interactive --token=$JWT`. Never propose interactive `nvcf-cli init` when `$CI` is set.
 

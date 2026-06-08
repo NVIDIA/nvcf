@@ -6,10 +6,12 @@ Standard four-step flow: function CREATE → DEPLOY → API key (for invoke scop
 
 Define the function in a JSON file. Minimum:
 
+Before creating the function, confirm the exact function name and container image with the user. If either value is missing, stop and ask. Do not invent or submit example values for these fields.
+
 ```json
 {
-  "name": "echo-test",
-  "containerImage": "nvcr.io/0651155215864979/ncp-dev/load_tester_supreme:0.0.8",
+  "name": "<confirmed-function-name>",
+  "containerImage": "<confirmed-container-image>",
   "inferenceUrl": "/echo",
   "inferencePort": 8000,
   "description": "smoke test echo function",
@@ -37,16 +39,18 @@ Save the IDs — they're needed for deploy + invoke.
 
 For an OpenAI-compatible LLM function, set `functionType: "LLM"` and put route metadata under `models[].llmConfig`:
 
+Before creating the function, confirm the exact function name, container image, and model name with the user. If any value is missing, stop and ask. Do not invent or submit example values for these fields.
+
 ```json
 {
-  "name": "llm-test",
-  "containerImage": "nvcr.io/example/openai-compatible:latest",
+  "name": "<confirmed-function-name>",
+  "containerImage": "<confirmed-container-image>",
   "inferenceUrl": "/",
   "inferencePort": 8000,
   "functionType": "LLM",
   "models": [
     {
-      "name": "dummy-model",
+      "name": "<confirmed-model-name>",
       "llmConfig": {
         "uris": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"],
         "routingMethod": "round_robin",
@@ -61,12 +65,12 @@ Equivalent CLI flag form:
 
 ```sh
 nvcf-cli function create \
-  --name=llm-test \
-  --image=nvcr.io/example/openai-compatible:latest \
+  --name="<confirmed-function-name>" \
+  --image="<confirmed-container-image>" \
   --inference-url=/ \
   --inference-port=8000 \
   --function-type=LLM \
-  --llm-model='name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S'
+  --llm-model='name=<confirmed-model-name>,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S'
 ```
 
 Use the same deploy step below after the LLM function is created.
@@ -77,7 +81,7 @@ Optional model routing update after creation:
 nvcf-cli function update \
   --function-id=<fn_id> \
   --version-id=<ver_id> \
-  --llm-model-update='name=dummy-model,routingMethod=power_of_two,tokenRateLimit=1000-S'
+  --llm-model-update='name=<confirmed-model-name>,routingMethod=power_of_two,tokenRateLimit=1000-S'
 ```
 
 Use this for mutable `routingMethod` and `tokenRateLimit`; create-time `uris` stay in `models[].llmConfig`.
@@ -87,9 +91,11 @@ Use this for mutable `routingMethod` and `tokenRateLimit`; create-time `uris` st
 
 LLM function type is independent of workload packaging. For a Helm-chart backed LLM function, keep the same `functionType` and `models[].llmConfig` fields, then set `helmChart` and `helmChartServiceName`. The service name must match a Kubernetes Service rendered by the chart, and `inferencePort` must be that Service port.
 
+Before creating the function, confirm the exact function name and model name with the user. If either value is missing, stop and ask. Do not invent or submit example values for these fields.
+
 ```json
 {
-  "name": "llm-helm-test",
+  "name": "<confirmed-function-name>",
   "inferenceUrl": "/",
   "inferencePort": 8000,
   "functionType": "LLM",
@@ -104,7 +110,7 @@ LLM function type is independent of workload packaging. For a Helm-chart backed 
   "helmChartServiceName": "openai-compatible",
   "models": [
     {
-      "name": "dummy-model",
+      "name": "<confirmed-model-name>",
       "llmConfig": {
         "uris": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"],
         "routingMethod": "round_robin",
@@ -119,13 +125,13 @@ Equivalent CLI flag form:
 
 ```sh
 nvcf-cli function create \
-  --name=llm-helm-test \
+  --name="<confirmed-function-name>" \
   --inference-url=/ \
   --inference-port=8000 \
   --function-type=LLM \
   --helm-chart=https://helm.ngc.nvidia.com/example/team/charts/openai-compatible-0.1.0.tgz \
   --helm-chart-service=openai-compatible \
-  --llm-model='name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S'
+  --llm-model='name=<confirmed-model-name>,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S'
 ```
 
 Deploy is unchanged. Put chart-specific values under `deploymentSpecifications[].configuration` only when the chart needs value overrides:
@@ -188,7 +194,7 @@ This command **blocks** until the deployment reaches ACTIVE (default 900s timeou
 `nvcf-cli init`'s admin token does NOT carry the `invoke_function` scope — invoke would 403 with "missing requested authorities". Mint an API key:
 
 ```sh
-nvcf-cli api-key generate --description="echo-test invoke" --expires-in=1h
+nvcf-cli api-key generate --description="<confirmed-function-name> invoke" --expires-in=1h
 # → API Key: nvapi-nvcf-stg-...
 ```
 
@@ -218,7 +224,7 @@ curl -sS -X POST "https://llm.invocation.<domain>/v1/chat/completions" \
   -H "Authorization: Bearer ${NVCF_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "<fn_id>/dummy-model",
+    "model": "<fn_id>/<confirmed-model-name>",
     "stream": true,
     "messages": [
       {
@@ -238,7 +244,7 @@ curl -sS -X POST "https://llm.invocation.<domain>/v1/responses" \
   -H "Authorization: Bearer ${NVCF_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "<fn_id>/dummy-model",
+    "model": "<fn_id>/<confirmed-model-name>",
     "input": "Write a one sentence summary of NVCF."
   }'
 ```
@@ -250,7 +256,7 @@ curl -sS -X POST "https://llm.invocation.<domain>/v1/embeddings" \
   -H "Authorization: Bearer ${NVCF_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "<fn_id>/dummy-model",
+    "model": "<fn_id>/<confirmed-model-name>",
     "input": "NVCF embeddings check"
   }'
 ```
