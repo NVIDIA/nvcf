@@ -37,6 +37,7 @@ Set these gRPC metadata values when invoking a function:
 | `authorization` | Yes | API key, formatted as `Bearer <api-key>`. You can also use gRPC call credentials. |
 | `function-id` | Yes | Function ID to invoke. |
 | `function-version-id` | No | Function version ID to target. |
+| `nvcf-reqid` | No | Request ID (UUID) from a previous session. Send this to resume an existing session instead of starting a new one. See [Session Resumption](#session-resumption). |
 
 The data sent to your gRPC function is defined by the Protobuf messages your
 function implements. gRPC functions do not have an input request size limit.
@@ -106,3 +107,53 @@ obtain the request ID from the proxy, and use that ID for subsequent requests.
 
 For requirements and a sample intermediary proxy implementation, see
 [Intermediary Proxy](./streaming-functions.md#intermediary-proxy).
+
+## Session Resumption
+
+Streaming applications such as Omniverse Kit need to reconnect a client to the
+same worker after a brief network interruption or a deliberate pause. The gRPC
+proxy supports this through a request ID that identifies the stateful session
+bound to a specific worker.
+
+### How it works
+
+1. On the first request to a function, the proxy allocates a new session and
+   assigns it a UUID request ID.
+2. The proxy returns the request ID to the client in two forms:
+   - An `nvcf-reqid` response header.
+   - A `Set-Cookie` header with the cookie name `nvcf-request-id`.
+3. On subsequent requests, the client sends the request ID back to the proxy.
+   The proxy checks for the ID in this order:
+   - The `nvcf-reqid` metadata header (or `Sec-WebSocket-Protocol` for browser
+     WebSocket clients).
+   - The `nvcf-request-id` cookie.
+4. When the proxy finds a valid request ID, it routes the request to the
+   existing worker session instead of creating a new one.
+
+### Sending the request ID
+
+For gRPC clients, set `nvcf-reqid` as a metadata header. For HTTP or WebSocket
+clients that cannot set custom headers, the `nvcf-request-id` cookie works as
+a fallback.
+
+```python
+# gRPC session resumption example.
+# First call: no request ID. The proxy creates a session.
+response, call = grpc_client.ModelInfer.with_call(request, metadata=metadata)
+request_id = dict(call.initial_metadata()).get("nvcf-reqid")
+
+# Subsequent calls: pass the request ID to resume the session.
+metadata.append(("nvcf-reqid", request_id))
+grpc_client.ModelInfer.with_call(next_request, metadata=metadata)
+```
+
+### What happens when resumption fails
+
+If the session has expired or the worker is no longer available, the proxy
+returns a 404 (NotFound) error with the message "no existing session found" and
+clears the `nvcf-request-id` cookie. This error does not indicate a
+control-plane problem. The client should discard the stale request ID and
+reconnect without it to start a new session.
+
+See [Troubleshooting](./troubleshooting.md#grpc-session-resumption-fails)
+for diagnosis steps.

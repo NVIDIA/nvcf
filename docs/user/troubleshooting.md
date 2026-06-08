@@ -626,6 +626,50 @@ allows UDP, the NIC NSG blocks it by default.
 See [Cloud Provider Network Requirements](./streaming-functions.md#cloud-provider-network-requirements)
 for the full CSP networking checklist.
 
+### gRPC Session Resumption Fails
+
+#### Symptom
+
+A streaming client receives a 404 (gRPC NotFound) error with "no existing
+session found" when reconnecting to a function that was previously working. The
+function shows active in the control plane. The proxy also clears the
+`nvcf-request-id` cookie so the next retry starts a fresh session.
+
+#### Root cause
+
+The client is sending a stale `nvcf-reqid` header or `nvcf-request-id` cookie
+from a previous session that no longer exists. The gRPC proxy looks up the
+request ID, finds no matching worker session, and returns NotFound.
+
+Common causes of stale request IDs:
+
+- The worker pod was evicted or restarted between requests.
+- The session timed out because the connection was idle too long.
+- The client is reusing a request ID from a different function or function
+  version.
+
+#### Diagnosis
+
+Check whether the client is sending the `nvcf-reqid` header or
+`nvcf-request-id` cookie:
+
+```bash
+# Look for session-not-found errors in gRPC proxy logs.
+kubectl logs -n nvcf -l app=grpc-proxy --tail=200 | grep "no existing session found\|worker connection not found"
+```
+
+If the logs show "no existing session found for request id", the client is
+referencing an expired session.
+
+#### Resolution
+
+Remove the stale request ID from the client and reconnect without it. The proxy
+creates a new session and returns a fresh request ID. Update the client to
+handle 404 by discarding the stored request ID and retrying without it.
+
+See [Session Resumption](./grpc-function-invocation.md#session-resumption) for
+the full request ID lifecycle.
+
 ## Getting Help
 
 When requesting support, provide:
