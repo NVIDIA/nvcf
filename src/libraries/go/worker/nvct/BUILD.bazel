@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "nvct",
+    srcs = [
+        "artifacts.go",
+        "client.go",
+        "connect.go",
+        "ess.go",
+        "heartbeat.go",
+        "result.go",
+        "worker_token.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/nvct",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/libraries/go/lib/pkg/nvkit/auth",
+        "//src/libraries/go/lib/pkg/nvkit/clients",
+        "//src/libraries/go/worker/auth",
+        "//src/libraries/go/worker/proto/nvct:pb",
+        "//src/libraries/go/worker/token",
+        "//src/libraries/go/worker/types",
+        "//src/libraries/go/worker/utils",
+        "@com_github_cenkalti_backoff_v4//:backoff",
+        "@com_github_golang_jwt_jwt_v5//:jwt",
+        "@com_github_samber_lo//:lo",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_x_oauth2//:oauth2",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "nvct_test",
+    srcs = ["client_test.go"],
+    embed = [":nvct"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/libraries/go/lib/pkg/nvkit/logs",
+        "//src/libraries/go/worker/proto/nvct:pb",
+        "//src/libraries/go/worker/test/testutils",
+        "//src/libraries/go/worker/types",
+        "@org_golang_x_oauth2//:oauth2",
+        "@org_uber_go_zap//:zap",
+    ],
+)

@@ -20,7 +20,8 @@ exports_files(
     visibility = ["//src/libraries/go/lib:__pkg__"],
 )
 
-# Phase 1 scope: only the two native Go subtrees are managed by Bazel.
+# Phase 1 scope: only the native Go subtrees listed in go.work.bazel are
+# managed by Bazel.
 # Everything else is excluded so Gazelle does not descend into vendored
 # directories of synthetic-import subtrees (whose source is owned upstream
 # and whose changes here would be clobbered by `tools/scripts/sync_synthetic_imports`).

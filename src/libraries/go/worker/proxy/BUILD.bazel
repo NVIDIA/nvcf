@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "proxy",
+    srcs = [
+        "h3.go",
+        "proxy.go",
+        "push_listener.go",
+        "routing.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/libraries/go/worker/ca",
+        "//src/libraries/go/worker/metrics/nvcf",
+        "//src/libraries/go/worker/proto/nvcf:pb",
+        "//src/libraries/go/worker/proxy/buffconn",
+        "//src/libraries/go/worker/proxy/handlerisolationconn",
+        "//src/libraries/go/worker/proxy/quicconn",
+        "//src/libraries/go/worker/proxy/rp",
+        "//src/libraries/go/worker/utils",
+        "//src/libraries/go/worker/utils/middleware",
+        "//src/libraries/go/worker/utils/pool",
+        "@com_github_cenkalti_backoff_v4//:backoff",
+        "@com_github_goccy_go_json//:go-json",
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_nats_io_nats_go//jetstream",
+        "@com_github_quic_go_quic_go//:quic-go",
+        "@com_github_quic_go_quic_go//http3",
+        "@com_github_quic_go_quic_go//qlog",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_httptrace_otelhttptrace//:otelhttptrace",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel//semconv/v1.20.0:v1_20_0",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_x_net//http2",
+        "@org_golang_x_net//http2/h2c",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "proxy_test",
+    srcs = ["proxy_test.go"],
+    embed = [":proxy"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/libraries/go/lib/pkg/nvkit/logs",
+        "//src/libraries/go/lib/pkg/nvkit/tracing",
+        "//src/libraries/go/worker/proto/nvcf:pb",
+        "//src/libraries/go/worker/proxy/handlerisolationconn",
+        "//src/libraries/go/worker/proxy/quicconn",
+        "//src/libraries/go/worker/proxy/rp",
+        "//src/libraries/go/worker/test/testutils",
+        "//src/libraries/go/worker/utils",
+        "//src/libraries/go/worker/utils/middleware",
+        "//src/libraries/go/worker/utils/pool",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_nats_io_nats_go//jetstream",
+        "@com_github_quic_go_quic_go//http3",
+        "@com_github_quic_go_quic_go//integrationtests/tools",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_net//http2",
+        "@org_golang_x_net//http2/h2c",
+        "@org_golang_x_sync//errgroup",
+        "@org_uber_go_zap//:zap",
+    ],
+)

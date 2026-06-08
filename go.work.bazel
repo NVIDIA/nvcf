@@ -18,6 +18,7 @@
 // Only lists the native Go subtrees that Bazel currently builds:
 //   - src/clis/nvcf-cli
 //   - src/libraries/go/lib
+//   - src/libraries/go/worker
 //
 // The repo also has a generated go.work (gitignored) used by the existing
 // non-Bazel CI for license/dependency checks across all 31 go.mod files.
@@ -28,4 +29,5 @@ go 1.25.0
 use (
 	./src/clis/nvcf-cli
 	./src/libraries/go/lib
+	./src/libraries/go/worker
 )
