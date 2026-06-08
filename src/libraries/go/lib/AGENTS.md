@@ -55,10 +55,13 @@ Run Bazel commands from the repository root:
 ```bash
 bazel build //src/libraries/go/lib/...
 bazel test //src/libraries/go/lib/...
+bazel test //src/libraries/go/lib:golangci_lint
 ```
 
-Bazel build is the current mirror gate. Bazel tests are useful for local cleanup
-work, but some targets still have known test cleanup issues.
+Bazel build, test, and lint targets are the CI gate for this subtree. The Bazel
+lint target uses the shared runner at `rules/golangci/golangci_lint.sh` with this
+module's `.golangci.yml`. `make lint` still runs the same module-scoped
+`golangci-lint` command for local iteration.
 
 ## Root CI
 
@@ -69,10 +72,9 @@ The current subproject checks are:
 
 - vendor: `./tools/ci/check-go-vendor src/libraries/go/lib`
 - codegen: `./tools/ci/check-go-codegen src/libraries/go/lib --command 'make codegen-update'`
-- lint: `make lint`
-- unit tests: `./tools/ci/run-go-unit-tests src/libraries/go/lib`
+- Bazel build/test/lint: `go-lib-bazel-build-test`, including `//src/libraries/go/lib:golangci_lint`
 
-The unit-test wrapper sources `.env`. Keep these values current when coverage
+Local Make targets source `.env`. Keep these values current when coverage
 behavior changes:
 
 - `GO_TEST_COVERAGE_THRESHOLD`
@@ -125,7 +127,7 @@ go run ./tools/collect-dependencies
 ## Style and Testing
 
 - Use `GOWORK=off` and `GOFLAGS=-mod=vendor` when running module-scoped Go commands that need to match this module's vendored dependency set.
-- `make lint` runs `golangci-lint` via `go run` with `.golangci.yml`.
+- `bazel test //src/libraries/go/lib:golangci_lint` runs `golangci-lint` via `go run` with `.golangci.yml`; `make lint` remains a local equivalent.
 - Keep tests next to the code they cover.
 - Use `testdata/` for fixtures and refresh consolidated `icms-translate` fixtures with `make update-testdata`.
 - Do not commit secrets, tokens, or generated local output such as `_output/`.

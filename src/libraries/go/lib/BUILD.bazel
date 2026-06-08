@@ -32,3 +32,29 @@ gazelle_test(
     extra_args = ["src/libraries/go/lib"],
     workspace = "//:BUILD.bazel",
 )
+
+# Transitional non-hermetic wrapper: this shells out to `go run` through the
+# shared golangci-lint runner. Keep cache-disabled tags until lint inputs are
+# declared in Bazel.
+sh_test(
+    name = "golangci_lint",
+    timeout = "long",
+    srcs = ["//rules/golangci:golangci_lint.sh"],
+    args = [
+        "--dir",
+        "src/libraries/go/lib",
+        "--config",
+        "src/libraries/go/lib/.golangci.yml",
+        "--modules-download-mode",
+        "vendor",
+    ],
+    env_inherit = ["PATH"],
+    tags = [
+        "local",
+        "manual",
+        "no-cache",
+        "no-remote-cache",
+        "no-sandbox",
+    ],
+    visibility = ["//visibility:public"],
+)

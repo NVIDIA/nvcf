@@ -66,10 +66,15 @@ bazel build //src/libraries/go/lib/...
 
 # Run go-lib Bazel tests
 bazel test //src/libraries/go/lib/...
+
+# Run go-lib lint through Bazel
+bazel test //src/libraries/go/lib:golangci_lint
 ```
 
-Bazel build is the current mirror gate. Bazel tests are useful for local cleanup
-work, but some targets still have known test cleanup issues.
+Bazel build, test, and lint targets are the CI gate for this subtree. The Bazel
+lint target uses the shared runner at `rules/golangci/golangci_lint.sh` with this
+module's `.golangci.yml`. `make lint` still runs the same module-scoped
+`golangci-lint` command for local iteration.
 
 ### Test Coverage
 
