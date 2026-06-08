@@ -102,55 +102,12 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
   Rule: Helmfile registers and installs NVCA on the compute cluster
 
     Background:
-      Given environment variable "NGC_API_KEY" is set
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
-      And environment variable "NVCF_CLI" is set
+      Given environment variable "NVCF_CLI" is set
       And environment variable "REPO_ROOT" is set
-      # The multi-cluster fixture overrides global.nvcaOperator.selfManaged.*
-      # to the .test hostnames that configure-compute-control-plane-endpoints
-      # aliases to the control-plane LB. The single-cluster fixture's
-      # in-cluster URLs (api.sis.svc.cluster.local etc.) only resolve
-      # inside the control-plane k3d cluster and crash the NVCA agent
-      # on the compute cluster with ICMS 401.
-      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" to "deploy/stacks/self-managed/environments/local-bdd.yaml"
-      And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
-        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
-        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
-        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
-        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0  |
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml"
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
-      # Conflict precheck: single-cluster ncp-local's k3d serverlb
-      # claims 0.0.0.0:8080/8443/4222, the same host ports
-      # ncp-local-cp needs. Fail loudly so the operator runs
-      # `make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local`
-      # before retrying. `k3d cluster get` exits 1 when absent (k3d v5).
-      And I run command "k3d cluster get ncp-local"
-      And the command exit code should be 1
-      And multi-cluster ncp-local compute clusters are running:
-        | ncp-local-compute-1 |
-      And command has succeeded:
-        """
-        kubectl config use-context k3d-ncp-local-cp
-        """
-      And the "nvcr-pull-secret" image pull secret exists in namespaces:
-        | cassandra-system |
-        | nats-system      |
-        | nvcf             |
-        | api-keys         |
-        | ess              |
-        | sis              |
-        | vault-system     |
-        | nvca-operator    |
-        | cert-manager     |
-      # Reuse the previous scenario's install rather than re-running it
-      # if it already succeeded in this suite. Cache key is the resolved
-      # command text, identical to scenario 1's When step.
-      And command has succeeded:
-        """
-        make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd
-        """
+      # This rule depends on the earlier control-plane scenario in the
+      # same feature run. That scenario authors local-bdd.yaml with
+      # the compute-reachable endpoints, creates the pull secrets, and
+      # installs the control plane. Do not repeat that setup here.
 
     @nvca-registration
     Scenario: Operator registers the compute cluster and installs the NVCA operator there
