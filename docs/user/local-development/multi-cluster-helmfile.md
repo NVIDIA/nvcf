@@ -17,14 +17,18 @@ workloads.
 | `ncp-local-cp` | Control plane | `k3d-ncp-local-cp` |
 | `ncp-local-compute-1` | Compute plane (first worker) | `k3d-ncp-local-compute-1` |
 
-Cross-cluster traffic from the compute cluster reaches the control-plane
-load balancer via `.test` host aliases that
+Cross-cluster traffic from the compute cluster uses the same service-DNS
+hostnames as the local stack values. During topology bootstrap,
 `tools/ncp-local-cluster/scripts/configure-control-plane-endpoints.sh`
-provisions:
+creates compute-cluster alias Services and Endpoints for those names, and the
+Endpoints point at the control-plane k3d load balancer:
 
-- `http://sis.nvcf-control-plane.test:8080`
-- `http://reval.nvcf-control-plane.test:8080`
-- `nats://nats.nvcf-control-plane.test:4222`
+- `http://api.sis.svc.cluster.local:8080`
+- `http://reval.nvcf.svc.cluster.local:8080`
+- `nats://nats.nats-system.svc.cluster.local:4222`
+- `http://ess-api.ess.svc.cluster.local:8080`
+- `http://invocation.nvcf.svc.cluster.local:8080`
+- `api.nvcf.svc.cluster.local:9090`
 
 ## Prerequisites
 
@@ -65,7 +69,9 @@ make -C tools/ncp-local-cluster build-and-deploy-multicluster
 <Note>
 The single-cluster (`ncp-local`) and multi-cluster
 (`ncp-local-cp` + `ncp-local-compute-N`) topologies both claim host
-ports 8080/8443/4222 and cannot coexist. If you already have the
+ports 8080/8443/4222 and cannot coexist. The multi-cluster control plane also
+claims host ports 9090 and 10081 for worker-facing API gRPC and the stack-owned
+grpc-proxy TCP listener. If you already have the
 single-cluster topology running:
 
 ```bash
@@ -78,7 +84,7 @@ make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local
 
 The values-driven Helmfile path has no control-plane profile; the operator
 must author topology-correct URLs in the environment file. Use the
-**multi-cluster** fixture (NOT the single-cluster one):
+**multi-cluster** fixture for this flow:
 
 ```bash
 cp tests/bdd/fixtures/self-managed-local-bdd-multi.yaml \
@@ -95,13 +101,14 @@ sed -i.bak \
 rm deploy/stacks/self-managed/environments/local-bdd.yaml.bak
 ```
 
-<Warning>
-The multi-cluster fixture's `global.nvcaOperator.selfManaged.*` URLs use
-`.test` hostnames. The single-cluster fixture's in-cluster DNS (for example
-`http://api.sis.svc.cluster.local:8080`) would resolve only inside the
-control-plane cluster and the NVCA agent on the compute cluster would 401
-against ICMS at runtime. Use the right fixture.
-</Warning>
+<Note>
+The multi-cluster fixture intentionally uses service-DNS hostnames such as
+`api.sis.svc.cluster.local` and `invocation.nvcf.svc.cluster.local`. In this
+split topology those names resolve on the compute cluster because Step 1
+created alias Services and Endpoints that forward to the control-plane load
+balancer. Do not replace these values with topology-specific `.test`
+hostnames.
+</Note>
 
 ## Step 3: Author the secrets file
 

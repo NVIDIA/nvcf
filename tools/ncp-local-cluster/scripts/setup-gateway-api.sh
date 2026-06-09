@@ -65,8 +65,7 @@ log_info "OK Envoy Gateway Helm chart applied successfully."
 
 # Step 2: Apply GatewayClass and Gateway resources
 log_info "Applying Envoy Gateway configuration..."
-kubectl apply -f "${PROJECT_ROOT}/apps/envoy-gateway/gatewayclass.yaml"
-kubectl apply -f "${PROJECT_ROOT}/apps/envoy-gateway/gateway.yaml"
+kubectl apply -k "${PROJECT_ROOT}/apps/envoy-gateway"
 log_info "OK Envoy Gateway configuration applied."
 
 # Step 3: Wait for GatewayClass to become ready

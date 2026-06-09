@@ -160,8 +160,8 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
       # (single-cluster topology), the in-cluster service hostnames are
       # the directly reachable ones. This matches what self-hosted up
       # used to emit. The multi-cluster scenario, in contrast, gets
-      # the compute-reachable .test hostnames because the worker lives
-      # in a different k3d cluster.
+      # compute-reachable endpoints because the worker lives in a
+      # different k3d cluster.
       Then yaml file "deploy/stacks/self-managed/out/ncp-local-register-values.yaml" should contain:
         """
         clusterName: ncp-local

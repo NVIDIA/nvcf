@@ -5,21 +5,10 @@
 #
 # The values-driven Helmfile install path expects the operator to
 # author topology-correct URLs in the environment file. This fixture
-# is the multi-cluster variant; the single-cluster equivalent
-# (self-managed-local-bdd.yaml) carries in-cluster DNS that only
-# resolves inside the control-plane k3d cluster. See
-# tests/bdd/AGENTS.md "CLI vs Helmfile install paths" for why the
-# two paths each need their own fixture.
-#
-# The .test hostnames in global.nvcaOperator.selfManaged below are
-# the same ones the CLI feature asserts in
-# features/multi-cluster-up.feature under
-# controlPlane.endpoints.computeReachable. Both come from
-# tools/ncp-local-cluster/scripts/configure-control-plane-endpoints.sh,
-# which aliases them to the control-plane LB container so traffic
-# from the compute cluster reaches the right place. If you change
-# those hostnames, change all three (script, fixture, CLI feature)
-# together.
+# keeps the same service-DNS URL shape as the single-cluster local
+# fixture. In the multi-cluster topology those names resolve to alias
+# Services in the compute cluster, and the alias Endpoints point at
+# the control-plane load balancer.
 global:
   nodeSelectors:
     enabled: false
@@ -41,17 +30,18 @@ global:
     registry: nvcr.io
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
-  # Compute-reachable URLs for the multi-cluster topology. The
-  # compute-control-plane-endpoints script aliases these `.test`
-  # hostnames to the control-plane LB container over the docker
-  # network. In-cluster URLs (api.sis.svc.cluster.local etc.) only
-  # resolve inside the control-plane k3d cluster, so the
-  # single-cluster fixture's values do not work here.
+  workerEndpoints:
+    essServiceURL: http://ess-api.ess.svc.cluster.local:8080
+    invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
+
+  # These service DNS names resolve to real control-plane Services in
+  # the single-cluster topology and to compute-cluster alias Services
+  # in the multi-cluster topology.
   nvcaOperator:
     selfManaged:
-      icmsServiceURL: http://sis.nvcf-control-plane.test:8080
-      revalServiceURL: http://reval.nvcf-control-plane.test:8080
-      natsURL: nats://nats.nvcf-control-plane.test:4222
+      icmsServiceURL: http://api.sis.svc.cluster.local:8080
+      revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+      natsURL: nats://nats.nats-system.svc.cluster.local:4222
 
 cassandra:
   replicaCount: 1

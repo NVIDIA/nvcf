@@ -131,9 +131,30 @@ done
 if ! grep -q '\${CONTROL_PLANE_NATS_PORT}:4222' "$ROOT_DIR/k3d-config-control-plane.yaml"; then
   fail "control-plane k3d config must expose CONTROL_PLANE_NATS_PORT to Gateway port 4222"
 fi
+if ! grep -q '\${CONTROL_PLANE_GRPC_PORT}:9090' "$ROOT_DIR/k3d-config-control-plane.yaml"; then
+  fail "control-plane k3d config must expose CONTROL_PLANE_GRPC_PORT to Gateway port 9090"
+fi
+if ! grep -q '\${CONTROL_PLANE_GRPC_PROXY_PORT}:10081' "$ROOT_DIR/k3d-config-control-plane.yaml"; then
+  fail "control-plane k3d config must expose CONTROL_PLANE_GRPC_PROXY_PORT to Gateway port 10081"
+fi
+if ! grep -q 'invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080' "$ROOT_DIR/../../deploy/stacks/self-managed/environments/local.yaml"; then
+  fail "local stack values must advertise the invocation service DNS worker endpoint"
+fi
 
 if ! grep -q 'name: nats' "$ROOT_DIR/apps/envoy-gateway/gateway.yaml"; then
   fail "control-plane Gateway must define a nats TCP listener"
+fi
+if ! grep -R -q 'name: api-grpc-gw' "$ROOT_DIR/apps/envoy-gateway"; then
+  fail "control-plane Gateway must define a worker-facing API gRPC listener"
+fi
+if ! grep -R -q 'protocol: HTTP' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
+  fail "worker-facing API gRPC Gateway must use HTTP protocol for GRPCRoute"
+fi
+if ! grep -R -q 'name: grpc-gw' "$ROOT_DIR/apps/envoy-gateway"; then
+  fail "control-plane Gateway must define the stack-owned grpc-gw TCP listener"
+fi
+if ! grep -q 'kubectl apply -k .*apps/envoy-gateway' "$ROOT_DIR/scripts/setup-gateway-api.sh"; then
+  fail "gateway setup must apply the full envoy-gateway kustomization"
 fi
 
 if grep -R -q 'type: ExternalName' "$ROOT_DIR/apps/compute-control-plane-endpoints"; then
@@ -152,6 +173,15 @@ fi
 if ! grep -q 'CONTROL_PLANE_LB_HTTP_PORT=80' "$ROOT_DIR/Makefile"; then
   fail "Makefile must pass the control-plane HTTP container port to endpoint configuration"
 fi
+if ! grep -q 'CONTROL_PLANE_LB_GRPC_PORT=9090' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must pass the control-plane gRPC container port to endpoint configuration"
+fi
+if ! grep -q 'CONTROL_PLANE_GRPC_PROXY_PORT ?= 10081' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must define the host port for the stack-owned grpc-gw TCP listener"
+fi
+if ! grep -q 'CONTROL_PLANE_GRPC_PROXY_PORT="$(CONTROL_PLANE_GRPC_PROXY_PORT)"' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must pass CONTROL_PLANE_GRPC_PROXY_PORT to the control-plane k3d config"
+fi
 if ! grep -q 'CONTROL_PLANE_LB_NATS_PORT=4222' "$ROOT_DIR/Makefile"; then
   fail "Makefile must pass the control-plane NATS container port to endpoint configuration"
 fi
@@ -160,7 +190,7 @@ if grep -q 'CLUSTER_NAME' <<<"$dns_target"; then
   fail "compute DNS configuration must not pass unused CLUSTER_NAME"
 fi
 
-for unsupported_alias in 'api.${domain}' 'api-keys.${domain}' 'invocation.${domain}'; do
+for unsupported_alias in 'api.${domain}' 'api-keys.${domain}'; do
   if grep -q "$unsupported_alias" "$ROOT_DIR/scripts/configure-control-plane-dns.sh"; then
     fail "compute DNS must not advertise unsupported control-plane alias '${unsupported_alias}'"
   fi
@@ -175,19 +205,46 @@ fi
 if ! grep -q "reval.${custom_domain}" <<<"$rendered_routes"; then
   fail "control-plane ReVal route must use CONTROL_PLANE_DOMAIN"
 fi
-if grep -q "kind: TCPRoute" <<<"$rendered_routes"; then
+if ! grep -q "ess-api.ess.svc.cluster.local" <<<"$rendered_routes"; then
+  fail "control-plane ESS route must advertise the service DNS hostname used by workers"
+fi
+if ! grep -q "api.nvcf.svc.cluster.local" <<<"$rendered_routes"; then
+  fail "control-plane API route must advertise the in-cluster API hostname used by workers"
+fi
+if ! grep -q "invocation.nvcf.svc.cluster.local" <<<"$rendered_routes"; then
+  fail "control-plane invocation route must advertise the service DNS hostname used by workers"
+fi
+if grep -q "ess.${custom_domain}" <<<"$rendered_routes"; then
+  fail "control-plane ESS route must not add a topology-specific .test hostname"
+fi
+if grep -q "invocation.${custom_domain}" <<<"$rendered_routes"; then
+  fail "control-plane invocation route must not add a topology-specific .test hostname"
+fi
+if ! grep -q "nvcf-api-control-plane-grpc" <<<"$rendered_routes"; then
+  fail "control-plane API gRPC route must expose the in-cluster API gRPC port used by workers"
+fi
+if ! grep -q "kind: GRPCRoute" <<<"$rendered_routes"; then
+  fail "control-plane API gRPC route must use GRPCRoute for worker gRPC clients"
+fi
+if ! grep -A12 "nvcf-api-control-plane-grpc" <<<"$rendered_routes" | grep -q "sectionName: http"; then
+  fail "control-plane API gRPC route must attach to the HTTP listener"
+fi
+if grep -A4 'name: nats' <<<"$rendered_routes" | grep -q "kind: TCPRoute"; then
   fail "ncp-local must not render the NATS TCPRoute; nvcf-gateway-routes owns that route"
 fi
 if grep -q "sis.nvcf-control-plane.test" <<<"$rendered_routes"; then
   fail "custom control-plane routes must not keep the default domain"
 fi
 
-endpoints_yaml="$(CONTROL_PLANE_DOMAIN="$custom_domain" CONTROL_PLANE_LB_IP=172.18.0.7 CONTROL_PLANE_LB_HTTP_PORT=18080 CONTROL_PLANE_LB_NATS_PORT=14222 CLUSTER_NAME=ncp-local-compute-1 "$ROOT_DIR/scripts/configure-control-plane-endpoints.sh" --dry-run)"
+endpoints_yaml="$(CONTROL_PLANE_DOMAIN="$custom_domain" CONTROL_PLANE_LB_IP=172.18.0.7 CONTROL_PLANE_LB_HTTP_PORT=18080 CONTROL_PLANE_LB_GRPC_PORT=19090 CONTROL_PLANE_LB_NATS_PORT=14222 CLUSTER_NAME=ncp-local-compute-1 "$ROOT_DIR/scripts/configure-control-plane-endpoints.sh" --dry-run)"
 if ! grep -q "ip: 172.18.0.7" <<<"$endpoints_yaml"; then
   fail "compute endpoint dry-run must point at the control-plane load balancer container IP"
 fi
 if ! grep -q "port: 18080" <<<"$endpoints_yaml"; then
   fail "compute HTTP endpoint dry-run must use CONTROL_PLANE_LB_HTTP_PORT"
+fi
+if ! grep -q "port: 19090" <<<"$endpoints_yaml"; then
+  fail "compute gRPC endpoint dry-run must use CONTROL_PLANE_LB_GRPC_PORT"
 fi
 if ! grep -q "port: 14222" <<<"$endpoints_yaml"; then
   fail "compute NATS endpoint dry-run must use CONTROL_PLANE_LB_NATS_PORT"
@@ -217,7 +274,7 @@ done
 if grep -q "172.18.0.1" <<<"$dns_yaml"; then
   fail "compute DNS dry-run must not point control-plane hostnames at the Docker gateway"
 fi
-for unsupported_alias in "api.${custom_domain}" "api-keys.${custom_domain}" "invocation.${custom_domain}"; do
+for unsupported_alias in "api.${custom_domain}" "api-keys.${custom_domain}" "ess.${custom_domain}" "invocation.${custom_domain}"; do
   if grep -q "$unsupported_alias" <<<"$dns_yaml"; then
     fail "compute DNS must not advertise unsupported alias '${unsupported_alias}'"
   fi

@@ -6,5 +6,9 @@ kind: Kustomization
 
 resources:
   - namespaces.yaml
+  - httproute-ess.yaml
+  - httproute-api.yaml
+  - grpcroute-api.yaml
+  - httproute-invocation.yaml
   - httproute-sis.yaml
   - httproute-reval.yaml

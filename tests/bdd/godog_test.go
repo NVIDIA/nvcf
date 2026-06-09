@@ -178,7 +178,7 @@ selfManaged:
 // hostnames in single-cluster topology (worker and CP share the same
 // k3d cluster, so the in-cluster URLs are the directly reachable
 // ones). The multi-cluster equivalent in writeMulticlusterComputeRegisterValues
-// uses the compute-reachable .test hostnames instead.
+// uses compute-reachable gateway hostnames instead.
 func writeSingleClusterComputeRegisterValues(t *testing.T, repoRoot string) {
 	t.Helper()
 	body := `clusterName: ncp-local
@@ -333,7 +333,7 @@ func TestSingleClusterUpOneClickFeatureFileWiresToSteps(t *testing.T) {
 // TestMultiClusterUpFeatureFileWiresToSteps runs multi-cluster-up.feature
 // against a fake CommandRunner, exercising the same handler chain as
 // the live run. The seeded handoff artifacts use the split-cluster
-// nvcf-control-plane.test hostnames that the install command produces.
+// service-DNS hostnames that the install command produces.
 func TestMultiClusterUpFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("NGC_API_KEY", "test-key")
@@ -425,7 +425,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 
 // TestMultiClusterHelmfileFeatureFileWiresToSteps runs
 // multi-cluster-helmfile.feature against a fake runner. The same
-// fixture seeds and canned helm-list outputs cover both scenarios;
+// fixture seeds and canned helm-list outputs cover the scenarios;
 // the helm list canned keys carry --kube-context because the
 // multi-cluster feature targets the cp and compute clusters
 // explicitly.
@@ -438,6 +438,10 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local-cp -o json":        {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
 		"helm list -n nvca-operator --kube-context k3d-ncp-local-compute-1 -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
+		},
 		// Conflict precheck: feature asserts the conflicting
 		// single-cluster is absent.
 		"k3d cluster get ncp-local": {ExitCode: 1},
@@ -466,6 +470,9 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "install-nvca-operator") {
 		t.Fatal("install-nvca-operator make target was never invoked")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke") {
+		t.Fatal("function invoke CLI command was never invoked")
 	}
 }
 
@@ -509,6 +516,9 @@ func seedHelmfileLocalBDDFixture(t *testing.T, repoRoot string) {
 	t.Helper()
 	writeFixture(t, repoRoot, "self-managed-local-bdd.yaml", `global:
   storageClass: local-path
+  workerEndpoints:
+    essServiceURL: http://ess-api.ess.svc.cluster.local:8080
+    invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
 addons:
   llm:
     enabled: true
@@ -517,18 +527,21 @@ addons:
 
 // seedHelmfileLocalBDDMultiFixture writes the multi-cluster variant
 // the multi-cluster helmfile feature copies onto the env file. Its
-// nvcaOperator.selfManaged URLs target the .test hostnames the
-// compute cluster aliases to the control-plane LB; single-cluster
-// in-cluster URLs do not resolve across k3d clusters.
+// workerEndpoints and nvcaOperator.selfManaged URLs use the service
+// DNS names from the local stack. In multi-cluster local runs those
+// names resolve to alias Services in the compute cluster.
 func seedHelmfileLocalBDDMultiFixture(t *testing.T, repoRoot string) {
 	t.Helper()
 	writeFixture(t, repoRoot, "self-managed-local-bdd-multi.yaml", `global:
   storageClass: local-path
+  workerEndpoints:
+    essServiceURL: http://ess-api.ess.svc.cluster.local:8080
+    invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
   nvcaOperator:
     selfManaged:
-      icmsServiceURL: http://sis.nvcf-control-plane.test:8080
-      revalServiceURL: http://reval.nvcf-control-plane.test:8080
-      natsURL: nats://nats.nvcf-control-plane.test:4222
+      icmsServiceURL: http://api.sis.svc.cluster.local:8080
+      revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+      natsURL: nats://nats.nats-system.svc.cluster.local:4222
 addons:
   llm:
     enabled: true
@@ -594,9 +607,9 @@ ncaID: nvcf-default
 region: ` + region + `
 selfManaged:
   identitySource: psat
-  icmsServiceURL: http://wiring-elb.example.test
-  revalServiceURL: http://wiring-elb.example.test
-  natsURL: nats://wiring-elb.example.test:4222
+  icmsServiceURL: http://wiring-elb.example.invalid
+  revalServiceURL: http://wiring-elb.example.invalid
+  natsURL: nats://wiring-elb.example.invalid:4222
 `
 	writeArtifact(t, repoRoot, clusterName+"-register-values.yaml", body)
 }
@@ -615,7 +628,7 @@ func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		eksContext      = "arn:aws:eks:us-east-1:000000000000:cluster/wiring-test"
 		eksClusterName  = "wiring-test"
 		eksRegion       = "us-east-1"
-		wiringGatewayLB = "wiring-elb.example.test"
+		wiringGatewayLB = "wiring-elb.example.invalid"
 	)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
@@ -690,7 +703,7 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		computeContext     = "arn:aws:eks:us-east-1:000000000000:cluster/wiring-compute"
 		computeClusterName = "wiring-compute"
 		eksRegion          = "us-east-1"
-		wiringGatewayLB    = "wiring-cp-elb.example.test"
+		wiringGatewayLB    = "wiring-cp-elb.example.invalid"
 	)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")

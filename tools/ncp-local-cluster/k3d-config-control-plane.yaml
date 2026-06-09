@@ -31,6 +31,12 @@ ports:
   - port: ${CONTROL_PLANE_HTTPS_PORT}:443
     nodeFilters:
       - loadbalancer
+  - port: ${CONTROL_PLANE_GRPC_PORT}:9090
+    nodeFilters:
+      - loadbalancer
+  - port: ${CONTROL_PLANE_GRPC_PROXY_PORT}:10081
+    nodeFilters:
+      - loadbalancer
   - port: ${CONTROL_PLANE_NATS_PORT}:4222
     nodeFilters:
       - loadbalancer

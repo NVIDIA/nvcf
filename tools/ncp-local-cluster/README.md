@@ -63,10 +63,11 @@ Addon placement:
 | fake GPU operator | no | yes |
 | private-image sample validation | no | yes |
 
-The compute-plane clusters get local aliases for control-plane SIS, ReVal, and
-NATS. Those aliases route through the control-plane k3d load balancer so pods
-can use the expected in-cluster service names while the traffic crosses local
-k3d clusters.
+The compute-plane clusters get local aliases for worker-facing control-plane
+service DNS names: API, API gRPC, ESS, invocation, SIS, ReVal, and NATS. Those
+aliases route through the control-plane k3d load balancer so pods can use the
+expected in-cluster service names while the traffic crosses local k3d
+clusters.
 
 Create the default split topology, with one control-plane cluster and one
 compute-plane cluster:
@@ -134,9 +135,10 @@ Multi-cluster mode uses `k3d-config-control-plane.yaml` for the control-plane
 cluster and `k3d-config-compute-plane.yaml` for compute-plane clusters. The
 compute-plane config intentionally avoids host port mappings so multiple
 compute clusters can run at the same time. The control-plane config maps host
-ports `8080`, `8443`, and `4222` for HTTP, HTTPS, and NATS respectively; stop
-or destroy any existing cluster or local process that already owns those ports
-before creating the control-plane cluster.
+ports `8080`, `8443`, `9090`, `10081`, and `4222` for HTTP, HTTPS,
+worker-facing API gRPC, stack-owned grpc-proxy TCP, and NATS respectively;
+stop or destroy any existing cluster or local process that already owns those
+ports before creating the control-plane cluster.
 
 If another local cluster already owns those ports, override the control-plane
 ports together:
@@ -145,6 +147,8 @@ ports together:
 make build-and-deploy-multicluster \
   CONTROL_PLANE_HTTP_PORT=18080 \
   CONTROL_PLANE_HTTPS_PORT=18443 \
+  CONTROL_PLANE_GRPC_PORT=19090 \
+  CONTROL_PLANE_GRPC_PROXY_PORT=20081 \
   CONTROL_PLANE_NATS_PORT=14222
 ```
 
@@ -155,10 +159,12 @@ make build-and-deploy-multicluster \
   CONTROL_PLANE_DOMAIN=control-plane.dev.test
 ```
 
-The domain is applied to compute-plane CoreDNS aliases and to the local
-control-plane Gateway route hostnames for SIS and ReVal. The NATS Gateway route
-is owned by the self-managed stack `nvcf-gateway-routes` chart; ncp-local only
-provides the Gateway TCP listener and the compute-plane DNS alias.
+The domain is applied to the legacy compute-plane CoreDNS aliases and to the
+local control-plane Gateway route hostnames for SIS and ReVal. Worker-facing
+API, API gRPC, ESS, and invocation aliases use the stack service-DNS hostnames
+directly. The NATS Gateway route is owned by the self-managed stack
+`nvcf-gateway-routes` chart; ncp-local only provides the Gateway TCP listener
+and the compute-plane DNS alias.
 
 Run the dry Makefile checks without creating k3d clusters:
 

@@ -9,4 +9,4 @@ kind: Kustomization
 resources:
   - gatewayclass.yaml
   - gateway.yaml
-
+  - gateway-grpc.yaml

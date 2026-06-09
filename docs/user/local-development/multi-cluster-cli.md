@@ -25,10 +25,10 @@ services. The docker network shared between the two k3d clusters
 (plus the install-time wiring `make build-and-deploy-multicluster`
 sets up) is what makes the cross-cluster reach work.
 
-For users coming from the Helmfile install path: that flow is
-values-driven and uses the `.nvcf-control-plane.test` aliases
-provisioned by `tools/ncp-local-cluster/scripts/configure-control-plane-endpoints.sh`.
-The CLI path does not depend on those aliases.
+For users coming from the Helmfile install path: that flow is values-driven
+and uses service-DNS endpoint values bridged by compute-cluster alias Services
+and Endpoints. The CLI path writes a control-plane profile with localhost
+URLs and does not depend on those Helmfile environment values.
 
 ## Prerequisites
 
@@ -66,13 +66,16 @@ make -C tools/ncp-local-cluster build-and-deploy-multicluster
 ```
 
 This creates `ncp-local-cp` plus `ncp-local-compute-1`, installs the fake
-GPU operator and CSI SMB driver on the compute cluster, configures DNS for
-the `.test` aliases, and validates Envoy Gateway on the control-plane cluster.
+GPU operator and CSI SMB driver on the compute cluster, configures
+compute-side control-plane service aliases, and validates Envoy Gateway on the
+control-plane cluster.
 
 <Note>
 The single-cluster (`ncp-local`) and multi-cluster
 (`ncp-local-cp` + `ncp-local-compute-N`) topologies both claim host
-ports 8080/8443/4222 and cannot coexist. If you already have the
+ports 8080/8443/4222 and cannot coexist. The multi-cluster control plane also
+claims host ports 9090 and 10081 for worker-facing API gRPC and the stack-owned
+grpc-proxy TCP listener. If you already have the
 single-cluster topology running:
 
 ```bash
@@ -206,8 +209,10 @@ nvcf-cli \
     --output deploy/stacks/self-managed/out/ncp-local-compute-1-register-values.yaml
 ```
 
-The output file's `selfManaged` block contains the `.test` hostnames, not
-the in-cluster service URLs.
+The output file's `selfManaged` block contains the `.localhost`
+compute-reachable URLs, not the in-cluster service URLs. For the default local
+topology, this is `http://sis.localhost:8080`,
+`http://reval.localhost:8080`, and `nats://nats.localhost:4222`.
 
 <Note>
 `nvcf-cli cluster register` (run internally during this step) auto-discovers

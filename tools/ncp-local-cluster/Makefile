@@ -24,6 +24,8 @@ CONTROL_PLANE_CLUSTER_NAME ?= ncp-local-cp
 CONTROL_PLANE_CONFIG_FILE ?= k3d-config-control-plane.yaml
 CONTROL_PLANE_HTTP_PORT ?= 8080
 CONTROL_PLANE_HTTPS_PORT ?= 8443
+CONTROL_PLANE_GRPC_PORT ?= 9090
+CONTROL_PLANE_GRPC_PROXY_PORT ?= 10081
 CONTROL_PLANE_NATS_PORT ?= 4222
 CONTROL_PLANE_DOMAIN ?= nvcf-control-plane.test
 COMPUTE_CLUSTER_PREFIX ?= ncp-local-compute
@@ -90,6 +92,8 @@ ensure-cluster: ## Create cluster if it doesn't exist, otherwise skip
 		K3D_CLUSTER_NAME="$(CLUSTER_NAME)" \
 			CONTROL_PLANE_HTTP_PORT="$(CONTROL_PLANE_HTTP_PORT)" \
 			CONTROL_PLANE_HTTPS_PORT="$(CONTROL_PLANE_HTTPS_PORT)" \
+			CONTROL_PLANE_GRPC_PORT="$(CONTROL_PLANE_GRPC_PORT)" \
+			CONTROL_PLANE_GRPC_PROXY_PORT="$(CONTROL_PLANE_GRPC_PROXY_PORT)" \
 			CONTROL_PLANE_NATS_PORT="$(CONTROL_PLANE_NATS_PORT)" \
 			k3d cluster create $(CLUSTER_NAME) --config $(K3D_CONFIG_FILE); \
 		echo "OK Cluster $(CLUSTER_NAME) created."; \
@@ -233,12 +237,13 @@ deploy-compute-control-plane-endpoints: ## Deploy compute-cluster aliases for co
 	@# from the compute cluster reaches the control-plane LB container
 	@# over the docker network on the container ports, not the host
 	@# ports. Pass the literal container ports; do NOT forward
-	@# CONTROL_PLANE_HTTP_PORT / CONTROL_PLANE_NATS_PORT, which would
-	@# make compute aliases point at host-port:8080 (refused on the
-	@# container side).
+	@# CONTROL_PLANE_HTTP_PORT / CONTROL_PLANE_GRPC_PORT /
+	@# CONTROL_PLANE_NATS_PORT, which would make compute aliases point
+	@# at host-port:8080 (refused on the container side).
 	@CONTROL_PLANE_DOMAIN="$(CONTROL_PLANE_DOMAIN)" \
 		CONTROL_PLANE_CLUSTER_NAME="$(CONTROL_PLANE_CLUSTER_NAME)" \
 		CONTROL_PLANE_LB_HTTP_PORT=80 \
+		CONTROL_PLANE_LB_GRPC_PORT=9090 \
 		CONTROL_PLANE_LB_NATS_PORT=4222 \
 		CLUSTER_NAME="$(COMPUTE_CLUSTER_NAME)" \
 		bash ./scripts/configure-control-plane-endpoints.sh

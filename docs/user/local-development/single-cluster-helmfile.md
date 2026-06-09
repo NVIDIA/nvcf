@@ -49,7 +49,9 @@ make -C tools/ncp-local-cluster build-and-deploy-cluster
 <Note>
 The single-cluster (`ncp-local`) and multi-cluster
 (`ncp-local-cp` + `ncp-local-compute-N`) topologies both claim host
-ports 8080/8443/4222 and cannot coexist. If you already have the
+ports 8080/8443/4222 and cannot coexist. The multi-cluster control plane also
+claims host ports 9090 and 10081 for worker-facing API gRPC and the stack-owned
+grpc-proxy TCP listener. If you already have the
 multi-cluster topology running:
 
 ```bash

@@ -143,15 +143,12 @@ dependency into the CLI path.
   topology-correct URLs in their environment file.
 
 For multi-cluster Helmfile the BDD fixture
-`fixtures/self-managed-local-bdd-multi.yaml` carries the
-compute-reachable `.test` hostnames that
-`tools/ncp-local-cluster/scripts/configure-control-plane-endpoints.sh`
-aliases to the control-plane LB. The same `.test` hostnames appear
-literally in `multi-cluster-up.feature`'s `controlPlane.endpoints.
-computeReachable` profile assertion, so the two paths agree on the
-multi-cluster URL surface. If those hostnames or ports ever change
-in the alias script, three places need to stay in sync: that
-script, the multi fixture's `selfManaged` block, and the CLI
+`fixtures/self-managed-local-bdd-multi.yaml` carries the same
+service-DNS URL shape as the single-cluster local fixture. In the
+multi-cluster ncp-local topology, those names resolve to alias
+Services in the compute cluster and the alias Endpoints point at the
+control-plane LB. If those hostnames or ports ever change, keep the
+multi fixture's `selfManaged` block, the local stack values, and the CLI
 feature's profile assertion. A follow-up drift-detection check is
 tracked separately (see commit history).
 

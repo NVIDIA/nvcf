@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ess-control-plane
+  namespace: ess
+spec:
+  hostnames:
+    - ess-api.ess.svc.cluster.local
+  parentRefs:
+    - name: shared-gw
+      namespace: envoy-gateway-system
+      sectionName: http
+  rules:
+    - backendRefs:
+        - name: ess-api
+          port: 8080
+      matches:
+        - path:
+            type: PathPrefix
+            value: /

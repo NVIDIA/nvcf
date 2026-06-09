@@ -6,6 +6,9 @@ kind: Kustomization
 
 resources:
   - namespaces.yaml
+  - service-ess.yaml
+  - service-api.yaml
+  - service-invocation.yaml
   - service-sis.yaml
   - service-reval.yaml
   - service-nats.yaml
