@@ -101,4 +101,4 @@ kubectl delete namespace kai-scheduler
 
 - [references/kai-scheduler.md](references/kai-scheduler.md) — KAI install detail, queue-quota theory, failure modes
 - [references/smb-csi.md](references/smb-csi.md) — SMB CSI install detail, AKS managed-add-on alternative, verification
-- Companion skill: `nvcf-nvca-install` (install the NVCA operator after these prereqs are satisfied — landing in a follow-up MR; for now the AKS-flavored guide lives at `omniverse/streaming-skills/azure-base:.claude/skills/nvcf-nvca-install.md`)
+- Companion skill: `nvcf-self-managed-installation` — Section 7 covers enabling and validating the NVCA operator after these prerequisites are satisfied.
