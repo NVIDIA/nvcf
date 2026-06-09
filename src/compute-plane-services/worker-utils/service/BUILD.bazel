@@ -1,0 +1,43 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "service",
+    srcs = ["service.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/service",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//worker",
+        "@com_github_go_viper_mapstructure_v2//:mapstructure",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/config",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//types",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_pflag//:pflag",
+        "@com_github_spf13_viper//:viper",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "service_test",
+    srcs = ["service_test.go"],
+    embed = [":service"],
+    deps = [
+        "//worker",
+        "@com_github_cenkalti_backoff_v4//:backoff",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_nats_io_nats_go//jetstream",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//nvcf",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//test/testutils",
+        "@com_github_samber_lo//:lo",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+        "@org_golang_x_sync//errgroup",
+        "@org_uber_go_zap//:zap",
+    ],
+)

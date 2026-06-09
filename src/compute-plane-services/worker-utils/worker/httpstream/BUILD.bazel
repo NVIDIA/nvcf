@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "httpstream",
+    srcs = [
+        "background_once.go",
+        "hop_headers.go",
+        "request_stream.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/httpstream",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//tracing",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@com_github_valyala_bytebufferpool//:bytebufferpool",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "httpstream_test",
+    srcs = ["request_stream_test.go"],
+    embed = [":httpstream"],
+    deps = [
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
+    ],
+)

@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "polling",
+    srcs = ["polling.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/polling",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_cenkalti_backoff_v4//:backoff",
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
+        "@com_github_samber_lo//:lo",
+        "@org_golang_google_protobuf//proto",
+        "@org_uber_go_zap//:zap",
+    ],
+)

@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "ess",
+    srcs = ["ess.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/pkg/ess",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "@com_github_hashicorp_hcl_v2//gohcl",
+        "@com_github_hashicorp_hcl_v2//hclparse",
+        "@com_github_hashicorp_hcl_v2//hclwrite",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "ess_test",
+    srcs = ["ess_test.go"],
+    data = glob(["configs/**"]),
+    embed = [":ess"],
+    deps = [
+        "@com_github_hashicorp_hcl_v2//hclsimple",
+    ],
+)

@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ============================================================================
+# Bazel configuration for nvcf-worker-init.
+# ============================================================================
+
+build --compilation_mode=fastbuild
+common --enable_bzlmod
+build --incompatible_strict_action_env
+common --enable_platform_specific_config
+common --incompatible_enable_proto_toolchain_resolution
+
+test --test_output=errors
+test --test_env=HOME=/tmp
+test --test_env=XDG_CACHE_HOME=/tmp/.cache
+
+startup --host_jvm_args=-Xmx2g
+
+# ---- Go ----
+# Pure Go (no cgo). Matches the Dockerfile (CGO_ENABLED=0) so Bazel
+# binaries are interchangeable with the existing go-build artifacts.
+#
+# No GOPROXY/GONOPROXY/GONOSUM overrides here: gazelle's go_deps must
+# fetch the private NVIDIA module github.com/NVIDIA/nvcf/src/libraries/go/*
+# through the CI environment's git URL rewrite + internal proxy (same as
+# helm-reval). Forcing GONOPROXY=direct here would bypass that and hit the
+# public GitHub mirror, which can't always resolve fresh pseudo-versions.
+build --@rules_go//go/config:pure
+
+# ---- Workspace status (build stamping) ----
+build --workspace_status_command=tools/workspace_status.sh
+
+# ---- CI profile ----
+build:ci --jobs=16
+
+# ---- Debug / release profiles ----
+build:debug --compilation_mode=dbg
+build:debug -s
+build:release --compilation_mode=opt
+build:release --strip=always

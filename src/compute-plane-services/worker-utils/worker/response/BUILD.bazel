@@ -1,0 +1,12 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "response",
+    srcs = ["error.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/response",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ],
+)

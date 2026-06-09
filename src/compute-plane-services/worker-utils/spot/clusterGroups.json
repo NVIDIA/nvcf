@@ -1,0 +1,98 @@
+{
+  "clusterGroups": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "name": "GFN",
+      "ncaId": "EXAMPLE-NCA-ID-GFN",
+      "authorizedNcaIds": [
+        "*"
+      ],
+      "gpus": [
+        {
+          "name": "L40G",
+          "instanceTypes": [
+            {
+              "name": "gl40g_1.br25_2xlarge",
+              "value": "gl40g_1.br25_2xlarge",
+              "description": "One Nvidia L40G Ada GPU",
+              "default": true
+            }
+          ]
+        },
+        {
+          "name": "T10",
+          "instanceTypes": [
+            {
+              "name": "g6.full",
+              "value": "g6.full",
+              "description": "One Nvidia Tensor Core GPU",
+              "default": true
+            }
+          ]
+        },
+        {
+          "name": "A10G",
+          "instanceTypes": [
+            {
+              "name": "ga10g_1.br20_2xlarge",
+              "value": "ga10g_1.br20_2xlarge",
+              "description": "One Nvidia Ampere GPU",
+              "default": true
+            }
+          ]
+        },
+        {
+          "name": "L40",
+          "instanceTypes": [
+            {
+              "name": "gl40_1.br20_2xlarge",
+              "value": "gl40_1.br20_2xlarge",
+              "description": "One Nvidia L40 Ada GPU",
+              "default": true
+            }
+          ]
+        }
+      ],
+      "clusters": [
+        {
+          "k8sVersion": "v1.25.9",
+          "id": "example-cluster-gfn-static-zone",
+          "name": "STATIC-ZONE"
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "name": "OCI",
+      "ncaId": "EXAMPLE-NCA-ID-OCI",
+      "authorizedNcaIds": [
+        "*"
+      ],
+      "gpus": [
+        {
+          "name": "A100_80GB",
+          "instanceTypes": [
+            {
+              "name": "BM.GPU.A100-v2.8",
+              "value": "BM.GPU.A100-v2.8",
+              "description": "One Nvidia Tensor Core GPU",
+              "default": true
+            },
+            {
+              "name": "BM.GPU.A100-v2.8_8x",
+              "value": "BM.GPU.A100-v2.8",
+              "description": "Eight Nvidia Tensor Core GPU"
+            }
+          ]
+        }
+      ],
+      "clusters": [
+        {
+          "k8sVersion": "v1.25.9",
+          "id": "example-cluster-oci-static-region",
+          "name": "OCI-STATIC-REGION"
+        }
+      ]
+    }
+  ]
+}
