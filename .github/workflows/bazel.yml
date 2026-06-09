@@ -43,7 +43,7 @@ jobs:
     name: bazel (${{ matrix.subtree.id }})
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.4.0
+      image: ghcr.io/nvidia/nvcf/bazel-ci:0.7.0
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

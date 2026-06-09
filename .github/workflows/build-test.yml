@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: build-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run docs validation
+        run: ./tools/ci/check-docs
+
+  go-lib-codegen:
+    name: go-lib codegen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+
+      - name: Run go-lib codegen freshness check
+        run: ./tools/ci/check-go-codegen src/libraries/go/lib --install k8s.io/code-generator/cmd/deepcopy-gen@v0.34.2 --command 'make codegen-update'

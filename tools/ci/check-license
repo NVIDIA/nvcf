@@ -138,6 +138,7 @@ else
     run_header_check
 fi
 
+./tools/ci/check-mpl-audit
 ./tools/ci/check-private-go-module-paths
 
-echo "${license_file} is present, ${notice_file} is up to date, source headers passed, and native Go roots are free of private GitLab module paths."
+echo "${license_file} is present, ${notice_file} is up to date, source headers and MPL audit passed, and native Go roots are free of private GitLab module paths."
