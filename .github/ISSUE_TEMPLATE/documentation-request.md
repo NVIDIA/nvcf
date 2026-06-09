@@ -1,7 +1,6 @@
 ---
 name: Documentation request
 about: Report incorrect or needed documentation
-title: "[DOC]"
 labels: "needs-triage, documentation"
 assignees: ''
 

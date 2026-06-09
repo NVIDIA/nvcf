@@ -1,7 +1,6 @@
 ---
 name: Feature request
 about: Suggest an idea for NVCF
-title: "[FEA]"
 labels: "needs-triage, enhancement"
 assignees: ''
 
