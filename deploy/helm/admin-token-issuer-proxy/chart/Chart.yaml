@@ -15,6 +15,12 @@
 
 apiVersion: v2
 name: helm-admin-token-issuer-proxy
+# Backfill marker for OCI manifest publish post-issuer-#9 fix: the
+# previous tag (v1.4.1) was cut with the legacy cds-component that
+# only wrote to NGC's chart-registry surface, leaving the OCI
+# manifest absent and blocking nvcf-self-managed-stack consumers.
+# Bumping the patch through semantic-release re-runs the release
+# under the new helm push oci:// path.
 description: Admin Issuer Proxy service for minting admin-scoped JWTs from Vault/OpenBao
 type: application
 version: 0.0.0 # Chart version is managed by semantic-release

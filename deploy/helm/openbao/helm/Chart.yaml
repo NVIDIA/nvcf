@@ -15,6 +15,12 @@
 
 apiVersion: v2
 name: helm-nvcf-openbao-server
+# Backfill marker for OCI manifest publish post-issue-#9 fix: the
+# previous tag (v0.30.18) was cut with the legacy cds-component that
+# only wrote to NGC's chart-registry surface, leaving the OCI
+# manifest absent and blocking nvcf-self-managed-stack consumers.
+# Bumping the patch through semantic-release re-runs the release
+# under the new helm push oci:// path.
 description: OpenBao self-managed deployment
 type: application
 

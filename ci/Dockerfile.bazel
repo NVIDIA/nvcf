@@ -19,6 +19,7 @@ ARG BAZELISK_VERSION=1.25.0
 ARG BAZEL_VERSION=8.6.0
 ARG GRPCURL_VERSION=1.9.1
 ARG KUBEBUILDER_TOOLS_VERSION=1.30.3
+ARG HELM_VERSION=3.16.4
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -99,6 +100,22 @@ RUN arch="$(uname -m)" && case "$arch" in x86_64) arch=amd64;; aarch64|arm64) ar
      | tar -xz --strip-components=2 -C /usr/local/kubebuilder/bin \
   && /usr/local/kubebuilder/bin/kube-apiserver --version \
   && /usr/local/kubebuilder/bin/etcd --version
+
+# Helm CLI. Used by the per-service helm-push-<svc>-<tgt> release jobs
+# emitted by tools/generate-subproject-ci to log in to nvcr.io and push
+# the chart OCI manifest (helm push oci://...). The job extends
+# .nv-vault + .vault-reader-settings, which iterates
+# SECRETS_TO_RETRIEVE_IN_JSON via `jq -c '.[]'` -- jq is already
+# installed above, so consolidating helm here means one image carries
+# both tools instead of the prior alpine/helm:3.16.4 image that
+# shipped helm without jq (silent secret-fetch failure, see job
+# 336565515 on helm-admin-token-issuer-proxy-v1.4.2).
+RUN arch="$(uname -m)" && case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac \
+  && curl -fSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${arch}.tar.gz" \
+     | tar -xz -C /tmp \
+  && mv "/tmp/linux-${arch}/helm" /usr/local/bin/helm \
+  && rm -rf "/tmp/linux-${arch}" \
+  && helm version --short
 
 # Bazelisk (installed as `bazel`).
 RUN arch="$(uname -m)" && case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac \
