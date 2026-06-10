@@ -38,7 +38,7 @@ permissions:
 env:
   # Keep in lockstep with BAZEL_CI_VERSION in .gitlab-ci.yml and the
   # container.image tag in .github/workflows/bazel.yml.
-  BAZEL_CI_VERSION: "0.7.0"
+  BAZEL_CI_VERSION: "0.8.0"
   IMAGE: ghcr.io/nvidia/nvcf/bazel-ci
 
 jobs:
