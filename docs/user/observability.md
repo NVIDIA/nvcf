@@ -11,7 +11,7 @@ Common operator questions and where to look on this page or in linked references
 | How do I see application-level NVCF stats (number of functions, queue depth, request latency)? | [State Metrics Service metrics](./state-metrics). The page documents per-function instance count, queue depth, and request latency, plus other function-level signals. |
 | How do I debug a single request end-to-end? | Combine the per-hop signals: enable tracing per [Tracing Configuration](#tracing-configuration), correlate with the [Metrics Overview](./metrics-overview) for each service in the request path, and tail the matching service logs. A consolidated hop-by-hop walkthrough is in development. |
 | Where are per-service metrics? | [Metrics Overview](./metrics-overview). |
-| Where are gRPC proxy metrics? | Not yet documented for self-hosted. The [Metrics Overview](./metrics-overview) lists all services with documented metrics today. |
+| Where are gRPC proxy metrics? | [gRPC Proxy metrics](./metrics/grpc-proxy/metrics). The page documents client connection counts, NATS pipe health, gRPC worker session-attach latency, and HTTP RED metrics. |
 | How do I add custom spans or metrics in a Kit application? | Use the OpenTelemetry API directly, the OmniTrace helper, the Carbonite static metrics API, or the `omni::observability::IMeter` interface. Refer to the Omniverse Kit and Carbonite documentation for details. |
 | Where are reference dashboards? | [Example dashboards](./example-dashboards) and the [Dashboards](#dashboards) section below. |
 

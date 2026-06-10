@@ -7,6 +7,7 @@ Per-service metrics reference for the NVCF self-hosted control plane. Each linke
 - [NVCF API](./nvcf-api/metrics.md): request rates, response status codes, and log event counts for the NVCF API service.
 - [Invocation Service](./invocation-service/metrics.md): HTTP request counts, durations, and invocation error metrics for the invocation path.
 - [ESS](./ess/metrics.md): template rendering counters and HTTP client metrics for the Encrypted Secrets Service.
+- [gRPC Proxy](./grpc-proxy/metrics.md): client connection counts, NATS pipe health, gRPC worker session-attach latency, and HTTP RED metrics for the gRPC proxy.
 - [State Metrics Service](./state-metrics/metrics.md): per-function instance count, stage durations, request latency, and function metadata.
 - [SIS/Spot](./sis-spot/metrics.md): HTTP client metrics for the Spot Instance Service.
 - [Function Autoscaler](../autoscaling/observability.md): OpenTelemetry metrics emitted by the function autoscaler service.
