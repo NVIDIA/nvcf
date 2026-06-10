@@ -141,6 +141,18 @@ nvcfGatewayRoutes:
         port: 8080
       routeAnnotations: {}
 
+    # Helm ReVal HTTPRoute
+    reval:
+      enabled: true
+      name: reval
+      hostnames:
+        - "reval.{{ .Values.nvcfGatewayRoutes.domain }}"
+      backend:
+        name: reval
+        namespace: nvcf
+        port: 8080
+      routeAnnotations: {}
+
     # SIS (Service Identity Service) HTTPRoute
     # Exposes SIS outside the cluster so tools like `nvcf-cli cluster register`
     # can reach it without a kubectl port-forward workaround.

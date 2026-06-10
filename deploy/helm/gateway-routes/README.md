@@ -6,7 +6,7 @@ This repository contains the Helm chart for deploying NVCF ingress routes via th
 
 The chart deploys `HTTPRoute`, `TCPRoute`, and `ReferenceGrant` resources that attach to an existing Gateway provisioned separately by the cluster operator (e.g. Envoy Gateway, Istio, Traefik, Kong). It also includes optional `PodMonitor` resources for scraping Envoy Gateway proxy metrics with Prometheus.
 
-The chart deploys routing configuration only. It does not include any container images. Backend services referenced by the routes (`api`, `nvct-api`, `api-keys`, `invocation`, `llm-api-gateway`, `vanity-gateway`, `sis`, `grpc`, `nats`) must already be deployed separately.
+The chart deploys routing configuration only. It does not include any container images. Backend services referenced by the routes (`api`, `nvct-api`, `api-keys`, `invocation`, `llm-api-gateway`, `vanity-gateway`, `reval`, `sis`, `grpc`, `nats`) must already be deployed separately.
 
 ## Prerequisites
 
@@ -78,6 +78,7 @@ Enabled `HTTPRoute` entries must not share a resolved hostname because each `HTT
 | `llmApiGateway` | HTTPRoute | `llm.<domain>` | `llm-api-gateway.nvcf:8080` |
 | `llmInvocation` | HTTPRoute (disabled by default) | `llm.invocation.<domain>` | `llm-api-gateway.nvcf:8080` |
 | `vanityGateway` | HTTPRoute (disabled by default) | `vanity.<domain>` | `vanity-gateway.nvcf:8080` |
+| `reval` | HTTPRoute | `reval.<domain>` | `reval.nvcf:8080` |
 | `sis` | HTTPRoute | `sis.<domain>` | `api.sis:8080` |
 | `grpc` | TCPRoute | Not rendered | `grpc.nvcf:10081` |
 | `nats` | TCPRoute (disabled by default) | Not rendered | `nats.nats-system:4222` |
