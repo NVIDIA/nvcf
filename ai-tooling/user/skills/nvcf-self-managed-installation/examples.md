@@ -81,11 +81,11 @@ docker login nvcr.io -u '$oauthtoken' -p "$NGC_API_KEY"
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
   kubectl create secret docker-registry nvcr-creds \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
@@ -176,7 +176,7 @@ done
 ### Step 3: Delete all namespaces
 
 ```bash
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
   kubectl delete namespace "$ns" --ignore-not-found
 done
 ```

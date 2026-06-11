@@ -98,13 +98,13 @@ To override arbitrary chart values, use a helmfile release `values:` block. See 
 ### 1. Create namespaces and image pull secrets (if using a private registry)
 
 ```bash
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
 # Only if pulling from a private registry (e.g., NGC nvcr.io)
 export NGC_API_KEY="<your-key>"
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
   kubectl create secret docker-registry nvcr-creds \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
@@ -285,7 +285,7 @@ done
 ### Delete namespaces
 
 ```bash
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system nvca-system nvcf-backend; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager nvca-system nvcf-backend; do
   kubectl delete namespace "$ns" --ignore-not-found
 done
 ```
@@ -356,7 +356,7 @@ helm install kyverno kyverno/kyverno -n kyverno --create-namespace
 
 # 2. Create pull secret in each namespace
 export NGC_API_KEY="<your-key>"
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
   kubectl create secret docker-registry nvcr-pull-secret \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \

@@ -21,11 +21,11 @@ helm install kyverno kyverno/kyverno -n kyverno --create-namespace
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
   kubectl create secret docker-registry nvcr-pull-secret \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
@@ -62,6 +62,7 @@ spec:
             - "nats-system"
             - "cassandra-system"
             - "vault-system"
+            - "cert-manager"
       mutate:
         patchStrategicMerge:
           metadata:
