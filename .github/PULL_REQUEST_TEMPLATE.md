@@ -2,12 +2,13 @@
 <!--To include in the release notes. Use customer facing language to describe the effect on them.-->
 
 ## TL;DR
-<!--Provide a brief description of the changes in this MR.-->
+<!--Provide a brief description of what changed and why it is needed.-->
 
 ## Additional Details (optional for docs, build, test, refactor, ci, chore, style, and revert PRs)
-<!-- - describe the intent of this PR -->
+<!-- - explain the problem, requirement, review comment, or CI blocker driving this MR -->
+<!-- - explain how the changed pieces connect -->
+<!-- - link upstream MRs/PRs, tickets, bugs, or related reviews when relevant -->
 <!-- - any limitations or possible things missing from this PR -->
-<!-- - what led to this change being made? this is optional extra information to help the reviewer -->
 
 ## For the Reviewer
 <!--mention reviewers you wish to review this MR-->

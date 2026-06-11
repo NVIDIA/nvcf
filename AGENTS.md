@@ -231,6 +231,14 @@ Use a structured Merge Request/Pull Request description. Subtree repos may defin
 their own Merge Request/Pull Request template; fall back to this shape when none
 exists. Do not include a test plan checklist unless explicitly requested.
 
+Every Merge Request/Pull Request description must explain why the change is
+needed, not only what changed. Include enough context that a reviewer can
+understand the motivation without doing detective work. Always include:
+- the problem, requirement, review comment, or CI blocker driving the change
+- what changed and how the changed pieces connect
+- links to upstream Merge Requests/Pull Requests, tickets, bugs, or related
+  reviews when relevant
+
 ```
 ## Why
 <context and motivation for the change>
