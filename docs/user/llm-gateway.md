@@ -31,7 +31,7 @@ The LLM Gateway path has these runtime components:
 2. LLM API Gateway extracts the routing key from the `model` field, validates authorization, applies request and token rate limits, and validates endpoint-specific request fields.
 3. LLM API Gateway forwards the request to LLM request router with routing metadata such as request ID, routing key, model name, routing method, token estimate, and cache affinity key when present.
 4. LLM request router selects a healthy backend for the requested function and model.
-5. The `stargate-client` sidecar on the selected workload forwards the request to the user container through the configured inference port.
+5. The `pylon` sidecar on the selected workload forwards the request to the user container through the configured inference port.
 6. The user container handles the OpenAI-compatible route and returns the response through the same path.
 
 The function container must expose the declared OpenAI-compatible paths on its inference port. Use `inferenceUrl: "/"` for LLM functions unless the container needs a different base path.
@@ -200,4 +200,4 @@ Sticky routing only affects backend selection when the LLM request router is con
 - The LLM API Gateway chart and LLM request router chart are installed as self-managed stack components.
 - The Gateway Routes chart creates the external HTTPRoute for LLM invocation.
 - Token rate limits are evaluated per model when `llmConfig.tokenRateLimit` is set.
-- The LLM request router and `stargate-client` images must be from a stack release that includes the endpoint support documented here.
+- The LLM request router and `pylon` worker sidecar images must be from a stack release that includes the endpoint support documented here.

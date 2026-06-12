@@ -92,7 +92,7 @@
 
   <rect class="compute" x="735" y="320" width="224" height="88" rx="8" />
   <text class="label" x="847" y="351" text-anchor="middle">LLM Worker Gateway</text>
-  <text class="small" x="847" y="377" text-anchor="middle">stargate-client sidecar</text>
+  <text class="small" x="847" y="377" text-anchor="middle">pylon sidecar</text>
 
   <rect class="compute" x="1010" y="320" width="218" height="88" rx="8" />
   <text class="label" x="1119" y="351" text-anchor="middle">Customer Inference</text>

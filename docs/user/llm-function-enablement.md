@@ -3,8 +3,8 @@
 Enable the LLM addon before creating or invoking functions with
 `functionType: "LLM"` through the LLM invocation route. The addon deploys the
 LLM API Gateway and LLM request router, creates the external LLM invocation
-route, and configures worker pods to use the `stargate-client` sidecar for
-model-aware routing.
+route, and configures worker pods to use the `pylon` sidecar for model-aware
+routing.
 
 For LLM function payload shape and invocation examples, see
 [Function Creation](./function-creation.md#llm-functions) and
@@ -26,8 +26,8 @@ When enabled, the stack creates:
 - `llm-api-gateway` in the `nvcf` namespace.
 - `llm-request-router` in the `nvcf` namespace.
 - The `llm.invocation.<domain>` HTTPRoute when Gateway API ingress is enabled.
-- LLM worker pods with a `stargate-client` sidecar that forwards requests to
-  the function container on the configured `inferencePort`.
+- LLM worker pods with a `pylon` sidecar that forwards requests to the function
+  container on the configured `inferencePort`.
 
 ## Helmfile Configuration
 
@@ -42,19 +42,41 @@ addons:
       replicaCount: 3
     requestRouter:
       replicaCount: 3
+      loadBalancer:
+        config: |
+          {
+            "default": "power-of-two",
+            "request_algorithms": {
+              "power-of-two": "power-of-two",
+              "round-robin": "round-robin",
+              "random": "random",
+              "groq-multiregion": "groq-multiregion"
+            }
+          }
 ```
 
 Use `replicaCount: 1` for local or single-node test clusters. Use multiple
 replicas for shared or production environments.
 
+`addons.llm.requestRouter.loadBalancer.config` configures request-router
+algorithm selection. Function model specs use underscored `routingMethod`
+values such as `round_robin`, `power_of_two`, `groq_multiregion`, and
+`random`. The request router configuration uses hyphenated algorithm IDs such
+as `round-robin`, `power-of-two`, `groq-multiregion`, and `random`.
+
+When a function can use a non-default `routingMethod`, include the matching
+algorithm in `request_algorithms`. If the request router does not have a
+matching algorithm entry, invocation can fail with HTTP `400` before a backend
+is selected.
+
 If you mirror images to a registry that does not use the stack's default
 `global.image.registry` and `global.image.repository`, override the
-`stargate-client` sidecar image passed to generated LLM workers:
+`pylon` sidecar image passed to generated LLM workers:
 
 ```yaml
 api:
   env:
-    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/stargate-client:0.3.0
+    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/pylon:0.2.1
 ```
 
 The LLM API Gateway and request router images are resolved from the same stack
@@ -86,7 +108,7 @@ agentConfig:
 talk to the local NVCF API over plaintext gRPC.
 
 `workload.stargateQUICInsecure: true` configures generated LLM workers to pass
-the insecure local QUIC setting to `stargate-client`.
+the insecure local QUIC setting to the `pylon` sidecar.
 
 <Warning>
 Use these insecure settings only for local or isolated test clusters. Production
@@ -131,9 +153,9 @@ kubectl -n nvcf-backend get pod <function-pod> \
   -o jsonpath='{range .spec.containers[?(@.name=="llm-worker")].args[*]}{.}{"\n"}{end}'
 ```
 
-The function pod should include an `llm-worker` container using
-`stargate-client`. For local plaintext clusters, the `llm-worker` args should
-include `--quic-insecure`.
+The function pod should include an `llm-worker` container using `pylon`. For
+local plaintext clusters, the `llm-worker` args should include
+`--quic-insecure`.
 
 ## Troubleshooting
 
@@ -146,6 +168,8 @@ mean the router knows the target but has no active eligible backend. Check:
 - The request `model` value uses `<function-id>/<model-name>`.
 - The function's `models[].name` matches the model suffix in the request.
 - `models[].llmConfig.uris` includes the invoked path.
+- `addons.llm.requestRouter.loadBalancer.config` includes the algorithm selected
+  by the function's `models[].llmConfig.routingMethod`.
 - The `llm-worker` sidecar connected to `llm-request-router`.
 - Local clusters using plaintext transport include both `grpcInsecure` and
   `stargateQUICInsecure`.

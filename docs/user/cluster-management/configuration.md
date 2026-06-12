@@ -840,7 +840,7 @@ agentConfig:
 ```
 
 `workload.stargateQUICInsecure: true` makes generated LLM workers pass
-`--quic-insecure` to the `stargate-client` sidecar. Use it only for local or
+`--quic-insecure` to the `pylon` sidecar. Use it only for local or
 isolated test clusters that run the LLM request router tunnel without TLS. For
 the full LLM addon setup, see
 [LLM Function Enablement](../llm-function-enablement.md).
