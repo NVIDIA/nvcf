@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: task-helmchart-byoo
+  labels:
+    app.kubernetes.io/name: "task-helmchart-byoo-job"
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Release.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: {{ .Values.ngcImagePullSecretName }}
+      containers:
+      - name: task
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        env:
+          - name: "NVCT_NCA_ID"
+            value: {{ .Values.nvctNcaId }}
+          - name: "NVCT_TASK_ID"
+            value: {{ .Values.nvctTaskId }}
+          - name: "NVCT_TASK_NAME"
+            value: {{ .Values.nvctTaskName }}
+          - name: "NVCT_RESULTS_DIR"
+            value: {{ .Values.nvctResultsDir }}
+          - name: "NVCT_PROGRESS_FILE_PATH"
+            value: {{ .Values.nvctProgressFilePath }}
+          # BYOO env variables
+          - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+            value: "{{ .Values.otelExporterOtlpLogsEndpoint }}"
+          - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+            value: "{{ .Values.otelExporterOtlpMetricsEndpoint }}"
+          - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+            value: "{{ .Values.otelExporterOtlpTracesEndpoint }}"
+          - name: OTEL_EXPORTER_OTLP_LOGS_PROTOCOL
+            value: "{{ .Values.otelExporterOtlpLogsProtocol }}"
+          - name: OTEL_EXPORTER_OTLP_METRICS_PROTOCOL
+            value: "{{ .Values.otelExporterOtlpMetricsProtocol }}"
+          - name: OTEL_EXPORTER_OTLP_TRACES_PROTOCOL
+            value: "{{ .Values.otelExporterOtlpTracesProtocol }}"

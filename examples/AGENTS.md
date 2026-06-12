@@ -10,8 +10,8 @@ Top-level groups:
 
 - `function-samples/`: long-running services (FastAPI echo, streaming, multi-endpoint, gRPC echo, secrets, vLLM with OTLP, load tester).
 - `function-samples/helmchart-samples/`: Helm charts that wrap the FastAPI and multi-node samples.
-- `task-samples/`: one-shot NVCT task containers and task Helm charts.
-- `load-tests/`: k6 scripts for `functions/` (HTTP, gRPC, SSE, streaming).
+- `task-samples/`: one-shot NVCT task containers and Helm charts (simple, BYOO, Helm, multi-node).
+- `load-tests/`: k6 scripts for `functions/` (HTTP, gRPC, SSE, streaming) and `tasks/` (health, create, list tasks/events/results).
 - `cluster-monitoring-sample/`: Prometheus ServiceMonitor and OTEL collector configs for NVCA.
 
 Local development tooling for self-hosted NVCF lives in `tools/ncp-local-cluster/`, not under `examples/`.
@@ -68,9 +68,19 @@ Stay on Go versions listed in each `go.mod`. Do not tie load-tester build config
 ```
 cd examples/load-tests
 k6 run functions/<test>.js
+k6 run tasks/<test>.js
 ```
 
 k6 scripts accept endpoint URLs and keys through environment variables. Do not hardcode NGC keys, auth tokens, or customer-facing endpoints. Every test must read credentials from env.
+
+### NVCT task samples
+
+```
+cd examples/task-samples/<sample>
+docker build -t <sample> .
+```
+
+Each task sample README documents the self-hosted NVCT launch flow (registry credentials, API key, and `POST /v2/orgs/<org>/nvct/tasks`). Helm variants package a chart and reference it by OCI URL on task submission.
 
 ## Code style
 

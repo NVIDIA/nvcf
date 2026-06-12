@@ -27,10 +27,14 @@ Tasks are one-shot workloads that run to completion and surface progress and res
 | Sample | Description |
 |--------|-------------|
 | [Task Simple](task-samples/task-simple-sample/) | Minimal task that writes progress updates until completion. |
+| [Task BYOO](task-samples/task-byoo-sample/) | Task instrumented with OpenTelemetry for BYO Observability. |
+| [Task Helm Chart](task-samples/task-helmchart-sample/) | Helm chart that deploys the simple task container as a Kubernetes Job. |
+| [Task Helm Chart BYOO](task-samples/task-helmchart-byoo-sample/) | Helm chart that deploys the BYOO task container as a Kubernetes Job. |
+| [Multi-Node Helm Task](task-samples/multi-node-helm-task-test/) | Multi-node NCCL and GPU bandwidth test packaged as a Helm task. |
 
 ## Load Tests
 
-k6 load testing scripts for NVCF function endpoints are in the [load-tests/](load-tests/) directory.
+k6 load testing scripts for NVCF function and NVCT task endpoints are in the [load-tests/](load-tests/) directory.
 
 ## Building for Multiple Compute Architectures
 

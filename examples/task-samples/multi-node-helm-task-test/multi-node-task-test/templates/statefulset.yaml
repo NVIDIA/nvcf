@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "multi-node-task-test.name" . }}
+  labels:
+    {{- include "multi-node-task-test.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "multi-node-task-test.name" . }}-headless
+  podManagementPolicy: Parallel
+  replicas: {{ .Values.nodesPerInstance }}
+  selector:
+    matchLabels:
+      {{- include "multi-node-task-test.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "multi-node-task-test.selectorLabels" . | nindent 8 }}
+    spec:
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+        - name: temp
+          emptyDir: {}
+      {{- if .Values.ngcImagePullSecretName }}
+      imagePullSecrets:
+      - name: {{ .Values.ngcImagePullSecretName }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          volumeMounts:
+            - mountPath: /dev/shm
+              name: dshm
+            - mountPath: /tmp
+              name: temp
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODES_PER_INSTANCE
+              value: {{ .Values.nodesPerInstance | quote }}
+            - name: NVCT_NCA_ID
+              value: {{ .Values.nvctNcaId }}
+            - name: NVCT_TASK_ID
+              value: {{ .Values.nvctTaskId }}
+            - name: NVCT_TASK_NAME
+              value: {{ .Values.nvctTaskName }}
+            - name: NVCT_RESULTS_DIR
+              value: {{ .Values.nvctResultsDir }}
+            - name: NVCT_PROGRESS_FILE_PATH
+              value: {{ .Values.nvctProgressFilePath }}
+            - name: TOTAL_NUM_GPUS
+              value: {{ mul (int .Values.gpusPerNode) (int .Values.nodesPerInstance) | quote }}
+            - name: NPERNODE
+              value: {{ .Values.gpusPerNode | quote }}
+            - name: HEADLESS_SERVICE_NAME
+              value: {{ include "multi-node-task-test.name" . }}-headless
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
