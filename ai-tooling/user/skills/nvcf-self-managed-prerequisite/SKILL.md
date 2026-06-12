@@ -47,25 +47,59 @@ Both installs are cloud-neutral helm commands pinned to the NVCF-validated versi
 ### 1 — KAI Scheduler
 
 ```bash
-helm upgrade -i kai-scheduler \
+cat > nvca-values.yaml << 'EOF'
+scheduler:
+  placementStrategy: binpack
+  plugins:
+    nodeplacement:
+      arguments:
+        gpu: binpack
+        cpu: spread
+  actions:
+    preempt:
+      enabled: false
+    consolidation:
+      enabled: false
+
+defaultQueue:
+  createDefaultQueue: true
+  parentName: default-parent-queue
+  childName: default-queue
+  parentResources:
+    cpu:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+    gpu:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+    memory:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+  childResources:
+    cpu:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+    gpu:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+    memory:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+EOF
+
+
+helm install kai-scheduler \
   oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler \
-  -n kai-scheduler --create-namespace \
+  -n kai-scheduler --create-namespace -f nvca-values.yaml \
   --version v0.12.6 \
   --wait --timeout 5m
-
-# Required quota patch — default queues ship with quota=0; NVCA needs -1.
-for q in default-parent-queue default-queue; do
-  kubectl patch queue "$q" --type=merge -p '{
-    "spec":{"resources":{
-      "cpu":{"limit":-1,"quota":-1,"overQuotaWeight":1},
-      "gpu":{"limit":-1,"quota":-1,"overQuotaWeight":1},
-      "memory":{"limit":-1,"quota":-1,"overQuotaWeight":1}
-    }}
-  }'
-done
 ```
-
-If you skip the patch, NVCA later spams `kai-scheduler-queues_errors="[CPU resource violation … quota=0]"`. Full failure modes + version-pin guidance: [references/kai-scheduler.md](references/kai-scheduler.md).
 
 ### 2 — SMB CSI driver
 

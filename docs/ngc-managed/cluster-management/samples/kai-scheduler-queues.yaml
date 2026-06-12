@@ -1,6 +1,19 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+scheduler:
+  placementStrategy: binpack
+  plugins:
+    nodeplacement:
+      arguments:
+        gpu: binpack
+        cpu: spread
+  actions:
+    preempt:
+      enabled: false
+    consolidation:
+      enabled: false
+
 defaultQueue:
   createDefaultQueue: true
   parentName: default-parent-queue

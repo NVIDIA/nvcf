@@ -30,45 +30,10 @@ kubectl get pods -n kai-scheduler
 # Expect 7 pods, all Running (controller + queue + scheduler + admission components).
 ```
 
-## Why the queue quota patch is required
-
-The chart's default values create two `Queue` CRs (`default-parent-queue` and `default-queue`) with resource quotas of **`0`** on cpu / gpu / memory.
-
-NVCA polls these queues at registration time and reports unhealthy until each quota is **`-1`** (unlimited). The agent logs this clearly:
-
-```
-kai-scheduler-queues_errors="[CPU resource violation for queue default-parent-queue:
-  expected limit=-1, quota=-1, overQuotaWeight=1, got limit=-1, quota=0, overQuotaWeight=1]"
-```
-
-The NVCF docs reference a downloadable `values.yaml` template that would set the queue quotas correctly at install time; we apply the post-install patch instead — cleaner, same outcome, no extra file to download.
-
-## The patch
-
-```bash
-for q in default-parent-queue default-queue; do
-  kubectl patch queue "$q" --type=merge -p '{
-    "spec":{"resources":{
-      "cpu":{"limit":-1,"quota":-1,"overQuotaWeight":1},
-      "gpu":{"limit":-1,"quota":-1,"overQuotaWeight":1},
-      "memory":{"limit":-1,"quota":-1,"overQuotaWeight":1}
-    }}
-  }'
-done
-```
-
-Verify:
-
-```bash
-kubectl get queues -o yaml | grep -A6 "name: default"
-# Expect: limit: -1, quota: -1 on cpu, gpu, memory for both queues.
-```
-
 ## Failure modes
 
 | Symptom | Cause | Fix |
 | ------- | ----- | --- |
-| `kai-scheduler-queues_errors="… quota=0"` in NVCA agent log; NVCA reports unhealthy after registration | Queue quotas not patched | Run the `kubectl patch queue …` loop above |
 | `kai-scheduler` namespace pods stuck `Pending` with `Insufficient cpu` | KAI's controller pods couldn't be scheduled on small system pools | Add a system / general-purpose node pool with at least 2 CPU + 2Gi memory free |
 | `helm install kai-scheduler` fails on `oci://ghcr.io` pull | Cluster can't reach ghcr.io (air-gap or proxy) | Mirror the chart to your private registry first and install from there |
 | `Queue` CRs not present after install | Helm install succeeded but CRDs didn't apply | Re-run with `--wait --timeout 5m`; if still missing, check `kubectl get crd queues.scheduling.run.ai` |

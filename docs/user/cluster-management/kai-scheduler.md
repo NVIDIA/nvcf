@@ -26,6 +26,19 @@ Create `values.yaml` with [default queue](https://raw.githubusercontent.com/NVID
 
 <Accordion title="kai-scheduler-queues.yaml">
 ```yaml title="kai-scheduler-queues.yaml"
+scheduler:
+  placementStrategy: binpack
+  plugins:
+    nodeplacement:
+      arguments:
+        gpu: binpack
+        cpu: spread
+  actions:
+    preempt:
+      enabled: false
+    consolidation:
+      enabled: false
+
 defaultQueue:
   createDefaultQueue: true
   parentName: default-parent-queue
