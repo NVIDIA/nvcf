@@ -162,6 +162,14 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 - Contents of `~/.nvcf-cli.state` or any kubeconfig.
 - Any data marked secret in helmfile values.
 
+> Note (only when operating more than one cluster from the same machine): the CLI's default
+> config (`~/.nvcf-cli.yaml`) and state (`~/.nvcf-cli.state`) are a single shared slot, not
+> per-cluster. With a single control plane (the common case) this needs no attention. If you
+> manage multiple clusters, pass `--config <cluster>.yaml` on every command (or keep a
+> deliberately-switched per-cluster default): with no `--config`, commands target whichever
+> cluster was last `init`'d, and `init` / `api-key generate` mutate that shared default, so an
+> unscoped `api-key generate` can mint or surface keys against the wrong cluster.
+
 ## Output modes (for agent piping)
 
 `nvcf-cli` subcommands that long-run (`up`, `status`, `check`) accept four output modes:

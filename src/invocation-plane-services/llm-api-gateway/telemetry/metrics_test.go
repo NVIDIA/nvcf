@@ -129,8 +129,41 @@ func TestInitStartsPrometheusMetricsServer(t *testing.T) {
 	if !strings.Contains(body, "llm_api_gateway_pubsub_publish_failures_total") {
 		t.Fatalf("metrics body missing pubsub counter:\n%s", body)
 	}
+	if !strings.Contains(body, "go_goroutines") {
+		t.Fatalf("metrics body missing Go runtime collector:\n%s", body)
+	}
 	if strings.Contains(body, "llm_api_gateway_pubsub_publish_failures_total_total") {
 		t.Fatalf("metrics body contains duplicated total suffix:\n%s", body)
+	}
+}
+
+func TestInitAllowsMultiplePrometheusRuntimes(t *testing.T) {
+	firstPort := freePort(t)
+	first, err := Init(context.Background(), RuntimeConfig{MetricsPort: firstPort})
+	if err != nil {
+		t.Fatalf("first Init() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = first.Shutdown(context.Background())
+	})
+
+	secondPort := freePort(t)
+	second, err := Init(context.Background(), RuntimeConfig{MetricsPort: secondPort})
+	if err != nil {
+		t.Fatalf("second Init() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = second.Shutdown(context.Background())
+	})
+
+	Add(PubSubPublishFailures(), 1)
+
+	body := waitForMetricsBody(t, fmt.Sprintf("http://127.0.0.1:%d/metrics", secondPort))
+	if !strings.Contains(body, "llm_api_gateway_pubsub_publish_failures_total") {
+		t.Fatalf("second metrics body missing pubsub counter:\n%s", body)
+	}
+	if !strings.Contains(body, "go_goroutines") {
+		t.Fatalf("second metrics body missing Go runtime collector:\n%s", body)
 	}
 }
 

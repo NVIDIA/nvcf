@@ -227,7 +227,7 @@ func newMeterProvider(
 			return nil, nil, err
 		}
 		readers = append(readers, prometheusReader)
-		gatherer = registry
+		gatherer = prometheus.Gatherers{registry, prometheus.DefaultGatherer}
 	}
 
 	switch exporter {
