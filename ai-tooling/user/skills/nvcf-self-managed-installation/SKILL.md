@@ -141,6 +141,37 @@ aws ecr get-login-password --region <region> | \
 > on the stored login. (Pulling everything from a single registry mirror avoids this
 > entirely.)
 
+### 2b. (Recommended) Pull from a registry the cluster authenticates to automatically
+
+If you mirror the NVCF images into a registry that the cluster can pull from without an
+explicit image pull secret (for example, a registry where the node or workload identity is
+granted pull access automatically), point the stack at it and skip the credential steps
+above.
+
+1. Point the stack at the mirror in `environments/<env>.yaml`:
+
+   ```yaml
+   global:
+     image:
+       registry: <your-registry>            # e.g. registry.example.com
+       repository: <mirror-sub-path>
+     helm:
+       sources:                              # only if you also mirrored the helm charts
+         registry: <your-registry>
+         repository: <mirror-sub-path>
+   ```
+
+2. Skip the credential steps above. When the cluster authenticates to the registry
+   automatically (the node or workload identity has pull access), the pull needs no
+   Kubernetes secret, so you do not need: the per-namespace `nvcr-pull-secret` from step 1
+   (still create the namespaces, just not the secret), the `global.imagePullSecrets` entry,
+   or the `docker login`/`helm registry login nvcr.io` from step 2.
+
+   > One residual credential: nvcf-api still validates the user function image at
+   > `function create` via the account registry credential, so that credential must point at
+   > whichever registry holds the user image (set it to your mirror if the image is mirrored
+   > there).
+
 ### 3. Set the gateway address in your environment file
 
 Your environment file (`environments/<env>.yaml`) requires `global.domain` to be set to the external address of your Envoy Gateway or load balancer. How to obtain it depends on timing:

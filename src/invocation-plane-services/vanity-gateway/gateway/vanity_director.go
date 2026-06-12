@@ -97,6 +97,7 @@ type execTarget struct {
 	functionID        string
 	functionVersionID string
 	sessionTimeout    config.SessionTimeoutSeconds
+	customHeaders     config.CustomHeaders
 }
 
 type VanityExecRequest struct {
@@ -105,6 +106,7 @@ type VanityExecRequest struct {
 	PathOverride      *string
 	UsePexec          bool
 	SessionTimeout    config.SessionTimeoutSeconds
+	CustomHeaders     config.CustomHeaders
 	EOL               time.Time
 	OfflineMessage    string
 }
@@ -135,12 +137,13 @@ func NewVanityDirector(nvcfApiHost string, transport http.RoundTripper) (*Vanity
 	return &VanityDirector{rp: rp, nvcfApiHost: nvcfApiUrl.Host, nvcfApiScheme: nvcfApiUrl.Scheme}, nil
 }
 
-func buildExecTarget(functionID string, functionVersionID string, pathOverride *string, usePexec bool, sessionTimeout config.SessionTimeoutSeconds) execTarget {
+func buildExecTarget(functionID string, functionVersionID string, pathOverride *string, usePexec bool, sessionTimeout config.SessionTimeoutSeconds, customHeaders config.CustomHeaders) execTarget {
 	target := execTarget{
 		path:              pathOverride,
 		functionID:        functionID,
 		functionVersionID: functionVersionID,
 		sessionTimeout:    sessionTimeout,
+		customHeaders:     customHeaders,
 	}
 	if !usePexec {
 		return target
@@ -175,6 +178,13 @@ func applyExecTarget(request *http.Request, apiScheme string, apiHost string, ta
 	}
 	request.Host = ""
 	setPollingHeaderIfNotPresent(request, target.sessionTimeout)
+	applyCustomHeaders(request, target.customHeaders)
+}
+
+func applyCustomHeaders(request *http.Request, headers config.CustomHeaders) {
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
 }
 
 func (d *VanityDirector) ServeExec(target VanityExecRequest, writer http.ResponseWriter, request *http.Request) error {
@@ -188,7 +198,7 @@ func (d *VanityDirector) ServeExec(target VanityExecRequest, writer http.Respons
 		return nil
 	}
 
-	applyExecTarget(request, d.nvcfApiScheme, d.nvcfApiHost, buildExecTarget(target.FunctionID, target.FunctionVersionID, target.PathOverride, target.UsePexec, target.SessionTimeout))
+	applyExecTarget(request, d.nvcfApiScheme, d.nvcfApiHost, buildExecTarget(target.FunctionID, target.FunctionVersionID, target.PathOverride, target.UsePexec, target.SessionTimeout, target.CustomHeaders))
 
 	// Set Deprecation header if EOL is set but not yet expired
 	if !target.EOL.IsZero() {

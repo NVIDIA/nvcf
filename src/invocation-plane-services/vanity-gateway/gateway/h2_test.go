@@ -173,6 +173,177 @@ func TestBuildChiMux_SessionTimeoutHeader(t *testing.T) {
 	}
 }
 
+func TestBuildChiMux_OpenAICustomHeaders(t *testing.T) {
+	receivedHeaders := make(chan http.Header, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders <- r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(backend.Close)
+
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = "test.host"
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+		"configured": {
+			ModelName:  "configured-model",
+			FunctionID: "configured-func",
+			CustomHeaders: config.CustomHeaders{
+				"X-Provider-Feature": "enabled",
+				"X-Request-Source":   "vanity-gateway",
+			},
+		},
+	}
+
+	mux, err := buildChiMux(mappings, Config{
+		NvcfApiEndpoint:              backend.URL,
+		PrivateModelNameRegexPattern: "^$",
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"configured-model"}`))
+	req.Host = "test.host"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Provider-Feature", "caller-value")
+	req.Header.Set("X-Request-Client", "client-value")
+
+	mux.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	select {
+	case headers := <-receivedHeaders:
+		assert.Equal(t, "enabled", headers.Get("X-Provider-Feature"))
+		assert.Equal(t, "vanity-gateway", headers.Get("X-Request-Source"))
+		assert.Equal(t, "client-value", headers.Get("X-Request-Client"))
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for upstream request")
+	}
+}
+
+func TestBuildChiMux_VanityCustomHeaders(t *testing.T) {
+	receivedHeaders := make(chan http.Header, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders <- r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(backend.Close)
+
+	mappings := &config.GatewayConfig{}
+	mappings.Vanity = map[string]config.VanityEntry{
+		"example": {
+			Host: "vanity.test",
+			Paths: map[string]config.PathFunctionDetails{
+				"sample": {
+					Path:       "/v1/example/infer",
+					FunctionID: "vanity-func",
+					CustomHeaders: config.CustomHeaders{
+						"X-Provider-Feature": "enabled",
+					},
+				},
+			},
+		},
+	}
+
+	mux, err := buildChiMux(mappings, Config{
+		NvcfApiEndpoint:              backend.URL,
+		PrivateModelNameRegexPattern: "^$",
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/example/infer", bytes.NewBufferString(`{}`))
+	req.Host = "vanity.test"
+	req.Header.Set("X-Provider-Feature", "caller-value")
+
+	mux.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	select {
+	case headers := <-receivedHeaders:
+		assert.Equal(t, "enabled", headers.Get("X-Provider-Feature"))
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for upstream request")
+	}
+}
+
+func TestBuildChiMux_ShadowUsesTargetCustomHeaders(t *testing.T) {
+	type receivedRequest struct {
+		modelName string
+		route     string
+		isShadow  bool
+	}
+	receivedRequests := make(chan receivedRequest, 2)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(body, &payload))
+		modelName, ok := payload["model"].(string)
+		require.True(t, ok)
+		receivedRequests <- receivedRequest{
+			modelName: modelName,
+			route:     r.Header.Get("X-Custom-Route"),
+			isShadow:  r.Header.Get(shadowHeader) == shadowHeaderValue,
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(backend.Close)
+
+	shadowPct := 100
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = "test.host"
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+		"primary": {
+			ModelName:        "primary-model",
+			FunctionID:       "primary-func",
+			ShadowModelName:  "shadow-model",
+			ShadowPercentage: &shadowPct,
+			CustomHeaders: config.CustomHeaders{
+				"X-Custom-Route": "primary",
+			},
+		},
+		"shadow": {
+			ModelName:  "shadow-model",
+			FunctionID: "shadow-func",
+			CustomHeaders: config.CustomHeaders{
+				"X-Custom-Route": "shadow",
+			},
+		},
+	}
+
+	mux, err := buildChiMux(mappings, Config{
+		NvcfApiEndpoint:              backend.URL,
+		PrivateModelNameRegexPattern: "^$",
+		ShadowMaxConcurrent:          10,
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"primary-model"}`))
+	req.Host = "test.host"
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	seen := map[string]receivedRequest{}
+	timeout := time.After(5 * time.Second)
+	for len(seen) < 2 {
+		select {
+		case received := <-receivedRequests:
+			seen[received.modelName] = received
+		case <-timeout:
+			t.Fatalf("timed out waiting for primary and shadow requests; seen=%v", seen)
+		}
+	}
+
+	assert.False(t, seen["primary-model"].isShadow)
+	assert.Equal(t, "primary", seen["primary-model"].route)
+	assert.True(t, seen["shadow-model"].isShadow)
+	assert.Equal(t, "shadow", seen["shadow-model"].route)
+}
+
 func TestBuildChiMux_SessionTimeoutTraceAttribute(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

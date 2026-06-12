@@ -132,6 +132,7 @@ func registerVanity(hostRouter *middleware2.HostRouter, mappings *config.Gateway
 				FunctionVersionID: mapping.FunctionVersionID,
 				PathOverride:      mapping.OutgoingPathOverride,
 				UsePexec:          mapping.UsePexec,
+				CustomHeaders:     mapping.CustomHeaders,
 				EOL:               mapping.EOL,
 				OfflineMessage:    mapping.OfflineMessage,
 			}

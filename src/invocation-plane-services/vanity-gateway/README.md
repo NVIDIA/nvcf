@@ -131,6 +131,9 @@ v2config:
         functionVersionID: 11111111-1111-1111-1111-111111111111
         usePexec: true
         sessionTimeout: 900
+        customHeaders:
+          X-Provider-Feature: enabled
+          X-Request-Source: vanity-gateway
         tooManyRequestsMessage: "Try again later or use a partner endpoint."
         shadowModelNames:
           - private/meta/llama-3.1-8b-shadow
@@ -153,6 +156,8 @@ v2config:
           path: /v1/example/infer
           functionID: 00000000-0000-0000-0000-000000000003
           functionVersionID: 11111111-1111-1111-1111-111111111113
+          customHeaders:
+            X-Provider-Feature: enabled
         sample_pexec:
           path: /v1/example/pexec
           functionID: 00000000-0000-0000-0000-000000000004
@@ -171,6 +176,7 @@ v2config:
 | `outgoingPathOverride` | No | Upstream path to use instead of the incoming OpenAI-compatible path. Ignored when `usePexec` is true. |
 | `usePexec` | No | When `true`, route to `/v2/nvcf/pexec/functions/{functionID}` and append `/versions/{functionVersionID}` when set. |
 | `sessionTimeout` | No | Integer seconds used as the default `NVCF-POLL-SECONDS` value for this model. Missing or `0` uses `300`; caller-provided headers take precedence. |
+| `customHeaders` | No | Map of static request headers to set on the upstream request. Configured values overwrite caller-provided values for the same header. Reserved routing, protocol, auth, proxy, and `NVCF-*` headers are rejected. |
 | `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone` and hide the model from `/v1/models`. |
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
 | `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. |
@@ -209,9 +215,12 @@ response completes.
 | `functionVersionID` | No | NVCF function version ID. When empty, the gateway targets the function without pinning a version. |
 | `outgoingPathOverride` | No | Upstream path to use instead of the incoming vanity path. Ignored when `usePexec` is true. |
 | `usePexec` | No | When `true`, route to `/v2/nvcf/pexec/functions/{functionID}` and append `/versions/{functionVersionID}` when set. |
+| `customHeaders` | No | Map of static request headers to set on the upstream request. Configured values overwrite caller-provided values for the same header. Reserved routing, protocol, auth, proxy, and `NVCF-*` headers are rejected. |
 | `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone`. |
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
 | shadow fields | No | Unsupported for Vanity URL routes. `shadowFunctionID`, `shadowFunctionVersionID`, and `shadowPercentage` are rejected during config validation. |
+
+`customHeaders` only affects outbound proxied requests; it does not add response headers. Header names must be valid HTTP field names and cannot include reserved routing, auth, protocol, proxy, or NVCF-managed names such as `Authorization`, `Host`, `function-id`, `function-version-id`, `Content-Length`, `Connection`, or any `NVCF-*` header.
 
 ## Invoking OpenAI-compatible Endpoints
 

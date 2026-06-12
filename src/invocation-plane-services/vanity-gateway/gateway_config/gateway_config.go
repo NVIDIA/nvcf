@@ -21,12 +21,38 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	rc "ai-api-gateway-service/internal/reloadableconfig"
 )
 
 type SessionTimeoutSeconds int
+
+type CustomHeaders map[string]string
+
+func (h *CustomHeaders) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*h = nil
+		return nil
+	}
+
+	rawHeaders := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &rawHeaders); err != nil {
+		return err
+	}
+
+	headers := make(CustomHeaders, len(rawHeaders))
+	for name, rawValue := range rawHeaders {
+		var value string
+		if err := json.Unmarshal(rawValue, &value); err != nil {
+			return fmt.Errorf("customHeaders.%s must be a string", name)
+		}
+		headers[name] = value
+	}
+	*h = headers
+	return nil
+}
 
 type ModelFunctionDetails struct {
 	ModelName                      string                `json:"modelName"`
@@ -35,6 +61,7 @@ type ModelFunctionDetails struct {
 	OutgoingPathOverride           string                `json:"outgoingPathOverride"`
 	UsePexec                       bool                  `json:"usePexec"`
 	SessionTimeout                 SessionTimeoutSeconds `json:"sessionTimeout,omitempty"`
+	CustomHeaders                  CustomHeaders         `json:"customHeaders,omitempty"`
 	EOL                            time.Time             `json:"eol,omitempty"`            // RFC3339 timestamp (full ISO 8601)
 	OfflineMessage                 string                `json:"offlineMessage,omitempty"` // non-empty = endpoint is offline
 	TooManyRequestsMessage         string                `json:"tooManyRequestsMessage"`
@@ -44,6 +71,18 @@ type ModelFunctionDetails struct {
 	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadow when primary completes; default false
 }
 
+func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
+	type modelFunctionDetailsAlias ModelFunctionDetails
+
+	var alias modelFunctionDetailsAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+
+	*m = ModelFunctionDetails(alias)
+	return nil
+}
+
 type PathFunctionDetails struct {
 	Path                    string                 `json:"path"` // incoming path
 	OutgoingPathOverride    *string                `json:"outgoingPathOverride"`
@@ -51,6 +90,7 @@ type PathFunctionDetails struct {
 	FunctionVersionID       string                 `json:"functionVersionID"`
 	UsePexec                bool                   `json:"usePexec"`
 	SessionTimeout          *SessionTimeoutSeconds `json:"sessionTimeout,omitempty"`
+	CustomHeaders           CustomHeaders          `json:"customHeaders,omitempty"`
 	EOL                     time.Time              `json:"eol,omitempty"`            // RFC3339 timestamp (full ISO 8601)
 	OfflineMessage          string                 `json:"offlineMessage,omitempty"` // non-empty = endpoint is offline
 	ShadowFunctionID        string                 `json:"shadowFunctionID,omitempty"`
@@ -109,6 +149,18 @@ func notifySharedReload() {
 
 type GatewayConfig struct {
 	V2Config `json:"v2config"`
+}
+
+func (c *GatewayConfig) UnmarshalJSON(data []byte) error {
+	type gatewayConfigAlias GatewayConfig
+
+	var alias gatewayConfigAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+
+	*c = GatewayConfig(alias)
+	return nil
 }
 
 func uniqueShadowModelNames(legacyModelName string, modelNames []string) ([]string, error) {
@@ -185,8 +237,12 @@ func validateOpenAISection(sectionName string, entries map[string]ModelFunctionD
 	}
 
 	for modelKey, entry := range entries {
+		location := "openai." + sectionName + "." + modelKey
 		if entry.SessionTimeout < 0 {
-			return fmt.Errorf("openai.%s.%s: sessionTimeout must be greater than or equal to 0", sectionName, modelKey)
+			return fmt.Errorf("%s: sessionTimeout must be greater than or equal to 0", location)
+		}
+		if err := validateCustomHeaders(location, entry.CustomHeaders); err != nil {
+			return err
 		}
 	}
 
@@ -247,14 +303,96 @@ func validateShadowTargetNames(location string, sectionName string, modelName st
 	return nil
 }
 
+var reservedCustomHeaderNames = map[string]struct{}{
+	"authorization":       {},
+	"connection":          {},
+	"content-length":      {},
+	"function-id":         {},
+	"function-version-id": {},
+	"host":                {},
+	"keep-alive":          {},
+	"proxy-authenticate":  {},
+	"proxy-authorization": {},
+	"te":                  {},
+	"trailer":             {},
+	"transfer-encoding":   {},
+	"upgrade":             {},
+	"via":                 {},
+	"x-forwarded-for":     {},
+	"x-forwarded-host":    {},
+	"x-forwarded-proto":   {},
+}
+
+func validateCustomHeaders(location string, headers CustomHeaders) error {
+	seenNames := make(map[string]string, len(headers))
+	for name := range headers {
+		if err := validateCustomHeaderName(location, name); err != nil {
+			return err
+		}
+		lowerName := strings.ToLower(name)
+		if existingName, ok := seenNames[lowerName]; ok {
+			return fmt.Errorf("%s: customHeaders cannot contain duplicate header names %q and %q", location, existingName, name)
+		}
+		seenNames[lowerName] = name
+	}
+	return nil
+}
+
+func validateCustomHeaderName(location string, name string) error {
+	if name == "" {
+		return fmt.Errorf("%s: customHeaders cannot contain empty header names", location)
+	}
+	if !isHTTPFieldName(name) {
+		return fmt.Errorf("%s: customHeaders header %q has invalid HTTP field name", location, name)
+	}
+	lowerName := strings.ToLower(name)
+	if _, ok := reservedCustomHeaderNames[lowerName]; ok {
+		return fmt.Errorf("%s: customHeaders cannot set reserved header %q", location, name)
+	}
+	if strings.HasPrefix(lowerName, "nvcf-") {
+		return fmt.Errorf("%s: customHeaders cannot set NVCF-managed header %q", location, name)
+	}
+	return nil
+}
+
+func isHTTPFieldName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if !isHTTPFieldNameChar(name[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHTTPFieldNameChar(ch byte) bool {
+	switch {
+	case ch >= 'a' && ch <= 'z':
+		return true
+	case ch >= 'A' && ch <= 'Z':
+		return true
+	case ch >= '0' && ch <= '9':
+		return true
+	}
+	switch ch {
+	case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *GatewayConfig) validateVanityConfig() error {
 	for vanityName, vanity := range c.Vanity {
 		for pathKey, path := range vanity.Paths {
+			location := "vanity." + vanityName + ".paths." + pathKey
 			if path.sessionTimeoutPresent || path.SessionTimeout != nil {
-				return fmt.Errorf("vanity.%s.paths.%s: sessionTimeout is unsupported for vanity routes", vanityName, pathKey)
+				return fmt.Errorf("%s: sessionTimeout is unsupported for vanity routes", location)
 			}
 			if path.ShadowFunctionID != "" || path.ShadowFunctionVersionID != "" || path.ShadowPercentage != nil {
-				return fmt.Errorf("vanity.%s.paths.%s: shadow config is unsupported for vanity routes", vanityName, pathKey)
+				return fmt.Errorf("%s: shadow config is unsupported for vanity routes", location)
+			}
+			if err := validateCustomHeaders(location, path.CustomHeaders); err != nil {
+				return err
 			}
 		}
 	}

@@ -15,11 +15,57 @@ At the time of writing, the pinned chart version is `v0.12.6`. See [NVCF KAI Sch
 ## Install
 
 ```bash
-helm upgrade -i kai-scheduler \
+cat > nvca-values.yaml << 'EOF'
+scheduler:
+  placementStrategy: binpack
+  plugins:
+    nodeplacement:
+      arguments:
+        gpu: binpack
+        cpu: spread
+  actions:
+    preempt:
+      enabled: false
+    consolidation:
+      enabled: false
+
+defaultQueue:
+  createDefaultQueue: true
+  parentName: default-parent-queue
+  childName: default-queue
+  parentResources:
+    cpu:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+    gpu:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+    memory:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+  childResources:
+    cpu:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+    gpu:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+    memory:
+      quota: -1
+      limit: -1
+      overQuotaWeight: 1
+EOF
+
+helm install kai-scheduler \
   oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler \
   -n kai-scheduler \
   --create-namespace \
-  --version v0.12.6 \
+  --version v0.12.6 -f nvca-values.yaml \
   --wait --timeout 5m
 ```
 

@@ -91,6 +91,7 @@ type FunctionInfo struct {
 	pathOverride                   *string
 	usePexec                       bool
 	sessionTimeout                 config.SessionTimeoutSeconds
+	customHeaders                  config.CustomHeaders
 	eol                            time.Time
 	offlineMessage                 string
 	tooManyRequestsMessage         string
@@ -122,6 +123,7 @@ type ModelNameToFunctionIdVersionId struct {
 	OutgoingPathOverride           string
 	UsePexec                       bool
 	SessionTimeout                 config.SessionTimeoutSeconds
+	CustomHeaders                  config.CustomHeaders
 	EOL                            time.Time
 	OfflineMessage                 string
 	TooManyRequestsMessage         string
@@ -234,6 +236,7 @@ func buildModelMapping(
 			pathOverride:                   pathOverride,
 			usePexec:                       entry.UsePexec,
 			sessionTimeout:                 entry.SessionTimeout,
+			customHeaders:                  entry.CustomHeaders,
 			eol:                            entry.EOL,
 			offlineMessage:                 entry.OfflineMessage,
 			tooManyRequestsMessage:         entry.TooManyRequestsMessage,
@@ -394,6 +397,7 @@ func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]co
 			OutgoingPathOverride:           entry.OutgoingPathOverride,
 			UsePexec:                       entry.UsePexec,
 			SessionTimeout:                 entry.SessionTimeout,
+			CustomHeaders:                  entry.CustomHeaders,
 			EOL:                            entry.EOL,
 			OfflineMessage:                 entry.OfflineMessage,
 			TooManyRequestsMessage:         entry.TooManyRequestsMessage,
@@ -723,6 +727,7 @@ func (d *OpenAIDirector) proxyResolvedRequest(writer http.ResponseWriter, resolv
 			PathOverride:      resolved.functionInfo.pathOverride,
 			UsePexec:          resolved.functionInfo.usePexec,
 			SessionTimeout:    resolved.functionInfo.sessionTimeout,
+			CustomHeaders:     resolved.functionInfo.customHeaders,
 			EOL:               resolved.functionInfo.eol,
 			OfflineMessage:    resolved.functionInfo.offlineMessage,
 		},

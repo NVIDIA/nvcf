@@ -161,6 +161,189 @@ v2config:
 	assert.Equal(t, SessionTimeoutSeconds(0), cfg.OpenAI.ChatCompletions["zero"].SessionTimeout)
 }
 
+func TestGatewayConfigLoadAcceptsCustomHeaders(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(configPath, []byte(`
+v2config:
+  openai:
+    chatCompletions:
+      primary:
+        modelName: facebook/opt-125m
+        functionID: func-id
+        customHeaders:
+          X-Provider-Feature: enabled
+          X-Request-Source: vanity-gateway
+  vanity:
+    example:
+      host: ai.example.com
+      paths:
+        sample:
+          path: /v1/example/infer
+          functionID: vanity-func-id
+          customHeaders:
+            X-Provider-Feature: enabled
+`), 0600)
+	require.NoError(t, err)
+
+	reloadable, err := SetupConfigWithConfigPath(configPath)
+	require.NoError(t, err)
+
+	cfg := reloadable.Get()
+	assert.Equal(t, CustomHeaders{
+		"X-Provider-Feature": "enabled",
+		"X-Request-Source":   "vanity-gateway",
+	}, cfg.OpenAI.ChatCompletions["primary"].CustomHeaders)
+	assert.Equal(t, CustomHeaders{
+		"X-Provider-Feature": "enabled",
+	}, cfg.Vanity["example"].Paths["sample"].CustomHeaders)
+}
+
+func TestGatewayConfigLoadAcceptsNullCustomHeaders(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(configPath, []byte(`
+v2config:
+  openai:
+    chatCompletions:
+      primary:
+        modelName: facebook/opt-125m
+        functionID: func-id
+        customHeaders: null
+  vanity:
+    example:
+      host: ai.example.com
+      paths:
+        sample:
+          path: /v1/example/infer
+          functionID: vanity-func-id
+          customHeaders: null
+`), 0600)
+	require.NoError(t, err)
+
+	reloadable, err := SetupConfigWithConfigPath(configPath)
+	require.NoError(t, err)
+
+	cfg := reloadable.Get()
+	assert.Nil(t, cfg.OpenAI.ChatCompletions["primary"].CustomHeaders)
+	assert.Nil(t, cfg.Vanity["example"].Paths["sample"].CustomHeaders)
+}
+
+func TestGatewayConfigLoadRejectsNonStringCustomHeaderValues(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(configPath, []byte(`
+v2config:
+  openai:
+    chatCompletions:
+      primary:
+        modelName: facebook/opt-125m
+        functionID: func-id
+        customHeaders:
+          X-Provider-Feature: true
+`), 0600)
+	require.NoError(t, err)
+
+	_, err = SetupConfigWithConfigPath(configPath)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "customHeaders.X-Provider-Feature must be a string")
+}
+
+func TestGatewayConfigValidateRejectsInvalidCustomHeaders(t *testing.T) {
+	tests := []struct {
+		name          string
+		headers       CustomHeaders
+		vanity        bool
+		errorContains string
+	}{
+		{
+			name:          "empty name",
+			headers:       CustomHeaders{"": "value"},
+			errorContains: "customHeaders cannot contain empty header names",
+		},
+		{
+			name:          "malformed name",
+			headers:       CustomHeaders{"Bad Header": "value"},
+			errorContains: "invalid HTTP field name",
+		},
+		{
+			name:          "duplicate name",
+			headers:       CustomHeaders{"X-Foo": "first", "x-foo": "second"},
+			errorContains: "duplicate header names",
+		},
+		{
+			name:          "nvcf managed header",
+			headers:       CustomHeaders{"NVCF-POLL-SECONDS": "value"},
+			errorContains: "NVCF-managed header",
+		},
+		{
+			name:          "reserved vanity host",
+			headers:       CustomHeaders{"Host": "value"},
+			vanity:        true,
+			errorContains: "reserved header",
+		},
+		{
+			name:          "reserved authorization",
+			headers:       CustomHeaders{"Authorization": "value"},
+			errorContains: "reserved header",
+		},
+		{
+			name:          "reserved function id",
+			headers:       CustomHeaders{"function-id": "value"},
+			errorContains: "reserved header",
+		},
+		{
+			name:          "reserved function version id",
+			headers:       CustomHeaders{"function-version-id": "value"},
+			errorContains: "reserved header",
+		},
+		{
+			name:          "reserved content length",
+			headers:       CustomHeaders{"Content-Length": "value"},
+			errorContains: "reserved header",
+		},
+		{
+			name:          "reserved connection",
+			headers:       CustomHeaders{"Connection": "value"},
+			errorContains: "reserved header",
+		},
+		{
+			name:          "reserved proxy header",
+			headers:       CustomHeaders{"Proxy-Authorization": "value"},
+			errorContains: "reserved header",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &GatewayConfig{}
+			if tc.vanity {
+				cfg.Vanity = map[string]VanityEntry{
+					"example": {
+						Host: "ai.example.com",
+						Paths: map[string]PathFunctionDetails{
+							"sample": {
+								Path:          "/v1/example/infer",
+								FunctionID:    "func-id",
+								CustomHeaders: tc.headers,
+							},
+						},
+					},
+				}
+			} else {
+				cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{
+					"primary": {
+						ModelName:     "facebook/opt-125m",
+						FunctionID:    "func-id",
+						CustomHeaders: tc.headers,
+					},
+				}
+			}
+
+			err := cfg.Validate()
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.errorContains)
+		})
+	}
+}
+
 func TestGatewayConfigValidateRejectsNegativeSessionTimeout(t *testing.T) {
 	cfg := &GatewayConfig{}
 	cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{
