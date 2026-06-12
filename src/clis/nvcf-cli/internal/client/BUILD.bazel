@@ -26,6 +26,7 @@ go_library(
         "queues.go",
         "registry.go",
         "secrets.go",
+        "tasks.go",
     ],
     importpath = "nvcf-cli/internal/client",
     visibility = ["//src/clis/nvcf-cli:__subpackages__"],
@@ -46,6 +47,7 @@ go_test(
         "host_header_transport_test.go",
         "llm_config_test.go",
         "multi_token_transport_test.go",
+        "tasks_test.go",
     ],
     embed = [":client"],
     deps = [

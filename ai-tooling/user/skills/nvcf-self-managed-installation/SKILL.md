@@ -636,4 +636,4 @@ For expanded debugging recipes, see [references/debugging.md](references/debuggi
 - For per-chart imagePullSecrets keys, see [references/pull-secrets.md](references/pull-secrets.md)
 - For debugging recipes, see [references/debugging.md](references/debugging.md)
 
-After deployment, use the `nvcf-self-managed-cli` skill to create functions, manage API keys, and invoke endpoints.
+After deployment, use the `nvcf-self-managed-cli` skill to create functions, create tasks, manage API keys, and invoke endpoints.

@@ -49,14 +49,33 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | `function invoke --input-file=FILE` | Call a regular function | Requires API key (not admin token); LLM functions are invoked through `llm.invocation.<domain>` with `model: "<function-id>/<model-name>"` |
 | `function delete --function-id=ID --version-id=VID` | Remove function + deployment | **DESTRUCTIVE: confirm with user** |
 
+## Tasks
+
+Task commands require a task API key (`NVCF_NVCT_API_KEY`) and `NVCF_BASE_NVCT_URL` set to the NVCT gateway endpoint. Run `api-key generate --for task` after `init` to mint the key.
+
+| Command | Purpose | Notes |
+|---|---|---|
+| `task create --name=X --gpu=GPU --instance-type=TYPE --image=IMG` | Submit a container task | Saves task ID to CLI state; use `--input-file` for repeatable configs |
+| `task create --name=X --gpu=GPU --instance-type=TYPE --helm-chart=CHART` | Submit a Helm task | `--helm-chart` replaces `--image` |
+| `task create --input-file=FILE` | Submit a task from a JSON config file | Recommended for repeatable configurations |
+| `task list [--status=STATUS] [--limit=N]` | List tasks, optionally filtered by status | Statuses: `QUEUED`, `LAUNCHED`, `RUNNING`, `COMPLETED`, `ERRORED`, `CANCELED`, `EXCEEDED_MAX_RUNTIME_DURATION`, `EXCEEDED_MAX_QUEUED_DURATION` |
+| `task get [taskId]` | Get task details | Uses saved task ID from state if omitted |
+| `task events [taskId] [--limit=N]` | List lifecycle events for a task | |
+| `task results [taskId]` | List result artifacts for a completed task | Returns empty list when `resultHandlingStrategy` is `NONE`; result upload not yet supported |
+| `task cancel [taskId]` | Cancel a running task | No-op if already in terminal state |
+| `task delete [taskId]` | Delete a task record | **Confirm with user** |
+| `task update-secrets [taskId] --secrets NAME=value` | Replace all secrets on a task (full replacement, not a merge) | Values are encrypted at rest |
+| `task bulk --task-ids=ID1[,ID2,…]` | Fetch details for multiple tasks in one request | |
+
 ## Auth
 
 | Command | Purpose | Notes |
 |---|---|---|
-| `init` | Mint admin token from API Keys via public api gateway | Idempotent; writes `~/.nvcf-cli.state` (token + control-plane fingerprint, see SRD/SDD §9.2) |
+| `init` | Mint admin token from API Keys via public api gateway | Idempotent; writes `~/.nvcf-cli.state`; clears saved function state and all API keys (function and task) |
 | `status` | Show CLI state (token, last endpoints, function context) | Distinct from `self-hosted status` |
-| `api-key generate --description=… [--expires-in=…] [--scopes=…]` | Mint API key | Default scopes include `invoke_function` |
-| `api-key list` | List API keys for current owner | |
+| `api-key generate [--for function\|task] [--description=…] [--expires-in=…]` | Mint API keys | Default (no `--for`): generates both a function key and a task key; `--for function` or `--for task` generates one only; `--scopes` requires `--for` |
+| `api-key generate --validate` | Mint and immediately validate each generated key | Validates each key against its correct audience (NVCF for function keys, NVCT for task keys) |
+| `api-key list` | List API keys for current owner | Lists NVCF-scoped keys only |
 | `api-key delete --id=ID` / `api-key revoke --id=ID` | Remove an API key | **Confirm with user** |
 | `api-key show` | Show currently saved API key from state | |
 

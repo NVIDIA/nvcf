@@ -65,8 +65,9 @@ type Config struct {
 	OAuth2TokenEndpoint string
 
 	// Authentication tokens
-	APIKey string // General API operations token (NVCF_API_KEY)
-	Token  string // Function creation specific token (NVCF_TOKEN)
+	APIKey     string // General API operations token (NVCF_API_KEY)
+	Token      string // Function creation specific token (NVCF_TOKEN)
+	NVCTAPIKey string // NVCT-scoped API key for task operations (NVCF_NVCT_API_KEY)
 
 	// Account configuration
 	ClientID string // NVIDIA Cloud Account client ID (NVCF_CLIENT_ID)
@@ -75,6 +76,7 @@ type Config struct {
 	BaseHTTPURL    string
 	BaseGRPCURL    string
 	BaseInvokeURL  string // Dedicated endpoint for function invocations
+	BaseNVCTURL    string // Dedicated endpoint for NVIDIA Cloud Tasks (NVCT) API
 	ICMSURL        string // ICMS/SIS endpoint for self-hosted cluster registration
 	DefaultTimeout time.Duration
 	AuthType       AuthType
@@ -192,8 +194,9 @@ func LoadConfig() (*Config, error) {
 		OAuth2TokenEndpoint: getConfigValue("oauth2_token_endpoint"),
 
 		// Authentication tokens with state fallback (Viper maps: api_key → NVCF_API_KEY, token → NVCF_TOKEN)
-		APIKey: getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
-		Token:  getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
+		APIKey:     getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
+		Token:      getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
+		NVCTAPIKey: getTokenWithFallback("nvct_api_key", currentState.NVCTAPIKey, currentState.NVCTAPIKeyExpiration),
 
 		// Account configuration (Viper maps: client_id → NVCF_CLIENT_ID)
 		ClientID: getConfigValueWithDefault("client_id", "nvcf-default"),
@@ -202,6 +205,7 @@ func LoadConfig() (*Config, error) {
 		BaseHTTPURL:    getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com"),
 		BaseGRPCURL:    getConfigValueWithDefault("grpc_url", getConfigValueWithDefault("base_grpc_url", "grpc.nvcf.nvidia.com:443")),
 		BaseInvokeURL:  getConfigValueWithDefault("invoke_url", getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com")),
+		BaseNVCTURL:    getConfigValueWithDefault("base_nvct_url", "https://api.nvct.nvidia.com"),
 		ICMSURL:        getConfigValue("icms_url"),
 		DefaultTimeout: 300 * time.Second,
 		Debug:          viper.GetBool("debug"),
@@ -348,8 +352,9 @@ func LoadConfigWithoutAuth() (*Config, error) {
 		OAuth2TokenEndpoint: getConfigValue("oauth2_token_endpoint"),
 
 		// Authentication tokens with state fallback (Viper maps: api_key → NVCF_API_KEY, token → NVCF_TOKEN)
-		APIKey: getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
-		Token:  getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
+		APIKey:     getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
+		Token:      getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
+		NVCTAPIKey: getTokenWithFallback("nvct_api_key", currentState.NVCTAPIKey, currentState.NVCTAPIKeyExpiration),
 
 		// Account configuration (Viper maps: client_id → NVCF_CLIENT_ID)
 		ClientID: getConfigValueWithDefault("client_id", "nvcf-default"),
@@ -358,6 +363,7 @@ func LoadConfigWithoutAuth() (*Config, error) {
 		BaseHTTPURL:    getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com"),
 		BaseGRPCURL:    getConfigValueWithDefault("grpc_url", getConfigValueWithDefault("base_grpc_url", "grpc.nvcf.nvidia.com:443")),
 		BaseInvokeURL:  getConfigValueWithDefault("invoke_url", getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com")),
+		BaseNVCTURL:    getConfigValueWithDefault("base_nvct_url", "https://api.nvct.nvidia.com"),
 		ICMSURL:        getConfigValue("icms_url"),
 		DefaultTimeout: 300 * time.Second,
 		Debug:          viper.GetBool("debug"),
@@ -505,11 +511,12 @@ func getNamespaceFromKubeconfig(kubeconfigPath string) string {
 
 // Client is the NVCF API client
 type Client struct {
-	httpClient *http.Client
-	grpcConn   *grpc.ClientConn
-	config     *Config
-	baseURL    string
-	debug      bool
+	httpClient     *http.Client
+	nvctHTTPClient *http.Client // dedicated client for NVCT requests; nil means use httpClient
+	grpcConn       *grpc.ClientConn
+	config         *Config
+	baseURL        string
+	debug          bool
 }
 
 // BearerTokenTransport implements http.RoundTripper for bearer token authentication
@@ -635,12 +642,21 @@ func NewClient(config *Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
 
+	var nvctHTTPClient *http.Client
+	if config.NVCTAPIKey != "" {
+		nvctHTTPClient = &http.Client{
+			Transport: &BearerTokenTransport{Token: config.NVCTAPIKey},
+			Timeout:   config.DefaultTimeout,
+		}
+	}
+
 	return &Client{
-		httpClient: httpClient,
-		grpcConn:   grpcConn,
-		config:     config,
-		baseURL:    config.BaseHTTPURL,
-		debug:      config.Debug,
+		httpClient:     httpClient,
+		nvctHTTPClient: nvctHTTPClient,
+		grpcConn:       grpcConn,
+		config:         config,
+		baseURL:        config.BaseHTTPURL,
+		debug:          config.Debug,
 	}, nil
 }
 

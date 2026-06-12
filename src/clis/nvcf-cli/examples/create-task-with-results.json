@@ -1,0 +1,21 @@
+{
+  "name": "example-fine-tune-with-upload",
+  "description": "Task that uploads results/checkpoints to NGC Model Registry. Requires NGC_API_KEY secret with write privileges to resultsLocation.",
+  "gpuSpecification": {
+    "gpu": "H100",
+    "instanceType": "GPU.H100_1x",
+    "backend": "GFN"
+  },
+  "containerImage": "nvcr.io/0651155215864979/ncp-dev/example-trainer:0.1.0",
+  "containerArgs": "--checkpoint-dir /workspace/checkpoints",
+  "containerEnvironment": [
+    {"key": "OUTPUT_DIR", "value": "/workspace/checkpoints"}
+  ],
+  "tags": ["example", "fine-tune"],
+  "maxRuntimeDuration": "PT6H",
+  "resultHandlingStrategy": "UPLOAD",
+  "resultsLocation": "my-org/my-team/my-finetuned-model",
+  "secrets": [
+    {"name": "NGC_API_KEY", "value": "nvapi-replace-with-real-key"}
+  ]
+}

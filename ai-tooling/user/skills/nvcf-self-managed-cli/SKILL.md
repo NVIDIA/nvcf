@@ -3,16 +3,18 @@ name: nvcf-self-managed-cli
 description: |
   Install, manage, operate, and tear down self-hosted NVIDIA Cloud Functions (NVCF)
   deployments via nvcf-cli. Use when users want to bring up a control plane, register
-  a compute plane, deploy or invoke a container or LLM function, manage admin tokens, check
-  cluster health, diagnose a failed install, or tear down (uninstall) any of the
-  above. Supports single-cluster (control plane and compute plane on one Kubernetes
-  cluster) and split-cluster (control plane on cluster A, N compute planes on
-  clusters B/C/...) topologies. Trigger keywords: nvcf, nvcf-cli, self-hosted nvcf,
-  install nvcf, uninstall nvcf, tear down nvcf, remove nvcf, deploy nvcf, register
-  cluster, deregister cluster, NVCFBackend, control plane, compute plane, NCP, NVCA,
+  a compute plane, deploy or invoke a container or LLM function, create or monitor
+  tasks, manage admin tokens, check cluster health, diagnose a failed install, or
+  tear down (uninstall) any of the above. Supports single-cluster (control plane and
+  compute plane on one Kubernetes cluster) and split-cluster (control plane on cluster
+  A, N compute planes on clusters B/C/...) topologies. Trigger keywords: nvcf, nvcf-cli,
+  self-hosted nvcf, install nvcf, uninstall nvcf, tear down nvcf, remove nvcf, deploy nvcf,
+  register cluster, deregister cluster, NVCFBackend, control plane, compute plane, NCP, NVCA,
   function deploy, function invoke, GPU function, LLM function, OpenAI-compatible
   invocation, chat completions, Responses API, embeddings, cluster register, cluster rotate, cluster delete,
-  helmfile, helmfile destroy, helm uninstall, icms, api-keys, cluster ID, JWKS rotation.
+  helmfile, helmfile destroy, helm uninstall, icms, api-keys, cluster ID, JWKS rotation,
+  task, tasks, task create, task list, task cancel, task delete, batch job, batch task,
+  create a task, run a task, submit a task, monitor a task.
 allowed-tools: Bash, Read, AskUserQuestion
 argument-hint: "[install|status|check|deploy-function|register-cluster|teardown] [args]"
 ---
@@ -36,7 +38,10 @@ Token Budget:
 - "rotate NVCF cluster JWKS" / "the NVCA agent stopped authenticating"
 - "tear down NVCF" / "remove the compute plane" / "uninstall NVCF" / "deregister this cluster"
 - "preview what `down` would do" / "dry-run uninstall"
+- "create a task" / "run a task" / "submit a GPU job" / "monitor a task"
+- "cancel a task" / "delete a task" / "list tasks" / "list running tasks"
 - Any reference to `NVCFBackend`, `NVCA`, ICMS, helm releases like `helm-nvcf-*`, or `icms.<domain>` / `api.<domain>` URLs.
+- Any reference to `nvcf-cli task` or batch tasks.
 
 ## Quick start
 
@@ -99,11 +104,24 @@ nvcf-cli self-hosted uninstall --no-apply --compute-plane --cluster-name=ncp-loc
 | `nvcf-cli cluster register --name=X --nca-id=Y --region=Z [--ignore-existing]` | Register a cluster JWKS+OIDC issuer with ICMS | Standalone register (without compute-plane install) |
 | `nvcf-cli cluster rotate --cluster-id=ID` | Rotate cluster JWKS in ICMS | When NVCA's K8s signing key changed and PSAT verification started 401-ing |
 | `nvcf-cli cluster delete --cluster-id=ID` | Remove cluster registration from ICMS | **Confirm with user.** Destroys ICMS state for the cluster. |
-| `nvcf-cli api-key generate --description="…" --expires-in=1h` | Mint an API key with `invoke_function` scope | Before invoking functions; admin tokens lack this scope by default |
+| `nvcf-cli api-key generate --description="…" --expires-in=1h` | Mint both a function API key and a task API key (default) | Before invoking functions or creating tasks; run after every `init` |
+| `nvcf-cli api-key generate --for function --description="…"` | Mint a function API key only (`invoke_function` scope) | When only function invocation is needed |
+| `nvcf-cli api-key generate --for task --description="…"` | Mint a task API key only | When only task operations are needed |
 | `nvcf-cli function create --input-file=<json>` | Create function metadata in ICMS | First step of any function deploy; use `functionType: "LLM"` and `models[].llmConfig` for LLM functions |
 | `nvcf-cli function deploy create --input-file=<json>` | Schedule a deployment of a created function | Waits for ACTIVE before returning (timeout 900s) |
 | `nvcf-cli function invoke --input-file=<json>` | Invoke a deployed function | Requires API key (not admin token) |
 | `nvcf-cli function delete --function-id=ID --version-id=VID` | Remove a function and its deployment | **Confirm with user.** |
+| `nvcf-cli task create --name=X --gpu=H100 --instance-type=Y --image=Z` | Submit a container task; saves task ID to CLI state | Requires task API key; set `NVCF_BASE_NVCT_URL` to the NVCT gateway endpoint |
+| `nvcf-cli task create --name=X --gpu=H100 --instance-type=Y --helm-chart=Z` | Submit a Helm task | Same as container task; `--helm-chart` replaces `--image` |
+| `nvcf-cli task create --input-file=<json>` | Submit a task from a JSON config file | Recommended for repeatable configurations |
+| `nvcf-cli task list [--status=QUEUED\|RUNNING\|COMPLETED]` | List tasks, optionally filtered by status | |
+| `nvcf-cli task get [taskId]` | Get details for a task; uses saved task ID if omitted | |
+| `nvcf-cli task events [taskId]` | Stream lifecycle events for a task | |
+| `nvcf-cli task results [taskId]` | List result artifacts for a completed task | Result upload not yet supported; returns empty list for `NONE` strategy |
+| `nvcf-cli task cancel [taskId]` | Cancel a queued or running task | |
+| `nvcf-cli task delete [taskId]` | Delete a task record | **Confirm with user.** |
+| `nvcf-cli task update-secrets [taskId] --secrets NAME=value` | Replace all secrets on a task (full replacement) | |
+| `nvcf-cli task bulk --task-ids=ID1,ID2` | Fetch details for multiple tasks in one call | |
 
 ## LLM function type
 
@@ -129,6 +147,7 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 - **Diagnose a failed install.** [prompts/diagnose-failed-install.md](prompts/diagnose-failed-install.md) — `status --json` → identify failed component → kubectl describe → remediation.
 - **Rotate JWKS.** [prompts/rotate-cluster-jwks.md](prompts/rotate-cluster-jwks.md) — when PSAT auth starts failing.
 - **Tear down.** [prompts/teardown.md](prompts/teardown.md) — `down --plan-only` first, then real run. `down --cluster-name=X` for one compute plane (orchestrator: drain + uninstall + cluster delete); `uninstall --control-plane` for the control plane (per-plane primitive); `down --all --confirm` for everything; `uninstall --no-apply <plane> | kubectl delete -f -` for GitOps.
+- **Create and run a task.** [prompts/create-and-run-task.md](prompts/create-and-run-task.md) — mint API keys → task create (container or Helm) → monitor with `task get` / `task events` → retrieve results → cleanup.
 
 ## Reference
 
@@ -213,9 +232,11 @@ nvcf-cli self-hosted check --pre              # pre-flight
 nvcf-cli self-hosted up --cluster-name=NAME   # one-shot install
 nvcf-cli self-hosted status                   # snapshot
 nvcf-cli self-hosted status --watch           # live
-nvcf-cli init                                 # mint admin token
+nvcf-cli init                                 # mint admin token (clears all saved API keys)
 nvcf-cli cluster register …                   # register cluster
-nvcf-cli api-key generate --description=…     # mint API key for invoke
+nvcf-cli api-key generate --description=…     # mint both function and task API keys (run after every init)
+nvcf-cli api-key generate --for function …    # function key only
+nvcf-cli api-key generate --for task …        # task key only
 nvcf-cli function create --input-file=…       # create function
 nvcf-cli function create --function-type=LLM --llm-model=<spec>  # create LLM function metadata
 nvcf-cli function create --name=llm-helm --inference-url=/ --inference-port=8000 \
@@ -223,6 +244,17 @@ nvcf-cli function create --name=llm-helm --inference-url=/ --inference-port=8000
 nvcf-cli function update --llm-model-update=<spec>  # update LLM routing/token limits
 nvcf-cli function deploy create --input-file=…
 nvcf-cli function invoke --input-file=…
+
+# Task commands — requires NVCF_BASE_NVCT_URL=http://<nvct-gateway>
+nvcf-cli task create --name=X --gpu=H100 --instance-type=Y --image=Z
+nvcf-cli task create --input-file=task.json   # from JSON config
+nvcf-cli task list                            # list all tasks
+nvcf-cli task list --status=RUNNING           # filter by status
+nvcf-cli task get [taskId]                    # task details
+nvcf-cli task events [taskId]                 # lifecycle events
+nvcf-cli task results [taskId]                # result artifacts
+nvcf-cli task cancel [taskId]
+nvcf-cli task delete [taskId]
 ```
 
 ## Feedback

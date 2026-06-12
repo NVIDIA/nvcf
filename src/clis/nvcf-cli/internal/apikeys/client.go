@@ -38,13 +38,16 @@ type Client struct {
 
 // Config holds API Keys service configuration
 type Config struct {
-	ServiceURL    string
-	ServiceID     string
-	IssuerService string
-	OwnerID       string
-	JWTToken      string // JWT token for authentication
-	HostHeader    string // Host header override for hostname-based routing (self-hosted)
-	Debug         bool
+	ServiceURL      string
+	ServiceID       string
+	IssuerService   string
+	OwnerID         string
+	JWTToken        string // JWT token for authentication
+	HostHeader      string // Host header override for hostname-based routing (self-hosted)
+	Debug           bool
+	Product         string              // product field in the policy (default: "nv-cloud-functions")
+	PolicyResources []map[string]string // resource entries in the policy (default: NVCF account/authorized-functions)
+	DefaultScopes   []string            // scopes used when none are passed to GenerateAPIKey
 }
 
 // APIKey represents an API key returned by the service
@@ -64,10 +67,27 @@ var defaultScopes = []string{
 	"list_functions_details",
 }
 
-// DefaultScopes returns the scopes used when an API key is generated without
-// an explicit --scopes value.
+var defaultNVCTScopes = []string{
+	"launch_task",
+	"list_tasks",
+	"task_details",
+	"cancel_task",
+	"delete_task",
+	"list_events",
+	"list_results",
+	"update_secrets",
+}
+
+// DefaultScopes returns the scopes used when an NVCF function API key is
+// generated without an explicit --scopes value.
 func DefaultScopes() []string {
 	return append([]string(nil), defaultScopes...)
+}
+
+// DefaultNVCTScopes returns the scopes used when an NVCT task API key is
+// generated without an explicit --scopes value.
+func DefaultNVCTScopes() []string {
+	return append([]string(nil), defaultNVCTScopes...)
 }
 
 // NewClient creates a new API Keys service client
@@ -113,17 +133,28 @@ func (c *Client) GenerateAPIKey(ctx context.Context, description string, expires
 		logging.Debug("Generating API key via direct HTTPS call to: %s", c.config.ServiceURL)
 	}
 
-	// Determine scopes to use - custom scopes if provided, otherwise default scopes
 	scopes := customScopes
 	if len(scopes) == 0 {
-		// Default scopes for API keys used by invoke, list, and queue status commands.
+		scopes = c.config.DefaultScopes
+	}
+	if len(scopes) == 0 {
 		scopes = DefaultScopes()
 		if c.config.Debug {
 			logging.Debug("Using default API key scopes: %v", scopes)
 		}
-	} else {
-		if c.config.Debug {
-			logging.Debug("Using custom API key scopes: %v", scopes)
+	} else if c.config.Debug {
+		logging.Debug("Using custom API key scopes: %v", scopes)
+	}
+
+	product := c.config.Product
+	if product == "" {
+		product = "nv-cloud-functions"
+	}
+	resources := c.config.PolicyResources
+	if len(resources) == 0 {
+		resources = []map[string]string{
+			{"id": "*", "type": "account-functions"},
+			{"id": "*", "type": "authorized-functions"},
 		}
 	}
 
@@ -134,14 +165,11 @@ func (c *Client) GenerateAPIKey(ctx context.Context, description string, expires
 		"authorizations": map[string]interface{}{
 			"policies": []map[string]interface{}{
 				{
-					"aud":     c.config.ServiceID,
-					"auds":    []string{c.config.ServiceID},
-					"product": "nv-cloud-functions",
-					"resources": []map[string]string{
-						{"id": "*", "type": "account-functions"},
-						{"id": "*", "type": "authorized-functions"},
-					},
-					"scopes": scopes,
+					"aud":       c.config.ServiceID,
+					"auds":      []string{c.config.ServiceID},
+					"product":   product,
+					"resources": resources,
+					"scopes":    scopes,
 				},
 			},
 		},

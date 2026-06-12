@@ -21,6 +21,7 @@ The NVCF API is divided into the following sets of APIs:
 | Cluster Groups & GPUs | Defines endpoints to list Cluster Groups and GPUs as targets for function deployment. |
 | Function Management   | The creation, modification and deletion of functions                                  |
 | Function Deployment   | Endpoints for creating and managing function deployments.                             |
+| Task Management       | GPU-backed batch jobs via NVIDIA Cloud Tasks (NVCT).                                  |
 
 **API Versioning**
 
@@ -32,14 +33,15 @@ All API endpoints include versioning in the path prefix.
 
 ## Authorization
 
-Self-hosted NVCF uses two bearer credential types:
+Self-hosted NVCF uses three bearer credential types:
 
 | Credential | CLI source | Typical use |
 | --- | --- | --- |
 | `NVCF_TOKEN` | `nvcf-cli init` | Default CLI credential for management operations and self-hosted cluster management |
 | `NVCF_API_KEY` | `nvcf-cli api-key generate` | Default CLI credential for function invocation, function discovery, and queue status |
+| `NVCF_NVCT_API_KEY` | `nvcf-cli api-key generate` | Credential for task commands (`task create`, `task list`, etc.) |
 
-Both credential types are sent as bearer credentials:
+All three credential types are sent as bearer credentials:
 
 ```bash
 Authorization: Bearer <credential>
@@ -76,12 +78,23 @@ scopes:
 - `manage_registry_credentials`
 - `cluster-management`
 
-The API key command creates a key with these default scopes:
+The function API key (`NVCF_API_KEY`) is created with these default scopes:
 
 - `invoke_function`
 - `list_functions`
 - `queue_details`
 - `list_functions_details`
+
+The task API key (`NVCF_NVCT_API_KEY`) is created with these default scopes:
+
+- `launch_task`
+- `list_tasks`
+- `task_details`
+- `cancel_task`
+- `delete_task`
+- `list_events`
+- `list_results`
+- `update_secrets`
 
 NVCF API authorization is scope-based. For the NVCF API endpoints below, either
 `NVCF_TOKEN` or `NVCF_API_KEY` can be used if that bearer includes the required
@@ -140,6 +153,21 @@ for these endpoints.
 | `PUT /v1/accounts/{ncaId}/clusters/{clusterId}` | `NVCF_TOKEN` | `cluster-management` |
 | `DELETE /v1/accounts/{ncaId}/clusters/{clusterId}` | `NVCF_TOKEN` | `cluster-management` |
 | `GET /v1/accounts/{ncaId}/clusterVersions` | `NVCF_TOKEN` | `cluster-management` |
+
+Task management uses NVCT endpoints served through your gateway. All task
+endpoints require `NVCF_NVCT_API_KEY` with the listed scope.
+
+| Method and endpoint | Accepted bearer | Scope |
+| --- | --- | --- |
+| `POST /v1/nvct/tasks` | `NVCF_NVCT_API_KEY` | `launch_task` |
+| `GET /v1/nvct/tasks` | `NVCF_NVCT_API_KEY` | `list_tasks` |
+| `POST /v1/nvct/tasks/bulk` | `NVCF_NVCT_API_KEY` | `list_tasks` |
+| `GET /v1/nvct/tasks/{taskId}` | `NVCF_NVCT_API_KEY` | `task_details` |
+| `DELETE /v1/nvct/tasks/{taskId}` | `NVCF_NVCT_API_KEY` | `delete_task` |
+| `POST /v1/nvct/tasks/{taskId}/cancel` | `NVCF_NVCT_API_KEY` | `cancel_task` |
+| `GET /v1/nvct/tasks/{taskId}/events` | `NVCF_NVCT_API_KEY` | `list_events` |
+| `GET /v1/nvct/tasks/{taskId}/results` | `NVCF_NVCT_API_KEY` | `list_results` |
+| `PUT /v1/nvct/secrets/tasks/{taskId}` | `NVCF_NVCT_API_KEY` | `update_secrets` |
 
 ### Direct API key creation
 

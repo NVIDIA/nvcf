@@ -27,6 +27,7 @@ limitations under the License.
 - **Advanced gRPC Support**: Native gRPC invocation with `--grpc` flag
 - **Comprehensive Authentication**: Multi-token support with automatic scope management
 - **Simple Architecture**: Everything works via direct HTTPS - no cluster access required
+- **NVCT Task Support**: First-class commands for NVIDIA Cloud Tasks (`nvcf-cli task ...`)
 
 **[Jump to Token Generation Guide](#automatic-token-generation-)**
 
@@ -1469,6 +1470,99 @@ export NVCF_TOKEN="your-existing-token"
 - **Automatic Context**: No more copying/pasting function IDs
 - **Enhanced Output**: Colored success/warning/error messages
 - **State Persistence**: CLI remembers your current function across commands
+
+---
+
+## **Cloud Tasks (NVCT)**
+
+The CLI also speaks to the NVIDIA Cloud Tasks (NVCT) service for managing
+GPU-backed batch jobs. NVCT commands live under `nvcf-cli task` and reuse the
+same authentication, state, and config conventions as the function commands.
+
+### **Configuration**
+
+NVCT requests are sent to a dedicated base URL, configurable via:
+
+| Source | Key |
+| --- | --- |
+| Environment variable | `NVCF_BASE_NVCT_URL` |
+| Config file (`~/.nvcf-cli.yaml`) | `base_nvct_url` |
+| Default | `https://api.nvct.nvidia.com` |
+
+Task commands authenticate with an NVCT-scoped API key, separate from the
+function key. `nvcf-cli api-key generate` mints both keys by default:
+
+```bash
+nvcf-cli api-key generate
+```
+
+The task key is saved as `NVCF_NVCT_API_KEY` and used automatically for all
+`nvcf-cli task` subcommands. Use `--for task` if you only want the task key.
+
+### **Command Surface**
+
+| Command | Endpoint | Notes |
+| --- | --- | --- |
+| `task create` | `POST /v1/nvct/tasks` | Launches a task. Saves Task ID to state. |
+| `task list` | `GET /v1/nvct/tasks` | Optional `--status`, `--limit`, `--cursor`. |
+| `task bulk` | `POST /v1/nvct/tasks/bulk` | Basic details for an explicit ID set. |
+| `task get [id]` | `GET /v1/nvct/tasks/{id}` | Falls back to saved task. `--include-secrets`. |
+| `task delete [id]` | `DELETE /v1/nvct/tasks/{id}` | Falls back to saved task. |
+| `task cancel [id]` | `POST /v1/nvct/tasks/{id}/cancel` | Falls back to saved task. |
+| `task events [id]` | `GET /v1/nvct/tasks/{id}/events` | Paginated. |
+| `task results [id]` | `GET /v1/nvct/tasks/{id}/results` | Paginated. |
+| `task update-secrets [id]` | `PUT /v1/nvct/secrets/tasks/{id}` | Replace user secrets. |
+
+### **Quickstart**
+
+```bash
+# Launch a task from a JSON spec (saves taskId to state)
+nvcf-cli task create --input-file examples/create-task.json
+
+# Inline alternative
+nvcf-cli task create \
+  --name my-job \
+  --gpu H100 --instance-type GPU.H100_1x --backend GFN \
+  --image nvcr.io/.../my-image:latest \
+  --container-args "--epochs 10" \
+  --container-env LOG_LEVEL=INFO \
+  --max-runtime PT4H
+
+# List, watch, and inspect using saved task context
+nvcf-cli task list --status RUNNING
+nvcf-cli task get
+nvcf-cli task events
+nvcf-cli task results
+
+# Rotate task secrets
+nvcf-cli task update-secrets --secrets NGC_API_KEY=nvapi-... HF_TOKEN=hf_...
+
+# Cancel and delete
+nvcf-cli task cancel
+nvcf-cli task delete
+
+# JSON automation output
+nvcf-cli --json task list --status RUNNING
+```
+
+### **JSON Input Files**
+
+Sample configs live under [`examples/`](./examples):
+
+- [`examples/create-task.json`](./examples/create-task.json) — minimal create
+- [`examples/create-task-with-results.json`](./examples/create-task-with-results.json) — UPLOAD strategy with NGC secret
+- [`examples/create-task-helm.json`](./examples/create-task-helm.json) — Helm chart based task
+- [`examples/update-task-secrets.json`](./examples/update-task-secrets.json) — secret rotation payload
+- [`examples/bulk-tasks.json`](./examples/bulk-tasks.json) — bulk task ID lookup payload
+
+### **Required vs Optional Fields**
+
+`task create` requires `name`, `gpuSpecification.gpu`, and
+`gpuSpecification.instanceType`. When `resultHandlingStrategy=UPLOAD`,
+`resultsLocation` becomes required and the user must supply an `NGC_API_KEY`
+secret with write privileges to that location. See the
+[NVCT OpenAPI spec](https://github.com/NVIDIA/nvcf/nvct/docs) for the
+full field reference.
 
 ---
 

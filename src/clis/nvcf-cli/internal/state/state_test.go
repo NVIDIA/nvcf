@@ -78,6 +78,49 @@ func TestState_SelfHostedAuth_RoundTrip(t *testing.T) {
 	assert.Equal(t, "https://cp.example/api-keys", got.Fingerprint.APIKeysEndpoint)
 }
 
+func TestNVCTAPIKey_Methods(t *testing.T) {
+	sm := newTestStateManager(t)
+
+	assert.False(t, sm.HasNVCTAPIKey())
+
+	exp := time.Now().Add(24 * time.Hour).UTC().Round(time.Second)
+	sm.SetNVCTAPIKey("nvapi-task-key", exp)
+	assert.True(t, sm.HasNVCTAPIKey())
+	assert.Equal(t, "nvapi-task-key", sm.GetState().NVCTAPIKey)
+
+	sm.ClearNVCTAPIKey()
+	assert.False(t, sm.HasNVCTAPIKey())
+	assert.Empty(t, sm.GetState().NVCTAPIKey)
+	assert.True(t, sm.GetState().NVCTAPIKeyExpiration.IsZero())
+}
+
+func TestClearTokens_ClearsNVCTAPIKey(t *testing.T) {
+	sm := newTestStateManager(t)
+
+	exp := time.Now().Add(24 * time.Hour).UTC().Round(time.Second)
+	sm.SetTokens("admin-token", "nvapi-function-key", exp, exp)
+	sm.SetNVCTAPIKey("nvapi-task-key", exp)
+
+	sm.ClearTokens()
+
+	assert.Empty(t, sm.GetState().Token)
+	assert.Empty(t, sm.GetState().APIKey)
+	assert.Empty(t, sm.GetState().NVCTAPIKey, "init must clear the task API key too")
+	assert.True(t, sm.GetState().NVCTAPIKeyExpiration.IsZero())
+}
+
+func TestNVCTAPIKey_RoundTrip(t *testing.T) {
+	sm := newTestStateManager(t)
+	exp := time.Now().Add(24 * time.Hour).UTC().Round(time.Second)
+	sm.SetNVCTAPIKey("nvapi-task-key", exp)
+	require.NoError(t, sm.Save())
+
+	sm2 := &StateManager{statePath: sm.statePath, state: &State{}}
+	require.NoError(t, sm2.Load())
+	assert.Equal(t, "nvapi-task-key", sm2.GetState().NVCTAPIKey)
+	assert.Equal(t, exp, sm2.GetState().NVCTAPIKeyExpiration.UTC().Round(time.Second))
+}
+
 // TestState_LegacyFile_NoSelfHostedAuth verifies that loading a state file
 // written by an older CLI (without the selfHostedAuth field) produces
 // SelfHostedAuth == nil — no panic, no parse error.

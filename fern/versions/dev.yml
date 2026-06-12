@@ -127,6 +127,12 @@ navigation:
         path: ../../docs/user/configure-autoscaling.md
       - page: CLI
         path: ../../docs/user/cli.md
+      - page: Task Creation
+        path: ../../docs/user/task-creation.md
+      - page: Container-Based Task Creation
+        path: ../../docs/user/container-tasks.md
+      - page: Helm-Based Task Creation
+        path: ../../docs/user/helm-tasks.md
 
   - section: Function Autoscaling
     skip-slug: true
