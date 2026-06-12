@@ -3,10 +3,10 @@
 If you are interested in contributing to NVCF, your contributions will fall into three categories:
 
 1. You want to report a bug, feature idea, or documentation issue
-   - File an [issue](https://github.com/nvidia/nvcf/issues/new/choose) describing what you encountered or what you want to see changed.
+   - File an [issue](https://github.com/NVIDIA/nvcf/issues/new/choose) describing what you encountered or what you want to see changed.
    - The NVCF team will evaluate and triage issues. Maintainers assign labels and priority. If you believe an issue needs priority attention, comment on the issue to notify the team.
 2. You want to propose a new feature and implement it
-   - File a [feature issue](https://github.com/nvidia/nvcf/issues/new/choose) describing your intended feature, and we shall discuss the design and implementation there.
+   - File a [feature issue](https://github.com/NVIDIA/nvcf/issues/new/choose) describing your intended feature, and we shall discuss the design and implementation there.
    - Once we agree that the plan looks good, go ahead and implement it, using the code contributions guide below.
 3. You want to implement a feature or bug fix for an outstanding issue
    - Follow the code contributions guide below.
@@ -28,8 +28,8 @@ All participants are expected to abide by our [Code of Conduct](CODE_OF_CONDUCT.
 
 New to the project? Look for issues labelled:
 
-- [good-first-issue](https://github.com/nvidia/nvcf/issues?q=is%3Aissue+is%3Aopen+label%3Agood-first-issue): beginner-friendly, with guidance.
-- [help-wanted](https://github.com/nvidia/nvcf/issues?q=is%3Aissue+is%3Aopen+label%3Ahelp-wanted): community contributions welcome.
+- [good-first-issue](https://github.com/NVIDIA/nvcf/issues?q=is%3Aissue+is%3Aopen+label%3Agood-first-issue): beginner-friendly, with guidance.
+- [help-wanted](https://github.com/NVIDIA/nvcf/issues?q=is%3Aissue+is%3Aopen+label%3Ahelp-wanted): community contributions welcome.
 
 ### Claiming an Issue
 
@@ -51,7 +51,14 @@ Thank you for working with us during this transition while we make the project e
 
 ### Step 1: Set Up Your Environment
 
-See the [Local Dev Env Setup](README.md#local-dev-env-setup) guide for setting up a development environment before you attempt to submit your first pull request.
+See the [Local dev env setup](README.md#local-dev-env-setup) guide in the
+README for setting up a development environment before you attempt to submit
+your first pull request. In short:
+
+1. Install Bazel through bazelisk. See [Building with Bazel](README.md#building-with-bazel).
+2. Confirm your toolchain with `bazel build //src/clis/nvcf-cli:nvcf-cli`.
+
+Full setup, caches, and the CI map live in [`BAZEL.md`](BAZEL.md).
 
 ### Step 2: Create a Branch
 
@@ -69,11 +76,27 @@ Branch model: `main` is the active development branch. All PRs target `main`, ex
 - Include tests for any new functionality or bug fix.
 - Update documentation if your change affects user-facing behavior.
 
-### Step 4: Commit Your Changes
+### Step 4: Run Tests Locally
+
+Before opening a PR, build and test the code you touched so you can
+self-verify:
+
+```bash
+# Test the package or packages you changed, for example the CLI:
+bazel test //src/clis/nvcf-cli/...
+
+# Or run the full tree:
+bazel test //...
+```
+
+For documentation-only changes, run `git diff --check` and `fern check` (see
+[Documentation Contributions](#documentation-contributions)).
+
+### Step 5: Commit Your Changes
 
 Commit with a DCO sign-off and a conventional commit message (see [Commit Message Conventions](#commit-message-conventions) below).
 
-### Step 5: Open a Pull Request
+### Step 6: Open a Pull Request
 
 - Push your branch and open a PR targeting `main`.
 - Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md) when opening your pull request.
@@ -169,9 +192,9 @@ If you discover a security vulnerability, please follow the instructions in our 
 
 ## Getting Help
 
-- GitHub Issues, for bug reports, feature ideas, and documentation issues: https://github.com/nvidia/nvcf/issues
+- GitHub Issues, for bug reports, feature ideas, and documentation issues: https://github.com/NVIDIA/nvcf/issues
 - GitHub Discussions, for support and usage help: https://github.com/NVIDIA/nvcf/discussions
-- GitHub Pull Requests, for code contributions: https://github.com/nvidia/nvcf/pulls
+- GitHub Pull Requests, for code contributions: https://github.com/NVIDIA/nvcf/pulls
 
 For support or usage uncertainty, start with GitHub Discussions. For feature ideas, file an issue.
 
