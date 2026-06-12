@@ -130,6 +130,17 @@ aws ecr get-login-password --region <region> | \
   helm registry login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
 ```
 
+> Note: `helm registry login` keeps only the last login per host (multi-org gotcha).
+> The stack and the caches span several NGC orgs that need different keys, but they all
+> live under the one host `nvcr.io`. A second `helm registry login nvcr.io` (or
+> `docker login`) with a different key silently overwrites the first, so pulls for the
+> first org then fail with a misleading `403 Access Denied` (not a 401: the auth
+> succeeded, it's the wrong-org key). If you pull charts/images from more than one org,
+> either re-run the login with the correct key immediately before each pull, or pass
+> `--username '$oauthtoken' --password <key>` per `helm pull` invocation instead of relying
+> on the stored login. (Pulling everything from a single registry mirror avoids this
+> entirely.)
+
 ### 3. Set the gateway address in your environment file
 
 Your environment file (`environments/<env>.yaml`) requires `global.domain` to be set to the external address of your Envoy Gateway or load balancer. How to obtain it depends on timing:
@@ -337,12 +348,40 @@ HELMFILE_ENV=<env> helmfile --selector name=cassandra sync      # Apply
 
 ## Image Pull Secrets
 
-There are two distinct credential types:
+There are three distinct credential types. Do not conflate them, and mind the
+format rule below (two of them fail even with the correct key if the format is wrong):
 
-| | Control Plane Pull Secrets | API Bootstrap Registry Creds |
-|---|---|---|
-| Purpose | K8s pulls NVCF service images | NVCF API pulls user function images |
-| Config | K8s Secrets + Kyverno ClusterPolicy | `<private-values>/<env>-secrets.yaml` |
+| | Control Plane Pull Secrets | API Bootstrap Registry Creds | Sidecar Image-Pull Secret |
+|---|---|---|---|
+| Purpose | K8s pulls NVCF service images | nvcf-api validates the user function image at `function create` | nvcf-api pulls the platform sidecars injected into every worker pod |
+| Where | K8s `docker-registry` Secrets + Kyverno ClusterPolicy | `<private-values>/<env>-secrets.yaml` (account-bootstrap) | `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` in `<env>-secrets.yaml` -> OpenBao `services/nvcf-api/kv/sidecars/image-pull-secret` (field `secret`) |
+| Format | standard `.dockerconfigjson` (kubectl builds it for you) | `base64("$oauthtoken:<key>")` | `base64("$oauthtoken:<key>")` |
+
+> Note: the account-bootstrap cred and the sidecar secret are NOT a
+> dockerconfigjson. The secrets template ships the placeholder
+> `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL`, which reads as "base64 of a dockerconfigjson."
+> It isn't. Both values are consumed as a raw docker `auth` string: nvcf-api takes the
+> value verbatim and drops it into the `auth` field of the dockerconfig it builds. So the
+> value must be `base64("$oauthtoken:<key>")`, e.g. `printf '$oauthtoken:%s' "$KEY" | openssl base64 -A`,
+> not `base64(<dockerconfigjson>)`.
+>  - Wrong account-bootstrap value: `function create` returns
+>    `400 "must be base64 encoded username:password format"`.
+>  - Wrong sidecar value: every worker's sidecar pull gets a malformed credential and
+>    `403`s, regardless of which key is inside. The symptom looks like a bad or wrong-org
+>    key, but the key is fine and the encoding is the bug. To repair an already-installed
+>    stack without a full re-sync:
+>    ```bash
+>    AUTH=$(printf '$oauthtoken:%s' "$KEY" | openssl base64 -A)
+>    bao kv put services/nvcf-api/kv/sidecars/image-pull-secret secret="$AUTH"
+>    # if NVIDIA Cloud Tasks is enabled, repeat for services/nvct-api/kv/sidecars/image-pull-secret
+>    kubectl rollout restart -n nvcf deploy/nvcf-api   # picks up the new sidecar cred
+>    ```
+
+> Note (multi-org): when pulling from NGC (not a mirror), the user function image and
+> the platform sidecars often live in different nvcr.io orgs, each needing a different
+> key, so the account-bootstrap cred (function image) and the sidecar secret (sidecars)
+> are frequently two different keys. Mirroring everything into a single registry the
+> cluster authenticates to automatically collapses this to one credential path.
 
 ### Configuring with Kyverno (recommended)
 

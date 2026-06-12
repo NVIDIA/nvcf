@@ -1,11 +1,15 @@
 # Infrastructure Sizing
 
 <Info>
-The recommendations on this page are **approximate starting points** based on
-AWS instance types. Actual requirements depend on workload characteristics,
-function count, and request concurrency. Use the
-[self-managed-grpc-load-test](./grpc-load-testing.md) guide to validate throughput and tune your
-control plane accordingly.
+The recommendations on this page are approximate starting points. The node
+types and storage classes are AWS examples. For another cloud service provider
+(CSP) or on-premises Kubernetes environment, choose equivalent node shapes and
+storage classes that provide at least the listed vCPU, memory, storage, zone
+spread, and GPU compatibility characteristics. Actual requirements depend on
+workload characteristics, function count, and request concurrency. Use the
+[self-managed-grpc-load-test](./grpc-load-testing.md) and
+[self-managed-http-load-test](./http-load-testing.md) guides to validate
+throughput and tune your control plane accordingly.
 
 </Info>
 
@@ -25,10 +29,10 @@ NVCF services can start.
 | NATS | `nats-system` | StatefulSet | 3 | `nvcf.nvidia.com/workload=control-plane` | Wraps the upstream `nats-io/k8s` chart with clustering and JetStream enabled. Each replica has its own PVC for file storage. |
 | OpenBao Server | `vault-system` | StatefulSet | 3 | `nvcf.nvidia.com/workload=vault` | HA Raft cluster for secrets management. Configured via `openbao.server.ha.replicas`. |
 | OpenBao Injector | `vault-system` | Deployment | 2 | `nvcf.nvidia.com/workload=vault` | Sidecar injector for Vault agent containers. Upstream chart defaults to 1; overridden to 2 in `global.yaml.gotmpl`. |
-| GPU Workers | *(operator-managed)* | *(varies)* | Workload-dependent | `nvcf.nvidia.com/workload=gpu` | Function instances requiring GPU acceleration. Sized independently from the control plane (see `GPU Worker Nodes`_). |
+| GPU Workers | *(operator-managed)* | *(varies)* | Workload-dependent | `nvcf.nvidia.com/workload=gpu` | Function instances requiring GPU acceleration. Sized independently from the control plane. See [GPU Worker Nodes](#gpu-worker-nodes). |
 
 <Info>
-Each Cassandra replica **must** run on its own node to ensure high
+Each Cassandra replica must run on its own node to ensure high
 availability. Do not co-locate multiple Cassandra pods on the same node.
 
 </Info>
@@ -42,15 +46,15 @@ scheduled without placement constraints.
 
 ## Sizing Tiers
 
-The tables below cover **control-plane infrastructure only**. GPU worker nodes
-are sized independently based on your inference workloads (see
-[GPU Worker Nodes]).
+The tables below cover control-plane infrastructure only. GPU worker nodes
+are sized independently based on your inference workloads. See
+[GPU Worker Nodes](#gpu-worker-nodes).
 
 ### Development
 
-For local development of the stack or functions, CI pipelines, or quick demos you can run the entire NVCF
-stack on a single machine using k3d. This setup uses a single Cassandra replica,
-fake GPUs, and ephemeral `local-path` storage.
+For local development of the stack or functions, CI pipelines, or quick demos,
+you can run the entire NVCF stack on a single machine using k3d. This setup
+uses a single Cassandra replica, fake GPUs, and ephemeral `local-path` storage.
 
 See [local-development](./local-development.md) for full step-by-step instructions.
 
@@ -60,14 +64,15 @@ A minimal deployment for validating the stack, running demos, or developing
 functions. All NVCF services can be co-located on one or two nodes with no
 dedicated node selectors.
 
-| Node Pool | Instance Type | vCPU | Memory | Nodes |
+| Node Pool | AWS Example Node Type | vCPU | Memory | Nodes |
 | --- | --- | --- | --- | --- |
-| All services (co-located) | `m6i.4xlarge` | 16 | 64 GiB | 1 |
-| *or split across* | `m6i.2xlarge` | 8 | 32 GiB | 2 |
+| All services (co-located) | `m6i.4xlarge` or equivalent | 16 | 64 GiB | 1 |
+| Split across | `m6i.2xlarge` or equivalent | 8 | 32 GiB | 2 |
 
-**Storage:** ~50 GB EBS `gp3`
+Storage: Approximately 50 GB AWS EBS `gp3`, or equivalent CSI-backed block
+storage for your CSP.
 
-**When to use:**
+Use this tier for:
 
 - Initial evaluation and proof-of-concept deployments
 - CI/CD pipelines and automated testing
@@ -85,17 +90,18 @@ The recommended minimum for production workloads. Core infrastructure
 (Cassandra, OpenBao) is fully redundant; the control plane has enough capacity
 for moderate function counts.
 
-| Node Pool | Instance Type | vCPU | Memory | Nodes |
+| Node Pool | AWS Example Node Type | vCPU | Memory | Nodes |
 | --- | --- | --- | --- | --- |
-| Control Plane | `m5.2xlarge` | 8 | 32 GiB | 2 |
-| Cassandra | `m5.2xlarge` | 8 | 32 GiB | 3 |
-| OpenBao | `m5.2xlarge` | 8 | 32 GiB | 2 |
+| Control Plane | `m5.2xlarge` or equivalent | 8 | 32 GiB | 2 |
+| Cassandra | `m5.2xlarge` or equivalent | 8 | 32 GiB | 3 |
+| OpenBao | `m5.2xlarge` or equivalent | 8 | 32 GiB | 2 |
 
-**Total:** 7 control-plane nodes
+Total: 7 control-plane nodes
 
-**Storage:** ~500 GB EBS `gp3` (across Cassandra and OpenBao volumes)
+Storage: Approximately 500 GB AWS EBS `gp3`, or equivalent CSI-backed block
+storage, across Cassandra and OpenBao volumes.
 
-**When to use:**
+Use this tier for:
 
 - Production workloads with up to ~2,000 registered functions
 - Environments where core infrastructure HA is required
@@ -106,17 +112,18 @@ for moderate function counts.
 Designed for high-throughput production deployments with a large number of
 concurrent functions and full high availability across every component.
 
-| Node Pool | Instance Type | vCPU | Memory | Nodes |
+| Node Pool | AWS Example Node Type | vCPU | Memory | Nodes |
 | --- | --- | --- | --- | --- |
-| Control Plane | `m5.4xlarge` | 16 | 64 GiB | 3--5 |
-| Cassandra | `r5.2xlarge` | 8 | 64 GiB | 3 |
-| OpenBao | `m5.xlarge` | 4 | 16 GiB | 3 |
+| Control Plane | `m5.4xlarge` or equivalent | 16 | 64 GiB | 3 to 5 |
+| Cassandra | `r5.2xlarge` or equivalent memory-optimized node | 8 | 64 GiB | 3 |
+| OpenBao | `m5.xlarge` or equivalent | 4 | 16 GiB | 3 |
 
-**Total:** 9--11 control-plane nodes
+Total: 9 to 11 control-plane nodes
 
-**Storage:** ~500 GB EBS `gp3` (across Cassandra and OpenBao volumes)
+Storage: Approximately 500 GB AWS EBS `gp3`, or equivalent CSI-backed block
+storage, across Cassandra and OpenBao volumes.
 
-**When to use:**
+Use this tier for:
 
 - High-throughput production with more than 2,000 concurrent functions
 - Full HA required for all components including OpenBao
@@ -133,13 +140,13 @@ per-node headroom.
 
 ## GPU Worker Nodes
 
-GPU worker nodes are **not part of the control-plane tiers** above. They are
+GPU worker nodes are not part of the control-plane tiers above. They are
 sized based on your inference workloads and can be added to any tier.
 
 Self-hosted NVCF supports any GPU instance type compatible with the
 [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/).
 
-**GPU requirements:**
+GPU requirements:
 
 - NVIDIA GPU Operator must be installed
 - NVIDIA device plugin for Kubernetes
@@ -153,10 +160,10 @@ instructions.
 
 | Component | Default | Production Recommendation |
 | --- | --- | --- |
-| Cassandra | 20 Gi per replica | 50--100 Gi |
-| OpenBao | 20 Gi | 20--50 Gi |
-| NATS JetStream | 20 Gi | 50--100 Gi (depending on message volume) |
-| Control Plane Services | 1--10 Gi each | Defaults are typically sufficient |
+| Cassandra | 20 Gi per replica | 50 to 100 Gi |
+| OpenBao | 20 Gi | 20 to 50 Gi |
+| NATS JetStream | 20 Gi | 50 to 100 Gi (depending on message volume) |
+| Control Plane Services | 1 to 10 Gi each | Defaults are typically sufficient |
 
 Storage sizes are configurable via the `storageSize` value in your environment
 file. See [helmfile-installation](./helmfile-installation.md) for details.
@@ -170,19 +177,21 @@ Some cloud providers have minimum PVC size requirements. For example, AWS EBS
 ## Scaling Beyond Defaults
 
 The default control-plane resource sizing shipped with the helmfile stack is
-designed to handle approximately **100 concurrent users**. If you need higher
+designed to handle approximately 100 concurrent users. If you need higher
 throughput:
 
-1. **Benchmark your deployment** using the [self-managed-grpc-load-test](./grpc-load-testing.md)
-   guide. Start with `--vus 100` and increase gradually.
-2. **Scale node pools independently.** Cassandra, OpenBao, and control-plane
+1. Benchmark your deployment using the [self-managed-grpc-load-test](./grpc-load-testing.md)
+   or [self-managed-http-load-test](./http-load-testing.md) guide. Start with
+   `--vus 100` and increase gradually.
+2. Scale node pools independently. Cassandra, OpenBao, and control-plane
    pools can each be scaled without affecting the others.
-3. **Increase pod resources** for specific services by adding `values:` blocks
+3. Increase pod resources for specific services by adding `values:` blocks
    in the helmfile release definitions. See [helmfile-installation](./helmfile-installation.md)
    for override examples.
 
 <Note>
-- [Quickstart](./quickstart.md) -- One-click fresh installation walkthrough
-- [self-managed-grpc-load-test](./grpc-load-testing.md) -- Validate control-plane throughput
+- [Quickstart](./quickstart.md): One-click fresh installation walkthrough
+- [self-managed-grpc-load-test](./grpc-load-testing.md): Validate control-plane throughput
+- [self-managed-http-load-test](./http-load-testing.md): Validate HTTP invocation throughput
 
 </Note>
