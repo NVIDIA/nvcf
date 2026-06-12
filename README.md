@@ -2,7 +2,7 @@
 
 [![bazel](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml/badge.svg?branch=main)](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml?query=branch%3Amain)
 
-[Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/user/installation.md) | [API Reference](docs/user/api.md) | [Contributing](CONTRIBUTING.md) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
+[Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/user/installation.md) | [API Reference](docs/user/api.md) | [Contributing](CONTRIBUTING.md) | [License](#license) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
 
 # NVIDIA Cloud Functions
 
@@ -63,6 +63,25 @@ Kubernetes resources.
 | Multi-cluster autoscaling | Scales workloads from zero to max across clusters. |
 | Mixed GPU support | Supports mixed GPU types across clusters for workloads with different GPU requirements. |
 | Health checks and telemetry | Tracks worker status and request latency through health checks and telemetry. |
+
+## Usage
+
+After installing a self-managed NVCF deployment and configuring `nvcf-cli`, a
+typical function workflow is:
+
+```bash
+nvcf-cli init
+nvcf-cli api-key generate
+
+# Update the example file with your function image before creating it.
+nvcf-cli function create --input-file src/clis/nvcf-cli/examples/create-function.json
+nvcf-cli function deploy create
+nvcf-cli function invoke --request-body '{"message": "hello world"}'
+```
+
+For the full setup, cleanup, and configuration flow, see
+[`docs/user/cli.md`](docs/user/cli.md) and
+[`docs/user/quickstart.md`](docs/user/quickstart.md).
 
 ## Repository map
 
@@ -184,7 +203,7 @@ We welcome contributions of all sizes, from typo fixes to new features. See
 NVCF is a new open source project, and we are actively smoothing the
 contribution workflow. We accept external contributions through GitHub pull
 requests today, with a few temporary wrinkles while the repository becomes more
-GitHub-native.
+[GitHub-native](https://github.com/NVIDIA/nvcf/issues/27).
 
 Before changing a service, read [`AGENTS.md`](AGENTS.md) and the nearest nested
 `AGENTS.md`. The nested file is the best source for service-specific build,
@@ -206,3 +225,7 @@ guidelines.
 Dependency collection guide and tool:
 [`tools/collect-dependencies/README.md`](tools/collect-dependencies/README.md)
 and [`tools/collect-dependencies`](tools/collect-dependencies).
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
