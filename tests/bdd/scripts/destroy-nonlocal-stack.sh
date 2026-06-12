@@ -314,9 +314,6 @@ delete_stack_namespaces() {
 # the controller is gone first the Gateway sticks in deletion and the
 # namespace hangs.
 #
-# The Gateway references the chart-provisioned `eg` GatewayClass, so
-# no separate GatewayClass cleanup is needed: the helm uninstall of
-# the `eg` release removes the GatewayClass alongside the controller.
 delete_gateway_first() {
   local ctx="$1"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -330,6 +327,21 @@ delete_gateway_first() {
     echo "  delete gateway nvcf-gateway in envoy-gateway"
     run kubectl --context "$ctx" delete gateway nvcf-gateway \
       -n envoy-gateway --ignore-not-found --wait --timeout=300s || true
+  fi
+}
+
+delete_gateway_class() {
+  local ctx="$1"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if ! context_reachable "$ctx"; then
+    return 0
+  fi
+  if kubectl --context "$ctx" get gatewayclass eg >/dev/null 2>&1; then
+    echo "  delete gatewayclass eg"
+    run kubectl --context "$ctx" delete gatewayclass eg \
+      --ignore-not-found --wait --timeout=60s || true
   fi
 }
 
@@ -395,6 +407,7 @@ if [[ -n "$CONTROL_PLANE_CONTEXT" ]]; then
   echo ">>> Cleaning control-plane stack on $CONTROL_PLANE_CONTEXT"
   if context_reachable "$CONTROL_PLANE_CONTEXT"; then
     delete_gateway_first "$CONTROL_PLANE_CONTEXT"
+    delete_gateway_class "$CONTROL_PLANE_CONTEXT"
     purge_stuck_helm_releases "$CONTROL_PLANE_CONTEXT" "${STACK_RELEASES_CP[@]}"
     uninstall_stack_releases "$CONTROL_PLANE_CONTEXT" "${STACK_RELEASES_CP[@]}"
     delete_stack_namespaces "$CONTROL_PLANE_CONTEXT" "${STACK_NAMESPACES_CP[@]}"

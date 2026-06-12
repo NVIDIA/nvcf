@@ -59,6 +59,14 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
     And environment variable "EKS_COMPUTE_CONTEXT" is set
     And environment variable "EKS_COMPUTE_CLUSTER_NAME" is set
     And environment variable "EKS_REGION" is set
+    # Helmfile pulls OCI charts through helm, so host-side helm
+    # registry auth must be present before any helmfile sync.
+    # Keep $NGC_API_KEY unbraced so the BDD runner does not expand
+    # the secret into command logs; bash expands it at execution time.
+    And command has succeeded:
+      """
+      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
+      """
     # Create NGC dockerconfig registry credentials.
     And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml"
     And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"

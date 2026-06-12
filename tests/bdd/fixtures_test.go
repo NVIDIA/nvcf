@@ -18,6 +18,8 @@ limitations under the License.
 package bdd_tmp
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"regexp"
 	"testing"
@@ -75,5 +77,51 @@ func TestNVCFCLINonlocalFixtureMatchesCLITemplate(t *testing.T) {
 		if !pattern.MatchString(cliBody) {
 			t.Errorf("BDD fixture key %q not referenced in CLI template at %s; the CLI may have renamed or removed it", key, cliTemplatePath)
 		}
+	}
+}
+
+func TestNVCFGatewayFixtureDefinesReferencedGatewayClass(t *testing.T) {
+	const fixturePath = "fixtures/nvcf-gateway.yaml"
+
+	fixtureBytes, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", fixturePath, err)
+	}
+
+	decoder := yaml.NewDecoder(bytes.NewReader(fixtureBytes))
+	gatewayClasses := map[string]bool{}
+	var gatewayClassName string
+	for {
+		var doc map[string]any
+		if err := decoder.Decode(&doc); err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatalf("parse fixture %s: %v", fixturePath, err)
+		}
+		if len(doc) == 0 {
+			continue
+		}
+
+		kind, _ := doc["kind"].(string)
+		metadata, _ := doc["metadata"].(map[string]any)
+		name, _ := metadata["name"].(string)
+		switch kind {
+		case "GatewayClass":
+			gatewayClasses[name] = true
+		case "Gateway":
+			if name != "nvcf-gateway" {
+				continue
+			}
+			spec, _ := doc["spec"].(map[string]any)
+			gatewayClassName, _ = spec["gatewayClassName"].(string)
+		}
+	}
+
+	if gatewayClassName == "" {
+		t.Fatalf("fixture %s does not define gateway/nvcf-gateway with spec.gatewayClassName", fixturePath)
+	}
+	if !gatewayClasses[gatewayClassName] {
+		t.Fatalf("fixture %s references GatewayClass %q but does not define it", fixturePath, gatewayClassName)
 	}
 }

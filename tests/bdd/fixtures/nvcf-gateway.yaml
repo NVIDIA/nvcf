@@ -6,8 +6,10 @@
 #
 # Layout:
 # - Namespace `envoy-gateway` for the Gateway resource itself.
-# - Gateway `nvcf-gateway` referencing the `eg` GatewayClass that
-#   envoy-gateway-helm provisions by default. Three listeners matching
+# - GatewayClass `eg` using the Envoy Gateway controller name. The
+#   envoy-gateway-helm chart installs the controller but does not
+#   create this class.
+# - Gateway `nvcf-gateway` referencing `eg`. Three listeners matching
 #   the gateway-routes chart's sectionName values:
 #     - http  port 80    (HTTPRoute, used by shared listener)
 #     - tcp   port 10081 (TCPRoute, used by grpc-proxy)
@@ -26,6 +28,13 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: envoy-gateway
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
