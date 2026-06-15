@@ -19,18 +19,21 @@ package clusteragent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 const (
@@ -48,8 +51,6 @@ func newFakeMaintainer(dynObjs, k8sObjs []runtime.Object) (*k8sMaintainer, *dyna
 		icmsRequestGVR: "ICMSRequestList",
 	}
 	dc := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind, dynObjs...)
-	_ = appsv1.AddToScheme(scheme)
-	_ = corev1.AddToScheme(scheme)
 	cs := k8sfake.NewSimpleClientset(k8sObjs...)
 	return &k8sMaintainer{dc: dc, cs: cs}, dc, cs
 }
@@ -270,6 +271,7 @@ func TestDrainRolloutTimeoutIsWarningNotError(t *testing.T) {
 	cfg := "agent:\n"
 	m, _, cs := newFakeMaintainer(
 		[]runtime.Object{defaultBackend()},
+		// Deployment never reaches the complete state.
 		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, false)},
 	)
 
@@ -283,6 +285,7 @@ func TestDrainRolloutTimeoutIsWarningNotError(t *testing.T) {
 	if !strings.Contains(res.Message, "did not complete") {
 		t.Errorf("message = %q, want a timeout note", res.Message)
 	}
+	// Config was still persisted.
 	if got := readConfig(t, cs, testSystemNS); !strings.Contains(got, cordonAndDrainFeatureFlag) {
 		t.Errorf("config not persisted on timeout:\n%s", got)
 	}
@@ -293,6 +296,8 @@ func TestWaitForRolloutWaitsForObservedGeneration(t *testing.T) {
 	rolloutPollInterval = time.Millisecond
 	t.Cleanup(func() { rolloutPollInterval = prev })
 
+	// Replicas look complete, but the controller has not observed the latest
+	// spec generation yet, so the status still reflects the prior rollout.
 	d := nvcaDeployObj(testSystemNS, 1, true)
 	d.Generation = 3
 	d.Status.ObservedGeneration = 2
@@ -315,6 +320,27 @@ func TestDrainForceSkipsRolloutWait(t *testing.T) {
 	}
 	if !res.RolloutTriggered || res.RolloutComplete {
 		t.Fatalf("force should trigger rollout but not wait: %+v", res)
+	}
+}
+
+func TestDrainForceRetriggersRolloutWhenConfigAlreadySet(t *testing.T) {
+	// Simulate a prior run that patched the config but failed before triggering
+	// the rollout. The config is already in the target state (changed=false),
+	// but --force must bypass the idempotency guard and trigger the rollout.
+	cfg := "agent:\n  maintenanceMode: CordonAndDrain\n  featureFlags:\n  - CordonAndDrainMaintenance\n"
+	m, _, _ := newFakeMaintainer(
+		[]runtime.Object{defaultBackend()},
+		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, false)},
+	)
+	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Force: true})
+	if err != nil {
+		t.Fatalf("Drain --force returned error: %v", err)
+	}
+	if res.ConfigChanged {
+		t.Errorf("expected no config change (already set), got ConfigChanged=true")
+	}
+	if !res.RolloutTriggered {
+		t.Errorf("--force should trigger rollout even when config is unchanged: %+v", res)
 	}
 }
 
@@ -359,27 +385,6 @@ func TestUndrainIdempotent(t *testing.T) {
 	}
 }
 
-func TestDrainForceRetriggersRolloutWhenConfigAlreadySet(t *testing.T) {
-	// Simulate a prior run that patched the config but failed before triggering
-	// the rollout. The config is already in the target state (changed=false),
-	// but --force must bypass the idempotency guard and trigger the rollout.
-	cfg := "agent:\n  maintenanceMode: CordonAndDrain\n  featureFlags:\n  - CordonAndDrainMaintenance\n"
-	m, _, _ := newFakeMaintainer(
-		[]runtime.Object{defaultBackend()},
-		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, false)},
-	)
-	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Force: true})
-	if err != nil {
-		t.Fatalf("Drain --force returned error: %v", err)
-	}
-	if res.ConfigChanged {
-		t.Errorf("expected no config change (already set), got ConfigChanged=true")
-	}
-	if !res.RolloutTriggered {
-		t.Errorf("--force should trigger rollout even when config is unchanged: %+v", res)
-	}
-}
-
 // --- agent-config YAML helpers ---
 
 func TestAddFeatureFlagToConfig(t *testing.T) {
@@ -407,6 +412,11 @@ func TestAddFeatureFlagToConfig(t *testing.T) {
 			name: "no agent section is a no-op",
 			in:   "other:\n  x: y\n",
 			want: "other:\n  x: y\n",
+		},
+		{
+			name: "flag in another section is not treated as duplicate",
+			in:   "other:\n- CordonAndDrainMaintenance\nagent:\n  logLevel: info\n",
+			want: "other:\n- CordonAndDrainMaintenance\nagent:\n  featureFlags:\n  - CordonAndDrainMaintenance\n  logLevel: info\n",
 		},
 		{
 			name: "agent anchor with trailing whitespace is matched",
@@ -461,6 +471,13 @@ func TestRemoveAndClearHelpers(t *testing.T) {
 			t.Errorf("got %q want %q", got, want)
 		}
 	})
+	t.Run("remove scoped to featureFlags section only", func(t *testing.T) {
+		in := "other:\n- CordonAndDrainMaintenance\nagent:\n  featureFlags:\n  - CordonAndDrainMaintenance\n  - LogPosting\n"
+		want := "other:\n- CordonAndDrainMaintenance\nagent:\n  featureFlags:\n  - LogPosting\n"
+		if got := removeFeatureFlagFromConfig(in, cordonAndDrainFeatureFlag); got != want {
+			t.Errorf("got %q want %q", got, want)
+		}
+	})
 	t.Run("clear maintenance mode", func(t *testing.T) {
 		in := "agent:\n  maintenanceMode: CordonAndDrain\n  logLevel: info\n"
 		want := "agent:\n  logLevel: info\n"
@@ -470,7 +487,188 @@ func TestRemoveAndClearHelpers(t *testing.T) {
 	})
 }
 
+// --- Kill ---
+
+func killSeed() []runtime.Object {
+	return []runtime.Object{
+		defaultBackend(),
+		icmsRequest(testRequestsNS, "r1", "fn-1", "v1", "", statusCompleted, false),
+		icmsRequest(testRequestsNS, "r2", "fn-1", "v2", "", statusInProgress, false),
+		icmsRequest(testRequestsNS, "r3", "fn-2", "v1", "", statusCompleted, true),
+	}
+}
+
+func icmsExists(t *testing.T, dc *dynamicfake.FakeDynamicClient, ns, name string) bool {
+	t.Helper()
+	_, err := dc.Resource(icmsRequestGVR).Namespace(ns).Get(context.Background(), name, metav1.GetOptions{})
+	if err == nil {
+		return true
+	}
+	if apierrors.IsNotFound(err) {
+		return false
+	}
+	t.Fatalf("unexpected error checking %s/%s: %v", ns, name, err)
+	return false
+}
+
+func TestKillFunctionMatchesVersion(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(killSeed(), nil)
+
+	res, err := m.KillFunction(context.Background(), "fn-1", "v2", KillOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("KillFunction returned error: %v", err)
+	}
+	if len(res.Affected) != 1 || res.Affected[0].Name != "r2" {
+		t.Fatalf("affected = %+v, want only r2", res.Affected)
+	}
+	if icmsExists(t, dc, testRequestsNS, "r2") {
+		t.Error("r2 should have been deleted")
+	}
+	if !icmsExists(t, dc, testRequestsNS, "r1") {
+		t.Error("r1 (other version) must remain")
+	}
+}
+
+func TestKillFunctionAllVersions(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(killSeed(), nil)
+
+	res, err := m.KillFunction(context.Background(), "fn-1", "", KillOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("KillFunction returned error: %v", err)
+	}
+	if len(res.Affected) != 2 {
+		t.Fatalf("affected = %+v, want both fn-1 versions", res.Affected)
+	}
+	if icmsExists(t, dc, testRequestsNS, "r1") || icmsExists(t, dc, testRequestsNS, "r2") {
+		t.Error("both fn-1 versions should be deleted")
+	}
+	if !icmsExists(t, dc, testRequestsNS, "r3") {
+		t.Error("fn-2 must remain")
+	}
+}
+
+func TestKillResultCarriesReason(t *testing.T) {
+	m, _, _ := newFakeMaintainer(killSeed(), nil)
+	res, err := m.KillFunction(context.Background(), "fn-1", "v2", KillOptions{BackendNS: testBackendNS, Reason: "node maintenance"})
+	if err != nil {
+		t.Fatalf("KillFunction returned error: %v", err)
+	}
+	if res.Reason != "node maintenance" {
+		t.Errorf("Reason = %q, want %q", res.Reason, "node maintenance")
+	}
+}
+
+func TestKillFunctionNotFound(t *testing.T) {
+	m, _, _ := newFakeMaintainer(killSeed(), nil)
+	if _, err := m.KillFunction(context.Background(), "missing", "", KillOptions{BackendNS: testBackendNS}); err == nil {
+		t.Fatal("expected error for unknown function")
+	}
+}
+
+func TestKillFunctionDryRunDeletesNothing(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(killSeed(), nil)
+
+	res, err := m.KillFunction(context.Background(), "fn-1", "", KillOptions{BackendNS: testBackendNS, DryRun: true})
+	if err != nil {
+		t.Fatalf("KillFunction dry-run returned error: %v", err)
+	}
+	if !res.DryRun || len(res.Affected) != 2 {
+		t.Fatalf("unexpected dry-run result: %+v", res)
+	}
+	if !icmsExists(t, dc, testRequestsNS, "r1") || !icmsExists(t, dc, testRequestsNS, "r2") {
+		t.Error("dry-run must not delete anything")
+	}
+}
+
+func TestKillAll(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(killSeed(), nil)
+
+	res, err := m.KillAll(context.Background(), KillOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("KillAll returned error: %v", err)
+	}
+	if len(res.Affected) != 3 {
+		t.Fatalf("affected = %d, want 3", len(res.Affected))
+	}
+	for _, name := range []string{"r1", "r2", "r3"} {
+		if icmsExists(t, dc, testRequestsNS, name) {
+			t.Errorf("%s should have been deleted", name)
+		}
+	}
+}
+
+func TestKillAllEmptyCluster(t *testing.T) {
+	m, _, _ := newFakeMaintainer([]runtime.Object{defaultBackend()}, nil)
+	res, err := m.KillAll(context.Background(), KillOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("KillAll on empty cluster must not error: %v", err)
+	}
+	if len(res.Affected) != 0 || res.FailedCount != 0 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+func TestKillPartialFailureReportsAggregateError(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(killSeed(), nil)
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if da, ok := action.(k8stesting.DeleteAction); ok && da.GetName() == "r2" {
+			return true, nil, fmt.Errorf("simulated delete failure")
+		}
+		return false, nil, nil
+	})
+
+	res, err := m.KillAll(context.Background(), KillOptions{BackendNS: testBackendNS})
+	if err == nil {
+		t.Fatal("expected aggregate error on partial failure")
+	}
+	if res == nil || res.FailedCount != 1 {
+		t.Fatalf("expected populated result with one failure, got %+v", res)
+	}
+	var failed *KilledRequest
+	for i := range res.Affected {
+		if res.Affected[i].Name == "r2" {
+			failed = &res.Affected[i]
+		}
+	}
+	if failed == nil || failed.Error == "" {
+		t.Fatalf("r2 should carry a per-item error, got %+v", res.Affected)
+	}
+}
+
+func TestStripFinalizersThenDelete(t *testing.T) {
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.nvcf.nvidia.io/cleanup")
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+
+	if err := m.stripFinalizers(context.Background(), testRequestsNS, "r1"); err != nil {
+		t.Fatalf("stripFinalizers returned error: %v", err)
+	}
+	got, err := dc.Resource(icmsRequestGVR).Namespace(testRequestsNS).Get(context.Background(), "r1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get after strip: %v", err)
+	}
+	if len(got.GetFinalizers()) != 0 {
+		t.Errorf("finalizers = %v, want empty", got.GetFinalizers())
+	}
+}
+
+func TestKillForceDeletesFinalizedRequest(t *testing.T) {
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.nvcf.nvidia.io/cleanup")
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+
+	res, err := m.KillFunction(context.Background(), "fn-1", "", KillOptions{BackendNS: testBackendNS, Force: true})
+	if err != nil {
+		t.Fatalf("KillFunction --force returned error: %v", err)
+	}
+	if res.FailedCount != 0 || len(res.Affected) != 1 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if icmsExists(t, dc, testRequestsNS, "r1") {
+		t.Error("forced kill should have deleted the request")
+	}
+}
+
 func TestResolveClusterAppliesNamespaceDefaults(t *testing.T) {
+	// Backend with no system/requests namespace set.
 	b := backendObj(testBackendNS, testClusterID, testCluster, "", "")
 	m, _, _ := newFakeMaintainer([]runtime.Object{b}, nil)
 

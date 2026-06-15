@@ -25,7 +25,8 @@ import (
 // AgentMaintainer performs maintenance mutations against a compute-plane
 // cluster's NVCA. It is the write-side counterpart to AgentInspector: drain and
 // undrain toggle CordonAndDrain maintenance on the NVCA agent-config ConfigMap
-// (which the operator picks up on a rollout restart).
+// (which the operator picks up on a rollout restart), and the kill operations
+// delete ICMSRequest CRs so the NVCA reconciler evicts the workloads.
 //
 // The Kubernetes implementation (k8s_maintainer.go) mirrors the proven operator
 // logic in nvca/pkg/operator/cleanup/cleanup.go. The interface is the seam where
@@ -35,12 +36,18 @@ type AgentMaintainer interface {
 	// ResolveCluster reads the NVCFBackend CR in backendNS and returns the
 	// cluster identity and the system/requests namespaces, applying defaults for
 	// any field the CR leaves empty. It is the common preamble for every
-	// maintenance operation.
+	// maintenance operation: the identity feeds the optional cluster guard and
+	// the kill-all confirmation, and the namespaces target the writes.
 	ResolveCluster(ctx context.Context, backendNS string) (*ClusterTarget, error)
 	// Drain puts the cluster into CordonAndDrain maintenance.
 	Drain(ctx context.Context, opts DrainOptions) (*DrainResult, error)
 	// Undrain reverses Drain, returning the cluster to normal operation.
 	Undrain(ctx context.Context, opts DrainOptions) (*DrainResult, error)
+	// KillFunction force-terminates every ICMSRequest matching functionID (and
+	// versionID, when non-empty). An empty versionID matches all versions.
+	KillFunction(ctx context.Context, functionID, versionID string, opts KillOptions) (*KillResult, error)
+	// KillAll force-terminates every ICMSRequest on the cluster.
+	KillAll(ctx context.Context, opts KillOptions) (*KillResult, error)
 }
 
 // ClusterTarget is the NVCFBackend-derived identity and namespace layout of a
@@ -67,6 +74,22 @@ type DrainOptions struct {
 	Timeout time.Duration
 }
 
+// KillOptions controls KillFunction and KillAll.
+type KillOptions struct {
+	// BackendNS is the namespace holding the NVCFBackend CR.
+	BackendNS string
+	// ExpectClusterID, when non-empty, must match the live cluster's ID or name
+	// or the operation is refused.
+	ExpectClusterID string
+	// Reason is an optional operator-supplied audit note recorded in logs.
+	Reason string
+	// DryRun reports what would be deleted without deleting anything.
+	DryRun bool
+	// Force strips finalizers before deleting, so a CR stuck Terminating is
+	// removed even when NVCA is not running to process its finalizer.
+	Force bool
+}
+
 // DrainResult is the outcome of a Drain or Undrain.
 type DrainResult struct {
 	ClusterID        string `json:"clusterId,omitempty"`
@@ -78,4 +101,26 @@ type DrainResult struct {
 	RolloutComplete  bool   `json:"rolloutComplete"`
 	DryRun           bool   `json:"dryRun"`
 	Message          string `json:"message,omitempty"`
+}
+
+// KilledRequest is one ICMSRequest targeted by a kill operation. Error is set
+// when that CR failed to delete; otherwise it was deleted (or would be, in a
+// dry run).
+type KilledRequest struct {
+	Namespace         string `json:"namespace"`
+	Name              string `json:"name"`
+	FunctionID        string `json:"functionId,omitempty"`
+	FunctionVersionID string `json:"functionVersionId,omitempty"`
+	Error             string `json:"error,omitempty"`
+}
+
+// KillResult is the outcome of KillFunction or KillAll.
+type KillResult struct {
+	ClusterID         string          `json:"clusterId,omitempty"`
+	ClusterName       string          `json:"clusterName,omitempty"`
+	RequestsNamespace string          `json:"requestsNamespace"`
+	Reason            string          `json:"reason,omitempty"`
+	Affected          []KilledRequest `json:"affected"`
+	FailedCount       int             `json:"failedCount"`
+	DryRun            bool            `json:"dryRun"`
 }

@@ -80,7 +80,7 @@ func (k *k8sInspector) Status(ctx context.Context, namespace string) (*AgentStat
 // ListFunctions lists ICMSRequest CRs and maps them to scheduled functions,
 // applying phase filtering and deterministic ordering.
 func (k *k8sInspector) ListFunctions(ctx context.Context, opts ListOptions) ([]ScheduledFunction, error) {
-	items, err := k.listICMSRequests(ctx, opts.Namespace)
+	items, err := listICMSRequests(ctx, k.dc, opts.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func (k *k8sInspector) ListFunctions(ctx context.Context, opts ListOptions) ([]S
 // GetFunction lists ICMSRequest CRs across all namespaces and returns the first
 // one matching functionID (and versionID, if set).
 func (k *k8sInspector) GetFunction(ctx context.Context, functionID, versionID string) (*FunctionDetail, error) {
-	items, err := k.listICMSRequests(ctx, "")
+	items, err := listICMSRequests(ctx, k.dc, "")
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (k *k8sInspector) GetFunction(ctx context.Context, functionID, versionID st
 // ICMSRequest CRs does not force the API server to return everything at once.
 const icmsRequestListPageSize = 500
 
-func (k *k8sInspector) listICMSRequests(ctx context.Context, namespace string) ([]unstructured.Unstructured, error) {
+func listICMSRequests(ctx context.Context, dc dynamic.Interface, namespace string) ([]unstructured.Unstructured, error) {
 	var items []unstructured.Unstructured
 	continueToken := ""
 	for {
@@ -150,9 +150,9 @@ func (k *k8sInspector) listICMSRequests(ctx context.Context, namespace string) (
 			err  error
 		)
 		if namespace == "" {
-			list, err = k.dc.Resource(icmsRequestGVR).List(ctx, opts)
+			list, err = dc.Resource(icmsRequestGVR).List(ctx, opts)
 		} else {
-			list, err = k.dc.Resource(icmsRequestGVR).Namespace(namespace).List(ctx, opts)
+			list, err = dc.Resource(icmsRequestGVR).Namespace(namespace).List(ctx, opts)
 		}
 		if err != nil {
 			return nil, wrapCRDError(err, "ICMSRequest", namespace)

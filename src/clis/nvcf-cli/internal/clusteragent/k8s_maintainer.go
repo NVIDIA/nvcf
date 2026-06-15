@@ -23,9 +23,12 @@ import (
 	"strings"
 	"time"
 
+	"nvcf-cli/internal/logging"
+
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
@@ -54,8 +57,8 @@ const (
 var rolloutPollInterval = 2 * time.Second
 
 // k8sMaintainer mutates NVCA state on a compute-plane cluster. It uses the
-// dynamic client for the NVCFBackend custom resource and the typed clientset for
-// the agent-config ConfigMap and the NVCA Deployment.
+// dynamic client for the ICMSRequest and NVCFBackend custom resources and the
+// typed clientset for the agent-config ConfigMap and the NVCA Deployment.
 type k8sMaintainer struct {
 	dc dynamic.Interface
 	cs kubernetes.Interface
@@ -309,6 +312,142 @@ func (m *k8sMaintainer) waitForRollout(ctx context.Context, systemNS string, tim
 	}
 }
 
+// KillFunction terminates every ICMSRequest matching functionID (and versionID
+// when set). Zero matches is an error.
+func (m *k8sMaintainer) KillFunction(ctx context.Context, functionID, versionID string, opts KillOptions) (*KillResult, error) {
+	target, err := m.resolveAndVerify(ctx, opts.BackendNS, opts.ExpectClusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := m.killMatching(ctx, target, opts, func(fid, vid string) bool {
+		return fid == functionID && (versionID == "" || vid == versionID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Affected) == 0 {
+		if versionID != "" {
+			return nil, fmt.Errorf("no scheduled function found for function %s version %s in namespace %s", functionID, versionID, target.RequestsNamespace)
+		}
+		return nil, fmt.Errorf("no scheduled function found for function %s in namespace %s", functionID, target.RequestsNamespace)
+	}
+	return result, aggregateKillError(result)
+}
+
+// KillAll terminates every ICMSRequest on the cluster. An empty cluster returns
+// an empty result and no error.
+func (m *k8sMaintainer) KillAll(ctx context.Context, opts KillOptions) (*KillResult, error) {
+	target, err := m.resolveAndVerify(ctx, opts.BackendNS, opts.ExpectClusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := m.killMatching(ctx, target, opts, func(string, string) bool { return true })
+	if err != nil {
+		return nil, err
+	}
+	return result, aggregateKillError(result)
+}
+
+// killMatching lists ICMSRequests in the requests namespace, selects the ones
+// the predicate accepts (in deterministic order), and deletes each unless DryRun.
+// Scope is intentionally limited to target.RequestsNamespace: the NVCA operator
+// contract guarantees all ICMSRequests for a cluster live in the single namespace
+// recorded in the NVCFBackend CR's requestsNamespace field. The inspector's
+// all-namespace scan is a visibility-only read path that tolerates stale state;
+// kill operations use the authoritative namespace to avoid accidental cross-cluster deletions.
+func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget, opts KillOptions, match func(functionID, versionID string) bool) (*KillResult, error) {
+	items, err := listICMSRequests(ctx, m.dc, target.RequestsNamespace)
+	if err != nil {
+		return nil, err
+	}
+	sortICMSRequests(items)
+
+	result := &KillResult{
+		ClusterID:         target.ClusterID,
+		ClusterName:       target.ClusterName,
+		RequestsNamespace: target.RequestsNamespace,
+		Reason:            opts.Reason,
+		DryRun:            opts.DryRun,
+		Affected:          []KilledRequest{},
+	}
+
+	for i := range items {
+		fid, vid := functionIdentity(items[i].Object)
+		if !match(fid, vid) {
+			continue
+		}
+		killed := KilledRequest{
+			Namespace:         items[i].GetNamespace(),
+			Name:              items[i].GetName(),
+			FunctionID:        fid,
+			FunctionVersionID: vid,
+		}
+		if !opts.DryRun {
+			if err := m.deleteICMSRequest(ctx, killed.Namespace, killed.Name, opts.Force); err != nil {
+				killed.Error = err.Error()
+				result.FailedCount++
+			} else {
+				// Audit line for the termination, including the operator-supplied
+				// reason. Carried in the result too, but this emits it to logs.
+				logging.Info("terminated ICMSRequest %s/%s (function=%s version=%s) reason=%q",
+					killed.Namespace, killed.Name, killed.FunctionID, killed.FunctionVersionID, opts.Reason)
+			}
+		}
+		result.Affected = append(result.Affected, killed)
+	}
+	return result, nil
+}
+
+// deleteICMSRequest deletes one ICMSRequest. When force is set, it first strips
+// finalizers so a CR stuck Terminating is removed even if NVCA is not running.
+// A NotFound on delete is treated as success (the reconciler raced us).
+func (m *k8sMaintainer) deleteICMSRequest(ctx context.Context, namespace, name string, force bool) error {
+	if force {
+		if err := m.stripFinalizers(ctx, namespace, name); err != nil {
+			return err
+		}
+	}
+	err := m.dc.Resource(icmsRequestGVR).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// stripFinalizers clears the finalizers on an ICMSRequest, mirroring the
+// operator's forced-teardown path. The GVK must be set before a dynamic Update.
+func (m *k8sMaintainer) stripFinalizers(ctx context.Context, namespace, name string) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest, err := m.dc.Resource(icmsRequestGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		if len(latest.GetFinalizers()) == 0 {
+			return nil
+		}
+		latest.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   icmsRequestGVR.Group,
+			Version: icmsRequestGVR.Version,
+			Kind:    "ICMSRequest",
+		})
+		latest.SetFinalizers(nil)
+		_, err = m.dc.Resource(icmsRequestGVR).Namespace(namespace).Update(ctx, latest, metav1.UpdateOptions{})
+		return err
+	})
+}
+
+func aggregateKillError(result *KillResult) error {
+	if result.FailedCount == 0 {
+		return nil
+	}
+	return fmt.Errorf("failed to terminate %d of %d ICMSRequest(s)", result.FailedCount, len(result.Affected))
+}
+
 // --- agent-config YAML edits ---
 //
 // These mirror the line-based edits in nvca/pkg/operator/cleanup/cleanup.go so
@@ -320,17 +459,30 @@ func (m *k8sMaintainer) waitForRollout(ctx context.Context, systemNS string, tim
 func addFeatureFlagToConfig(configYAML, featureFlag string) string {
 	lines := strings.Split(configYAML, "\n")
 
-	for _, line := range lines {
-		if strings.TrimLeft(line, " \t") == "- "+featureFlag {
-			return configYAML // already present
+	// Locate the featureFlags: section; check for duplicates only within it.
+	featureFlagsIdx := -1
+	inFlags := false
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "featureFlags:" {
+			featureFlagsIdx = i
+			inFlags = true
+			continue
+		}
+		if inFlags {
+			if strings.HasPrefix(trimmed, "- ") {
+				if trimmed == "- "+featureFlag {
+					return configYAML // already present in featureFlags section
+				}
+			} else if trimmed != "" {
+				inFlags = false
+			}
 		}
 	}
 
-	for i, line := range lines {
-		if strings.TrimLeft(line, " \t") == "featureFlags:" {
-			lines = insertAfter(lines, i, "  - "+featureFlag)
-			return strings.Join(lines, "\n")
-		}
+	if featureFlagsIdx >= 0 {
+		lines = insertAfter(lines, featureFlagsIdx, "  - "+featureFlag)
+		return strings.Join(lines, "\n")
 	}
 
 	for i, line := range lines {
@@ -347,10 +499,17 @@ func addFeatureFlagToConfig(configYAML, featureFlag string) string {
 func removeFeatureFlagFromConfig(configYAML, featureFlag string) string {
 	lines := strings.Split(configYAML, "\n")
 
-	// Remove the specific flag entry.
+	// Remove the flag only within the featureFlags: section.
+	inFlags := false
 	without := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if strings.TrimLeft(line, " \t") == "- "+featureFlag {
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "featureFlags:" {
+			inFlags = true
+		} else if inFlags && !strings.HasPrefix(trimmed, "- ") && trimmed != "" {
+			inFlags = false
+		}
+		if inFlags && trimmed == "- "+featureFlag {
 			continue
 		}
 		without = append(without, line)

@@ -1724,6 +1724,8 @@ cluster identity and the system and requests namespaces.
 | :---- | :---- |
 | `cluster agent cordon-and-drain` (alias `drain`) | Put the cluster into CordonAndDrain maintenance: stop new deployments, let in-flight requests finish, and drain instances to zero. |
 | `cluster agent uncordon` (alias `undrain`) | Reverse a drain and re-enable the cluster. |
+| `cluster agent kill-function <function-id> [version-id]` | Force-terminate one function version (all versions when version-id is omitted). |
+| `cluster agent kill-all` | Force-terminate every function on the cluster. |
 
 ### How drain works
 
@@ -1736,17 +1738,32 @@ Watch progress with `cluster agent list-functions --phase DRAINING`. `--timeout`
 bounds the rollout wait (default 5m); a timeout is reported as a warning because
 the config change is already persisted and re-running is a no-op.
 
+### How kill works
+
+`kill-function` and `kill-all` delete the matching `ICMSRequest` CRs; the NVCA
+reconciler detects the deletion and evicts the workloads. Deletion is
+asynchronous, so the command returns once the delete is accepted. `--force`
+additionally strips finalizers so a request stuck `Terminating` is removed even
+when NVCA is not running to process its finalizer.
+
 ### Confirmation and safety
 
-`cordon-and-drain` and `uncordon` prompt for a `y/N` confirmation; pass `--yes`
-to skip it in automation.
+`cordon-and-drain`, `uncordon`, and `kill-function` prompt for a `y/N`
+confirmation; pass `--yes` to skip it in automation.
+
+`kill-all` is higher impact. It prints the affected function ids first and then
+requires you to type the cluster name to confirm; there is no plain `--yes` bypass.
+For automation, pass both `--yes` and `--confirm <cluster-name>` matching the
+connected cluster. When the cluster has no name, it falls back to the cluster id.
 
 All maintenance commands accept `--dry-run` to preview without mutating, and
 `--expect-cluster-id <id>` to refuse to act unless the connected cluster's id or
-name matches (guards against a wrong `--compute-plane-context`).
+name matches (guards against a wrong `--compute-plane-context`). `kill-function`
+and `kill-all` accept `--reason` for an audit note, and `--json` for automation.
 
 These commands need write access to the target cluster: get/update on the
-`agent-config` ConfigMap and the `nvca` Deployment.
+`agent-config` ConfigMap and the `nvca` Deployment for drain, and list/delete
+(and update, with `--force`) on `ICMSRequest` CRs for kill.
 
 ### Examples
 
@@ -1757,6 +1774,12 @@ nvcf-cli cluster agent cordon-and-drain --compute-plane-context edge-1
 
 # Re-enable the cluster
 nvcf-cli cluster agent uncordon --compute-plane-context edge-1
+
+# Force-terminate one function version
+nvcf-cli cluster agent kill-function func-abc ver-def --compute-plane-context edge-1 --yes
+
+# Wipe every function on the cluster (CI/automation form)
+nvcf-cli cluster agent kill-all --compute-plane-context edge-1 --yes --confirm <cluster-name>
 ```
 
 ---
