@@ -359,7 +359,7 @@ func (r *Reconciler) ensureImageCredentialUpdaterObjects(
 	// All Pods created by NVCA must use the same scheduler.
 	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
 		tprUpdaterInitJob.Spec.Template.Spec.SchedulerName = kaischeduler.SchedulerName
-		tprUpdaterInitJob.Spec.Template.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.GetQName()
+		tprUpdaterInitJob.Spec.Template.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
 	}
 
 	// Set TTL to 1 hour so jobs are cleaned up in case of terminal failure

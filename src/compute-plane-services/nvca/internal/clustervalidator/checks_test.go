@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,6 +40,26 @@ import (
 	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 )
+
+// TestMain stubs the network-dependent capability probes to "succeed" by
+// default so tests don't pay 15s of real-network DNS retries per call.
+// Individual tests that want to exercise failure modes override via
+// stubProbes(t, ...).
+func TestMain(m *testing.M) {
+	probeDNSFn = func(context.Context) bool { return true }
+	probeAPIServiceIPFn = func(context.Context) bool { return true }
+	os.Exit(m.Run())
+}
+
+// stubProbes overrides the capability probes for the duration of a single
+// test. Restoration is automatic via t.Cleanup.
+func stubProbes(t *testing.T, dnsOK, routingOK bool) {
+	t.Helper()
+	origDNS, origRouting := probeDNSFn, probeAPIServiceIPFn
+	t.Cleanup(func() { probeDNSFn, probeAPIServiceIPFn = origDNS, origRouting })
+	probeDNSFn = func(context.Context) bool { return dnsOK }
+	probeAPIServiceIPFn = func(context.Context) bool { return routingOK }
+}
 
 // ---------------------------------------------------------------------------
 // checkPrerequisites – additional cases
@@ -57,31 +78,45 @@ func TestCheckPrerequisites_NoNodes(t *testing.T) {
 // checkControlPlaneHealth – additional cases
 // ---------------------------------------------------------------------------
 
-func TestCheckControlPlaneHealth_NoPods(t *testing.T) {
+func TestCheckControlPlaneHealth_NoKubeSystemPods_VerdictDrivenByProbes(t *testing.T) {
+	// Under the capability-based model, the absence of kube-system pods
+	// is diagnostic-only — the verdict comes from the DNS and
+	// service-routing probes. When the probes pass, a cluster with no
+	// recognised kube-system pods is still reported healthy (the most
+	// common reason this happens in tests is the fake clientset, but the
+	// same is true in production for clusters where the agent runs in
+	// a namespace it can't see kube-system from).
+	stubProbes(t, true, true)
 	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
-	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true}
+	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
 	checkControlPlaneHealth(context.Background(), client, state)
-	// Missing control plane pods mark the cluster as unhealthy.
-	assert.False(t, state.ControlPlaneHealthy)
+	assert.True(t, state.ControlPlaneHealthy,
+		"missing kube-system pods must not flip verdict when capability probes pass")
 }
 
-func TestCheckControlPlaneHealth_MixedPodPhases(t *testing.T) {
+func TestCheckControlPlaneHealth_PodsPresentButProbesFail(t *testing.T) {
+	// The new authoritative signal: even if every expected pod is
+	// running, a broken DNS or service-routing capability still flips
+	// the verdict. This catches the failure pod-prefix matching could
+	// not (e.g. CoreDNS pod is Running but its Corefile is broken).
+	stubProbes(t, false, true) // DNS broken
 	client := fake.NewSimpleClientset(
 		makeNode("node-1", true, 0),
 		makePod("kube-apiserver-node-1", "kube-system", corev1.PodRunning),
-		makePod("kube-scheduler-node-1", "kube-system", corev1.PodPending),
-		makePod("etcd-node-1", "kube-system", corev1.PodFailed),
+		makePod("coredns-abc", "kube-system", corev1.PodRunning),
+		makePod("kube-proxy-xyz", "kube-system", corev1.PodRunning),
 	)
-	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true}
+	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
 	checkControlPlaneHealth(context.Background(), client, state)
-	// Non-running pods (Pending/Failed) and missing pods mark cluster unhealthy.
-	assert.False(t, state.ControlPlaneHealthy)
+	assert.False(t, state.ControlPlaneHealthy,
+		"capability probes are authoritative; broken DNS flips verdict even if all pods Running")
 }
 
 func TestCheckControlPlaneHealth_MultipleNotReadyNodes(t *testing.T) {
 	// NotReady worker nodes alone should NOT flip the cluster verdict —
 	// they emit a Warning but cluster readiness is unaffected. Only
-	// control-plane pod failures cause Critical.
+	// capability-probe failures (DNS / service routing) cause Critical.
+	stubProbes(t, true, true)
 	client := fake.NewSimpleClientset(
 		makeNode("node-1", false, 0),
 		makeNode("node-2", false, 0),
@@ -107,26 +142,41 @@ func TestCheckControlPlaneHealth_MultipleNotReadyNodes(t *testing.T) {
 		"no recommendations expected when only nodes are NotReady (no pod failures)")
 }
 
-func TestCheckControlPlaneHealth_PodsUnhealthyButNodesReady(t *testing.T) {
-	// Missing data-plane pods (coredns, kube-proxy) should still flip the
-	// verdict to Critical, even when all nodes are Ready.
-	client := fake.NewSimpleClientset(
-		makeNode("node-1", true, 0),
-		// no data-plane pods → podsHealthy = false
-	)
-	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true}
+func TestCheckControlPlaneHealth_DNSProbeFailureFlipsVerdict(t *testing.T) {
+	// Replaces the prior "missing coredns/kube-proxy → unhealthy" test.
+	// Under the capability-based model, what matters is whether DNS
+	// actually resolves — independent of which provider implements it.
+	stubProbes(t, false, true)
+	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
+	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
 	checkControlPlaneHealth(context.Background(), client, state)
 	assert.False(t, state.ControlPlaneHealthy,
-		"missing coredns/kube-proxy should mark cluster unhealthy")
+		"DNS probe failure must flip verdict regardless of pod presence")
 	assert.NotEmpty(t, state.Recommendations)
+}
+
+func TestCheckControlPlaneHealth_ServiceRoutingProbeFailureFlipsVerdict(t *testing.T) {
+	// Same shape as the DNS case, but for the service-routing probe —
+	// catches "kube-proxy / Cilium / OVN-Kubernetes / etc. is broken"
+	// regardless of which implementation the cluster uses.
+	stubProbes(t, true, false)
+	client := fake.NewSimpleClientset(
+		makeNode("node-1", true, 0),
+		makePod("coredns-abc", "kube-system", corev1.PodRunning),
+		makePod("kube-proxy-xyz", "kube-system", corev1.PodRunning),
+	)
+	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
+	checkControlPlaneHealth(context.Background(), client, state)
+	assert.False(t, state.ControlPlaneHealthy,
+		"service-routing probe failure must flip verdict regardless of pod presence")
 }
 
 func TestCheckControlPlaneHealth_ManagedControlPlane(t *testing.T) {
 	// EKS-like cluster: control-plane pods (apiserver/etcd/scheduler/cm) are
 	// hidden because the cloud provider manages them, but coredns and
-	// kube-proxy run as visible workloads. /readyz isn't reachable from the
-	// fake client, so we fall back to ServerVersion which succeeds. Verdict
-	// must be healthy.
+	// kube-proxy run as visible workloads. Capability probes pass.
+	// Verdict must be healthy and the managed-cluster diagnostic must fire.
+	stubProbes(t, true, true)
 	client := fake.NewSimpleClientset(
 		makeNode("ip-10-0-1-15", true, 0),
 		makeNode("ip-10-0-1-22", true, 0),
@@ -140,25 +190,10 @@ func TestCheckControlPlaneHealth_ManagedControlPlane(t *testing.T) {
 	checkControlPlaneHealth(context.Background(), client, state)
 	assert.True(t, state.ControlPlaneHealthy,
 		"managed control plane (apiserver/etc. hidden) should still be healthy "+
-			"when coredns/kube-proxy are running")
+			"when capability probes pass")
 	assert.True(t, state.NodesAllReady)
 	assert.Empty(t, state.Recommendations,
 		"no recommendations expected on a healthy managed cluster")
-}
-
-func TestCheckControlPlaneHealth_DataPlanePodMissingOnManaged(t *testing.T) {
-	// Even on a managed cluster (no apiserver pod visible), missing coredns
-	// is still Critical because workloads depend on it.
-	client := fake.NewSimpleClientset(
-		makeNode("ip-10-0-1-15", true, 0),
-		makePod("kube-proxy-aaa", "kube-system", corev1.PodRunning),
-		// no coredns
-	)
-	state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
-	checkControlPlaneHealth(context.Background(), client, state)
-	assert.False(t, state.ControlPlaneHealthy,
-		"missing coredns should flip the verdict even on a managed cluster")
-	assert.NotEmpty(t, state.Recommendations)
 }
 
 // ---------------------------------------------------------------------------
@@ -468,9 +503,11 @@ func TestIsEmbeddedKubeProxyDistro(t *testing.T) {
 	}
 }
 
-func TestCheckControlPlaneHealth_K3sSkipsKubeProxy(t *testing.T) {
-	// k3s/k3d cluster: coredns present, no kube-proxy pod (embedded in k3s
-	// server binary). Verdict must still be healthy.
+func TestCheckControlPlaneHealth_K3sStyleHealthy(t *testing.T) {
+	// k3s cluster: coredns present, no kube-proxy pod (embedded in k3s
+	// server binary). Capability probes pass. Verdict must be healthy
+	// and the routing-implementation diagnostic must identify k3s.
+	stubProbes(t, true, true)
 	client := fake.NewSimpleClientset(
 		makeNode("k3d-server-0", true, 0),
 		makePod("coredns-abc", "kube-system", corev1.PodRunning),
@@ -483,26 +520,38 @@ func TestCheckControlPlaneHealth_K3sSkipsKubeProxy(t *testing.T) {
 	}
 	checkControlPlaneHealth(context.Background(), client, state)
 	assert.True(t, state.ControlPlaneHealthy,
-		"k3s clusters without a kube-proxy pod should still be healthy")
+		"k3s cluster with capability probes passing should be healthy")
 	assert.Empty(t, state.Recommendations)
 }
 
-func TestCheckControlPlaneHealth_K3sCorednsStillRequired(t *testing.T) {
-	// On k3s/k3d, coredns still runs as a workload and is required. Missing
-	// coredns is still Critical even when kube-proxy is skipped.
+func TestCheckControlPlaneHealth_GKEStyleHealthy(t *testing.T) {
+	// GKE Dataplane V2 cluster: kube-dns instead of coredns, no
+	// kube-proxy pod (replaced by Cilium eBPF). Under the capability
+	// model, this is just another healthy cluster — the pod-prefix
+	// variance doesn't enter the verdict.
+	stubProbes(t, true, true)
 	client := fake.NewSimpleClientset(
-		makeNode("k3d-server-0", true, 0),
-		// no coredns
+		makeNode("gke-node-1", true, 0),
+		makePod("kube-dns-aaa", "kube-system", corev1.PodRunning),
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "cilium-xxx",
+				Namespace: "kube-system",
+				Labels:    map[string]string{"k8s-app": "cilium"},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
 	)
 	state := &ValidationState{
 		Log:                 testLog(),
 		ControlPlaneHealthy: true,
 		NodesAllReady:       true,
-		K8sVersion:          "v1.30.2+k3s2",
+		K8sVersion:          "v1.34.6-gke.1307000",
 	}
 	checkControlPlaneHealth(context.Background(), client, state)
-	assert.False(t, state.ControlPlaneHealthy,
-		"missing coredns on k3s should still mark cluster unhealthy")
+	assert.True(t, state.ControlPlaneHealthy,
+		"GKE+Cilium cluster with kube-dns should be healthy under capability model")
+	assert.Empty(t, state.Recommendations)
 }
 
 // ---------------------------------------------------------------------------
@@ -605,6 +654,11 @@ func TestProbeReadyz_AgainstHTTPServer(t *testing.T) {
 // summary row reads "Worker Nodes: 0 NotReady" rather than the misleading
 // "Worker Nodes: All Ready" that the prior code would have produced.
 func TestCheckControlPlaneHealth_NodeListErrorClearsNodesAllReady(t *testing.T) {
+	// Even with capability probes passing, a failed Nodes().List() call
+	// must flip the verdict to unhealthy AND clear NodesAllReady — node
+	// readiness is genuinely unknown and the summary row must not read
+	// "All Ready" when we never checked.
+	stubProbes(t, true, true)
 	client := fake.NewSimpleClientset(
 		makePod("coredns-abc", "kube-system", corev1.PodRunning),
 		makePod("kube-proxy-xyz", "kube-system", corev1.PodRunning),
@@ -623,4 +677,171 @@ func TestCheckControlPlaneHealth_NodeListErrorClearsNodesAllReady(t *testing.T) 
 		"node listing failure must flip the cluster verdict")
 	assert.False(t, state.NodesAllReady,
 		"NodesAllReady must reflect that node status was not verified")
+}
+
+// ---------------------------------------------------------------------------
+// Capability-based data-plane check: diagnostic helpers
+// ---------------------------------------------------------------------------
+
+func TestDetectDNSProvider(t *testing.T) {
+	tests := []struct {
+		name string
+		pods []corev1.Pod
+		want string
+	}{
+		{
+			name: "CoreDNS running",
+			pods: []corev1.Pod{*makePod("coredns-abc", "kube-system", corev1.PodRunning)},
+			want: "CoreDNS",
+		},
+		{
+			name: "kube-dns running (GKE)",
+			pods: []corev1.Pod{*makePod("kube-dns-xxx", "kube-system", corev1.PodRunning)},
+			want: "kube-dns",
+		},
+		{
+			name: "neither — verdict deferred to capability probe",
+			pods: []corev1.Pod{*makePod("unrelated", "kube-system", corev1.PodRunning)},
+			want: "",
+		},
+		{
+			name: "CoreDNS pod present but Pending — not counted",
+			pods: []corev1.Pod{*makePod("coredns-abc", "kube-system", corev1.PodPending)},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, detectDNSProvider(tt.pods))
+		})
+	}
+}
+
+func TestDetectServiceRoutingImpl(t *testing.T) {
+	ciliumPod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cilium-aaa",
+			Namespace: "kube-system",
+			Labels:    map[string]string{"k8s-app": "cilium"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	tests := []struct {
+		name    string
+		version string
+		pods    []corev1.Pod
+		want    string
+	}{
+		{
+			name:    "k3s — embedded in server binary",
+			version: "v1.30.2+k3s2",
+			pods:    nil,
+			want:    "kube-proxy embedded in server binary (k3s/rke2)",
+		},
+		{
+			name:    "Cilium — eBPF replacement",
+			version: "v1.34.6-gke.1307000",
+			pods:    []corev1.Pod{ciliumPod},
+			want:    "Cilium eBPF (kube-proxy replacement)",
+		},
+		{
+			name:    "OVN-Kubernetes",
+			version: "v1.30.0",
+			pods:    []corev1.Pod{*makePod("ovnkube-node-aaa", "kube-system", corev1.PodRunning)},
+			want:    "OVN-Kubernetes",
+		},
+		{
+			name:    "vanilla kube-proxy",
+			version: "v1.30.0",
+			pods:    []corev1.Pod{*makePod("kube-proxy-aaa", "kube-system", corev1.PodRunning)},
+			want:    "kube-proxy DaemonSet",
+		},
+		{
+			name:    "none recognised",
+			version: "v1.30.0",
+			pods:    []corev1.Pod{*makePod("unrelated", "kube-system", corev1.PodRunning)},
+			want:    "",
+		},
+		{
+			name:    "k3s takes priority over Cilium (rare but defined)",
+			version: "v1.30.2+k3s2",
+			pods:    []corev1.Pod{ciliumPod},
+			want:    "kube-proxy embedded in server binary (k3s/rke2)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, detectServiceRoutingImpl(tt.version, tt.pods))
+		})
+	}
+}
+
+func TestHasCiliumPods(t *testing.T) {
+	mkCilium := func(phase corev1.PodPhase) corev1.Pod {
+		return corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "cilium-aaa",
+				Namespace: "kube-system",
+				Labels:    map[string]string{"k8s-app": "cilium"},
+			},
+			Status: corev1.PodStatus{Phase: phase},
+		}
+	}
+	tests := []struct {
+		name string
+		pods []corev1.Pod
+		want bool
+	}{
+		{"running cilium pod", []corev1.Pod{mkCilium(corev1.PodRunning)}, true},
+		{"pending cilium pod doesn't count", []corev1.Pod{mkCilium(corev1.PodPending)}, false},
+		{"no cilium pods", []corev1.Pod{*makePod("kube-proxy-aaa", "kube-system", corev1.PodRunning)}, false},
+		{"empty pod list", nil, false},
+		{
+			name: "name 'cilium' but wrong label",
+			pods: []corev1.Pod{{
+				ObjectMeta: metav1.ObjectMeta{Name: "cilium-fake", Labels: map[string]string{"app": "other"}},
+				Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+			}},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, hasCiliumPods(tt.pods))
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Capability-based data-plane check: verdict driven by probes
+// ---------------------------------------------------------------------------
+
+func TestCheckControlPlaneHealth_CapabilityProbesDriveVerdict(t *testing.T) {
+	// Table-drives the (dnsOK, routingOK) outcomes through the full
+	// checkControlPlaneHealth function. The verdict comes from the
+	// probes; pod presence does not change it.
+	tests := []struct {
+		name        string
+		dnsOK       bool
+		routingOK   bool
+		wantHealthy bool
+	}{
+		{"both probes pass", true, true, true},
+		{"DNS broken", false, true, false},
+		{"service routing broken", true, false, false},
+		{"both broken", false, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubProbes(t, tt.dnsOK, tt.routingOK)
+			client := fake.NewSimpleClientset(
+				makeNode("node-1", true, 0),
+				makePod("coredns-abc", "kube-system", corev1.PodRunning),
+				makePod("kube-proxy-xyz", "kube-system", corev1.PodRunning),
+			)
+			state := &ValidationState{Log: testLog(), ControlPlaneHealthy: true, NodesAllReady: true}
+			checkControlPlaneHealth(context.Background(), client, state)
+			assert.Equal(t, tt.wantHealthy, state.ControlPlaneHealthy)
+		})
+	}
 }

@@ -52,6 +52,20 @@ type SourceOption interface {
 	configureX509Source(*x509SourceConfig)
 	configureJWTSource(*jwtSourceConfig)
 	configureBundleSource(*bundleSourceConfig)
+	configureWITSource(*witSourceConfig)
+}
+
+// WITSourceOption is an option for the WITSource. A SourceOption is also a
+// WITSourceOption.
+//
+// Experimental: subject to change.
+type WITSourceOption interface {
+	configureWITSource(*witSourceConfig)
+}
+
+type witSourceConfig struct {
+	client        *Client
+	clientOptions []ClientOption
 }
 
 // WithClient provides a Client for the source to use. If unset, a new Client
@@ -144,6 +158,10 @@ func (o withClient) configureBundleSource(config *bundleSourceConfig) {
 	config.watcher.client = o.client
 }
 
+func (o withClient) configureWITSource(config *witSourceConfig) {
+	config.client = o.client
+}
+
 type withClientOptions struct {
 	options []ClientOption
 }
@@ -158,6 +176,10 @@ func (o withClientOptions) configureJWTSource(config *jwtSourceConfig) {
 
 func (o withClientOptions) configureBundleSource(config *bundleSourceConfig) {
 	config.watcher.clientOptions = o.options
+}
+
+func (o withClientOptions) configureWITSource(config *witSourceConfig) {
+	config.clientOptions = o.options
 }
 
 type withDefaultX509SVIDPicker struct {

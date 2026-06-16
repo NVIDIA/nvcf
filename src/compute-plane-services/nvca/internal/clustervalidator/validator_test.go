@@ -97,6 +97,7 @@ func TestCheckControlPlaneHealth(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("all healthy", func(t *testing.T) {
+		stubProbes(t, true, true)
 		client := fake.NewSimpleClientset(
 			makeNode("node-1", true, 0),
 			makePod("kube-apiserver-node-1", "kube-system", corev1.PodRunning),
@@ -113,7 +114,8 @@ func TestCheckControlPlaneHealth(t *testing.T) {
 
 	t.Run("not-ready node alone is non-blocking", func(t *testing.T) {
 		// NotReady worker nodes emit a Warning but do not flip the cluster
-		// verdict. Only control-plane pod failures cause Critical.
+		// verdict. With capability probes passing, the verdict stays healthy.
+		stubProbes(t, true, true)
 		client := fake.NewSimpleClientset(
 			makeNode("node-1", true, 0),
 			makeNode("node-2", false, 0),

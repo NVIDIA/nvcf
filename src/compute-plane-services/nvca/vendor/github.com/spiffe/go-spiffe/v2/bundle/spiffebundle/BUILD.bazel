@@ -15,6 +15,7 @@ go_library(
         "//vendor/github.com/go-jose/go-jose/v4:go-jose",
         "//vendor/github.com/spiffe/go-spiffe/v2/bundle/jwtbundle",
         "//vendor/github.com/spiffe/go-spiffe/v2/bundle/x509bundle",
+        "//vendor/github.com/spiffe/go-spiffe/v2/exp/bundle/witbundle",
         "//vendor/github.com/spiffe/go-spiffe/v2/internal/jwtutil",
         "//vendor/github.com/spiffe/go-spiffe/v2/internal/x509util",
         "//vendor/github.com/spiffe/go-spiffe/v2/spiffeid",

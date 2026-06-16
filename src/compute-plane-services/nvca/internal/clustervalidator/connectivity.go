@@ -18,15 +18,35 @@ limitations under the License.
 package clustervalidator
 
 import (
+	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
 const defaultConnectTimeout = 10 * time.Second
+
+const (
+	// inClusterCAPath is the standard mount path for the API server's CA bundle
+	// inside any pod with automountServiceAccountToken: true.
+	inClusterCAPath = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+	// inClusterAPIURL is the in-cluster ClusterIP DNS name of the Kubernetes
+	// API service. Probing this proves the service-routing layer (kube-proxy,
+	// Cilium eBPF, OVN-Kubernetes, etc.) is working, regardless of which
+	// implementation the cluster uses.
+	inClusterAPIURL = "https://kubernetes.default.svc/readyz"
+	// inClusterDNSName is the short name of the Kubernetes API service.
+	// LookupHost succeeding on this name proves DNS works. Using the
+	// short form (no `.cluster.local`) lets the kubelet-injected
+	// resolv.conf search path resolve it correctly on clusters with a
+	// non-default cluster domain (`--cluster-domain` override).
+	inClusterDNSName = "kubernetes.default.svc"
+)
 
 // Reachability protocol identifiers as written in the user's ConfigMap.
 const (
@@ -154,4 +174,87 @@ func testTCP(host string, port int, useTLS bool) bool {
 	}
 
 	return true
+}
+
+// probeInClusterDNS resolves the Kubernetes API service's FQDN via the
+// default OS resolver. Inside a Pod, /etc/resolv.conf is wired to the
+// cluster's DNS service (CoreDNS, kube-dns, OpenShift DNS, etc.), so
+// success proves DNS works regardless of which provider implements it.
+// Brief retry loop covers init-container race conditions where the pod's
+// network may not be fully wired in the first second.
+func probeInClusterDNS(ctx context.Context) bool {
+	// Backoff: 0.5s, 1s, 2s, 4s, 8s — total worst case ~22s before
+	// declaring DNS broken (5 × 3s probe timeout + 0.5+1+2+4s sleeps
+	// between attempts; the final 8s sleep is skipped). Fast enough
+	// for an init container.
+	backoffs := []time.Duration{
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+	}
+	for attempt, backoff := range backoffs {
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		ips, err := net.DefaultResolver.LookupHost(probeCtx, inClusterDNSName)
+		cancel()
+		if err == nil && len(ips) > 0 {
+			return true
+		}
+		// Don't sleep after the final attempt.
+		if attempt < len(backoffs)-1 {
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return false
+			}
+		}
+	}
+	return false
+}
+
+// probeKubernetesAPIServiceIP issues GET kubernetes.default.svc/readyz —
+// the API server reached via its in-cluster ClusterIP. Any HTTP response
+// (200, 401, 403, even 5xx) proves the service-routing layer routed the
+// ClusterIP to a backing pod and the TLS handshake completed. We don't
+// care about the response status; only that the cluster's
+// kube-proxy / eBPF / OVN-Kubernetes / etc. did its job.
+//
+// Uses the standard in-cluster CA bundle when present; falls back to
+// InsecureSkipVerify only when the CA is unreadable (e.g., running outside
+// a pod for dev/testing) — TLS verification of a remote API server is
+// not the goal of this probe, the routing capability is.
+func probeKubernetesAPIServiceIP(ctx context.Context) bool {
+	client := &http.Client{
+		Timeout: defaultConnectTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: inClusterTLSConfig(),
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, inClusterAPIURL, nil)
+	if err != nil {
+		return false
+	}
+	// err is discarded intentionally: any non-nil response (even 4xx/5xx)
+	// proves the ClusterIP routed to a TLS-speaking backend. A nil
+	// response means DNS / TCP / TLS-handshake failure — caller treats
+	// that as "routing did not work".
+	resp, _ := client.Do(req)
+	if resp != nil {
+		resp.Body.Close()
+		return true
+	}
+	return false
+}
+
+// inClusterTLSConfig returns a *tls.Config that trusts the cluster's CA
+// when the standard SA-mount is present, or skips verification otherwise.
+// Skipping verify is acceptable here because the probe is solely a
+// "routing reaches a TLS-speaking endpoint" capability check.
+func inClusterTLSConfig() *tls.Config {
+	pool := x509.NewCertPool()
+	if caBytes, err := os.ReadFile(inClusterCAPath); err == nil && pool.AppendCertsFromPEM(caBytes) {
+		return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	}
+	return &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} // #nosec G402 — routing-only probe
 }

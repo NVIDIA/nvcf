@@ -17,6 +17,7 @@ go_library(
         "encode_go.go",
         "encodeblock_amd64.go",
         "encodeblock_amd64.s",
+        "hashtable_pool.go",
         "index.go",
         "lz4convert.go",
         "lz4sconvert.go",

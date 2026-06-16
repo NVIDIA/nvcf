@@ -438,6 +438,7 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	// Initialize K8s API metrics to zero for known resource types
 	for _, resource := range []string{
 		"csidriver",
+		"deployment",
 		"namespace",
 		"node",
 		"pod",
@@ -474,6 +475,11 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 		MaxAge:     1 * time.Hour,
 		Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 	}, withStorageLabels(StorageRequestPhaseLabel))
+	// Pre-register all known storage phases so the series appear on the first Prometheus scrape
+	// even before any StorageRequest reaches a terminal state.
+	for _, phase := range []string{"Pending", "InitRunning", "Creating", "Ready", "Failed", "RuntimeError"} {
+		m.StorageRequestDuration.WithLabelValues(m.withStorageLabelValues(phase)...)
+	}
 
 	// MiniService controller metrics (use getMiniServiceLabels for backwards compatibility)
 	m.MiniServiceReconcilePhaseTotal = promFactory.NewCounterVec(prometheus.CounterOpts{

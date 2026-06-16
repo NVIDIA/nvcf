@@ -26,6 +26,8 @@ spec:
       protocol: TCP
     - port: 8018
       protocol: TCP
+    - port: 8888
+      protocol: TCP
     - port: 10103
       protocol: TCP
     - port: 18888

@@ -12,7 +12,6 @@ go_library(
         "//pkg/nvca/health",
         "//pkg/types",
         "//vendor/github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2:scheduling",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//vendor/k8s.io/apimachinery/pkg/api/meta",
         "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
     ],

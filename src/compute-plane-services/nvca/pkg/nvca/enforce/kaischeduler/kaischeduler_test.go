@@ -41,7 +41,6 @@ func TestNewRunAIQueueHealthCheck(t *testing.T) {
 		queues         []kaischedulingv2.Queue
 		expectedStatus nvcatypes.HealthStatus
 		expectedErrors []string
-		expectedQName  string
 	}{
 		{
 			name: "healthy default queue hierarchy",
@@ -51,7 +50,6 @@ func TestNewRunAIQueueHealthCheck(t *testing.T) {
 			},
 			expectedStatus: nvcatypes.HealthStatusHealthy,
 			expectedErrors: nil,
-			expectedQName:  "default-queue",
 		},
 		{
 			name: "healthy with extra queues",
@@ -63,7 +61,6 @@ func TestNewRunAIQueueHealthCheck(t *testing.T) {
 			},
 			expectedStatus: nvcatypes.HealthStatusHealthy,
 			expectedErrors: nil,
-			expectedQName:  "default-queue",
 		},
 		{
 			name: "unhealthy - missing default queues",
@@ -72,14 +69,12 @@ func TestNewRunAIQueueHealthCheck(t *testing.T) {
 			},
 			expectedStatus: nvcatypes.HealthStatusUnhealthy,
 			expectedErrors: []string{"Expected the two default queues"},
-			expectedQName:  "",
 		},
 		{
 			name:           "unhealthy - no queues at all",
 			queues:         []kaischedulingv2.Queue{},
 			expectedStatus: nvcatypes.HealthStatusUnhealthy,
 			expectedErrors: []string{"Expected the two default queues"},
-			expectedQName:  "",
 		},
 		{
 			name: "unhealthy - only default-parent-queue present",
@@ -88,7 +83,6 @@ func TestNewRunAIQueueHealthCheck(t *testing.T) {
 			},
 			expectedStatus: nvcatypes.HealthStatusUnhealthy,
 			expectedErrors: []string{"Expected the two default queues"},
-			expectedQName:  "",
 		},
 		{
 			name: "unhealthy - CPU resource violation",
@@ -108,7 +102,6 @@ func TestNewRunAIQueueHealthCheck(t *testing.T) {
 			},
 			expectedStatus: nvcatypes.HealthStatusUnhealthy,
 			expectedErrors: []string{"CPU resource violation for queue "},
-			expectedQName:  "",
 		},
 		{
 			name: "unhealthy - GPU resource violation",
@@ -128,7 +121,6 @@ func TestNewRunAIQueueHealthCheck(t *testing.T) {
 			},
 			expectedStatus: nvcatypes.HealthStatusUnhealthy,
 			expectedErrors: []string{"GPU resource violation for queue "},
-			expectedQName:  "",
 		},
 		{
 			name: "unhealthy - Memory resource violation",
@@ -148,33 +140,29 @@ func TestNewRunAIQueueHealthCheck(t *testing.T) {
 			},
 			expectedStatus: nvcatypes.HealthStatusUnhealthy,
 			expectedErrors: []string{"Memory resource violation for queue "},
-			expectedQName:  "",
 		},
 		{
 			name: "unhealthy - no leaf queue (both are root queues)",
 			queues: []kaischedulingv2.Queue{
 				validQueue("default-parent-queue", ""),
-				{
-					ObjectMeta: metav1.ObjectMeta{Name: "default-queue"},
-					Spec: kaischedulingv2.QueueSpec{
-						ParentQueue: "",
-						Resources: &kaischedulingv2.QueueResources{
-							CPU:    kaischedulingv2.QueueResource{Limit: -1, Quota: -1, OverQuotaWeight: 1},
-							GPU:    kaischedulingv2.QueueResource{Limit: -1, Quota: -1, OverQuotaWeight: 1},
-							Memory: kaischedulingv2.QueueResource{Limit: -1, Quota: -1, OverQuotaWeight: 1},
-						},
-					},
-				},
+				validQueue("default-queue", ""),
 			},
 			expectedStatus: nvcatypes.HealthStatusUnhealthy,
-			expectedErrors: []string{"Leaf queue not found in Run.ai queue list"},
-			expectedQName:  "",
+			expectedErrors: []string{"Queue hierarchy misconfigured"},
+		},
+		{
+			name: "unhealthy - both queues are child queues",
+			queues: []kaischedulingv2.Queue{
+				validQueue("default-parent-queue", "grandparent-queue"),
+				validQueue("default-queue", "default-parent-queue"),
+			},
+			expectedStatus: nvcatypes.HealthStatusUnhealthy,
+			expectedErrors: []string{"Queue hierarchy misconfigured"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			kaiSchedulerQName.Store("")
 			scheme := runtime.NewScheme()
 			err := kaischedulingv2.AddToScheme(scheme)
 			require.NoError(t, err)
@@ -218,14 +206,11 @@ func TestNewRunAIQueueHealthCheck(t *testing.T) {
 			} else {
 				assert.Equal(t, nvcatypes.StatusLevelError, component.StatusLevel)
 			}
-
-			assert.Equal(t, tt.expectedQName, GetQName(), "leaf queue name mismatch")
 		})
 	}
 }
 
 func TestNewRunAIQueueHealthCheck_ListError(t *testing.T) {
-	kaiSchedulerQName.Store("")
 	scheme := runtime.NewScheme()
 	err := kaischedulingv2.AddToScheme(scheme)
 	require.NoError(t, err)
@@ -243,33 +228,6 @@ func TestNewRunAIQueueHealthCheck_ListError(t *testing.T) {
 	assert.Equal(t, nvcatypes.HealthStatusUnhealthy, component.Status)
 	assert.Equal(t, nvcatypes.StatusLevelError, component.StatusLevel)
 	assert.NotEmpty(t, component.Errors)
-}
-
-func TestGetQName(t *testing.T) {
-	tests := []struct {
-		name          string
-		setQName      string
-		expectedQName string
-	}{
-		{
-			name:          "empty queue",
-			setQName:      "",
-			expectedQName: "",
-		},
-		{
-			name:          "queue name set",
-			setQName:      "test-queue",
-			expectedQName: "test-queue",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			kaiSchedulerQName.Store(tt.setQName)
-			result := GetQName()
-			assert.Equal(t, tt.expectedQName, result)
-		})
-	}
 }
 
 // fakeFailingClient wraps a fake client and makes List fail
@@ -312,7 +270,6 @@ func validQueue(name, parentQueue string) kaischedulingv2.Queue {
 }
 
 func TestNewRunAIQueueHealthCheck_CRDNotInstalled(t *testing.T) {
-	kaiSchedulerQName.Store("")
 	scheme := runtime.NewScheme()
 	err := kaischedulingv2.AddToScheme(scheme)
 	require.NoError(t, err)

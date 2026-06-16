@@ -91,11 +91,10 @@ func (r *Reconciler) buildMiniserviceMetadata(
 
 	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
 		meta.SchedulerName = kaischeduler.SchedulerName
-		kaiSchedulerQueueName := kaischeduler.GetQName()
 		if meta.PodLabels == nil {
 			meta.PodLabels = make(map[string]string)
 		}
-		meta.PodLabels[kaischeduler.SchedulerQueueLabel] = kaiSchedulerQueueName
+		meta.PodLabels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
 	}
 
 	return meta, nil

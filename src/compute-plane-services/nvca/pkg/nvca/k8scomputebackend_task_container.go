@@ -216,7 +216,7 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 
 		if c.bk8s.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
 			workloadPod.Spec.SchedulerName = kaischeduler.SchedulerName
-			workloadPod.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.GetQName()
+			workloadPod.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
 		}
 
 		// Task pods must only be created once.
@@ -259,9 +259,12 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 			}
 		}
 
-		// Container task utils and init resources are toggled by feature flag.
-		if c.bk8s.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.EnforceContainerTaskResourceLimits) {
-			k8sutil.SetNVCFInfraContainerResources(corev1.ResourceList(c.bk8s.cfg.Agent.UtilsResources), workloadPod)
+		// Container task utils and init resource limits are toggled by feature flag.
+		setResourceLimits := c.bk8s.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.EnforceContainerTaskResourceLimits)
+		k8sutil.SetNVCFInfraContainerResources(corev1.ResourceList(c.bk8s.cfg.Agent.UtilsResources), workloadPod, setResourceLimits)
+		// Only validate the whole pod if limits are required, since other containers may not have them
+		// when the feature flag is disabled.
+		if setResourceLimits {
 			if err := k8sutil.ValidateAllContainerResourcesSet(workloadPod); err != nil {
 				log.WithError(err).Error("Container task pod resources are invalid")
 				return nvcaerrors.TerminalError(err)

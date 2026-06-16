@@ -175,7 +175,7 @@ func TestBuildMiniserviceMetadata_KAISchedulerEnabled(t *testing.T) {
 
 	assert.Equal(t, kaischeduler.SchedulerName, meta.SchedulerName)
 	if assert.Contains(t, meta.PodLabels, kaischeduler.SchedulerQueueLabel) {
-		assert.Equal(t, kaischeduler.GetQName(), meta.PodLabels[kaischeduler.SchedulerQueueLabel])
+		assert.Equal(t, kaischeduler.DefaultQueue, meta.PodLabels[kaischeduler.SchedulerQueueLabel])
 	}
 }
 

@@ -20,10 +20,8 @@ package kaischeduler
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 
 	kaischedulingv2 "github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -38,14 +36,13 @@ const (
 	SchedulerName = "kai-scheduler"
 
 	SchedulerQueueLabel = "kai.scheduler/queue"
-)
 
-var kaiSchedulerQName atomic.Value
+	DefaultQueue = "default-queue"
+)
 
 // NewRunAIQueueHealthCheck creates a health check that validates Run.ai queue configuration.
 func NewRunAIQueueHealthCheck(k8sClient client.Client) health.ComponentStatusGetter {
 	return health.GetComponentStatusFunc(func(ctx context.Context) (hs nvcatypes.AgentHealth, err error) {
-		log := core.GetLogger(ctx)
 		ch := nvcatypes.ComponentHealth{
 			Status:      nvcatypes.HealthStatusHealthy,
 			StatusLevel: nvcatypes.StatusLevelWarn,
@@ -71,16 +68,19 @@ func NewRunAIQueueHealthCheck(k8sClient client.Client) health.ComponentStatusGet
 
 		const (
 			defaultParentQueue = "default-parent-queue"
-			defaultQueue       = "default-queue"
-			notFoundMessage    = "Expected the two default queues " + defaultParentQueue + " and " + defaultQueue +
+			notFoundMessage    = "Expected the two default queues " + defaultParentQueue + " and " + DefaultQueue +
 				", but either one or both were not found. " +
 				"See https://raw.githubusercontent.com/NVIDIA/KAI-Scheduler/refs/heads/main/docs/quickstart/default-queues.yaml " +
 				"for setting up right hierarchy"
+			incorrectQMessage = "Queue hierarchy misconfigured: '" + defaultParentQueue + "' must be a parent queue " +
+				"and '" + DefaultQueue + "' must be a child of '" + defaultParentQueue + "'. " +
+				"See https://raw.githubusercontent.com/NVIDIA/KAI-Scheduler/refs/heads/main/docs/quickstart/default-queues.yaml " +
+				"for setting up the correct hierarchy"
 		)
 		var expectedQueues []kaischedulingv2.Queue
 		for _, queue := range queueList.Items {
 			switch queue.Name {
-			case defaultParentQueue, defaultQueue:
+			case defaultParentQueue, DefaultQueue:
 				expectedQueues = append(expectedQueues, queue)
 			}
 		}
@@ -93,7 +93,16 @@ func NewRunAIQueueHealthCheck(k8sClient client.Client) health.ComponentStatusGet
 			return hs, nil
 		}
 
+		var singleChildQExists bool
 		for _, queue := range expectedQueues {
+			if queue.Spec.ParentQueue != "" {
+				if queue.Name != DefaultQueue {
+					singleChildQExists = false
+					break
+				}
+				singleChildQExists = true
+			}
+
 			if queue.Spec.Resources.CPU.Limit != -1 ||
 				queue.Spec.Resources.CPU.Quota != -1 || queue.Spec.Resources.CPU.OverQuotaWeight != 1 {
 				ch.Status = nvcatypes.HealthStatusUnhealthy
@@ -126,29 +135,17 @@ func NewRunAIQueueHealthCheck(k8sClient client.Client) health.ComponentStatusGet
 				hs.Components[ComponentName] = ch
 				return hs, nil
 			}
-
-			if queue.Spec.ParentQueue != "" {
-				oldName, _ := kaiSchedulerQName.Load().(string)
-				if oldName != queue.Name {
-					kaiSchedulerQName.Store(queue.Name)
-					log.Infof("Leaf queue name updated: %q -> %q", oldName, queue.Name)
-				}
-			}
 		}
 
-		qName, ok := kaiSchedulerQName.Load().(string)
-		if !ok || qName == "" {
+		if !singleChildQExists {
 			ch.Status = nvcatypes.HealthStatusUnhealthy
-			ch.Errors = append(ch.Errors, "Leaf queue not found in Run.ai queue list")
+			ch.Errors = append(ch.Errors, incorrectQMessage)
 			ch.StatusLevel = nvcatypes.StatusLevelError
+			hs.Components[ComponentName] = ch
+			return hs, nil
 		}
 
 		hs.Components[ComponentName] = ch
 		return hs, nil
 	})
-}
-
-func GetQName() string {
-	qName, _ := kaiSchedulerQName.Load().(string)
-	return qName
 }

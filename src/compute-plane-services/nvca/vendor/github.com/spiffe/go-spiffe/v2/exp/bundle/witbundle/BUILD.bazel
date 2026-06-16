@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "witbundle",
+    srcs = [
+        "bundle.go",
+        "set.go",
+        "source.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/exp/bundle/witbundle",
+    importpath = "github.com/spiffe/go-spiffe/v2/exp/bundle/witbundle",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//vendor/github.com/spiffe/go-spiffe/v2/internal/jwtutil",
+        "//vendor/github.com/spiffe/go-spiffe/v2/spiffeid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":witbundle",
+    visibility = ["//visibility:public"],
+)

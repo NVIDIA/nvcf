@@ -596,7 +596,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	// All Pods created by NVCA must use the same scheduler.
 	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
 		utilsPod.Spec.SchedulerName = kaischeduler.SchedulerName
-		utilsPod.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.GetQName()
+		utilsPod.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
 	}
 
 	// Set required worker env vars.
@@ -682,14 +682,13 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		setUtilsHelmTaskPollProgressEnv(log, utilsPod, taskLaunchSpec.MaxRuntimeDuration)
 	}
 
-	// Utils and init container resources are toggled by feature flag.
-	if (taskLaunchSpec != nil && r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.EnforceHelmTaskResourceLimits)) ||
-		(funcLaunchSpec != nil && r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.EnforceHelmFunctionResourceLimits)) {
-		k8sutil.SetNVCFInfraContainerResources(corev1.ResourceList(r.cfg.Agent.UtilsResources), utilsPod)
-		if err := k8sutil.ValidateAllContainerResourcesSet(utilsPod); err != nil {
-			log.Error(err, "Helm utils pod resources are invalid")
-			return reconcile.Result{}, reconcile.TerminalError(err)
-		}
+	// Utils and init container resource limits are toggled by feature flag.
+	setResourceLimits := (taskLaunchSpec != nil && r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.EnforceHelmTaskResourceLimits)) ||
+		(funcLaunchSpec != nil && r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.EnforceHelmFunctionResourceLimits))
+	k8sutil.SetNVCFInfraContainerResources(corev1.ResourceList(r.cfg.Agent.UtilsResources), utilsPod, setResourceLimits)
+	if err := k8sutil.ValidateAllContainerResourcesSet(utilsPod); err != nil {
+		log.Error(err, "Helm utils pod resources are invalid")
+		return reconcile.Result{}, reconcile.TerminalError(err)
 	}
 
 	infraObjs = append(infraObjs, utilsPod)

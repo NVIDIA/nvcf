@@ -67,7 +67,11 @@ type JWKSUpdaterOptions struct {
 // volume, so a missing CA cert reflects a real misconfiguration that must
 // fail closed rather than silently degrade.
 func NewJWKSUpdater(opts JWKSUpdaterOptions) (*JWKSUpdater, error) {
-	k8sClient, err := newK8sHTTPClient()
+	return newJWKSUpdater(opts, k8sCACertPath)
+}
+
+func newJWKSUpdater(opts JWKSUpdaterOptions, caCertPath string) (*JWKSUpdater, error) {
+	k8sClient, err := newK8sHTTPClientFromCAFile(caCertPath)
 	if err != nil {
 		return nil, fmt.Errorf("build K8s HTTP client for JWKS updater: %w", err)
 	}
@@ -138,14 +142,18 @@ const k8sSATokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 // hatch: every supported deployment target (including local k3d/kind)
 // projects this file via the standard service-account volume.
 func newK8sHTTPClient() (*http.Client, error) {
-	caCert, err := os.ReadFile(k8sCACertPath)
+	return newK8sHTTPClientFromCAFile(k8sCACertPath)
+}
+
+func newK8sHTTPClientFromCAFile(caCertPath string) (*http.Client, error) {
+	caCert, err := os.ReadFile(caCertPath)
 	if err != nil {
-		return nil, fmt.Errorf("read K8s CA cert at %s: %w", k8sCACertPath, err)
+		return nil, fmt.Errorf("read K8s CA cert at %s: %w", caCertPath, err)
 	}
 
 	caCertPool := x509.NewCertPool()
 	if !caCertPool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("parse K8s CA cert at %s: no PEM certificates found", k8sCACertPath)
+		return nil, fmt.Errorf("parse K8s CA cert at %s: no PEM certificates found", caCertPath)
 	}
 
 	return &http.Client{

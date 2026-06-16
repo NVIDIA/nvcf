@@ -547,8 +547,12 @@ func (c K8sComputeBackend) applyFunctionCreationMessage(ctx context.Context, req
 			log.Debug("InitCacheJob / BDCreate spec was not specified, skipping model caching")
 		}
 
-		if c.bk8s.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.EnforceContainerFunctionResourceLimits) {
-			k8sutil.SetNVCFInfraContainerResources(corev1.ResourceList(c.bk8s.cfg.Agent.UtilsResources), pod)
+		// Container function utils and init resource limits are toggled by feature flag.
+		setResourceLimits := c.bk8s.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.EnforceContainerFunctionResourceLimits)
+		k8sutil.SetNVCFInfraContainerResources(corev1.ResourceList(c.bk8s.cfg.Agent.UtilsResources), pod, setResourceLimits)
+		// Only validate the whole pod if limits are required, since other containers may not have them
+		// when the feature flag is disabled.
+		if setResourceLimits {
 			if err := k8sutil.ValidateAllContainerResourcesSet(pod); err != nil {
 				log.WithError(err).Error("Container function pod resources are invalid")
 				return nvcaerrors.TerminalError(err)
@@ -557,7 +561,7 @@ func (c K8sComputeBackend) applyFunctionCreationMessage(ctx context.Context, req
 
 		if c.bk8s.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
 			pod.Spec.SchedulerName = kaischeduler.SchedulerName
-			pod.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.GetQName()
+			pod.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
 		}
 
 		if requeue, err := c.initializeImageCredentialHelper(ctx, req, mf); err != nil || requeue {

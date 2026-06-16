@@ -1426,7 +1426,7 @@ func TestMetricsInitializedToZero(t *testing.T) {
 
 	t.Run("K8sAPISuccessTotal initialized to zero", func(t *testing.T) {
 		expectedResources := []string{
-			"csidriver", "namespace", "node", "pod", "runtimeclass",
+			"csidriver", "deployment", "namespace", "node", "pod", "runtimeclass",
 			"secret", "serviceaccount", "icmsrequest", "storageclass", "storagerequests",
 		}
 		for _, resource := range expectedResources {
@@ -1438,7 +1438,7 @@ func TestMetricsInitializedToZero(t *testing.T) {
 
 	t.Run("K8sAPIFailureTotal initialized to zero", func(t *testing.T) {
 		expectedResources := []string{
-			"csidriver", "namespace", "node", "pod", "runtimeclass",
+			"csidriver", "deployment", "namespace", "node", "pod", "runtimeclass",
 			"secret", "serviceaccount", "icmsrequest", "storageclass", "storagerequests",
 		}
 		for _, resource := range expectedResources {
@@ -1711,6 +1711,30 @@ func TestMetricsInitializedToZero(t *testing.T) {
 			}
 			assert.True(t, found, "UpstreamRequestTotal should be initialized for operation=%s,status=success", op)
 			assert.Equal(t, float64(0), value, "UpstreamRequestTotal should be zero for operation=%s,status=success", op)
+		}
+	})
+
+	t.Run("StorageRequestDuration pre-registered for all phases", func(t *testing.T) {
+		// Verify all 6 storage phases appear on the first scrape so Prometheus panels
+		// can compute Ready vs all-terminal ratios without gaps.
+		findSummaryCount := func(phase string) (uint64, bool) {
+			for _, mf := range metricFamilies {
+				if *mf.Name == StorageRequestDurationMetricName {
+					for _, metric := range mf.Metric {
+						for _, label := range metric.Label {
+							if *label.Name == StorageRequestPhaseLabel && *label.Value == phase {
+								return metric.Summary.GetSampleCount(), true
+							}
+						}
+					}
+				}
+			}
+			return 0, false
+		}
+		for _, phase := range []string{"Pending", "InitRunning", "Creating", "Ready", "Failed", "RuntimeError"} {
+			count, found := findSummaryCount(phase)
+			assert.True(t, found, "StorageRequestDuration should be pre-registered for phase %s", phase)
+			assert.Equal(t, uint64(0), count, "StorageRequestDuration count should be zero for phase %s", phase)
 		}
 	})
 }

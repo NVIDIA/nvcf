@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -37,13 +38,14 @@ func TestNewJWKSUpdater(t *testing.T) {
 	// than silently downgrading to insecure TLS. Every supported deployment
 	// target (k3d, kind, EKS, GKE, AKS) projects this file via the standard
 	// service-account volume, so this is the right behavior in production too.
-	_, err := NewJWKSUpdater(JWKSUpdaterOptions{
+	missingCACertPath := filepath.Join(t.TempDir(), "ca.crt")
+	_, err := newJWKSUpdater(JWKSUpdaterOptions{
 		ICMSURL:   "https://icms.nvidia.com",
 		ClusterID: "cluster-123",
 		TokenPath: "/var/run/secrets/tokens/token",
-	})
+	}, missingCACertPath)
 	require.Error(t, err, "missing K8s CA cert must fail closed")
-	assert.Contains(t, err.Error(), k8sCACertPath)
+	assert.Contains(t, err.Error(), missingCACertPath)
 }
 
 func TestJWKSHashComparison_SameJWKS(t *testing.T) {
@@ -128,10 +130,11 @@ func TestNewK8sHTTPClient_RequiresCACert(t *testing.T) {
 	// insecure-skip-verify escape hatch: every supported deployment target
 	// (k3d, kind, EKS, GKE, AKS, kubeadm) projects this file via the standard
 	// service-account volume.
-	client, err := newK8sHTTPClient()
+	missingCACertPath := filepath.Join(t.TempDir(), "ca.crt")
+	client, err := newK8sHTTPClientFromCAFile(missingCACertPath)
 	require.Error(t, err, "missing K8s CA cert must fail closed")
 	assert.Nil(t, client)
-	assert.Contains(t, err.Error(), k8sCACertPath)
+	assert.Contains(t, err.Error(), missingCACertPath)
 }
 
 func TestNewK8sHTTPClient_SecureClientConstruction(t *testing.T) {

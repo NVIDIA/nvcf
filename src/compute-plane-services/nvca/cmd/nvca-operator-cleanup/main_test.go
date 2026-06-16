@@ -28,6 +28,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	cli "github.com/urfave/cli/v2"
+	rbacv1 "k8s.io/api/rbac/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
@@ -133,6 +136,46 @@ func TestRunCleanupWithDeps_ReturnsCleanupError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cleanup failed")
 	assert.Contains(t, err.Error(), "sentinel finalizer is still present")
+}
+
+func TestRunCleanupWithDeps_PreservesHookClusterRoleBindingAfterCleanupError(t *testing.T) {
+	ctx := cleanupCLIContext(t, "--hook-cluster-role-binding-name", "hook-cleanup")
+	k8sClient := fake.NewSimpleClientset(&rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "hook-cleanup"},
+	})
+	deps := fakeCleanupDeps(t)
+	deps.newK8sClient = func(*rest.Config) (kubernetes.Interface, error) {
+		return k8sClient, nil
+	}
+	deps.runShutdownCleanup = func(context.Context, cleanup.ShutdownHandlerOptions) cleanup.ShutdownResponse {
+		return cleanup.ShutdownResponse{
+			Cleanup: true,
+			Message: "cleanup failed",
+			Error:   "sentinel finalizer is still present",
+		}
+	}
+
+	require.Error(t, runCleanupWithDeps(ctx, deps))
+
+	_, err := k8sClient.RbacV1().ClusterRoleBindings().Get(context.Background(), "hook-cleanup", metav1.GetOptions{})
+	require.NoError(t, err)
+}
+
+func TestRunCleanupWithDeps_RemovesHookClusterRoleBindingAfterSuccessfulCleanup(t *testing.T) {
+	ctx := cleanupCLIContext(t, "--hook-cluster-role-binding-name", "hook-cleanup")
+	k8sClient := fake.NewSimpleClientset(&rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "hook-cleanup"},
+	})
+	deps := fakeCleanupDeps(t)
+	deps.newK8sClient = func(*rest.Config) (kubernetes.Interface, error) {
+		return k8sClient, nil
+	}
+
+	require.NoError(t, runCleanupWithDeps(ctx, deps))
+
+	_, err := k8sClient.RbacV1().ClusterRoleBindings().Get(context.Background(), "hook-cleanup", metav1.GetOptions{})
+	require.Error(t, err)
+	assert.True(t, k8serrors.IsNotFound(err), "hook ClusterRoleBinding should be removed last")
 }
 
 func TestRunCleanupWithDeps_ReturnsSetupErrors(t *testing.T) {

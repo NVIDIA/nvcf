@@ -86,7 +86,7 @@ func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 		if labels == nil {
 			labels = make(map[string]string)
 		}
-		labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.GetQName()
+		labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
 		smbPod.SetLabels(labels)
 	}
 

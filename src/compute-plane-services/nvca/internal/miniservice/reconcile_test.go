@@ -631,9 +631,17 @@ rules:
 	}
 	for _, c := range utilsPod.Spec.InitContainers {
 		assert.Subset(t, c.Env, expEnvs)
+		if c.Name == common.InitContainerName {
+			assert.Len(t, c.Resources.Limits, 2)
+			assert.Len(t, c.Resources.Requests, 2)
+		}
 	}
 	for _, c := range utilsPod.Spec.Containers {
 		assert.Subset(t, c.Env, expEnvs)
+		if c.Name == common.UtilsContainerName {
+			assert.Len(t, c.Resources.Limits, 2)
+			assert.Len(t, c.Resources.Requests, 2)
+		}
 	}
 	assert.Contains(t, utilsPod.Spec.Tolerations, configuredToleration)
 	assert.Equal(t, mergeMaps(translatedLabels, map[string]string{

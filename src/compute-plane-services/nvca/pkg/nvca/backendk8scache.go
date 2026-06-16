@@ -2861,7 +2861,7 @@ func (c *BackendK8sCache) ensureImageCredentialUpdaterCronJob(ctx context.Contex
 		if labels == nil {
 			labels = make(map[string]string)
 		}
-		labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.GetQName()
+		labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
 		cj.Spec.JobTemplate.Spec.Template.SetLabels(labels)
 	}
 

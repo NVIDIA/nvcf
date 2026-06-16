@@ -4,6 +4,8 @@ _output/
 .vscode/
 .scannerwork/
 .worktrees/
+.understand-anything/
+docs/dev/
 
 # Test items
 nvca-operator-dev-local.tgz
