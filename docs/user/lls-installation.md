@@ -3,7 +3,11 @@
 This guide provides instructions for installing Low Latency Streaming (LLS) components for self-hosted NVCF deployments. LLS enables real-time streaming capabilities for simulation workloads.
 
 <Note>
-This guide covers **manual installation** of LLS resources, image mirroring, and NLB resources.
+LLS supports self-hosted Kubernetes deployments on AWS and Azure. AWS-specific
+commands and resources in this guide are illustrative examples.
+
+This guide covers manual installation of LLS resources, image mirroring, and
+load balancer resources.
 
 </Note>
 
@@ -13,7 +17,7 @@ Low Latency Streaming (LLS) provides real-time streaming capabilities for self-h
 
 - **Streaming Proxy (RP Container)** - Handle WebRTC UDP streaming connections
 
-Self-hosted mode uses your ECR registry for container images and customer-managed infrastructure.
+Self-hosted mode uses your container registry for container images and customer-managed infrastructure.
 
 ## Architecture
 
@@ -67,21 +71,21 @@ Key components and data flows:
 
 Before installing LLS, ensure:
 
-- **Self-hosted NVCF control plane** installed and running on an AWS EKS cluster (see [helmfile-installation](./helmfile-installation.md))
+- Self-hosted NVCF control plane installed and running on a Kubernetes cluster (see [helmfile-installation](./helmfile-installation.md))
 - **kubectl** configured with access to your cluster
 - **Helm v3.x** installed
 - **NGC API Key** with access to the `nvcf-onprem` organization
-- **AWS CLI** configured with credentials that have permissions for EC2, ELB, and IAM operations
+- For AWS examples, AWS CLI configured with credentials that have permissions for EKS, ECR, EC2, ELBv2, and IAM operations
 
 **Configure AWS Credentials**
 
-LLS installation requires AWS CLI access to create NLB resources, security groups, and manage EC2 instances. Verify your AWS credentials are configured:
+For AWS examples, LLS installation requires AWS CLI access to create NLB resources, security groups, and manage EC2 instances. Verify your AWS credentials are configured:
 
 ```bash
 aws sts get-caller-identity
 ```
 
-If this command fails, configure your AWS credentials before proceeding using your organization's standard AWS authentication flow.
+If this command fails, configure your AWS credentials before running the AWS examples using your organization's standard AWS authentication flow.
 
 **Set NGC API Key**
 
