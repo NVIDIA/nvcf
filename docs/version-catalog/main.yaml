@@ -149,11 +149,11 @@ artifacts:
   - name: nvca-operator
     type: image
     registry: staging
-    version: 3.0.0-rc.27
+    version: 3.0.0
   - name: nvca
     type: image
     registry: staging
-    version: 3.0.0-rc.27
+    version: 3.0.0
   - name: nvcf-api-keys-service
     type: image
     registry: staging

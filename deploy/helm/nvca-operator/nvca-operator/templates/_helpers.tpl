@@ -167,6 +167,45 @@ Usage: {{- if (include "nvcaop.clusterValidatorEnabled" .) -}}
 {{- end -}}
 
 {{/*
+Cluster validator config with chart defaults merged in.
+Returns YAML; callers `| fromYaml` it and dereference safely.
+
+Defends against `helm upgrade --reuse-values` from a release created before
+clusterValidator existed: in that case the stored values have no
+clusterValidator.image / .resources / .schedule sections, and Helm does not
+fall back to the new chart's values.yaml defaults for absent keys. Without
+this helper, deployment.yaml / cronjob.yaml hit a nil pointer when
+dereferencing .Values.clusterValidator.image.repository.
+
+`merge` keeps existing user values when present and only fills in defaults
+for absent keys, so explicit overrides are preserved.
+
+Usage: {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml -}}
+*/}}
+{{- define "nvcaop.clusterValidatorConfig" -}}
+{{- /* Defaults must mirror values.yaml so a --reuse-values upgrade gets
+       exactly the same effective config as a fresh install. */ -}}
+{{- $defaults := dict
+    "image" (dict "repository" "" "tag" "" "pullPolicy" "IfNotPresent")
+    "schedule" "0 */3 * * *"
+    "configMapName" "cluster-validator-network-checks"
+    "networkChecks" (dict)
+    "resources" (dict
+      "requests" (dict "cpu" "100m" "memory" "64Mi")
+      "limits"   (dict "cpu" "200m" "memory" "128Mi"))
+-}}
+{{- /* `merge (dict) user defaults` writes into a fresh empty dict so
+       .Values.clusterValidator is never mutated in-place. Sprig's
+       `merge dst src...` modifies dst; if dst were $cv directly, the
+       default keys would be written back into .Values.clusterValidator
+       and any other template that reads .Values directly after the
+       first render would see merged-in defaults instead of original
+       user values. */ -}}
+{{- $user := .Values.clusterValidator | default dict -}}
+{{- merge (dict) $user $defaults | toYaml -}}
+{{- end -}}
+
+{{/*
 Get the cluster-validator repository based on image.repository
 If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
 Usage: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" .Values.clusterValidator.image.repository "defaultRepository" .Values.image.repository) }}

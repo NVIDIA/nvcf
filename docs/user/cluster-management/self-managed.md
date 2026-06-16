@@ -145,7 +145,7 @@ ngcConfig:
 
 # Self-managed backend configuration
 selfManaged:
-  nvcaVersion: "3.0.0-rc.27"  # NVCA agent version to deploy
+  nvcaVersion: "3.0.0"  # NVCA agent version to deploy
   featureGateValues: ["DynamicGPUDiscovery", "SelfHosted", "KAIScheduler"]
   imageCredHelper:
     imageRepository: "nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-image-credential-helper"

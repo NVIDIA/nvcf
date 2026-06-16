@@ -14,7 +14,7 @@
 # limitations under the License.
 
 apiVersion: v2
-appVersion: "3.0.0-rc.27"
+appVersion: "3.0.0"
 description: A Helm chart for the NVCF ClusterAgent Operator
 name: helm-nvca-operator
 version: 0.0.0

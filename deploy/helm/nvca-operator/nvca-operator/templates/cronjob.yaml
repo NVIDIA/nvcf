@@ -14,6 +14,7 @@
 # limitations under the License.
 
 {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+{{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -24,7 +25,7 @@ metadata:
     {{- include "nvcaop.labels" . | nindent 4 }}
     app.kubernetes.io/component: validation
 spec:
-  schedule: {{ .Values.clusterValidator.schedule | quote }}
+  schedule: {{ $cv.schedule | quote }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -63,22 +64,22 @@ spec:
           {{- end }}
           containers:
             - name: cluster-validator
-              image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" .Values.clusterValidator.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.Version .Values.clusterValidator.image.tag }}
-              imagePullPolicy: {{ .Values.clusterValidator.image.pullPolicy }}
+              image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.Version $cv.image.tag }}
+              imagePullPolicy: {{ $cv.image.pullPolicy }}
               env:
                 - name: VALIDATOR_CONFIG_NAMESPACE
                   valueFrom:
                     fieldRef:
                       fieldPath: metadata.namespace
                 - name: VALIDATOR_CONFIG_NAME
-                  value: {{ .Values.clusterValidator.configMapName | default "cluster-validator-network-checks" | quote }}
+                  value: {{ $cv.configMapName | quote }}
               resources:
                 requests:
-                  cpu: {{ .Values.clusterValidator.resources.requests.cpu | quote }}
-                  memory: {{ .Values.clusterValidator.resources.requests.memory | quote }}
+                  cpu: {{ $cv.resources.requests.cpu | quote }}
+                  memory: {{ $cv.resources.requests.memory | quote }}
                 limits:
-                  cpu: {{ .Values.clusterValidator.resources.limits.cpu | quote }}
-                  memory: {{ .Values.clusterValidator.resources.limits.memory | quote }}
+                  cpu: {{ $cv.resources.limits.cpu | quote }}
+                  memory: {{ $cv.resources.limits.memory | quote }}
               securityContext:
                 runAsNonRoot: true
                 readOnlyRootFilesystem: true
