@@ -10,7 +10,7 @@ description: >-
   quotas, default-parent-queue, NVCA shared-storage PVCs stuck Pending, or
   asks how to prepare a cluster before installing the NVCA operator.
 license: Apache-2.0
-compatibility: Requires helm >= 3.12, kubectl matching cluster version.
+compatibility: Requires helm >= 3.12, < 4 (Helm 4 not supported), kubectl matching cluster version.
 author: "nvcf-core-eng <nvcf-core-eng@exchange.nvidia.com>"
 version: "1.0.0"
 tags: [nvcf, self-managed, self-hosted, kai-scheduler, smb-csi, csi-driver-smb, prereq, nvca-prereq, shared-storage]
@@ -39,10 +39,23 @@ Both installs are cloud-neutral helm commands pinned to the NVCF-validated versi
 ## Prerequisites
 
 - A running Kubernetes cluster (any cloud — AKS, EKS, GKE, k3d, MicroK8s) with `kubectl` configured and admin access.
-- `helm` 3.12+.
+- `helm` **>= 3.12 and < 4**. **Helm 4 is NOT supported** (matches `nvcf-self-managed-stack/README.md`). On Helm 4 the KAI install below hangs silently for many minutes — Helm 4 runs the chart's pre-install `crd-manager` hook through a `before-hook-creation` delete and then waits `--timeout` *per already-absent hook resource*, so the release sits in `pending-install` with no pods and never errors cleanly. Use Helm 3.x.
 - Cluster has CPU headroom on a general-purpose node pool for KAI's 7 pods.
 
 ## Install
+
+### 0 — Preflight: verify Helm 3.x (fail fast on Helm 4)
+
+Helm 4 is not supported and causes a silent multi-minute hang on the KAI install below. Check the major version before installing anything:
+
+```bash
+helm_major="$(helm version --template '{{.Version}}' | sed -E 's/^v?([0-9]+).*/\1/')"
+if [ "$helm_major" != "3" ]; then
+  echo "ERROR: Helm $helm_major detected; this prerequisite requires Helm 3.x (>= 3.12, < 4)." >&2
+  echo "Helm 4 hangs on the KAI Scheduler chart's crd-manager hook. Install a 3.x release and retry." >&2
+  exit 1
+fi
+```
 
 ### 1 — KAI Scheduler
 
