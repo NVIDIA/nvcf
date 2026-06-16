@@ -1,0 +1,113 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nvcf-ratelimiter.fullname" . }}
+  namespace: {{ include "nvcf-ratelimiter.namespace" . }}
+  labels:
+    {{- include "nvcf-ratelimiter.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.rateLimiter.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "nvcf-ratelimiter.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "nvcf-ratelimiter.vaultAnnotations" . | nindent 8 }}
+        {{- with .Values.rateLimiter.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        checksum/config-env: {{ printf "%s|%s|%s" (toYaml .Values.rateLimiter.env) (include "nvcf-ratelimiter.oauth2Issuer" .) (include "nvcf-ratelimiter.audience" .) | sha256sum }}
+      labels:
+        {{- include "nvcf-ratelimiter.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.rateLimiter.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "nvcf-ratelimiter.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.rateLimiter.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: vault-config-templates
+          configMap:
+            name: {{ include "nvcf-ratelimiter.fullname" . }}-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+        {{- with .Values.rateLimiter.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      containers:
+        - name: {{ include "nvcf-ratelimiter.fullname" . }}
+          securityContext:
+            {{- toYaml .Values.rateLimiter.securityContext | nindent 12 }}
+          image: {{ include "nvcf-ratelimiter.image" . | quote }}
+          imagePullPolicy: {{ .Values.rateLimiter.image.pullPolicy }}
+          volumeMounts:
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+            {{- with .Values.rateLimiter.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Scope Olric peer discovery to this release's pods so it never
+            # merges with other Olric services sharing the namespace.
+            - name: OLRIC_K8S_LABEL_SELECTOR
+              value: {{ printf "app.kubernetes.io/name=%s,app.kubernetes.io/instance=%s" (include "nvcf-ratelimiter.name" .) .Release.Name | quote }}
+            - name: OAUTH2_ISSUER
+              value: {{ include "nvcf-ratelimiter.oauth2Issuer" . | quote }}
+            - name: AUDIENCE
+              value: {{ include "nvcf-ratelimiter.audience" . | quote }}
+            {{- range $key, $value := .Values.rateLimiter.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          ports:
+            {{- range .Values.rateLimiter.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .containerPort }}
+              protocol: {{ .protocol }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.rateLimiter.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.rateLimiter.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.rateLimiter.resources | nindent 12 }}
+      {{- with .Values.rateLimiter.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.rateLimiter.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.rateLimiter.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }} 

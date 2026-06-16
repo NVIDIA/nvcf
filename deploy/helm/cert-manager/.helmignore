@@ -1,0 +1,24 @@
+.DS_Store
+.git/
+.gitlab/
+.gitlab-ci.yml
+.gitignore
+.helmignore
+node_modules/
+package/
+packaged-charts/
+.releaserc.json
+
+# Release job artifacts and downloaded tooling.
+*.tar.gz
+*.tgz
+*.zip
+containerd
+docker
+docker.tgz
+helm
+linux-amd64/
+release
+release-cli
+vault
+vault_agent.zip

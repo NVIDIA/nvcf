@@ -1,0 +1,184 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+llmRequestRouter:
+  enabled: true
+  # Multi-replica requires DNS discovery and stable per-pod hostnames from
+  # the StatefulSet and headless service.
+  replicaCount: 3
+
+  image:
+    registry: "nvcr.io"
+    repository: ""
+    tag: "0.3.0"
+    pullPolicy: IfNotPresent
+
+  imagePullSecrets: []
+  # Namespace to deploy namespaced resources. Defaults to the release namespace.
+  namespace: ""
+  nameOverride: llm-request-router
+  fullnameOverride: llm-request-router
+
+  serviceAccount:
+    create: true
+    annotations: {}
+    name: ""
+
+  rbac:
+    create: true
+
+  podAnnotations: {}
+  podLabels: {}
+
+  podSecurityContext:
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  service:
+    type: ClusterIP
+    httpPort: 8000
+    grpcPort: 50071
+    metricsPort: 9090
+    reverseTunnelPort: 50072
+    headlessName: llm-request-router-headless
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  kubernetes:
+    advertisedHostnameTemplate: ""
+
+  certificate:
+    enabled: false
+    secretName: ""
+    issuerRef:
+      kind: ClusterIssuer
+      name: ""
+    dnsNames: []
+    usages:
+      - server auth
+    privateKey: {}
+
+  # Helm hook Job that provisions the NVCF service-issuing PKI hierarchy in
+  # OpenBao before the Certificate above is issued. Opt-in; mirrors the SIS
+  # chart's sis/templates/hook-lls-migrations.yaml pattern. When enabled,
+  # the Job runs pre-install/pre-upgrade using the nvcf-openbao-migrations
+  # image with CORE_MIGRATIONS_ENABLED=false + ADDONS_LLM_ENABLED=true so
+  # it executes only the LLM addon (addons/llm/setup_llm.sh).
+  pki:
+    enabled: false
+    # Namespace for the hook Job. Should match the openbao-server install
+    # namespace so the root-token secret + serviceAccount resolve.
+    namespace: vault-system
+    podAnnotations: {}
+    # backoffLimit for the hook Job. Transient retries handled via
+    # restartPolicy: OnFailure (kubelet); deterministic failures (missing
+    # required env, OpenBao misconfigured) exhaust this and the Job fails.
+    backoffLimit: 3
+    # OpenBao PKI role allowed_domains constraint (comma-separated DNS
+    # suffixes). REQUIRED when enabled. Typically:
+    #   "<customer-domain>,cluster.local"
+    # so the signing role accepts both the customer's external DNS and
+    # in-cluster service names. Missing value → script aborts non-zero →
+    # entrypoint accumulator → Job fails on backoff exhaustion.
+    allowedDomains: ""
+    # nvcf-openbao-migrations image. The chart picks up the same image
+    # that the k8s-openbao Helm hook uses; supply registry/repository/tag
+    # via the stack chart's global image overrides.
+    image:
+      # registry: must be supplied in additional values
+      # repository: must be supplied in additional values
+      # tag: must be supplied in additional values
+      tag: ""
+      pullPolicy: IfNotPresent
+    imagePullSecrets: []
+    # OpenBao connection. When baoService is empty, the template derives
+    # `openbao-server.<pki.namespace>.svc.cluster.local`.
+    baoService: ""
+    baoPort: "8200"
+    # Service account that has read access to the openbao root-token
+    # secret (created by the k8s-openbao chart).
+    serviceAccountName: openbao-server-initialize-cluster
+    # Secret containing the OpenBao root token (created by the k8s-openbao
+    # chart, mounted at /secrets/root_token/root_token by the entrypoint).
+    rootTokenSecretName: openbao-server-root-token
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+  discovery:
+    disableDnsDiscovery: false
+
+  transport:
+    quicConnectTimeoutMs: 2000
+    quicRequestTimeoutMs: 30000
+    reverseTunnelListenAddr: "0.0.0.0:50072"
+    reverseTunnelConnectTimeoutMs: 10000
+
+  shutdown:
+    drainTimeoutMs: 30000
+
+  loadBalancer:
+    configPath: ""
+    config: ""
+
+  auth:
+    workerAuthEndpoint: "http://api.nvcf.svc.cluster.local:9090"
+
+  vault:
+    audience: ""
+
+  tls:
+    secretName: ""
+    mountPath: ""
+    certPath: ""
+    keyPath: ""
+    quicInsecure: true
+
+  metrics:
+    enabled: false
+    serviceMonitor:
+      enabled: false
+      interval: "30s"
+      path: "/metrics"
+      port: "metrics"
+
+  observability:
+    tracing:
+      enabled: false
+      endpoint: ""

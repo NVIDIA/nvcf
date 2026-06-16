@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+llmApiGateway:
+  replicaCount: 3
+
+  image:
+    registry: "nvcr.io"
+    repository: ""
+    tag: "0.5.0"
+    pullPolicy: IfNotPresent
+
+  imagePullSecrets: []
+  # Namespace to deploy namespaced resources. Defaults to the release namespace.
+  namespace: ""
+  nameOverride: llm-api-gateway
+  fullnameOverride: llm-api-gateway
+
+  serviceAccount:
+    create: true
+    annotations: {}
+    name: ""
+
+  podAnnotations: {}
+  podLabels: {}
+
+  podSecurityContext:
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  config:
+    region: global
+    requestRouterUrl: "http://llm-request-router-headless.nvcf.svc.cluster.local:8000"
+    requestRouterConnectTimeout: 2s
+    requestRouterRequestTimeout: 0s
+    nvcfGrpcAddr: "api.nvcf.svc.cluster.local:9090"
+    nvcfGrpcInsecure: false
+    nvcfGrpcTimeout: 2s
+    rateLimitEnabled: true
+    rateLimitFailOpen: true
+    localFunctionId: ""
+    defaultModel: ""
+    defaultRpm: 120
+    defaultTpm: 240000
+
+  # Rate-limit state is kept in an embedded Olric cluster colocated with the
+  # gateway pods (no separate Redis deployment). The gateway's server.go picks
+  # ratelimit.AllowAll when RATE_LIMIT_ENABLED=true AND OLRIC_ENABLED=false, so
+  # enabling rate limiting without Olric silently turns into a no-op.
+  olric:
+    enabled: true
+    # "local" | "lan" | "wan" - memberlist tuning. Use "local" for single-pod k3d
+    # or tight-timing dev setups; "lan" for normal multi-pod production.
+    env: lan
+    # Bind ports exposed on the pod. 3320 = Olric data, 3322 = memberlist.
+    bindPort: 3320
+    memberlistPort: 3322
+    # K8s label selector the Olric k8s-discovery plugin uses to find peers. Left
+    # empty here so it's computed from the chart's selectorLabels in the
+    # ConfigMap template; override to pin a different selector.
+    k8sLabelSelector: ""
+    replicaCount: 1
+    partitionCount: 271
+    dmapName: rate-limit
+    startupTimeout: 15s
+    logLevel: WARN
+    # Grants the gateway's ServiceAccount get/list on pods in its own namespace
+    # for memberlist peer discovery. Turn this off only if you're wiring up
+    # OLRIC_PEERS statically or discovery via another mechanism.
+    rbac:
+      create: true
+
+  vault:
+    audience: ""
+
+  metrics:
+    enabled: false
+    port: 9464
+    serviceMonitor:
+      enabled: false
+      interval: "30s"
+      path: "/metrics"
+      port: "metrics"
+
+  observability:
+    tracing:
+      enabled: false
+      endpoint: ""
+      protocol: grpc
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

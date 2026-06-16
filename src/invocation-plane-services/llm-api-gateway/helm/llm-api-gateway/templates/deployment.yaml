@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-api-gateway.fullname" . }}
+  namespace: {{ include "llm-api-gateway.namespace" . }}
+  labels:
+    {{- include "llm-api-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.llmApiGateway.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "llm-api-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llm-api-gateway.selectorLabels" . | nindent 8 }}
+        {{- with .Values.llmApiGateway.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "llm-api-gateway.podAnnotations" . | nindent 8 }}
+        checksum/config-env: {{ include "llm-api-gateway.configChecksum" . }}
+    spec:
+      serviceAccountName: {{ include "llm-api-gateway.serviceAccountName" . }}
+      # Olric's k8s memberlist plugin calls the k8s API from inside the pod to
+      # list peer pods, so the SA token must be mounted when Olric is enabled.
+      automountServiceAccountToken: {{ .Values.llmApiGateway.olric.enabled }}
+      {{- with .Values.llmApiGateway.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.llmApiGateway.podSecurityContext | nindent 8 }}
+      {{- with .Values.llmApiGateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.llmApiGateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.llmApiGateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "llm-api-gateway.image" . }}
+          imagePullPolicy: {{ .Values.llmApiGateway.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "llm-api-gateway.fullname" . }}
+          {{- if .Values.llmApiGateway.olric.enabled }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            {{- if (dig "metrics" "enabled" false .Values.llmApiGateway) }}
+            - name: metrics
+              containerPort: {{ dig "metrics" "port" 9090 .Values.llmApiGateway }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.llmApiGateway.olric.enabled }}
+            - name: olric
+              containerPort: {{ .Values.llmApiGateway.olric.bindPort }}
+              protocol: TCP
+            - name: olric-ml
+              containerPort: {{ .Values.llmApiGateway.olric.memberlistPort }}
+              protocol: TCP
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 12
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            {{- toYaml .Values.llmApiGateway.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.llmApiGateway.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+      volumes:
+        - name: vault-token
+          projected:
+            sources:
+            - serviceAccountToken:
+                path: token
+                expirationSeconds: 3600
+                audience: {{ include "llm-api-gateway.vaultAudience" . }}
+        - name: vault-config-templates
+          configMap:
+            name: {{ include "llm-api-gateway.fullname" . }}-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl

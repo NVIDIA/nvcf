@@ -1,0 +1,178 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default values for the nvcf-ratelimiter chart. All service-owned keys live
+# under the rateLimiter root so the chart's value API is namespaced and will
+# not collide with values from other releases when this chart is composed
+# into the self-hosted stack.
+rateLimiter:
+
+  # Namespace to deploy the resources. If empty, the release namespace is used.
+  namespace: ""
+
+  # Override the runtime service identity (resource names / selectors /
+  # container name). Defaults to "ratelimiter" so the Service DNS
+  # (ratelimiter.<ns>.svc) and the derived OAUTH2_ISSUER/AUDIENCE match the
+  # JWT auth role provisioned by nvcf-openbao-migrations, independent of the
+  # chart package name or release name.
+  nameOverride: ""
+  fullnameOverride: "ratelimiter"
+
+  replicaCount: 1
+
+  image:
+    registry: "" # base registry, must be supplied (e.g. nvcr.io)
+    repository: "" # base repository, must be supplied (e.g. 0651155215864979/ncp-dev)
+    # Image name is chart-owned and appended to registry/repository.
+    name: "nvcf-ratelimiter"
+    pullPolicy: IfNotPresent
+    tag: "1.14.3"
+
+  imagePullSecrets: []
+
+  serviceAccount:
+    create: true
+    # Auto-mount the default-audience SA token (+ ca.crt + namespace) at the
+    # standard path. Olric's Kubernetes peer discovery uses in-cluster config
+    # (rest.InClusterConfig), which reads that token + CA to list peer Pods, so
+    # a valid default-audience token must live at the standard path for
+    # multi-replica clustering to work. The OpenBao-bound token the Vault Agent
+    # presents is mounted separately at /var/run/secrets/openbao (see below).
+    automount: true
+    annotations: {}
+    # ServiceAccount name is hardcoded to match the JWT auth role
+    # provisioned by nvcf-openbao-migrations 11_setup_ratelimiter.sh.
+    # The Vault Agent Injector will not authenticate the pod to OpenBao
+    # unless the SA name on the pod matches the role's bound subject.
+    name: "ratelimiter-api"
+
+  # RBAC for Olric Kubernetes peer discovery (Pods list/get/watch) is rendered
+  # automatically when replicaCount > 1 (see templates/role.yaml). Single-pod
+  # installs don't need it and don't get it.
+
+  podAnnotations: {}
+  podLabels: {}
+
+  podSecurityContext: {}
+  securityContext: {}
+
+  service:
+    type: ClusterIP
+    ports:
+      - name: grpc
+        port: 7777
+        targetPort: 7777
+        protocol: TCP
+      - name: metrics
+        port: 7776
+        targetPort: 7776
+        protocol: TCP
+      - name: http-health
+        port: 8080
+        targetPort: 8080
+        protocol: TCP
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http-health
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http-health
+
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 1
+    targetCPUUtilizationPercentage: 80
+
+  # Hashicorp Vault Agent Injector wiring. The chart always renders the
+  # vault.hashicorp.com/* pod annotations so the injector mints
+  # /vault/secrets/secrets.json at pod start from `signerPath` in OpenBao.
+  # The pod's ServiceAccount must be bound to a JWT auth role in OpenBao
+  # with create+read on the signer path. The OpenBao role + signer are
+  # provisioned by nvcf-openbao-migrations 11_setup_ratelimiter.sh.
+  vault:
+    role: "ratelimiter-api"
+    jwtAuthPath: "auth/jwt"
+    signerPath: "services/nvcf-api/jwt/sign/ratelimiter-api"
+
+  # Projected ServiceAccount token with the OpenBao-bound audience, mounted at
+  # a dedicated path (NOT the standard SA path, which now carries the default
+  # automounted token for Olric peer discovery). The Vault Agent's kubernetes
+  # auto-auth is pointed at this token via the
+  # vault.hashicorp.com/auth-config-token-path annotation (see _helpers.tpl).
+  # The token's `aud` claim must match the JWT auth role's bound_audiences,
+  # which the migration sets to OPENBAO_SERVER_INTERNAL_URL.
+  # Additional caller-supplied volumes/volumeMounts are appended after.
+  volumes:
+    - name: openbao-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+              audience: http://openbao-server.vault-system.svc.cluster.local:8200
+  volumeMounts:
+    # NOTE: the Vault Agent reads this token via the hardcoded
+    # vault.hashicorp.com/auth-config-token-path annotation in _helpers.tpl
+    # ("/var/run/secrets/openbao/token"). If you change this mountPath (or the
+    # projected token `path` above), update that annotation to match, or the
+    # agent will not find the OpenBao token and the pod will fail to start.
+    - name: openbao-token
+      mountPath: /var/run/secrets/openbao
+      readOnly: true
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  ports:
+    - name: grpc
+      containerPort: 7777
+      protocol: TCP
+    - name: metrics
+      containerPort: 7776
+      protocol: TCP
+    - name: http-health
+      containerPort: 8080
+      protocol: TCP
+
+  # Environment variables passed to the container. OAUTH2_ISSUER and AUDIENCE
+  # are derived by the chart (see _helpers.tpl), not set here.
+  env:
+    # In-cluster gRPC endpoint for NVCF API policy fetch. Scheme required so
+    # rate_limiter.go's url.Parse populates Host (it derives the gRPC Addr
+    # from .Host; without a scheme the input is parsed as path and Host is
+    # empty, which makes the gRPC dial fail with "received empty target").
+    NVCF_API_URL: "http://api.nvcf.svc.cluster.local:9090"
+    # JWKS endpoint for inbound JWT validation: OpenBao JWT secret-engine mount
+    # for the ratelimiter-api signer (provisioned by nvcf-openbao-migrations).
+    OAUTH2_JWKS_URL: "http://openbao-server.vault-system.svc.cluster.local:8200/v1/services/ratelimiter-api/jwt/jwks"
+    # Vault-mounted secrets file path. vault-agent writes the minted token
+    # to /vault/secrets/secrets.json (see vault.hashicorp.com annotations).
+    SECRETS_PATH: "/vault/secrets/secrets.json"
+    # Tracing is opt-in. Leave empty to disable; set to an OTLP collector
+    # endpoint to enable.
+    OTEL_EXPORTER_OTLP_ENDPOINT: ""
