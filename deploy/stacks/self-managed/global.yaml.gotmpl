@@ -37,7 +37,7 @@ cassandra:
     {{- end }}
 
   replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
-  resourcesPreset: {{ dig "cassandra" "resourcesPreset" "small" .Values }}
+  resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
   {{- with include "nvcf.nodeSelector" (dict "type" "cassandra" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
@@ -263,7 +263,7 @@ natsAuthCalloutService:
     repository: {{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
 
 {{- $apiEnvOverrides := dig "api" "env" dict .Values }}
-{{- $llmRouterClientImageDefault := printf "%s/%s/stargate-client:0.3.0" .Values.global.image.registry .Values.global.image.repository }}
+{{- $llmRouterClientImageDefault := printf "%s/%s/pylon:0.2.1" .Values.global.image.registry .Values.global.image.repository }}
 {{- $llmRouterClientImage := dig "NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE" $llmRouterClientImageDefault $apiEnvOverrides }}
 {{- $essWorkerBaseURL := dig "global" "workerEndpoints" "essServiceURL" "" .Values }}
 {{- $invocationWorkerBaseURL := dig "global" "workerEndpoints" "invocationServiceURL" "" .Values }}
@@ -598,7 +598,7 @@ llmApiGateway:
   image:
     registry: {{ dig "addons" "llm" "gateway" "image" "registry" .Values.global.image.registry .Values }}
     repository: {{ dig "addons" "llm" "gateway" "image" "repository" (printf "%s/llm-api-gateway" .Values.global.image.repository) .Values }}
-    {{- with dig "addons" "llm" "gateway" "image" "tag" "" .Values }}
+    {{- with dig "addons" "llm" "gateway" "image" "tag" "0.7.1" .Values }}
     tag: {{ . | quote }}
     {{- end }}
     {{- with dig "addons" "llm" "gateway" "image" "pullPolicy" "" .Values }}
@@ -636,6 +636,9 @@ llmRequestRouter:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/stargate
+    {{- with dig "addons" "llm" "requestRouter" "image" "tag" "0.2.1" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}

@@ -124,10 +124,19 @@ nats:
 
 cassandra:
   enabled: true
-  # Bitnami resource preset. "small" may cause OOMKilled and CrashLoopBackoff in some environments.
-  # Consider "large" or higher if necessary.
-  # Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge
-  resourcesPreset: "small"
+  # Bitnami Cassandra resourcesPreset reference (request -> limit):
+  # none: no preset resources
+  # nano: 100m CPU, 128Mi memory -> 150m CPU, 192Mi memory
+  # micro: 250m CPU, 256Mi memory -> 375m CPU, 384Mi memory
+  # small: 500m CPU, 512Mi memory -> 750m CPU, 768Mi memory
+  # medium: 500m CPU, 1024Mi memory -> 750m CPU, 1536Mi memory
+  # large: 1 CPU, 2048Mi memory -> 1.5 CPU, 3072Mi memory
+  # xlarge: 1 CPU, 3072Mi memory -> 3 CPU, 6144Mi memory
+  # 2xlarge: 1 CPU, 3072Mi memory -> 6 CPU, 12288Mi memory
+  # All presets include 50Mi ephemeral-storage request and 2Gi limit.
+  # Do not use small for default cloud installs. Cassandra can OOM during
+  # first boot and leave migrations in a failed or dirty state.
+  resourcesPreset: "xlarge"
 
 certManager:
   # cert-manager controller required to reconcile Certificate resources for
