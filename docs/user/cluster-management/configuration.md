@@ -201,6 +201,15 @@ Once maintenance mode is configured, it can take up to 10 minutes for the agent 
 
 </Note>
 
+### Host-Isolated Clusters
+
+Clusters with the `HostIsolation` attribute ensure that no two function or task instances run on the same node at the same time. Each node is dedicated to a single active workload instance.
+
+<Warning>
+`HostIsolation` and `AccountIsolation` are mutually exclusive. Enabling both attributes on the same cluster is not supported. Use `AccountIsolation` if you need isolation at the NCA account boundary; use `HostIsolation` if you need isolation at the individual function boundary.
+
+</Warning>
+
 ### Account-Isolated Clusters
 
 <Note>

@@ -62,6 +62,8 @@ navigation:
         path: ../../docs/user/registry-allowlist.md
       - page: Cluster Configuration
         path: ../../docs/user/cluster-management/configuration.md
+      - page: Multi-Tenancy
+        path: ../../docs/user/cluster-management/multi-tenancy.md
       - page: KAI Scheduler
         path: ../../docs/user/cluster-management/kai-scheduler.md
       - section: Low Latency Streaming
