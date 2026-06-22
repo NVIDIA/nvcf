@@ -23,6 +23,9 @@ go_test(
     srcs = ["request_stream_test.go"],
     embed = [":httpstream"],
     deps = [
+        "@com_github_samber_lo//:lo",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
     ],
 )
