@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rsf-template.name" . }}-settings-configmap
+data:
+  settings.yaml: |-
+    {{- if .Values.rsfTemplate.settings.custom }}
+    {{- toYaml .Values.rsfTemplate.settings.custom | nindent 4}}
+    {{- end }}
+    {{- with .Values.rsfTemplate.settings.server }}
+    server:
+      ip_address: {{ .ip_address }}
+      port: '{{- .port }}'
+      {{- if eq .metrics.selectedMetricsBackend "ott-metrics" }}
+        {{- if .metrics.ottMetrics }}
+          {{- toYaml .metrics.ottMetrics | nindent 6}}
+        {{- end }}
+      {{- else if eq .metrics.selectedMetricsBackend "foundations-metrics" }}
+        {{- if .metrics.foundationsMetrics }}
+          {{- toYaml .metrics.foundationsMetrics | nindent 6 }}
+        {{- end}}
+      {{- end }}
+      {{- if eq .tracing.selectedTracingBackend "ott-tracing" }}
+        {{- if .tracing.ottTracing }}
+          {{- toYaml .tracing.ottTracing | nindent 6}}
+        {{- end }}
+      {{- else if eq .tracing.selectedTracingBackend "rsf-tracing" }}
+        {{- if .tracing.rsfTracing }}
+          {{- toYaml .tracing.rsfTracing | nindent 6 }}
+        {{- end}}
+      {{- end }}
+      {{- if .tonic}}
+      tonic:
+        {{- toYaml .tonic | nindent 8 }}
+      {{- end }}
+    {{- end }}

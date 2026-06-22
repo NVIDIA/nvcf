@@ -1,0 +1,172 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+
+rsfTemplate:
+  replicaCount: 1
+
+  nameOverride: nvcf-autoscaler-service
+
+  image:
+    repository: nvcr.io/nvidia/omniverse/nvcf-autoscaler-service
+    pullPolicy: IfNotPresent
+    tag: latest
+
+  imagePullSecrets:
+    # - name: docker-registry-secret
+
+  entrypoint:
+    command: /bin/server
+    args: []
+    # -- Configuration file is provided at this path
+    configPath: "/etc/settings.yaml"
+
+  # -- Environment variables
+  env: {}
+    # SERVER__TONIC__INITIAL_STREAM_WINDOW_SIZE: 1234
+
+  # -- Environment variables from secret data
+  envFromSecret:
+    # SECRET_USERNAME:
+    #  name: secret-name
+    #  key: secret-key
+
+  podAnnotations: {}
+
+  podLabels: {}
+
+  # -- Deploy a PodMonitor for the service
+  podMonitor:
+    enabled: false
+
+  service:
+    host: "nvcf-autoscaler-service.service.odp.nvidia.com"
+    port: 50051
+    tls_secret:
+    annotations:
+    # HTTP health probes on port 8181 (platform default for liveness/readiness)
+    # Liveness = process alive only (no deps). Readiness = deps healthy (TimeseriesDb, Cassandra).
+    livenessProbe:
+      path: /admin/health/liveness
+      port: 8181
+      delaySeconds: 30
+    readinessProbe:
+      path: /admin/health/readiness
+      port: 8181
+      delaySeconds: 30
+    startupProbe:
+      path: /admin/health/liveness
+      port: 8181
+      delaySeconds: 30
+
+  ingress:
+    enabled: false
+    annotations:
+    ingressClassName: nginx
+    path: /
+
+  # -- Container resource requests and limits.
+  # https://kubernetes.io/docs/user-guide/compute-resources/
+  resources: {}
+
+  # -- Affinity for pod assignment.
+  # https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#affinity-and-anti-affinity
+  affinity: {}
+
+  settings:
+    # -- Add any custom app settings here.
+    custom: {}
+      # my_setting_1: "foo"
+      # my_setting_2: "bar"
+
+    server:
+      ip_address: 0.0.0.0
+      port: '50051'
+
+      metrics:
+        selectedMetricsBackend: "ott-metrics"  # One of: {"foundations-metrics", "ott-metrics"}
+
+        foundationsMetrics:
+          metrics_server:
+            # -- Enables metrics server
+            enabled: true
+            # -- IP and Port of metrics server
+            addr: 127.0.0.1:41337
+
+          metrics:
+            service_name_format:
+              label_with_name: service_name
+            report_optional: true
+
+        ottMetrics:
+          metrics:
+            # Can be controlled through
+            # OTEL_ env vars as well
+            enabled: true
+            exporters:
+            - exporter: otlp
+              protocol: grpc
+              endpoint: http://localhost:4317
+              headers: null
+              tls: null
+              timeout: null
+            service_name: nvcf_autoscaler_service_server
+            meter_name: null
+            resource_attributes: null
+
+      # -- Filter expression for logging & traces
+      envfilter_directive: server=debug
+
+      tracing:
+        selectedTracingBackend: "ott-tracing" # One of: {"rsf-tracing", "ott-tracing"}
+
+        rsfTracing:
+          tracing:
+            # -- Jaeger or Otel collector address
+            endpoint_ip: localhost
+            endpoint_port: 4317
+      
+        ottTracing:
+          tracing:
+            enabled: true
+            exporters:
+            - exporter: otlp
+              protocol: grpc
+              endpoint: http://localhost:4317
+              file_path: null
+              headers: null
+              tls: null
+              timeout: null
+            service_name: nvcf_autoscaler_service_server
+            use_omnitrace: false
+            sampler: null
+            span_limits: null
+            resource_attributes: null
+          envfilter_directive: server=debug
+
+      tonic:
+        # -- Sets the SETTINGS_INITIAL_WINDOW_SIZE option for HTTP2 stream-level flow control.
+        initial_stream_window_size: 65535
+        # -- Max connection-level flow control for HTTP2
+        initial_connection_window_size: 65535
+        # -- Limits the maximum size of a decoded message
+        max_decoding_message_size: 4194304
+        # -- Timeout on all request handlers.
+        request_timeout: 30
+
+ov-otel-collector:
+  # By default, disable the otel collector sidecar
+  enabled: false

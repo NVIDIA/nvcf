@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,5 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-helm uninstall -n dns-proxy nvcf-unbound
-helm install nvcf-unbound ../../../deploy/helm/nvcf-unbound -f ../../../deploy/helm/nvcf-unbound/values.yaml -n dns-proxy
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "app.fullname" . }}-config
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+data:
+  # Configuration file that can be mounted as a volume
+  config.yaml: |
+{{ .Values.serviceConfig | toYaml | indent 4 }}

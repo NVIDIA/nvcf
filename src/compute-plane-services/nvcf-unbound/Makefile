@@ -103,7 +103,7 @@ verify-manifest:
 
 helm-template:
 	@echo "Rendering Helm templates (dry-run)..."
-	@helm template test-release deploy/ -f deploy/values-stage.yaml --dry-run
+	@helm template test-release ../../../deploy/helm/nvcf-unbound -f ../../../deploy/helm/nvcf-unbound/values-stage.yaml --dry-run
 
 helm-install:
 	@echo "Installing Helm chart..."

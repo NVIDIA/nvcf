@@ -1,0 +1,307 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Override the name and fullname of the chart
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+# Container registry credentials for pulling images
+registry:
+  # Use existing secret (leave empty to create one)
+  existingSecret: ""
+  # Secret data (used only if existingSecret is empty)
+  server: "github.com/NVIDIA:5005"
+  username: ""
+  password: ""
+
+# Metrics configuration
+metrics:
+  enabled: false # Enable metrics collection and exposure
+  port: "9090" # Port for metrics endpoint
+  serviceMonitor:
+    enabled: false # Enable ServiceMonitor for Prometheus (requires metrics.enabled=true)
+    interval: "15s" # Scrape interval
+    path: "/metrics" # Metrics path
+    labels: {} # Additional labels for the ServiceMonitor
+    relabelings: [] # Prometheus relabeling rules
+    # Example relabelings:
+    # - sourceLabels: [__meta_kubernetes_pod_label_app]
+    #   targetLabel: app
+    # - sourceLabels: [__meta_kubernetes_namespace]
+    #   targetLabel: kubernetes_namespace
+  service:
+    annotations: {} # Additional annotations for the metrics service
+    # Example annotations:
+    # prometheus.io/scrape: "true"
+    # prometheus.io/port: "9090"
+
+# Dashboard configuration
+dashboard:
+  enabled: false # Enable Grafana dashboard creation (requires metrics.enabled=true)
+  # Grafana dashboard configuration
+  grafana:
+    # Labels for dashboard discovery by Grafana operator
+    labels:
+      dashboards: "grafana" # Label used by Grafana operator to find dashboards
+    # Additional labels for the dashboard
+    additionalLabels: {}
+    # Allow cross-namespace import of the dashboard
+    allowCrossNamespaceImport: true
+    # Resync period for the dashboard
+    resyncPeriod: "30s"
+
+# See serviceConfig.tracing below for detailed tracing configuration options
+# (endpoints, sampling, headers, timeouts, etc.)
+tracing:
+  # Enable/disable tracing
+  enabled: false
+
+  # OpenTelemetry secrets configuration
+  otel:
+    # Use existing secret (leave empty to create one)
+    existingSecret: ""
+    # Name for created secret (only used if existingSecret is empty and secret data is provided)
+    secretName: ""
+    # Secret data (used only if existingSecret is empty)
+    # These will be set as environment variables: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_HEADERS_*
+    secretHeaders:
+      authorization: "" # Authorization header token
+      x_api_key: "" # API key header
+
+  # Lightstep secrets configuration
+  lightstep:
+    # Use existing secret (leave empty to create one)
+    existingSecret: ""
+    # Name for created secret (only used if existingSecret is empty and secret data is provided)
+    secretName: ""
+    # Secret data (used only if existingSecret is empty)
+    # This will be set as environment variable: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_ACCESS__TOKEN
+    secretAccessToken: ""
+
+image:
+  repository: nvcf-nats-auth-callout-service
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: [] # List of secrets containing registry credentials
+
+# Additional environment variables to be added to the pod
+extraEnvs:
+  []
+  # - name: ENV_NAME
+  #   value: "value"
+  # - name: ANOTHER_ENV
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: secret-name
+  #       key: secret-key
+
+podAnnotations: {}
+podLabels: {}
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: nats-auth-callout-service.nvidia.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # tls:
+  #   - secretName: nvcf-common-dns
+  #     hosts:
+  #       - nats-auth-callout-service.nvidia.com
+
+affinity:
+  {}
+  # Example node affinity configuration to avoid GPU nodes:
+  # nodeAffinity:
+  #   requiredDuringSchedulingIgnoredDuringExecution:
+  #     nodeSelectorTerms:
+  #       - matchExpressions:
+  #           - key: nvidia.com/gpu.present
+  #             operator: NotIn
+  #             values:
+  #               - "true"
+  #
+  # Example pod affinity configuration for high availability:
+  # podAntiAffinity:
+  #   preferredDuringSchedulingIgnoredDuringExecution:
+  #     - weight: 100
+  #       podAffinityTerm:
+  #         labelSelector:
+  #           matchExpressions:
+  #             - key: app.kubernetes.io/name
+  #               operator: In
+  #               values:
+  #                 - nvcf-nats-auth-callout-service
+  #         topologyKey: kubernetes.io/hostname
+
+nodeSelector:
+  {}
+  # Example node selector to target specific nodes:
+  # kubernetes.io/arch: amd64
+  # node-type: worker
+  # zone: us-west-2a
+
+tolerations:
+  []
+  # Example tolerations for dedicated nodes:
+  # - key: "dedicated"
+  #   operator: "Equal"
+  #   value: "nvcf-nats-auth-callout-service"
+  #   effect: "NoSchedule"
+  # - key: "nvidia.com/gpu"
+  #   operator: "Equal"
+  #   value: "true"
+  #   effect: "NoSchedule"
+
+# automountServiceAccountToken controls whether the pod's service account token is
+# automatically mounted. Set to false unless the service needs to access the Kubernetes API.
+automountServiceAccountToken: false
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Health check probes configuration
+healthChecks:
+  # Liveness probe configuration
+  livenessProbe:
+    enabled: true # Enable liveness probe
+    httpGet:
+      path: "/healthz" # Health check endpoint path
+      port: "http" # Port name or number
+      scheme: "HTTP" # HTTP or HTTPS
+    initialDelaySeconds: 10 # Initial delay before starting probes
+    periodSeconds: 10 # How often to perform the probe
+    timeoutSeconds: 5 # Timeout for each probe
+    failureThreshold: 3 # Number of failures before pod is restarted
+    successThreshold: 1 # Number of successes before probe is considered successful
+
+  # Readiness probe configuration
+  readinessProbe:
+    enabled: true # Enable readiness probe
+    httpGet:
+      path: "/healthz" # Health check endpoint path
+      port: "http" # Port name or number
+      scheme: "HTTP" # HTTP or HTTPS
+    initialDelaySeconds: 5 # Initial delay before starting probes
+    periodSeconds: 5 # How often to perform the probe
+    timeoutSeconds: 3 # Timeout for each probe
+    failureThreshold: 3 # Number of failures before pod is considered not ready
+    successThreshold: 1 # Number of successes before probe is considered successful
+
+  # Startup probe configuration (optional, for slow-starting containers)
+  startupProbe:
+    enabled: false # Disable startup probe by default
+    httpGet:
+      path: "/healthz" # Health check endpoint path
+      port: "http" # Port name or number
+      scheme: "HTTP" # HTTP or HTTPS
+    initialDelaySeconds: 0 # Initial delay before starting probes
+    periodSeconds: 10 # How often to perform the probe
+    timeoutSeconds: 5 # Timeout for each probe
+    failureThreshold: 30 # Number of failures before pod is considered failed (allow up to 5 minutes startup time)
+    successThreshold: 1 # Number of successes before probe is considered successful
+
+serviceConfig:
+  # Default Configuration for the nvcf-nats-auth-callout-service service
+  # This section contains the complete set of configuration options available
+
+  # Service-specific configuration
+  service:
+    name: "nvcf-nats-auth-callout-service" # Service name is derived from the release name in the templates (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NAME)
+
+  # Server-specific configuration
+  server:
+    port: "8080" # Server port, overridden by service.port and NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT environment variable (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT)
+
+  # Logging configuration
+  logging:
+    level: "info" # Log level:a debug, info, warn, error, panic, fatal (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_LEVEL)
+    format: "json" # Log format: json, console, text (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_FORMAT)
+    output: "stdout" # Log output: stdout, stderr (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_OUTPUT)
+    caller: true # Include caller information (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_CALLER)
+    stacktrace_level: "error" # Stacktrace level: debug, info, warn, error, panic, fatal (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_STACKTRACE__LEVEL)
+    development: false # Development mode logging (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_DEVELOPMENT)
+    disable_timestamp: false # Disable timestamp in logs (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_DISABLE__TIMESTAMP)
+    sampling: # Log sampling configuration to reduce log volume
+      initial: 100 # Initial sample rate (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_SAMPLING_INITIAL)
+      thereafter: 100 # Sample rate after initial (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_SAMPLING_THEREAFTER)
+    fields:
+      {} # Additional fields to include in every log entry
+      # service_name: "nvcf-nats-auth-callout-service" # Service name field (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_FIELDS_SERVICE__NAME)
+      # Note: version field is automatically added from build-time version, not configurable
+
+  # Metrics configuration (derived from top-level metrics configuration)
+  # metrics:
+  #   enabled: false # Enable metrics (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_ENABLED)
+  #   port: "9090" # Metrics port (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_PORT)
+
+  # OpenTelemetry Tracing Configuration
+  tracing:
+    # enabled: controlled by top-level tracing.enabled setting
+    provider: "otel" # Tracing provider: otel, lightstep (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_PROVIDER)
+
+    # OpenTelemetry Configuration
+    otel:
+      endpoint: "localhost:4317" # OTLP gRPC endpoint (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_ENDPOINT)
+      http_endpoint: "localhost:4318/v1/traces" # OTLP HTTP endpoint (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_HTTP__ENDPOINT)
+      insecure: true # Use insecure connection (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_INSECURE)
+      environment: "development" # Environment name (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_ENVIRONMENT)
+      sampling_ratio: "1.0" # Sampling ratio (0.0 to 1.0) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_SAMPLING__RATIO)
+      headers:
+        {} # Additional headers for OTLP exporter
+        # authorization: "" # Authorization header (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_HEADERS_AUTHORIZATION) - Set via secret
+        # x-api-key: "" # API key header (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_HEADERS_X___API___KEY) - Set via secret
+      timeout_ms: 10000 # Export timeout in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_TIMEOUT__MS)
+      retry_delay_ms: 5000 # Retry delay in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_RETRY__DELAY__MS)
+      max_export_batch_size: 512 # Maximum export batch size (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_MAX__EXPORT__BATCH__SIZE)
+      export_timeout_ms: 30000 # Export timeout in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_EXPORT__TIMEOUT__MS)
+      max_queue_size: 2048 # Maximum queue size (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_MAX__QUEUE__SIZE)
+      schedule_delay_ms: 5000 # Schedule delay in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_SCHEDULE__DELAY__MS)
+      compression: "gzip" # Compression type (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_COMPRESSION)
+
+    # Lightstep Configuration
+    lightstep:
+      endpoint: "ingest.lightstep.com:443/traces/otel/v1" # Lightstep OTLP endpoint (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_ENDPOINT)
+      # access_token: "" # Lightstep access token (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_ACCESS__TOKEN) - Set via secret
+      environment: "development" # Environment name (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_ENVIRONMENT)
+      sampling_ratio: "1.0" # Sampling ratio (0.0 to 1.0) (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_SAMPLING__RATIO)
+      timeout_ms: 10000 # Export timeout in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_TIMEOUT__MS)
+      max_export_batch_size: 512 # Maximum export batch size (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_MAX__EXPORT__BATCH__SIZE)
+      export_timeout_ms: 30000 # Export timeout in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_EXPORT__TIMEOUT__MS)
+      max_queue_size: 2048 # Maximum queue size (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_MAX__QUEUE__SIZE)
+      schedule_delay_ms: 5000 # Schedule delay in milliseconds (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_SCHEDULE__DELAY__MS)
+      compression: "gzip" # Compression type (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_COMPRESSION)
+      insecure: false # Use insecure connection (ENV: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_INSECURE)
+
+
+    # Note: Kubernetes attributes (pod name, namespace, cluster, instance ID) are automatically detected at runtime

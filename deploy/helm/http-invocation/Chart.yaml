@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,5 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-helm uninstall -n dns-proxy nvcf-unbound
-helm install nvcf-unbound ../../../deploy/helm/nvcf-unbound -f ../../../deploy/helm/nvcf-unbound/values.yaml -n dns-proxy
+apiVersion: v2
+name: helm-nvcf-invocation-service
+description: NVCF HTTP/gRPC invocation service
+
+type: application
+version: 0.5.0
+# Placeholder appVersion; release pipeline (semantic-release) replaces
+# this at build time.
+appVersion: "0.0.0"
+# All templates live under templates/ and all values are declared
+# explicitly at the root of values.yaml.

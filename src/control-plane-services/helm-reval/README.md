@@ -186,7 +186,7 @@ curl -X POST http://localhost:8080/v1/render \
 
 ## Kubernetes
 
-- Chart: [`deploy/helm/reval-service/`](./deploy/helm/reval-service/README.md)
+- Chart: [`deploy/helm/helm-reval`](../../../deploy/helm/helm-reval/README.md)
 - Config samples: [`examples/`](./examples/)
 
 ## License

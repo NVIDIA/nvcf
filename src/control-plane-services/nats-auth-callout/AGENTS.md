@@ -12,7 +12,7 @@ external webhook flows.
 - `internal/router/`: Gin HTTP routing
 - `internal/config/`: Viper configuration
 - `internal/tracing/`: OpenTelemetry and Lightstep tracing
-- `deploy/`: Helm chart assets
+- `../../../deploy/helm/nats-auth-callout/`: Helm chart assets
 
 ## Build and Test
 

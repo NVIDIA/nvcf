@@ -21,7 +21,6 @@ go.sum
 # Source, packaging, docs, examples, and tests
 api-tests/**
 cmd/**
-deploy/**
 docker/**
 examples/**
 pkg/**

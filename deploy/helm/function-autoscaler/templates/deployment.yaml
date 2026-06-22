@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rsf-template.name" . }}
+  labels:
+    {{ include "rsf-template.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.rsfTemplate.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "rsf-template.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.rsfTemplate.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "rsf-template.labels" . | nindent 8 }}
+        {{- with .Values.rsfTemplate.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if .Values.rsfTemplate.affinity }}
+      affinity:
+        {{- .Values.rsfTemplate.affinity | toYaml | nindent 8 }}
+      {{- end }}
+      {{- if .Values.ngcImagePullSecretName }}
+      # If deploying on NVCF, this field is provided by their build pipeline
+      imagePullSecrets:
+        - name: {{ .Values.ngcImagePullSecretName }}
+      {{- else }}
+      {{- with .Values.rsfTemplate.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ .Values.rsfTemplate.containerName | default (include "rsf-template.name" .) }}
+          image: "{{ .Values.rsfTemplate.image.repository }}:{{ .Values.rsfTemplate.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.rsfTemplate.image.pullPolicy }}
+          command: [{{ .Values.rsfTemplate.entrypoint.command }}]
+          args:
+            {{- if .Values.rsfTemplate.entrypoint.args }}
+            {{- toYaml .Values.rsfTemplate.entrypoint.args | nindent 12 }}
+            {{- end }}
+            - "--config"
+            - "{{ .Values.rsfTemplate.entrypoint.configPath }}"
+          env:
+            {{- range $key, $value := .Values.rsfTemplate.env }}
+            - name: {{ $key }}
+              value: "{{ $value }}"
+            {{- end }}
+            {{- range $envName, $secret := .Values.rsfTemplate.envFromSecret }}
+            - name: {{ $envName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret.name }}
+                  key: {{ $secret.key }}
+            {{- end }}
+          {{- if index .Values "ov-otel-collector" "enabled" }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-ov-otel-collector-observability-cm
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.rsfTemplate.service.livenessProbe.path | quote }}
+              port: {{ .Values.rsfTemplate.service.livenessProbe.port }}
+            failureThreshold: 5
+            initialDelaySeconds: {{ .Values.rsfTemplate.service.livenessProbe.delaySeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.rsfTemplate.service.readinessProbe.path | quote }}
+              port: {{ .Values.rsfTemplate.service.readinessProbe.port }}
+            failureThreshold: 5
+            initialDelaySeconds: {{ .Values.rsfTemplate.service.readinessProbe.delaySeconds }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.rsfTemplate.service.startupProbe.path | quote }}
+              port: {{ .Values.rsfTemplate.service.startupProbe.port }}
+            failureThreshold: 5
+            initialDelaySeconds: {{ .Values.rsfTemplate.service.startupProbe.delaySeconds }}
+          ports:
+            - name: grpc
+              containerPort: {{  .Values.rsfTemplate.service.port }}
+            - name: http
+              containerPort: 8080
+            - name: probe
+              containerPort: {{ .Values.rsfTemplate.service.livenessProbe.port }}
+          volumeMounts:
+            - name: settings
+              mountPath: {{ .Values.rsfTemplate.entrypoint.configPath }}
+              subPath: {{ base .Values.rsfTemplate.entrypoint.configPath }}
+              readOnly: true
+          {{- if .Values.rsfTemplate.resources }}
+          resources:
+            {{- toYaml .Values.rsfTemplate.resources | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: settings
+          configMap:
+            name: {{ include "rsf-template.name" . }}-settings-configmap

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,5 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-helm uninstall -n dns-proxy nvcf-unbound
-helm install nvcf-unbound ../../../deploy/helm/nvcf-unbound -f ../../../deploy/helm/nvcf-unbound/values.yaml -n dns-proxy
+apiVersion: v2
+name: helm-nvcf-function-autoscaler
+description: "Rust Service Framework"
+
+type: application
+version: 0.0.0 # To be filled in by CI pipeline
+
+dependencies:
+- name: ov-otel-collector
+  version: "0.3.10"
+  repository: "https://helm.ngc.nvidia.com/shhh2i6mga69/devinfra"
+  condition: ov-otel-collector.enabled
