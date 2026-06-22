@@ -93,7 +93,7 @@ kyverno:
 
 webhook:
   enabled: true
-  image: nvcr.io/nv-ngc-devops/nvcf-pod-mutator:v0.2.1
+  image: nvcr.io/nv-ngc-devops/nvcf-unbound-webhook:0.9.1
   imagePullPolicy: IfNotPresent
   certificatesImage: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.5
   replicas: 2
