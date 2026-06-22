@@ -1,5 +1,14 @@
 # NVCF LLM API Gateway Helm Chart
 
+> [!IMPORTANT]
+> Active development of the helm-nvcf-llm-api-gateway chart has moved to
+> the NVCF umbrella monorepo. This repository is retained as
+> historical source context only; new commits, issues, and merge
+> requests should target the umbrella.
+>
+> Internal: https://github.com/NVIDIA/nvcf/nvcf/-/tree/main/deploy/helm/llm-api-gateway
+> Public mirror: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/llm-api-gateway
+
 This repository contains the Helm chart for deploying the NVCF LLM API Gateway on Kubernetes.
 
 ## Overview

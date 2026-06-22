@@ -1,5 +1,14 @@
 # NVCF cert-manager Helm Chart
 
+> [!IMPORTANT]
+> Active development of the helm-nvcf-cert-manager chart has moved to
+> the NVCF umbrella monorepo. This repository is retained as
+> historical source context only; new commits, issues, and merge
+> requests should target the umbrella.
+>
+> Internal: https://github.com/NVIDIA/nvcf/nvcf/-/tree/main/deploy/helm/cert-manager
+> Public mirror: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/cert-manager
+
 ## Scope
 
 This chart installs cert-manager for self-managed NVCF. It is intentionally a minimal wrapper around the pinned upstream Jetstack cert-manager Helm chart, not a fork of cert-manager and not a custom NVCF cert-manager implementation.
