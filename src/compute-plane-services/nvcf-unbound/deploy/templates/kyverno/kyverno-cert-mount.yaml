@@ -194,26 +194,6 @@ spec:
                   - name: extracted
                     mountPath: /extracted
 
-              # 3. Mount certificates to all init containers
-              - (name): "*"
-                env:
-                  - name: REQUESTS_CA_BUNDLE
-                    value: "/etc/ssl/certs/ca-certificates.crt"
-                  - name: SSL_CERT_FILE
-                    value: "/etc/ssl/certs/ca-certificates.crt"
-                  - name: AWS_CA_BUNDLE
-                    value: "/etc/ssl/certs/ca-certificates.crt"
-                  - name: NIM_SDK_USE_NATIVE_TLS
-                    value: "1"
-                  - name: NIM_SDK_DOWNLOAD_MAX_RETRY_COUNT
-                    value: "8"
-                  - name: NIM_SDK_DOWNLOAD_BACKOFF_INTERVAL_MS
-                    value: "500"
-                volumeMounts:
-                  - name: merged-certs
-                    mountPath: /etc/ssl/certs
-                    readOnly: true
-
     # -- Extract certificates from customer containers (dynamic rule) --
     # DISABLED: extract-customer-certificates (moved to combined rule to fix ordering)
     # This entire rule is commented out to prevent BusyBox dependency issues
@@ -370,6 +350,66 @@ spec:
     #                     mountPath: /tools
     #                   - name: extracted
     #                     mountPath: /extracted
+
+    # -- Mount certificate bundle into the original init containers --
+    # Only the pod's original init containers (for example "init") get the merged
+    # bundle mounted over /etc/ssl/certs. The injected cert-helper init containers
+    # (a-toolbox, b-extract-inference, fast-merge-certs) are deliberately excluded:
+    # b-extract-inference must read the inference image's own /etc/ssl/certs to
+    # extract its baked-in server.crt/server.key, so it must NOT have merged-certs
+    # mounted over that path. Iterating request.object.spec.initContainers naturally
+    # skips the helpers since they are added by this same policy.
+    - name: mount-init-bundle
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              operations: ["CREATE"]
+              namespaceSelector:
+                matchExpressions:
+                  - key: "nvca.nvcf.nvidia.io/spot-instance-type"
+                    operator: In
+                    values: [pod_spec, helm_chart, miniservice]
+          - resources:
+              kinds: ["Pod"]
+              operations: ["CREATE"]
+              namespaceSelector:
+                matchExpressions:
+                  - key: "nvca.nvcf.nvidia.io/workload-instance-type"
+                    operator: In
+                    values: [pod_spec, helm_chart, miniservice]
+      mutate:
+        foreach:
+          - list: "request.object.spec.initContainers"
+            preconditions:
+              all:
+                - key: "{{$oc}} element.name {{$cc}}"
+                  operator: AnyNotIn
+                  value:
+                    - a-toolbox
+                    - b-extract-inference
+                    - fast-merge-certs
+            patchStrategicMerge:
+              spec:
+                initContainers:
+                  - name: "{{$oc}} element.name {{$cc}}"
+                    env:
+                      - name: REQUESTS_CA_BUNDLE
+                        value: "/etc/ssl/certs/ca-certificates.crt"
+                      - name: SSL_CERT_FILE
+                        value: "/etc/ssl/certs/ca-certificates.crt"
+                      - name: AWS_CA_BUNDLE
+                        value: "/etc/ssl/certs/ca-certificates.crt"
+                      - name: NIM_SDK_USE_NATIVE_TLS
+                        value: "1"
+                      - name: NIM_SDK_DOWNLOAD_MAX_RETRY_COUNT
+                        value: "8"
+                      - name: NIM_SDK_DOWNLOAD_BACKOFF_INTERVAL_MS
+                        value: "500"
+                    volumeMounts:
+                      - name: merged-certs
+                        mountPath: /etc/ssl/certs
+                        readOnly: true
 
     # -- Mount certificate bundle into all regular containers --
     - name: mount-bundle
