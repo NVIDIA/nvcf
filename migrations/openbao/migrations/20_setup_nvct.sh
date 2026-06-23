@@ -150,7 +150,8 @@ API_KEYS_API_SERVICE_ACCOUNT_NAMESPACE="api-keys"
 API_KEYS_API_SERVICE_ACCOUNT_NAME="api-keys-api"
 API_KEYS_API_SECRET_BASE_PATH="services/${API_KEYS_API_SERVICE_ACCOUNT_NAME}"
 API_KEYS_API_SECRET_POLICY_PATH="services-${API_KEYS_API_SERVICE_ACCOUNT_NAME}"
-SCOPES="KEY_ADMIN"
+# API Keys service (NAK) does not enforce scopes, so none are issued
+SCOPES=""
 
 #-------------------------------------------
 # Create JWT Secret Role for NVCF JWT Signer
