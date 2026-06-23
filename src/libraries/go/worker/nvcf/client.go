@@ -422,8 +422,19 @@ func newNatsConnection(nvcfFqdnNats string, nkeySeed *string, nvcfTokenProvider 
 			expBackoff.Reset()
 		}),
 		nats.ErrorHandler(func(conn *nats.Conn, sub *nats.Subscription, err error) {
-			zap.L().Warn("nats connection error", zap.Error(err))
 			nvcfMetrics.NatsErrorCounter.Inc()
+			fields := []zap.Field{zap.Error(err), zap.String("function version id", functionVersionId)}
+			if sub != nil {
+				fields = append(fields, zap.String("subject", sub.Subject), zap.String("queue", sub.Queue))
+			}
+			// Permission violations are rejected asynchronously (Subscribe/Publish return nil),
+			// so log loudly to expose a subject missing from the worker's NATS allow-list.
+			if errors.Is(err, nats.ErrPermissionViolation) {
+				zap.L().Error("nats permission violation; a subject is likely missing from the worker allow-list",
+					append(fields, utils.PublicLogMarker)...)
+				return
+			}
+			zap.L().Warn("nats connection error", fields...)
 		}),
 		nats.ConnectHandler(func(conn *nats.Conn) {
 			zap.L().Info("connected to nats", zap.String("server", conn.ConnectedServerName()), zap.String("cluster", conn.ConnectedClusterName()))
