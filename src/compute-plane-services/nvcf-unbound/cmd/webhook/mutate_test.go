@@ -906,8 +906,10 @@ func TestMutateCertificates_MountToInitContainers(t *testing.T) {
 
 	patches := mutateCertificates(pod)
 
-	// All 3 existing init containers should get the cert mount.
-	// After our 2 init containers are prepended, indices are 2, 3, 4.
+	// Only init containers matching *init* or *download* get the mount.
+	// After our 2 helper init containers are prepended, the consumer indices
+	// are: my-init-container=2 (init), download-ngc-model=3 (download),
+	// setup=4 (no match, skipped).
 	foundMounts := map[int]bool{}
 	for _, patch := range patches {
 		for _, idx := range []int{2, 3, 4} {
@@ -918,10 +920,13 @@ func TestMutateCertificates_MountToInitContainers(t *testing.T) {
 		}
 	}
 
-	for _, idx := range []int{2, 3, 4} {
+	for _, idx := range []int{2, 3} {
 		if !foundMounts[idx] {
 			t.Errorf("Expected mount patch for init container at index %d", idx)
 		}
+	}
+	if foundMounts[4] {
+		t.Error("Did not expect mount patch for 'setup' init container (no *init*/*download* match)")
 	}
 }
 

@@ -297,7 +297,8 @@ func securityContext() *corev1.SecurityContext {
 	}
 }
 
-// mountCertsInInitContainers mounts certs to all existing init containers
+// mountCertsInInitContainers mounts certs to existing init containers whose
+// name matches *init* or *download* (mirrors the Kyverno chart's anchor).
 func mountCertsInInitContainers(pod *corev1.Pod) []JSONPatch {
 	patches := []JSONPatch{}
 
@@ -310,6 +311,13 @@ func mountCertsInInitContainers(pod *corev1.Pod) []JSONPatch {
 	for i, container := range pod.Spec.InitContainers {
 		// Skip our own init containers
 		if container.Name == "a-toolbox" || container.Name == "b-extract-inference" || container.Name == "fast-merge-certs" {
+			continue
+		}
+
+		// Only consumer init containers get the merged bundle: match *init* or
+		// *download* substrings, matching the Kyverno chart's anchor pattern.
+		lname := strings.ToLower(container.Name)
+		if !strings.Contains(lname, "init") && !strings.Contains(lname, "download") {
 			continue
 		}
 
