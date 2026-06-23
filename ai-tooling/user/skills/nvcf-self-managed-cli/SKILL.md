@@ -122,6 +122,8 @@ nvcf-cli self-hosted uninstall --no-apply --compute-plane --cluster-name=ncp-loc
 
 Use `functionType: "LLM"` for OpenAI-compatible models served through the self-managed LLM Gateway. LLM functions must define at least one `models[]` entry with `name` and `llmConfig.uris`; the supported upstream paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
 
+Use `/health` on port `8000` as the default OpenAI-compatible container health probe unless the image exposes a different readiness path.
+
 LLM function type is independent of workload packaging. For a Helm-chart backed LLM function, keep `functionType: "LLM"` and `models[].llmConfig`, then set `helmChart` and `helmChartServiceName` in the create request. `helmChartServiceName` must match the Kubernetes Service exposed by the chart, and `inferencePort` must be that Service port.
 
 Invocation uses the LLM route, for example `https://llm.invocation.<domain>/v1/chat/completions`. The OpenAI `model` value must be `<function-id>/<model-name>`; the function ID is the routing key and the model name is forwarded upstream.

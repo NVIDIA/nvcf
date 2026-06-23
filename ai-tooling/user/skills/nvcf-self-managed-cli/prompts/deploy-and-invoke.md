@@ -48,6 +48,13 @@ Before creating the function, confirm the exact function name, container image, 
   "inferenceUrl": "/",
   "inferencePort": 8000,
   "functionType": "LLM",
+  "health": {
+    "protocol": "HTTP",
+    "uri": "/health",
+    "port": 8000,
+    "timeout": "PT30S",
+    "expectedStatusCode": 200
+  },
   "models": [
     {
       "name": "<confirmed-model-name>",
@@ -69,6 +76,11 @@ nvcf-cli function create \
   --image="<confirmed-container-image>" \
   --inference-url=/ \
   --inference-port=8000 \
+  --health-uri=/health \
+  --health-port=8000 \
+  --health-timeout=PT30S \
+  --health-protocol=HTTP \
+  --health-expected-status=200 \
   --function-type=LLM \
   --llm-model='name=<confirmed-model-name>,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S'
 ```
@@ -128,6 +140,11 @@ nvcf-cli function create \
   --name="<confirmed-function-name>" \
   --inference-url=/ \
   --inference-port=8000 \
+  --health-uri=/health \
+  --health-port=8000 \
+  --health-timeout=PT30S \
+  --health-protocol=HTTP \
+  --health-expected-status=200 \
   --function-type=LLM \
   --helm-chart=https://helm.ngc.nvidia.com/example/team/charts/openai-compatible-0.1.0.tgz \
   --helm-chart-service=openai-compatible \
