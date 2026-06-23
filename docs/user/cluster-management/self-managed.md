@@ -430,6 +430,13 @@ kubectl get nvcfbackends -n nvca-operator -o jsonpath='{.items[0].status}' | pyt
 # Look for GPU information in the status output
 ```
 
+### Optional Nsight Profiling
+
+After NVCA is healthy, you can install NVIDIA Nsight Operator on the GPU cluster
+to collect NVIDIA Nsight Systems reports from function pods. See
+[Nsight Profiling](./nsight-profiling.md) for external S3 storage setup,
+namespace labeling, Kyverno automation, and capture commands.
+
 ### Verify Workload Scheduling
 
 Use this check only when worker pods on the GPU cluster can reach the

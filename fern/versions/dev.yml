@@ -46,6 +46,8 @@ navigation:
         path: ../../docs/user/cluster-management/index.md
       - page: Self-Managed Clusters
         path: ../../docs/user/cluster-management/self-managed.md
+      - page: Nsight Profiling
+        path: ../../docs/user/cluster-management/nsight-profiling.md
 
   - section: Configuration
     skip-slug: true
