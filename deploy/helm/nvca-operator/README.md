@@ -8,6 +8,27 @@ The chart packages the NVCA Operator deployment, which manages NVCA agent pods a
 
 The default chart values do not set the required image registry and repository. They must be supplied through an additional values file at install time, and access to those images must be arranged separately.
 
+## Chart Layout
+
+This subtree intentionally keeps a release chart even though the NVCA source
+tree also contains a source chart:
+
+- `src/compute-plane-services/nvca/deployments/nvca-operator` is the source
+  chart kept next to the operator and agent code. Use it when chart behavior is
+  coupled to NVCA code changes.
+- `deploy/helm/nvca-operator/nvca-operator` is the NVCF release chart for
+  self-managed deployments. `make vendor-chart` regenerates it from the source
+  chart and then applies the release-specific defaults, chart name
+  `helm-nvca-operator`, version metadata, self-managed placeholder endpoints,
+  image defaults, supplemental image metadata, and license headers.
+- Keeping both charts avoids a release chart that must reach back into the NVCA
+  source tree at publish time, while still making behavior changes start beside
+  the code they ship with.
+
+Do not edit the vendored chart copy in isolation for source chart behavior.
+Make the source chart change first, run `make vendor-chart`, and commit the
+resulting release chart diff.
+
 Example:
 
 ```yaml

@@ -34,7 +34,7 @@ spec:
         {{- include "nvcaop.baseSelectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: cleanup
     spec:
-      serviceAccountName: {{ include "nvcaop.serviceAccountName" . }}
+      serviceAccountName: {{ include "nvcaop.fullname" . }}-pre-delete-cleanup
       automountServiceAccountToken: true
       {{- if or .Values.generateImagePullSecret (gt (len .Values.imagePullSecrets) 0) }}
       imagePullSecrets:
@@ -80,6 +80,8 @@ spec:
           - "{{ include "nvcaop.fullname" . }}"
           - --service-account-name
           - "{{ include "nvcaop.serviceAccountName" . }}"
+          - --hook-cluster-role-binding-name
+          - "{{ include "nvcaop.fullname" . }}-pre-delete-cleanup"
           - --log-level
           - "{{ .Values.logLevel }}"
         resources:

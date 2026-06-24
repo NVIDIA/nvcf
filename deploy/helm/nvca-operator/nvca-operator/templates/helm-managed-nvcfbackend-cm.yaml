@@ -74,15 +74,22 @@ data:
         tag: {{ .imageTag | quote }}
     {{- end }}
     {{- end }}
+    {{- $serviceOAuth := ((.Values.agent).serviceOAuth) | default dict }}
+    {{- $helmReVal := $serviceOAuth.helmReVal | default dict }}
+    {{- $helmReValStage := $helmReVal.stage | default dict }}
+    {{- $helmReValProd := $helmReVal.prod | default dict }}
+    {{- $fds := $serviceOAuth.functionDeploymentStages | default dict }}
+    {{- $fdsStage := $fds.stage | default dict }}
+    {{- $fdsProd := $fds.prod | default dict }}
     agent:
-      helmReValStageOAuthTokenURL: {{ .Values.agent.serviceOAuth.helmReVal.stage.tokenURL | quote }}
-      helmReValStageOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.helmReVal.stage.publicKeysetEndpoint | quote }}
-      helmReValProdOAuthTokenURL: {{ .Values.agent.serviceOAuth.helmReVal.prod.tokenURL | quote }}
-      helmReValProdOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.helmReVal.prod.publicKeysetEndpoint | quote }}
-      functionDeploymentStagesStageOAuthTokenURL: {{ .Values.agent.serviceOAuth.functionDeploymentStages.stage.tokenURL | quote }}
-      functionDeploymentStagesStageOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.functionDeploymentStages.stage.publicKeysetEndpoint | quote }}
-      functionDeploymentStagesProdOAuthTokenURL: {{ .Values.agent.serviceOAuth.functionDeploymentStages.prod.tokenURL | quote }}
-      functionDeploymentStagesProdOAuthPublicKeysetEndpoint: {{ .Values.agent.serviceOAuth.functionDeploymentStages.prod.publicKeysetEndpoint | quote }}
+      helmReValStageOAuthTokenURL: {{ $helmReValStage.tokenURL | default "" | quote }}
+      helmReValStageOAuthPublicKeysetEndpoint: {{ $helmReValStage.publicKeysetEndpoint | default "" | quote }}
+      helmReValProdOAuthTokenURL: {{ $helmReValProd.tokenURL | default "" | quote }}
+      helmReValProdOAuthPublicKeysetEndpoint: {{ $helmReValProd.publicKeysetEndpoint | default "" | quote }}
+      functionDeploymentStagesStageOAuthTokenURL: {{ $fdsStage.tokenURL | default "" | quote }}
+      functionDeploymentStagesStageOAuthPublicKeysetEndpoint: {{ $fdsStage.publicKeysetEndpoint | default "" | quote }}
+      functionDeploymentStagesProdOAuthTokenURL: {{ $fdsProd.tokenURL | default "" | quote }}
+      functionDeploymentStagesProdOAuthPublicKeysetEndpoint: {{ $fdsProd.publicKeysetEndpoint | default "" | quote }}
     {{- with .Values.agent.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
