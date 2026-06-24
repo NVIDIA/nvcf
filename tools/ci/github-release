@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+SEMVER_PATTERN = r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:rc|dev)\.(?:0|[1-9]\d*))?"
+RELEASE_RULES = [
+    {"type": "feat", "release": "minor"},
+    {"type": "fix", "release": "patch"},
+    {"type": "perf", "release": "patch"},
+    {"type": "chore", "release": False},
+    {"type": "ci", "release": False},
+    {"type": "docs", "release": False},
+    {"type": "style", "release": False},
+    {"type": "refactor", "release": False},
+    {"type": "test", "release": False},
+    {"type": "build", "release": False},
+]
+
+
+def bool_env(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def run(args, cwd=None, check=True, capture=False, env=None):
+    if capture:
+        result = subprocess.run(
+            args,
+            cwd=cwd,
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if check and result.returncode != 0:
+            sys.stdout.write(result.stdout)
+            raise subprocess.CalledProcessError(result.returncode, args)
+        return result.stdout
+
+    result = subprocess.run(args, cwd=cwd, env=env, check=False)
+    if check and result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, args)
+    return ""
+
+
+def stream(args, cwd=None, env=None):
+    proc = subprocess.Popen(
+        args,
+        cwd=cwd,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    output = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        output.append(line)
+        sys.stdout.write(line)
+    return proc.wait(), "".join(output)
+
+
+def repo_root():
+    return Path(run(["git", "rev-parse", "--show-toplevel"], capture=True).strip())
+
+
+def load_metadata(root, metadata_path):
+    path = Path(metadata_path)
+    if not path.is_absolute():
+        path = root / path
+    with path.open() as f:
+        metadata = json.load(f)
+    if metadata.get("version") != 1:
+        raise SystemExit(f"unsupported GitHub release metadata version: {metadata.get('version')}")
+    return metadata
+
+
+def semverish_sort_key(value):
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", value)]
+
+
+def latest_service_tag(service_name):
+    raw = run(["git", "tag", "-l", f"{service_name}-v*"], capture=True)
+    tags = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not tags:
+        return ""
+    return sorted(tags, key=semverish_sort_key)[-1]
+
+
+def only_generated_changes(root, service, generated_paths):
+    service_path = service["path"]
+    last_tag = latest_service_tag(service["service_name"])
+    log_range = f"{last_tag}..HEAD" if last_tag else "HEAD"
+    raw = run(
+        ["git", "log", log_range, "--name-only", "--pretty=format:", "--", service_path],
+        cwd=root,
+        capture=True,
+    )
+    changed = sorted({line.strip() for line in raw.splitlines() if line.strip()})
+    if not changed:
+        print(
+            f"[github-release] {service['id']}: no commits under {service_path} "
+            f"since {last_tag or '<root>'}; skipping"
+        )
+        return True
+    generated = set(generated_paths)
+    real = [path for path in changed if Path(path).name not in generated]
+    if real:
+        return False
+    print(
+        f"[github-release] {service['id']}: only generated/mechanical files changed "
+        f"under {service_path} since {last_tag or '<root>'}; skipping"
+    )
+    return True
+
+
+def write_semantic_release_files(service_dir, service_name, publish, draft):
+    deps = {
+        "semantic-release": "17.4.4",
+        "semantic-release-monorepo": "^7.0.0",
+    }
+    plugins = [
+        ["@semantic-release/commit-analyzer", {"releaseRules": RELEASE_RULES}],
+        "@semantic-release/release-notes-generator",
+    ]
+    if publish:
+        deps["@semantic-release/github"] = "7.2.3"
+        plugins.append(["@semantic-release/github", {"draftRelease": draft}])
+
+    package_json = {
+        "name": service_name,
+        "version": "1.0.0",
+        "private": True,
+        "devDependencies": deps,
+    }
+    release_config = {
+        "extends": "semantic-release-monorepo",
+        "tagFormat": f"{service_name}-v${{version}}",
+        "branches": ["main"],
+        "plugins": plugins,
+    }
+    (service_dir / "package.json").write_text(json.dumps(package_json, indent=2) + "\n")
+    (service_dir / ".releaserc.json").write_text(json.dumps(release_config, indent=2) + "\n")
+
+
+def install_semantic_release(service_dir):
+    run(["npm", "install", "--package-lock=false"], cwd=service_dir)
+
+
+def parse_next_version(output):
+    match = re.search(r"next release version is\s+([^\s]+)", output, flags=re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def no_release_output(output):
+    return any(
+        phrase in output
+        for phrase in (
+            "no relevant changes",
+            "There are no commits",
+            "is behind the remote",
+        )
+    )
+
+
+def validate_version_file(root, service):
+    service_dir = root / service["path"]
+    version_file = service.get("version_file") or ""
+    version_path = service_dir / version_file
+    if not version_path.is_file():
+        raise SystemExit(f"{service['id']}: version_file {version_file} not found")
+
+    version = version_path.read_text().strip().lstrip("v")
+    if not re.fullmatch(SEMVER_PATTERN, version):
+        raise SystemExit(f"{service['id']}: {version_file} does not contain a supported SemVer: {version}")
+
+    source_file = service.get("version_major_minor_source_file") or ""
+    if source_file:
+        source_path = service_dir / source_file
+        if not source_path.is_file():
+            raise SystemExit(f"{service['id']}: version_major_minor_source_file {source_file} not found")
+        source = re.search(r"v?(\d+\.\d+\.\d+)", source_path.read_text())
+        if not source:
+            raise SystemExit(f"{service['id']}: no semantic version found in {source_file}")
+        if ".".join(source.group(1).split(".")[:2]) != ".".join(version.split("-")[0].split(".")[:2]):
+            raise SystemExit(
+                f"{service['id']}: {version_file}={version} does not match "
+                f"{source_file} major/minor {source.group(1)}"
+            )
+    return version
+
+
+def create_release(tag, title, notes, draft, dry_run):
+    if dry_run:
+        print(f"[github-release] dry-run: would create GitHub release {tag}")
+        print(notes)
+        return
+    view = subprocess.run(["gh", "release", "view", tag], text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if view.returncode == 0:
+        print(f"[github-release] GitHub release {tag} already exists; leaving it unchanged")
+        return
+    cmd = ["gh", "release", "create", tag, "--verify-tag", "--title", title, "--notes", notes]
+    if draft:
+        cmd.append("--draft")
+    run(cmd)
+
+
+def publish_version_file_release(root, service, dry_run, draft):
+    version = validate_version_file(root, service)
+    tag = f"{service['service_name']}-v{version}"
+    existing = run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"], capture=True, check=False).strip()
+    if existing:
+        print(f"[github-release] {service['id']}: {tag} already exists; skipping")
+        return
+    notes = f"Release {tag}\n\nPackage version: {version}"
+    if dry_run:
+        print(f"[github-release] {service['id']}: would create {tag} at HEAD")
+        print(notes)
+        return
+    run(["git", "tag", tag, "HEAD"], cwd=root)
+    run(["git", "push", "origin", f"refs/tags/{tag}"], cwd=root)
+    create_release(tag, tag, notes, draft, dry_run=False)
+
+
+def auto_release(args):
+    root = repo_root()
+    metadata = load_metadata(root, args.metadata)
+    dry_run = bool_env("NVCF_GITHUB_RELEASE_DRY_RUN", True)
+    draft = bool_env("NVCF_GITHUB_RELEASE_DRAFT", False)
+    service_filter = args.service or os.environ.get("NVCF_GITHUB_RELEASE_SERVICE", "")
+    generated_paths = metadata.get("release_generated_paths", [])
+
+    print(
+        f"[github-release] mode={'dry-run' if dry_run else 'publish'} "
+        f"draft={str(draft).lower()} service_filter={service_filter or '<all>'}"
+    )
+
+    for service in metadata.get("services", []):
+        if service_filter and service_filter not in {service["id"], service["service_name"]}:
+            continue
+        service_dir = root / service["path"]
+        if not service_dir.is_dir():
+            print(f"[github-release] {service['id']}: {service['path']} is not present in this checkout; skipping")
+            continue
+
+        print(f"::group::github-release {service['id']}")
+        try:
+            if service.get("version_file"):
+                publish_version_file_release(root, service, dry_run=dry_run, draft=draft)
+                continue
+
+            if only_generated_changes(root, service, generated_paths):
+                continue
+
+            write_semantic_release_files(service_dir, service["service_name"], publish=not dry_run, draft=draft)
+            install_semantic_release(service_dir)
+
+            if dry_run:
+                code, output = stream(["npx", "semantic-release", "--dry-run", "--no-ci", "--debug"], cwd=service_dir)
+                next_version = parse_next_version(output)
+                if next_version:
+                    print(f"[github-release] {service['id']}: would create {service['service_name']}-v{next_version}")
+                elif code == 0 and no_release_output(output):
+                    print(f"[github-release] {service['id']}: no release-worthy commits")
+                else:
+                    raise SystemExit(f"{service['id']}: semantic-release dry-run produced no NEXT_VERSION")
+            else:
+                run(["npx", "semantic-release", "--no-ci"], cwd=service_dir)
+        finally:
+            print("::endgroup::")
+
+
+def parse_release_tag(tag, metadata):
+    path_match = re.fullmatch(rf"(?P<package>[A-Za-z0-9._/-]+)/v(?P<version>{SEMVER_PATTERN})", tag)
+    if path_match and not path_match.group("package").startswith("/"):
+        return {
+            "kind": "path",
+            "package": path_match.group("package"),
+            "version": path_match.group("version"),
+        }
+
+    for service in metadata.get("services", []):
+        prefix = f"{service['service_name']}-v"
+        if tag.startswith(prefix):
+            version = tag[len(prefix) :]
+            if re.fullmatch(SEMVER_PATTERN, version):
+                return {
+                    "kind": "service",
+                    "package": service["service_name"],
+                    "version": version,
+                }
+    return {}
+
+
+def release_branch(parsed):
+    major_minor = ".".join(parsed["version"].split("-")[0].split(".")[:2])
+    if parsed["kind"] == "path":
+        return f"release-{parsed['package']}/v{major_minor}"
+    return f"release-{parsed['package']}-v{major_minor}"
+
+
+def tag_release(args):
+    root = repo_root()
+    metadata = load_metadata(root, args.metadata)
+    tag = args.tag or os.environ.get("GITHUB_REF_NAME", "")
+    if not tag:
+        raise SystemExit("tag mode requires a tag argument or GITHUB_REF_NAME")
+
+    dry_run = bool_env("NVCF_GITHUB_RELEASE_DRY_RUN", True)
+    draft = bool_env("NVCF_GITHUB_RELEASE_DRAFT", False)
+    parsed = parse_release_tag(tag, metadata)
+    if not parsed:
+        print(f"[github-release] {tag} is not a supported release tag; skipping")
+        return
+
+    branch = release_branch(parsed)
+    notes = "\n".join(
+        [
+            f"Release {tag}",
+            "",
+            f"Package: {parsed['package']}",
+            f"Version: {parsed['version']}",
+            f"Release branch: {branch}",
+        ]
+    )
+    print(
+        f"[github-release] valid {parsed['kind']} release tag: tag={tag} "
+        f"version={parsed['version']} release_branch={branch}"
+    )
+    create_release(tag, tag, notes, draft=draft, dry_run=dry_run)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="GitHub release automation for NVCF")
+    parser.add_argument(
+        "--metadata",
+        default=os.environ.get("NVCF_GITHUB_RELEASE_METADATA", "tools/ci/github-release-subprojects.json"),
+        help="path to generated GitHub release metadata",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    auto = subparsers.add_parser("auto", help="compute or publish service release tags")
+    auto.add_argument("--service", default="", help="optional service id or service_name filter")
+    auto.set_defaults(func=auto_release)
+
+    tag = subparsers.add_parser("tag", help="validate a pushed tag and create release notes")
+    tag.add_argument("tag", nargs="?", help="tag name, defaults to GITHUB_REF_NAME")
+    tag.set_defaults(func=tag_release)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

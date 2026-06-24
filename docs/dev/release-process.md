@@ -9,6 +9,9 @@ Pre-cutover services kept their own repo with manual chart-version /
 image-version bumps. Once a service moves to the umbrella, it joins
 this shared auto-versioning machinery.
 
+For the public GitHub-side dry-run workflow and release tag
+conventions, see [GitHub Release Automation](github-release-process.md).
+
 ## Summary
 
 | Step | What | Where |
@@ -44,14 +47,12 @@ service (see `tools/generate-subproject-ci/main.go` for the
 `.releaserc.json` template) currently bump:
 
 - `feat:` -> minor
-- `fix:` / `chore:` / `refactor:` / `style:` / `docs:` / `ci:` / `perf:` -> patch
+- `fix:` / `perf:` -> patch
 
-This is more aggressive than vanilla semantic-release defaults
-(`feat` / `fix` / `perf` only); the umbrella opts in to releasing on
-chore + docs + ci so internal-only refactors still get a fresh image
-and chart that match the latest commit. If you do not want a commit
-to trigger a release, use a commit subject that does not match any
-of these types (e.g. `wip:` or no type at all).
+`chore:`, `ci:`, `docs:`, `style:`, `refactor:`, `test:`, and
+`build:` do not create a release. If you do not want a commit to
+trigger a release, use one of those non-releasing types or a commit
+subject that does not match a Conventional Commits type.
 
 ### Path scoping (how monorepo commits filter per service)
 

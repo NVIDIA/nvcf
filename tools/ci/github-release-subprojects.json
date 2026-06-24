@@ -1,0 +1,192 @@
+{
+  "version": 1,
+  "generated_by": "go run -C tools/generate-subproject-ci . --config ../ci/subproject-validations.yaml --github-release-output ../ci/github-release-subprojects.json",
+  "release_generated_paths": [
+    "MODULE.bazel.lock",
+    ".oss-allowlist"
+  ],
+  "services": [
+    {
+      "id": "nvcf-cli",
+      "path": "src/clis/nvcf-cli",
+      "service_name": "nvcf-cli",
+      "tag_format": "nvcf-cli-v${version}"
+    },
+    {
+      "id": "nvcf-compute-plane-stack",
+      "path": "deploy/stacks/nvcf-compute-plane",
+      "service_name": "nvcf-compute-plane-stack",
+      "tag_format": "nvcf-compute-plane-stack-v${version}"
+    },
+    {
+      "id": "grpc-proxy",
+      "path": "src/invocation-plane-services/grpc-proxy",
+      "service_name": "nvcf-grpc-proxy",
+      "tag_format": "nvcf-grpc-proxy-v${version}"
+    },
+    {
+      "id": "grpc-proxy-helm",
+      "path": "deploy/helm/grpc-proxy",
+      "service_name": "helm-nvcf-grpc-proxy",
+      "tag_format": "helm-nvcf-grpc-proxy-v${version}"
+    },
+    {
+      "id": "ratelimiter",
+      "path": "src/invocation-plane-services/ratelimiter",
+      "service_name": "nvcf-ratelimiter",
+      "tag_format": "nvcf-ratelimiter-v${version}"
+    },
+    {
+      "id": "ratelimiter-helm",
+      "path": "deploy/helm/ratelimiter",
+      "service_name": "helm-nvcf-rate-limiter",
+      "tag_format": "helm-nvcf-rate-limiter-v${version}"
+    },
+    {
+      "id": "http-invocation",
+      "path": "src/invocation-plane-services/http-invocation",
+      "service_name": "nvcf-invocation-service",
+      "tag_format": "nvcf-invocation-service-v${version}"
+    },
+    {
+      "id": "stargate",
+      "path": "src/libraries/rust/stargate",
+      "service_name": "stargate",
+      "tag_format": "stargate-v${version}"
+    },
+    {
+      "id": "llm-api-gateway",
+      "path": "src/invocation-plane-services/llm-api-gateway",
+      "service_name": "nvcf-llm-api-gateway",
+      "tag_format": "nvcf-llm-api-gateway-v${version}"
+    },
+    {
+      "id": "llm-api-gateway-helm",
+      "path": "deploy/helm/llm-api-gateway",
+      "service_name": "helm-nvcf-llm-api-gateway",
+      "tag_format": "helm-nvcf-llm-api-gateway-v${version}"
+    },
+    {
+      "id": "vanity-gateway",
+      "path": "src/invocation-plane-services/vanity-gateway",
+      "service_name": "nvcf-ai-api-gateway-service",
+      "tag_format": "nvcf-ai-api-gateway-service-v${version}"
+    },
+    {
+      "id": "function-autoscaler",
+      "path": "src/control-plane-services/function-autoscaler",
+      "service_name": "nvcf-function-autoscaler",
+      "tag_format": "nvcf-function-autoscaler-v${version}"
+    },
+    {
+      "id": "nats-auth-callout",
+      "path": "src/control-plane-services/nats-auth-callout",
+      "service_name": "nvcf-nats-auth-callout-service",
+      "tag_format": "nvcf-nats-auth-callout-service-v${version}"
+    },
+    {
+      "id": "nvcf-unbound",
+      "path": "src/compute-plane-services/nvcf-unbound",
+      "service_name": "nvcf-unbound",
+      "tag_format": "nvcf-unbound-v${version}"
+    },
+    {
+      "id": "helm-reval",
+      "path": "src/control-plane-services/helm-reval",
+      "service_name": "nvcf-helm-reval-api",
+      "tag_format": "nvcf-helm-reval-api-v${version}"
+    },
+    {
+      "id": "ess-agent",
+      "path": "src/compute-plane-services/ess-agent",
+      "service_name": "nvcf-ess-agent",
+      "tag_format": "nvcf-ess-agent-v${version}"
+    },
+    {
+      "id": "byoo-otel-collector",
+      "path": "src/compute-plane-services/byoo-otel-collector",
+      "service_name": "byoo-otel-collector",
+      "tag_format": "byoo-otel-collector-v${version}",
+      "version_file": "VERSION",
+      "version_major_minor_source_file": "otel-collector-build.yaml"
+    },
+    {
+      "id": "container-cache",
+      "path": "deploy/helm/container-cache",
+      "service_name": "nvcf-container-cache",
+      "tag_format": "nvcf-container-cache-v${version}"
+    },
+    {
+      "id": "nats",
+      "path": "deploy/helm/nats",
+      "service_name": "helm-nvcf-nats",
+      "tag_format": "helm-nvcf-nats-v${version}"
+    },
+    {
+      "id": "admin-token-issuer-proxy",
+      "path": "deploy/helm/admin-token-issuer-proxy",
+      "service_name": "helm-admin-token-issuer-proxy",
+      "tag_format": "helm-admin-token-issuer-proxy-v${version}"
+    },
+    {
+      "id": "cassandra",
+      "path": "deploy/helm/cassandra",
+      "service_name": "helm-nvcf-cassandra",
+      "tag_format": "helm-nvcf-cassandra-v${version}"
+    },
+    {
+      "id": "api-keys-colocated",
+      "path": "deploy/helm/api-keys-colocated",
+      "service_name": "helm-nvcf-api-keys",
+      "tag_format": "helm-nvcf-api-keys-v${version}"
+    },
+    {
+      "id": "openbao",
+      "path": "deploy/helm/openbao",
+      "service_name": "helm-nvcf-openbao-server",
+      "tag_format": "helm-nvcf-openbao-server-v${version}"
+    },
+    {
+      "id": "cert-manager",
+      "path": "deploy/helm/cert-manager",
+      "service_name": "helm-nvcf-cert-manager",
+      "tag_format": "helm-nvcf-cert-manager-v${version}"
+    },
+    {
+      "id": "llm-request-router",
+      "path": "deploy/helm/llm-request-router",
+      "service_name": "helm-nvcf-llm-request-router",
+      "tag_format": "helm-nvcf-llm-request-router-v${version}"
+    },
+    {
+      "id": "gateway-routes",
+      "path": "deploy/helm/gateway-routes",
+      "service_name": "nvcf-gateway-routes",
+      "tag_format": "nvcf-gateway-routes-v${version}"
+    },
+    {
+      "id": "nvca-operator",
+      "path": "deploy/helm/nvca-operator",
+      "service_name": "helm-nvca-operator",
+      "tag_format": "helm-nvca-operator-v${version}"
+    },
+    {
+      "id": "cassandra-migrations",
+      "path": "migrations/cassandra",
+      "service_name": "nvcf-cassandra-migrations",
+      "tag_format": "nvcf-cassandra-migrations-v${version}"
+    },
+    {
+      "id": "openbao-migrations",
+      "path": "migrations/openbao",
+      "service_name": "nvcf-openbao-migrations",
+      "tag_format": "nvcf-openbao-migrations-v${version}"
+    },
+    {
+      "id": "image-credential-helper",
+      "path": "src/compute-plane-services/image-credential-helper",
+      "service_name": "nvcf-image-credential-helper",
+      "tag_format": "nvcf-image-credential-helper-v${version}"
+    }
+  ]
+}

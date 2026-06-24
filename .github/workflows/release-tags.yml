@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: release-tags
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - '*-v*'
+      - '**/v*'
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Optional service id or service_name to dry-run/publish.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-tags-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Keep GitHub release automation inert until the migration cutover is ready.
+  # Set the repository variable NVCF_GITHUB_RELEASE_DRY_RUN=false to allow
+  # branch pushes to create service tags and tag pushes to create GitHub releases.
+  NVCF_GITHUB_RELEASE_DRY_RUN: ${{ vars.NVCF_GITHUB_RELEASE_DRY_RUN || 'true' }}
+  NVCF_GITHUB_RELEASE_DRAFT: ${{ vars.NVCF_GITHUB_RELEASE_DRAFT || 'false' }}
+  GH_TOKEN: ${{ github.token }}
+  GITHUB_TOKEN: ${{ github.token }}
+
+jobs:
+  service-release:
+    name: service release automation
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch semantic-release notes
+        run: git fetch origin '+refs/notes/semantic-release:refs/notes/semantic-release' || true
+
+      - name: Run service release automation
+        env:
+          NVCF_GITHUB_RELEASE_SERVICE: ${{ github.event_name == 'workflow_dispatch' && inputs.service || '' }}
+        run: ./tools/ci/github-release auto
+
+  tag-release-notes:
+    name: tag release notes
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate tag and create release notes
+        run: ./tools/ci/github-release tag "$GITHUB_REF_NAME"
