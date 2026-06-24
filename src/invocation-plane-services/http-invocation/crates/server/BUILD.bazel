@@ -104,11 +104,24 @@ pkg_tar(
     visibility = ["//visibility:private"],
 )
 
+# The distroless/cc base ships ENTRYPOINT ["/usr/bin/shelless_ulimit"], a shim
+# that raises RLIMIT_NOFILE (soft -> hard, 65536) when ULIMIT_FLAG=1 before
+# exec'ing its arguments. The legacy Dockerfile relied on that base entrypoint
+# plus `ENV ULIMIT_FLAG=1` and `CMD ["/usr/local/bin/server"]`. rust_oci_image
+# otherwise overrides the entrypoint with just [binary_path], which bypasses the
+# shim and leaves the default 1024 soft fd limit -- the service exhausts it
+# under load ("Too many open files"). Restore the shim + flag so the Bazel image
+# behaves like the Dockerfile did.
 rust_oci_image(
     name = "image",
     base = "@distroless_cc",
     binary = ":server",
     binary_path = "/usr/local/bin/server",
+    entrypoint = [
+        "/usr/bin/shelless_ulimit",
+        "/usr/local/bin/server",
+    ],
+    env = {"ULIMIT_FLAG": "1"},
     tags = ["nvcf-invocation-service"],
     visibility = ["//visibility:public"],
     extra_layers = [":config_layer"],
