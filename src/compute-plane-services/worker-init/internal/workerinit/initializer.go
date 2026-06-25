@@ -20,12 +20,11 @@ package workerinit
 import (
 	"context"
 	"net/url"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
 	"path/filepath"
 	"time"
 
-	"go.uber.org/zap"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	"go.uber.org/zap"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/configs"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/internal/downloader"
@@ -33,6 +32,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/pkg/ess"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
 )
 
 type baseInitializer struct {

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2/hclsimple"
@@ -70,6 +71,98 @@ func TestEssSetup(t *testing.T) {
 
 	if err := validateEssConfigs(essConfigs); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSetupEssAgentSkipsOnEmptyToken(t *testing.T) {
+	dir := t.TempDir()
+	if err := SetupEssAgent("", dir, "configs"); err != nil {
+		t.Fatalf("unexpected error with empty token: %v", err)
+	}
+	_, err := os.Stat(filepath.Join(dir, EssTokenFileName))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("token file must not be created when assertion token is empty")
+	}
+}
+
+func TestSetupEssAgentEssFqdnOverride(t *testing.T) {
+	const override = "https://ess.override.example.com"
+	t.Setenv("ESS_FQDN", override)
+
+	targetDir := t.TempDir()
+	if err := SetupEssAgent("tok", targetDir, "configs"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var cfg essConfigHcl
+	if err := hclsimple.DecodeFile(filepath.Join(targetDir, essConfigFileName), nil, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Ess == nil || cfg.Ess.Address != override {
+		got := ""
+		if cfg.Ess != nil {
+			got = cfg.Ess.Address
+		}
+		t.Fatalf("expected ESS address %q after ESS_FQDN override, got %q", override, got)
+	}
+}
+
+func TestSetupEssAgentCreatesMissingConfigDir(t *testing.T) {
+	// configDir does not exist yet, exercising the CreateDirectory branch.
+	configDir := filepath.Join(t.TempDir(), "ess-agent")
+	if err := SetupEssAgent("tok", configDir, "configs"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, EssTokenFileName)); err != nil {
+		t.Fatalf("expected token file to be written into the created dir: %v", err)
+	}
+}
+
+func TestSetupEssAgentMissingTemplateError(t *testing.T) {
+	// rawConfigDir has a valid config.hcl with an ess block but is missing the
+	// template files, so the template-copy step fails.
+	rawDir := t.TempDir()
+	hcl := `ess {
+  address = "http://localhost:8200"
+  namespace = "nvcf"
+  ess_agent_token_file = "/config/ess-agent/jwt.token"
+  default_lease_duration = "15m"
+  lease_renewal_threshold = 0.80
+}`
+	if err := os.WriteFile(filepath.Join(rawDir, essConfigFileName), []byte(hcl), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := SetupEssAgent("tok", t.TempDir(), rawDir)
+	if err == nil {
+		t.Fatal("expected error when template files are missing from raw config dir")
+	}
+}
+
+func TestSetupEssAgentMissingConfigFileError(t *testing.T) {
+	// rawConfigDir has no config.hcl at all; the read must fail.
+	err := SetupEssAgent("tok", t.TempDir(), t.TempDir())
+	if err == nil {
+		t.Fatal("expected error when config.hcl is missing from raw config dir")
+	}
+}
+
+func TestSetupEssAgentNilEssBlockError(t *testing.T) {
+	rawDir := t.TempDir()
+	hcl := `template {
+  source      = "/config/ess-agent/secrets.tmpl"
+  destination = "/var/secrets/secrets.json"
+}`
+	if err := os.WriteFile(filepath.Join(rawDir, essConfigFileName), []byte(hcl), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := SetupEssAgent("tok", t.TempDir(), rawDir)
+	if err == nil {
+		t.Fatal("expected error when ess block is missing from HCL, got nil")
+	}
+	if !strings.Contains(err.Error(), "ess block missing") {
+		t.Fatalf("expected 'ess block missing' in error, got: %v", err)
 	}
 }
 

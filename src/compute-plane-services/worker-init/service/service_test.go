@@ -45,6 +45,11 @@ var workerInitConfig configs.InitConfig
 func TestMain(m *testing.M) {
 	ctx = context.Background()
 
+	// No OTEL collector runs in the unit suite. Cap the OTLP export timeout so
+	// span flushing on tracer shutdown fails fast instead of blocking on the
+	// default 10s timeout to the dead endpoint.
+	_ = os.Setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "300")
+
 	zapLogger = logs.NewZapLogger(zap.NewAtomicLevelAt(zap.DebugLevel))
 	zap.RedirectStdLog(zapLogger.GetZapLogger())
 

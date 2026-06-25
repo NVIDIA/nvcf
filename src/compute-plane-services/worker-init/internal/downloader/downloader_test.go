@@ -22,8 +22,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -38,6 +36,9 @@ import (
 	"github.com/samber/lo"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/localstack"
+
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
 )
 
 func TestArtifactsDownloader_DownloadArtifacts(t *testing.T) {
