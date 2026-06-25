@@ -18,6 +18,8 @@ Functions are long-running services that respond to HTTP or gRPC invocations.
 | [vLLM OTLP Exporter](function-samples/vllm-otlp-exporter-sample/) | vLLM inference with OpenTelemetry (OTLP) metric exporting for BYO Observability. |
 | [Inference Helm Chart](function-samples/helmchart-samples/inference-test-sample/) | Helm chart that deploys the FastAPI Echo sample on a Kubernetes cluster. |
 | [Multi-Node Helm Function](function-samples/helmchart-samples/multi-node-helm-function-test/) | Multi-node Helm chart for running NCCL and GPU bandwidth tests via NVCF. |
+| [Ray Serve Helm Chart](function-samples/helmchart-samples/ray-serve-sample/) | Helm chart that deploys a Ray Serve application as an NVCF function. |
+| [Dynamo Operator Sample](function-samples/helmchart-samples/dynamo-operator-sample/) | Helm chart for a vLLM disaggregated router deployed through NVCF. |
 | [Load Tester Supreme](function-samples/load-tester-supreme/) | HTTP and gRPC echo servers designed for load and throughput testing. |
 
 ## Task Samples
