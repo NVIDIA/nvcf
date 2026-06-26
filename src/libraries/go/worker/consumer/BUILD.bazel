@@ -39,11 +39,20 @@ go_library(
 
 go_test(
     name = "consumer_test",
-    srcs = ["nats_consumer_test.go"],
+    srcs = [
+        "nats_consumer_e2e_test.go",
+        "nats_consumer_test.go",
+    ],
     embed = [":consumer"],
     visibility = ["//visibility:public"],
     deps = [
+        "//src/libraries/go/worker/proto/nvcf:pb",
         "//src/libraries/go/worker/semaphore",
+        "//src/libraries/go/worker/test/testutils",
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_nats_io_nats_go//jetstream",
         "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
     ],
 )

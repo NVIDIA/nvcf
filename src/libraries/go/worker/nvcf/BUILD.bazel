@@ -52,15 +52,27 @@ go_library(
 
 go_test(
     name = "nvcf_test",
-    srcs = ["client_test.go"],
+    srcs = [
+        "client_test.go",
+        "coverage_test.go",
+    ],
     embed = [":nvcf"],
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/worker/auth",
+        "//src/libraries/go/worker/consumer",
+        "//src/libraries/go/worker/proto/nvcf:pb",
+        "//src/libraries/go/worker/token",
         "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_nats_io_nats_go//jetstream",
+        "@com_github_nats_io_nats_server_v2//server",
         "@com_github_nats_io_nkeys//:nkeys",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
         "@org_golang_x_oauth2//:oauth2",
     ],
 )

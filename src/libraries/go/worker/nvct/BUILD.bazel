@@ -47,14 +47,22 @@ go_library(
 
 go_test(
     name = "nvct_test",
-    srcs = ["client_test.go"],
+    srcs = [
+        "client_test.go",
+        "coverage_test.go",
+    ],
     embed = [":nvct"],
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/lib/pkg/nvkit/logs",
         "//src/libraries/go/worker/proto/nvct:pb",
         "//src/libraries/go/worker/test/testutils",
+        "//src/libraries/go/worker/token",
         "//src/libraries/go/worker/types",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_protobuf//types/known/timestamppb",
         "@org_golang_x_oauth2//:oauth2",
         "@org_uber_go_zap//:zap",
     ],

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "nvcf",
@@ -27,5 +27,20 @@ go_library(
         "//src/libraries/go/worker/metrics",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/promauto",
+    ],
+)
+
+go_test(
+    name = "nvcf_test",
+    srcs = [
+        "nvcf_metrics_test.go",
+        "progress_tracker_test.go",
+    ],
+    embed = [":nvcf"],
+    deps = [
+        "//src/libraries/go/worker/metrics",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_model//go",
+        "@com_github_stretchr_testify//require",
     ],
 )

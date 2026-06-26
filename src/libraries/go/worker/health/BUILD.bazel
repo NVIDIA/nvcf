@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "health",
@@ -31,5 +31,15 @@ go_library(
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials/insecure",
         "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "health_test",
+    srcs = ["health_test.go"],
+    embed = [":health"],
+    deps = [
+        "@com_github_hellofresh_health_go_v5//:health-go",
+        "@com_github_stretchr_testify//require",
     ],
 )

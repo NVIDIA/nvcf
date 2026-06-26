@@ -13,12 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "ca",
     srcs = ["ca.go"],
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/ca",
     visibility = ["//visibility:public"],
-    deps = [],
+)
+
+go_test(
+    name = "ca_test",
+    srcs = ["ca_test.go"],
+    embed = [":ca"],
+    deps = ["@com_github_stretchr_testify//require"],
 )

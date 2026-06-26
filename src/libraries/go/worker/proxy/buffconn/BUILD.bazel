@@ -13,12 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "buffconn",
     srcs = ["buffconn.go"],
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/buffconn",
     visibility = ["//visibility:public"],
-    deps = [],
+)
+
+go_test(
+    name = "buffconn_test",
+    srcs = ["buffconn_test.go"],
+    embed = [":buffconn"],
+    deps = ["@com_github_stretchr_testify//require"],
 )

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "types",
@@ -23,5 +23,11 @@ go_library(
     ],
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/types",
     visibility = ["//visibility:public"],
-    deps = [],
+)
+
+go_test(
+    name = "types_test",
+    srcs = ["error_test.go"],
+    embed = [":types"],
+    deps = ["@com_github_stretchr_testify//require"],
 )

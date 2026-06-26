@@ -19,6 +19,7 @@ go_library(
     name = "artifacts_lib",
     srcs = ["main.go"],
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/test/cmd/artifacts",
+    visibility = ["//visibility:private"],
     deps = [
         "//src/libraries/go/lib/pkg/nvkit/logs",
         "//src/libraries/go/worker/test/testutils",

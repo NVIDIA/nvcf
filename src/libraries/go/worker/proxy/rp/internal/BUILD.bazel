@@ -19,6 +19,7 @@ go_library(
     name = "internal_lib",
     srcs = ["main.go"],
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/worker/proxy/rp/internal",
+    visibility = ["//visibility:private"],
     deps = [
         "//src/libraries/go/worker/proxy/rp",
         "@org_golang_x_net//http2",

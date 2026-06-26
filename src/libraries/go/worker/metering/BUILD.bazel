@@ -33,11 +33,16 @@ go_library(
 
 go_test(
     name = "metering_test",
-    srcs = ["metering_test.go"],
+    srcs = [
+        "infra_test.go",
+        "metering_test.go",
+    ],
     embed = [":metering"],
     visibility = ["//visibility:public"],
     deps = [
         "//src/libraries/go/worker/proto/nvcf:pb",
+        "@com_github_goccy_go_json//:go-json",
+        "@com_github_stretchr_testify//require",
         "@org_uber_go_zap//:zap",
         "@org_uber_go_zap//zapcore",
         "@org_uber_go_zap//zaptest/observer",

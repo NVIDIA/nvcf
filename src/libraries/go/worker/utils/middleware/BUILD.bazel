@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "middleware",
@@ -26,4 +26,11 @@ go_library(
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@org_uber_go_zap//:zap",
     ],
+)
+
+go_test(
+    name = "middleware_test",
+    srcs = ["middleware_test.go"],
+    embed = [":middleware"],
+    deps = ["@com_github_stretchr_testify//require"],
 )

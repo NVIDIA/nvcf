@@ -39,12 +39,19 @@ go_library(
 
 go_test(
     name = "tracing_test",
-    srcs = ["tracing_test.go"],
+    srcs = [
+        "tracing_helpers_test.go",
+        "tracing_test.go",
+        "transport_test.go",
+    ],
     embed = [":tracing"],
     visibility = ["//visibility:public"],
     deps = [
+        "@com_github_stretchr_testify//require",
         "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//codes",
         "@io_opentelemetry_go_otel//propagation",
         "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
     ],
 )
