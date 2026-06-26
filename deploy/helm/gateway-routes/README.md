@@ -81,6 +81,7 @@ Enabled `HTTPRoute` entries must not share a resolved hostname because each `HTT
 | `reval` | HTTPRoute | `reval.<domain>` | `reval.nvcf:8080` |
 | `sis` | HTTPRoute | `sis.<domain>` | `api.sis:8080` |
 | `grpc` | TCPRoute | Not rendered | `grpc.nvcf:10081` |
+| `grpcWorker` | TCPRoute (disabled by default) | Not rendered | `grpc.nvcf:10086` |
 | `nats` | TCPRoute (disabled by default) | Not rendered | `nats.nats-system:4222` |
 
 Cross-namespace routing is supported via `ReferenceGrant` resources rendered into each backend namespace.
@@ -90,4 +91,5 @@ Cross-namespace routing is supported via `ReferenceGrant` resources rendered int
 - The chart assumes the Gateway is reachable at the resolved hostnames. DNS records and TLS termination are out of scope and must be configured in the surrounding infrastructure.
 - The `nats` TCPRoute is plain TCP and does not render hostnames. Configure DNS or TCP load balancer routing outside this chart.
 - The `grpc` TCPRoute does not enforce HTTP hostname matching at the Gateway layer. Configure DNS or TCP load balancer routing outside this chart.
+- The `grpcWorker` TCPRoute is beta support for split or multi-cluster gRPC worker callbacks. It carries HTTP/1 CONNECT callback traffic only. Enable it only when the control-plane grpc-proxy runs one replica with HPA disabled. Multi-replica grpc-proxy requires pod-specific callback routing and is not supported by this shared TCPRoute.
 - Enabling the `nats` route requires a reachable TCP listener for NATS on the referenced Gateway. The HTTP Gateway address does not imply NATS reachability unless that same Gateway also has the NATS TCP listener configured.

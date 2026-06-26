@@ -177,6 +177,23 @@ nvcfGatewayRoutes:
         port: 10081
       routeAnnotations: {}
 
+    # Beta worker CONNECT route for split or multi-cluster installs.
+    # This carries HTTP/1 CONNECT callback traffic only. Keep this disabled
+    # unless workers run outside the control-plane cluster and need a
+    # load-balancer path back to grpc-proxy.
+    # Enable only when control-plane grpc-proxy runs one replica with HPA
+    # disabled. Multi-replica grpc-proxy requires pod-specific callback
+    # routing and is not supported by this shared TCPRoute.
+    grpcWorker:
+      enabled: false
+      name: grpc-worker
+      listenerName: worker-tcp
+      backend:
+        name: grpc
+        namespace: nvcf
+        port: 10086
+      routeAnnotations: {}
+
     # NATS client TCPRoute. Disabled by default because existing Gateway
     # installs may not have a NATS TCP listener on port 4222.
     nats:
