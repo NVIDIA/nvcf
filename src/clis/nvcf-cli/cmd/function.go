@@ -1973,6 +1973,25 @@ func runGetFunction(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if len(result.Models) > 0 {
+		fmt.Printf("\nModels:\n")
+		fmt.Printf("=======\n")
+		for _, m := range result.Models {
+			fmt.Printf("  Name: %s\n", m.Name)
+			if m.LLMConfig != nil {
+				if len(m.LLMConfig.URIs) > 0 {
+					fmt.Printf("    URIs: %s\n", strings.Join(m.LLMConfig.URIs, ", "))
+				}
+				if m.LLMConfig.TokenRateLimit != nil {
+					fmt.Printf("    Token Rate Limit: %s\n", *m.LLMConfig.TokenRateLimit)
+				}
+				if m.LLMConfig.RoutingMethod != nil {
+					fmt.Printf("    Routing Method: %s\n", *m.LLMConfig.RoutingMethod)
+				}
+			}
+		}
+	}
+
 	if len(result.Secrets) > 0 {
 		fmt.Printf("\nSecrets:\n")
 		fmt.Printf("========\n")

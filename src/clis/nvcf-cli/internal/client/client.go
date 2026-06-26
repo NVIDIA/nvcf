@@ -1726,6 +1726,7 @@ type FunctionDto struct {
 	FunctionType            string                      `json:"functionType"`
 	Secrets                 []string                    `json:"secrets,omitempty"`
 	RateLimit               *RateLimitDto               `json:"rateLimit,omitempty"`
+	Models                  []ArtifactDto               `json:"models,omitempty"`
 }
 
 // ClusterGroupsResponse represents the response from listing cluster groups
