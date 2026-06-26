@@ -289,6 +289,32 @@ func TestBuildModelMapping(t *testing.T) {
 	assert.False(t, shadowIsPublic)
 }
 
+func TestBuildModelMappingPreservesAndDefaultsShadowSamplingMethod(t *testing.T) {
+	privateModelMatcher := regexp.MustCompile("^private/")
+
+	mapping, err := buildModelMapping(map[string]ModelNameToFunctionIdVersionId{
+		"facebook/opt-125m": {
+			FunctionId:           "func-123",
+			ShadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
+			ShadowSamplingMethod: config.ShadowSamplingMethodPerBearerKey,
+		},
+		"meta/llama-3.1-8b": {
+			FunctionId:       "func-456",
+			ShadowModelNames: []string{"private/meta/llama-3.1-8b-shadow"},
+		},
+		"private/facebook/opt-125m-shadow": {
+			FunctionId: "shadow-func",
+		},
+		"private/meta/llama-3.1-8b-shadow": {
+			FunctionId: "shadow-func-2",
+		},
+	}, privateModelMatcher)
+	require.NoError(t, err)
+
+	assert.Equal(t, config.ShadowSamplingMethodPerBearerKey, mapping.modelNameToNVCFUrl["facebook/opt-125m"].shadowSamplingMethod)
+	assert.Equal(t, config.ShadowSamplingMethodRandom, mapping.modelNameToNVCFUrl["meta/llama-3.1-8b"].shadowSamplingMethod)
+}
+
 func TestResolveModelMappedRequestAddsMetricAttributes(t *testing.T) {
 	director := &OpenAIDirector{}
 	modelToNVCFURL := map[string]FunctionInfo{
@@ -370,6 +396,7 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2(t *testing.T) {
 			ShadowModelName:                "private/facebook/opt-125m-shadow",
 			ShadowModelNames:               []string{"private/facebook/opt-125m-shadow-b"},
 			ShadowPercentage:               &shadowPct,
+			ShadowSamplingMethod:           config.ShadowSamplingMethodPerBearerKey,
 			ShadowCancelOnClientDisconnect: true,
 		},
 	})
@@ -388,6 +415,7 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2(t *testing.T) {
 		"private/facebook/opt-125m-shadow-b",
 	}, expected.ShadowModelNames)
 	assert.Equal(t, &shadowPct, expected.ShadowPercentage)
+	assert.Equal(t, config.ShadowSamplingMethodPerBearerKey, expected.ShadowSamplingMethod)
 	assert.True(t, expected.ShadowCancelOnClientDisconnect)
 }
 
@@ -466,6 +494,55 @@ func TestDispatchShadowIfNeededReplaysHandlerAndRewritesBody(t *testing.T) {
 		},
 	}
 	director.dispatchShadowIfNeeded(resolved, modelMapping)
+
+	assert.Eventually(t, func() bool { return received.Load() }, 5*time.Second, 10*time.Millisecond)
+
+	var shadowBody map[string]any
+	require.NoError(t, json.Unmarshal([]byte(receivedBody), &shadowBody))
+	assert.Equal(t, "private/facebook/opt-125m-shadow", shadowBody["model"])
+	assert.Equal(t, true, shadowBody["stream"])
+}
+
+func TestDispatchShadowIfNeededPerBearerKeyUsesBearerBucket(t *testing.T) {
+	var receivedBody string
+	var received atomic.Bool
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		receivedBody = string(body)
+		received.Store(true)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	vanity, err := NewVanityDirector(backend.URL, backend.Client().Transport)
+	require.NoError(t, err)
+
+	modelMapping := map[string]FunctionInfo{
+		"facebook/opt-125m": {
+			functionId:           "primary-func",
+			shadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
+			shadowPercentage:     47,
+			shadowSamplingMethod: config.ShadowSamplingMethodPerBearerKey,
+		},
+		"private/facebook/opt-125m-shadow": {
+			functionId: "shadow-func",
+		},
+	}
+
+	director := &OpenAIDirector{
+		shadower:           NewTrafficShadower(10, 30*time.Second),
+		vanityDirector:     vanity,
+		shadowRandomBucket: func() int { return 99 },
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"facebook/opt-125m","stream":true}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
+		request:      req,
+		functionInfo: modelMapping["facebook/opt-125m"],
+	}, modelMapping)
 
 	assert.Eventually(t, func() bool { return received.Load() }, 5*time.Second, 10*time.Millisecond)
 

@@ -46,7 +46,7 @@ openbao:
     image:
       # registry: must be supplied in additional values
       # repository: must be supplied in additional values
-      tag: 0.14.2
+      tag: 0.16.1
       pullPolicy: IfNotPresent
     issuerDiscovery:
       enabled: false

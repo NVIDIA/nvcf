@@ -18,6 +18,7 @@ limitations under the License.
 package gateway
 
 import (
+	config "ai-api-gateway-service/gateway_config"
 	"bytes"
 	"context"
 	"errors"
@@ -25,6 +26,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -240,6 +242,12 @@ func assertContextNotCanceled(t *testing.T, ctx context.Context) {
 	}
 }
 
+func fixedRandomBucket(bucket int) func() int {
+	return func() int {
+		return bucket
+	}
+}
+
 func TestShadowDroppedWhenAtCapacity(t *testing.T) {
 	started := make(chan struct{})
 	done := make(chan struct{})
@@ -327,4 +335,128 @@ func TestShadowPercentage100(t *testing.T) {
 		return requestCount.Load() == int32(iterations)
 	}, 10*time.Second, 50*time.Millisecond,
 		"expected all %d requests to be shadowed, got %d", iterations, requestCount.Load())
+}
+
+func TestShouldDispatchShadowPerBearerKeyUsesBearerBucket(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+
+	info := FunctionInfo{
+		shadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
+		shadowPercentage:     47,
+		shadowSamplingMethod: config.ShadowSamplingMethodPerBearerKey,
+	}
+	assert.True(t, shouldDispatchShadow(req, info, fixedRandomBucket(99)))
+
+	info.shadowPercentage = 46
+	assert.False(t, shouldDispatchShadow(req, info, fixedRandomBucket(0)))
+}
+
+func TestShouldDispatchShadowPerBearerKeySkipsMalformedBearerBelow100(t *testing.T) {
+	tests := []struct {
+		name          string
+		authorization []string
+	}{
+		{name: "missing"},
+		{name: "malformed bearer", authorization: []string{"Bearer"}},
+		{name: "empty bearer credential", authorization: []string{"Bearer   "}},
+		{name: "non bearer", authorization: []string{"Basic test-key"}},
+		{name: "leading whitespace before scheme", authorization: []string{" Bearer test-key"}},
+		{name: "duplicate authorization", authorization: []string{"Bearer test-key", "Bearer test-key"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
+			for _, value := range tc.authorization {
+				req.Header.Add("Authorization", value)
+			}
+			info := FunctionInfo{
+				shadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
+				shadowPercentage:     99,
+				shadowSamplingMethod: config.ShadowSamplingMethodPerBearerKey,
+			}
+
+			assert.False(t, shouldDispatchShadow(req, info, fixedRandomBucket(0)))
+		})
+	}
+}
+
+func TestShouldDispatchShadowRandomUsesInjectedBucket(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+
+	info := FunctionInfo{
+		shadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
+		shadowPercentage:     40,
+		shadowSamplingMethod: config.ShadowSamplingMethodRandom,
+	}
+
+	assert.True(t, shouldDispatchShadow(req, info, fixedRandomBucket(39)))
+	assert.False(t, shouldDispatchShadow(req, info, fixedRandomBucket(40)))
+}
+
+func TestShouldDispatchShadowPerBearerKeyNormalizesBearerScheme(t *testing.T) {
+	tests := []string{
+		"Bearer test-key",
+		"bearer test-key",
+		"BEARER test-key",
+		"BeArEr \t test-key",
+	}
+
+	for _, authorization := range tests {
+		t.Run(authorization, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
+			req.Header.Set("Authorization", authorization)
+			info := FunctionInfo{
+				shadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
+				shadowPercentage:     47,
+				shadowSamplingMethod: config.ShadowSamplingMethodPerBearerKey,
+			}
+
+			assert.True(t, shouldDispatchShadow(req, info, fixedRandomBucket(99)))
+		})
+	}
+}
+
+func TestShadowBucketForBearerCredentialFixedVector(t *testing.T) {
+	assert.Equal(t, 46, shadowBucketForBearerCredential([]byte("test-key")))
+}
+
+func TestShadowBucketForBearerCredentialKeepsNVCFKeyPrefixes(t *testing.T) {
+	assert.Equal(t, 62, shadowBucketForBearerCredential([]byte("nvapi-test-key")))
+	assert.Equal(t, 52, shadowBucketForBearerCredential([]byte("nvapi-stg-test-key")))
+	assert.Equal(t, 97, shadowBucketForBearerCredential([]byte("nvapi-nvcf-test-key")))
+}
+
+func TestShadowBucketForBearerCredentialSyntheticDistribution(t *testing.T) {
+	const samples = 10_000
+	thresholds := []int{1, 5, 10, 25, 50, 75, 90, 99, 100}
+	var histogram [100]int
+
+	for i := range samples {
+		credential := []byte("nvapi-nvcf-synthetic-" + strconv.Itoa(i))
+		bucket := shadowBucketForBearerCredential(credential)
+		histogram[bucket]++
+	}
+
+	for _, threshold := range thresholds {
+		selected := 0
+		for bucket := range threshold {
+			selected += histogram[bucket]
+		}
+
+		lower := samples * max(threshold-5, 0) / 100
+		upper := samples * min(threshold+5, 100) / 100
+		assert.GreaterOrEqual(t, selected, lower, "threshold %d selected %d keys", threshold, selected)
+		assert.LessOrEqual(t, selected, upper, "threshold %d selected %d keys", threshold, selected)
+	}
+
+	expected := float64(samples) / 100
+	chiSquare := 0.0
+	for _, count := range histogram {
+		delta := float64(count) - expected
+		chiSquare += delta * delta / expected
+	}
+	assert.Less(t, chiSquare, 150.0)
 }

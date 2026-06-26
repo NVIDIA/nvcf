@@ -138,6 +138,7 @@ v2config:
         shadowModelNames:
           - private/meta/llama-3.1-8b-shadow
         shadowPercentage: 10
+        shadowSamplingMethod: perBearerKey
       private_meta_llama-3_1-8b-shadow:
         modelName: private/meta/llama-3.1-8b-shadow
         functionID: 00000000-0000-0000-0000-000000000002
@@ -183,6 +184,7 @@ v2config:
 | `shadowModelName` | No | Legacy single shadow target. Prefer `shadowModelNames` for new config. |
 | `shadowModelNames` | No | Additional model names in the same OpenAI section that receive shadow traffic. Not supported for multipart image edit or variation endpoints. |
 | `shadowPercentage` | No | Percentage of primary requests to shadow, from `1` to `100`. Defaults to `100` when shadow targets exist. |
+| `shadowSamplingMethod` | No | Shadow admission method. Allowed values are `random` and `perBearerKey`. Missing or empty defaults to `random`. Requires at least one shadow target. Not supported for multipart image edit or variation endpoints. |
 | `shadowCancelOnClientDisconnect` | No | When `true`, cancels shadow work if the primary request context is canceled. Requires at least one shadow target. |
 
 ### Shadow Traffic Support
@@ -193,6 +195,25 @@ request bodies: `chatCompletions`, `completions`, `embeddings`, `responses`, and
 section as the primary model. The gateway rewrites the request `model` field to
 the shadow target and marks the replay with `NVCF-Shadow: true` so shadow
 requests do not recursively shadow.
+
+`shadowSamplingMethod` controls how `shadowPercentage` admits requests. The
+default method, `random`, draws a request-local bucket from `0` to `99` and
+admits the request when `bucket < shadowPercentage`.
+
+The `perBearerKey` method makes admission sticky by bearer credential. It
+requires exactly one `Authorization` header whose value starts with the
+case-insensitive `Bearer` auth scheme followed by whitespace. The gateway strips
+only the `Bearer` scheme and following separator whitespace, then hashes the
+complete remaining credential as opaque UTF-8 bytes. It computes SHA-256, reads
+the first 8 digest bytes as a big-endian `uint64`, sets
+`bucket = value % 100`, and admits the request when
+`bucket < shadowPercentage`. Bearer credential prefixes such as `nvapi`,
+`nvapi-stg`, and `nvapi-nvcf` remain part of the credential and are not
+stripped. Missing, malformed, duplicate, or non-Bearer authorization skips
+shadow dispatch when `shadowPercentage` is below `100`.
+
+`perBearerKey` is key-level sampling. It is not true user or session sampling
+and can skew shadow volume when a few bearer keys dominate traffic.
 
 Shadow traffic is not supported for multipart image endpoints: `imageEdits` and
 `imageVariations`. Config validation rejects shadow fields in those sections.
@@ -218,7 +239,7 @@ response completes.
 | `customHeaders` | No | Map of static request headers to set on the upstream request. Configured values overwrite caller-provided values for the same header. Reserved routing, protocol, auth, proxy, and `NVCF-*` headers are rejected. |
 | `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone`. |
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
-| shadow fields | No | Unsupported for Vanity URL routes. `shadowFunctionID`, `shadowFunctionVersionID`, and `shadowPercentage` are rejected during config validation. |
+| shadow fields | No | Unsupported for Vanity URL routes. `shadowFunctionID`, `shadowFunctionVersionID`, `shadowPercentage`, and `shadowSamplingMethod` are rejected during config validation. |
 
 `customHeaders` only affects outbound proxied requests; it does not add response headers. Header names must be valid HTTP field names and cannot include reserved routing, auth, protocol, proxy, or NVCF-managed names such as `Authorization`, `Host`, `function-id`, `function-version-id`, `Content-Length`, `Connection`, or any `NVCF-*` header.
 

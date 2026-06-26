@@ -29,6 +29,13 @@ import (
 
 type SessionTimeoutSeconds int
 
+type ShadowSamplingMethod string
+
+const (
+	ShadowSamplingMethodRandom       ShadowSamplingMethod = "random"
+	ShadowSamplingMethodPerBearerKey ShadowSamplingMethod = "perBearerKey"
+)
+
 type CustomHeaders map[string]string
 
 func (h *CustomHeaders) UnmarshalJSON(data []byte) error {
@@ -67,7 +74,8 @@ type ModelFunctionDetails struct {
 	TooManyRequestsMessage         string                `json:"tooManyRequestsMessage"`
 	ShadowModelName                string                `json:"shadowModelName,omitempty"`
 	ShadowModelNames               []string              `json:"shadowModelNames,omitempty"`
-	ShadowPercentage               *int                  `json:"shadowPercentage,omitempty"`               // 1-100 when set; omitted defaults to 100
+	ShadowPercentage               *int                  `json:"shadowPercentage,omitempty"` // 1-100 when set; omitted defaults to 100
+	ShadowSamplingMethod           ShadowSamplingMethod  `json:"shadowSamplingMethod,omitempty"`
 	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadow when primary completes; default false
 }
 
@@ -96,6 +104,7 @@ type PathFunctionDetails struct {
 	ShadowFunctionID        string                 `json:"shadowFunctionID,omitempty"`
 	ShadowFunctionVersionID string                 `json:"shadowFunctionVersionID,omitempty"`
 	ShadowPercentage        *int                   `json:"shadowPercentage,omitempty"` // unsupported on vanity routes; rejected during validation
+	ShadowSamplingMethod    ShadowSamplingMethod   `json:"shadowSamplingMethod,omitempty"`
 	sessionTimeoutPresent   bool
 }
 
@@ -189,6 +198,10 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 		return nil, fmt.Errorf("%s: %w", location, err)
 	}
 
+	if err := validateShadowSamplingMethod(location, entry.ShadowSamplingMethod); err != nil {
+		return nil, err
+	}
+
 	if entry.ShadowPercentage != nil {
 		pct := *entry.ShadowPercentage
 		if pct < 1 || pct > 100 {
@@ -200,12 +213,24 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 		if entry.ShadowPercentage != nil {
 			return nil, fmt.Errorf("%s: shadowPercentage requires at least one shadow target", location)
 		}
+		if entry.ShadowSamplingMethod != "" {
+			return nil, fmt.Errorf("%s: shadowSamplingMethod requires at least one shadow target", location)
+		}
 		if entry.ShadowCancelOnClientDisconnect {
 			return nil, fmt.Errorf("%s: shadowCancelOnClientDisconnect requires at least one shadow target", location)
 		}
 	}
 
 	return shadowTargets, nil
+}
+
+func validateShadowSamplingMethod(location string, method ShadowSamplingMethod) error {
+	switch method {
+	case "", ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey:
+		return nil
+	default:
+		return fmt.Errorf("%s: shadowSamplingMethod must be %q or %q", location, ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey)
+	}
 }
 
 func (c *GatewayConfig) Validate() error {
@@ -270,7 +295,7 @@ func isMultipartOpenAISection(sectionName string) bool {
 
 func validateMultipartOpenAISection(sectionName string, entries map[string]ModelFunctionDetails) error {
 	for modelKey, entry := range entries {
-		if entry.ShadowModelName != "" || len(entry.ShadowModelNames) > 0 || entry.ShadowPercentage != nil || entry.ShadowCancelOnClientDisconnect {
+		if entry.ShadowModelName != "" || len(entry.ShadowModelNames) > 0 || entry.ShadowPercentage != nil || entry.ShadowSamplingMethod != "" || entry.ShadowCancelOnClientDisconnect {
 			return fmt.Errorf("openai.%s.%s: shadow config is unsupported for multipart image endpoints", sectionName, modelKey)
 		}
 	}
@@ -388,7 +413,7 @@ func (c *GatewayConfig) validateVanityConfig() error {
 			if path.sessionTimeoutPresent || path.SessionTimeout != nil {
 				return fmt.Errorf("%s: sessionTimeout is unsupported for vanity routes", location)
 			}
-			if path.ShadowFunctionID != "" || path.ShadowFunctionVersionID != "" || path.ShadowPercentage != nil {
+			if path.ShadowFunctionID != "" || path.ShadowFunctionVersionID != "" || path.ShadowPercentage != nil || path.ShadowSamplingMethod != "" {
 				return fmt.Errorf("%s: shadow config is unsupported for vanity routes", location)
 			}
 			if err := validateCustomHeaders(location, path.CustomHeaders); err != nil {

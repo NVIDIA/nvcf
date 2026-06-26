@@ -23,6 +23,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -57,16 +59,17 @@ const (
 )
 
 type OpenAIDirector struct {
-	chatCompletions  ModelMapping
-	completions      ModelMapping
-	embeddings       ModelMapping
-	responses        ModelMapping
-	imageGenerations ModelMapping
-	imageEdits       ModelMapping
-	imageVariations  ModelMapping
-	allPublicModels  []ModelInfo // list of models used for the /v1/models
-	vanityDirector   *VanityDirector
-	shadower         *TrafficShadower
+	chatCompletions    ModelMapping
+	completions        ModelMapping
+	embeddings         ModelMapping
+	responses          ModelMapping
+	imageGenerations   ModelMapping
+	imageEdits         ModelMapping
+	imageVariations    ModelMapping
+	allPublicModels    []ModelInfo // list of models used for the /v1/models
+	vanityDirector     *VanityDirector
+	shadower           *TrafficShadower
+	shadowRandomBucket func() int
 
 	// Cache for filtered models
 	filteredModelsCache        []ModelInfo
@@ -98,6 +101,7 @@ type FunctionInfo struct {
 	tooManyRequestsMessage         string
 	shadowModelNames               []string
 	shadowPercentage               int
+	shadowSamplingMethod           config.ShadowSamplingMethod
 	shadowCancelOnClientDisconnect bool
 }
 
@@ -130,6 +134,7 @@ type ModelNameToFunctionIdVersionId struct {
 	TooManyRequestsMessage         string
 	ShadowModelNames               []string
 	ShadowPercentage               *int
+	ShadowSamplingMethod           config.ShadowSamplingMethod
 	ShadowCancelOnClientDisconnect bool
 }
 
@@ -243,6 +248,7 @@ func buildModelMapping(
 			tooManyRequestsMessage:         entry.TooManyRequestsMessage,
 			shadowModelNames:               entry.ShadowModelNames,
 			shadowPercentage:               defaultShadowPercentage(entry.ShadowPercentage),
+			shadowSamplingMethod:           defaultShadowSamplingMethod(entry.ShadowSamplingMethod),
 			shadowCancelOnClientDisconnect: entry.ShadowCancelOnClientDisconnect,
 		}
 
@@ -404,6 +410,7 @@ func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]co
 			TooManyRequestsMessage:         entry.TooManyRequestsMessage,
 			ShadowModelNames:               effectiveShadowModelNames(entry.ShadowModelName, entry.ShadowModelNames),
 			ShadowPercentage:               entry.ShadowPercentage,
+			ShadowSamplingMethod:           entry.ShadowSamplingMethod,
 			ShadowCancelOnClientDisconnect: entry.ShadowCancelOnClientDisconnect,
 		}
 	}
@@ -416,6 +423,13 @@ func defaultShadowPercentage(shadowPercentage *int) int {
 		return 100
 	}
 	return *shadowPercentage
+}
+
+func defaultShadowSamplingMethod(shadowSamplingMethod config.ShadowSamplingMethod) config.ShadowSamplingMethod {
+	if shadowSamplingMethod == "" {
+		return config.ShadowSamplingMethodRandom
+	}
+	return shadowSamplingMethod
 }
 
 func effectiveShadowModelNames(legacyModelName string, modelNames []string) []string {
@@ -642,15 +656,14 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 	if isShadowRequest(resolved.request) {
 		return func(error) {}
 	}
-	shadowModelNames := resolved.functionInfo.shadowModelNames
-	if len(shadowModelNames) == 0 || d.shadower == nil {
+	if d.shadower == nil {
 		return func(error) {}
 	}
-	pct := resolved.functionInfo.shadowPercentage
-	if pct < 100 && rand.IntN(100) >= pct {
+	if !shouldDispatchShadow(resolved.request, resolved.functionInfo, d.randomShadowBucket) {
 		return func(error) {}
 	}
 
+	shadowModelNames := resolved.functionInfo.shadowModelNames
 	shadowCtx, finishShadowPrimary := shadowContext(resolved.request, resolved.functionInfo.shadowCancelOnClientDisconnect)
 
 	// Clone body only for shadowed requests — avoids allocation on the hot path.
@@ -716,6 +729,58 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 	}
 	recordShadowDispatchSummary(resolved.request.Context(), shadowModelNames, dispatchedCount, droppedCount, droppedReasons, droppedTargetModels)
 	return finishShadowPrimary
+}
+
+func (d *OpenAIDirector) randomShadowBucket() int {
+	if d.shadowRandomBucket != nil {
+		return d.shadowRandomBucket()
+	}
+	return rand.IntN(100)
+}
+
+func shouldDispatchShadow(req *http.Request, info FunctionInfo, randomBucket func() int) bool {
+	if len(info.shadowModelNames) == 0 {
+		return false
+	}
+	if info.shadowPercentage >= 100 {
+		return true
+	}
+	if info.shadowSamplingMethod == config.ShadowSamplingMethodPerBearerKey {
+		credential, ok := bearerCredential(req)
+		return ok && shadowBucketForBearerCredential(credential) < info.shadowPercentage
+	}
+	return randomBucket() < info.shadowPercentage
+}
+
+func bearerCredential(req *http.Request) ([]byte, bool) {
+	values := req.Header.Values("Authorization")
+	if len(values) != 1 {
+		return nil, false
+	}
+
+	const scheme = "Bearer"
+	value := values[0]
+	if len(value) <= len(scheme) || !strings.EqualFold(value[:len(scheme)], scheme) {
+		return nil, false
+	}
+
+	remainder := value[len(scheme):]
+	if remainder == "" || strings.TrimLeft(remainder, " \t") == remainder {
+		return nil, false
+	}
+
+	credential := strings.TrimLeft(remainder, " \t")
+	if credential == "" {
+		return nil, false
+	}
+	return []byte(credential), true
+}
+
+func shadowBucketForBearerCredential(credential []byte) int {
+	digest := sha256.Sum256(credential)
+	// Use the first 8 digest bytes as a stable uint64. This is enough entropy for
+	// 100 buckets while keeping the bucket algorithm simple to reproduce.
+	return int(binary.BigEndian.Uint64(digest[:8]) % 100)
 }
 
 func (d *OpenAIDirector) proxyResolvedRequest(writer http.ResponseWriter, resolved resolvedOpenAIRequest) error {

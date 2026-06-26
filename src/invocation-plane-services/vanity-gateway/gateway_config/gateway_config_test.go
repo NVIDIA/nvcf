@@ -136,6 +136,30 @@ v2config:
 	assert.Equal(t, []string{"private/facebook/opt-125m-shadow-b"}, primary.ShadowModelNames)
 }
 
+func TestGatewayConfigLoadAcceptsShadowSamplingMethod(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(configPath, []byte(`
+v2config:
+  openai:
+    chatCompletions:
+      primary:
+        modelName: facebook/opt-125m
+        functionID: func-id
+        shadowModelName: private/facebook/opt-125m-shadow
+        shadowSamplingMethod: perBearerKey
+      shadow:
+        modelName: private/facebook/opt-125m-shadow
+        functionID: shadow-func-id
+`), 0600)
+	require.NoError(t, err)
+
+	reloadable, err := SetupConfigWithConfigPath(configPath)
+	require.NoError(t, err)
+
+	cfg := reloadable.Get()
+	assert.Equal(t, ShadowSamplingMethodPerBearerKey, cfg.OpenAI.ChatCompletions["primary"].ShadowSamplingMethod)
+}
+
 func TestGatewayConfigLoadAcceptsSessionTimeout(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	err := os.WriteFile(configPath, []byte(`
@@ -480,6 +504,72 @@ func TestGatewayConfigValidateRejectsInvalidOpenAIShadowPercentage(t *testing.T)
 	}
 }
 
+func TestGatewayConfigValidateAcceptsShadowSamplingMethod(t *testing.T) {
+	tests := []struct {
+		name   string
+		method ShadowSamplingMethod
+	}{
+		{name: "omitted", method: ""},
+		{name: "random", method: ShadowSamplingMethodRandom},
+		{name: "per bearer key", method: ShadowSamplingMethodPerBearerKey},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &GatewayConfig{}
+			cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{
+				"primary": {
+					ModelName:            "facebook/opt-125m",
+					FunctionID:           "func-id",
+					ShadowModelName:      "private/facebook/opt-125m-shadow",
+					ShadowSamplingMethod: tc.method,
+				},
+				"shadow": {
+					ModelName:  "private/facebook/opt-125m-shadow",
+					FunctionID: "shadow-func-id",
+				},
+			}
+
+			require.NoError(t, cfg.Validate())
+		})
+	}
+}
+
+func TestGatewayConfigValidateRejectsInvalidShadowSamplingMethod(t *testing.T) {
+	cfg := &GatewayConfig{}
+	cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{
+		"primary": {
+			ModelName:            "facebook/opt-125m",
+			FunctionID:           "func-id",
+			ShadowModelName:      "private/facebook/opt-125m-shadow",
+			ShadowSamplingMethod: ShadowSamplingMethod("weighted"),
+		},
+		"shadow": {
+			ModelName:  "private/facebook/opt-125m-shadow",
+			FunctionID: "shadow-func-id",
+		},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "shadowSamplingMethod")
+}
+
+func TestGatewayConfigValidateRejectsShadowSamplingMethodWithoutShadowTarget(t *testing.T) {
+	cfg := &GatewayConfig{}
+	cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{
+		"primary": {
+			ModelName:            "facebook/opt-125m",
+			FunctionID:           "func-id",
+			ShadowSamplingMethod: ShadowSamplingMethodPerBearerKey,
+		},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "shadowSamplingMethod requires at least one shadow target")
+}
+
 func TestGatewayConfigValidateRejectsShadowPercentageWithoutShadowModel(t *testing.T) {
 	cfg := &GatewayConfig{}
 	cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{
@@ -683,6 +773,30 @@ func TestGatewayConfigValidateRejectsShadowOnMultipartImageSections(t *testing.T
 				}
 			},
 		},
+		{
+			name: "imageEdits shadowSamplingMethod",
+			applyTo: func(cfg *GatewayConfig) {
+				cfg.OpenAI.ImageEdits = map[string]ModelFunctionDetails{
+					"edit": {
+						ModelName:            "qwen/qwen-image-edit-2511",
+						FunctionID:           "edit-id",
+						ShadowSamplingMethod: ShadowSamplingMethodPerBearerKey,
+					},
+				}
+			},
+		},
+		{
+			name: "imageVariations shadowSamplingMethod",
+			applyTo: func(cfg *GatewayConfig) {
+				cfg.OpenAI.ImageVariations = map[string]ModelFunctionDetails{
+					"var": {
+						ModelName:            "qwen/qwen-image-var",
+						FunctionID:           "var-id",
+						ShadowSamplingMethod: ShadowSamplingMethodPerBearerKey,
+					},
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -724,6 +838,26 @@ func TestGatewayConfigValidateRejectsVanityShadowConfig(t *testing.T) {
 					Path:             "/v1/test",
 					FunctionID:       "func-id",
 					ShadowFunctionID: "shadow-func-id",
+				},
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "shadow config is unsupported for vanity routes")
+}
+
+func TestGatewayConfigValidateRejectsVanityShadowSamplingMethod(t *testing.T) {
+	cfg := &GatewayConfig{}
+	cfg.Vanity = map[string]VanityEntry{
+		"test": {
+			Host: "test.host",
+			Paths: map[string]PathFunctionDetails{
+				"path": {
+					Path:                 "/v1/test",
+					FunctionID:           "func-id",
+					ShadowSamplingMethod: ShadowSamplingMethodPerBearerKey,
 				},
 			},
 		},
