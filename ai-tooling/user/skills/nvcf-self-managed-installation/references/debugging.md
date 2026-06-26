@@ -119,6 +119,32 @@ kubectl logs -n <namespace> <pod-name> -c vault-agent-init
    kubectl exec -n vault-system openbao-server-0 -c openbao -- bao status
    ```
 
+4. **`vault-agent-init` logs `auth/jwt/login` -> `400 ... no known key successfully validated the token signature`**
+   (common on AKS, and on any cluster whose OIDC issuer publishes a rotating multi-key JWKS):
+   the OpenBao `auth/jwt` method was configured with a single static mounted public key
+   (`jwt_validation_pubkeys`) instead of the issuer's live JWKS, so it cannot validate the
+   cluster-signed ServiceAccount tokens the vault-agents present. Every service's
+   `vault-agent-init` then loops on that 400 and the pod never leaves `Init:0/1`. This is the
+   behavior of the base default `openbao.migrations.issuerDiscovery.enabled: false`; the
+   migration log shows `OIDC issuer discovery is disabled. Using ServiceAccount issuer and
+   mounted public key fallback`. Enable issuer discovery so the migration uses the live JWKS,
+   then re-run it:
+   ```bash
+   # In your env values (e.g. environments/<env>.yaml), set:
+   #   openbao:
+   #     migrations:
+   #       issuerDiscovery:
+   #         enabled: true
+   kubectl delete job -n vault-system openbao-server-migrations
+   HELMFILE_ENV=<env> helmfile --selector name=openbao-server sync
+   ```
+   The migration log should then show `Received discovery document from
+   .../.well-known/openid-configuration` and `Final OpenBao JWT JWKS URL set to:
+   .../openid/v1/jwks`, and the service pods authenticate and reach Ready within ~1 min.
+   AKS clusters with the cluster OIDC issuer enabled (the `aks-cluster` default) always need
+   this — the static-pubkey fallback cannot match the issuer's rotating signing keys.
+   (Ref: NVBug 6371575.)
+
 ## Failure: OOMKilled on Cassandra
 
 ### Symptoms

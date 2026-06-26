@@ -457,6 +457,7 @@ kubectl get events -n <ns> --sort-by='.lastTimestamp'  # Recent events
 |---------|-------|-----|
 | `ImagePullBackOff` + `401 Unauthorized` | Missing or wrong pull secret | Check secret exists, check SA has imagePullSecrets |
 | `Init:0/1` stuck on service pods | Vault-agent waiting for OpenBao | Check OpenBao pods + migration job status |
+| `Init:0/1` + `vault-agent-init` shows `auth/jwt/login` -> `400 ... no known key successfully validated the token signature` | OpenBao JWT auth configured with a static pubkey instead of the cluster's live JWKS -- the base default `openbao.migrations.issuerDiscovery.enabled: false`. Common on AKS / any OIDC-issuer cluster | Set `openbao.migrations.issuerDiscovery.enabled: true`, delete job `openbao-server-migrations`, re-sync `openbao-server`. See [references/debugging.md](references/debugging.md) "Init:0/1 Stuck" fix #4. (NVBug 6371575) |
 | `OOMKilled` on Cassandra | Default resources too small | Override `cassandra.resources` via values block |
 | DB-backed services crash-loop `Bad credentials` connecting to Cassandra | Secrets file set only `DEFAULT_CASSANDRA_PASSWORD`; `cassandra.serviceRolePassword` still defaults to `ch@ng3m3` | Set `cassandra.serviceRolePassword` in the secrets file equal to `DEFAULT_CASSANDRA_PASSWORD`, then re-sync cassandra + the DB-backed services |
 | `Pending` pods | Node selector mismatch or no storage class | `kubectl describe pod`, check labels and storage |

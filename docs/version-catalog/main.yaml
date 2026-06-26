@@ -214,11 +214,11 @@ supplemental_artifacts:
   - name: nvca-operator
     type: image
     registry: staging
-    version: 3.0.0
+    version: 3.0.2
   - name: nvca
     type: image
     registry: staging
-    version: 3.0.0
+    version: 3.0.2
   - name: stargate-client
     type: image
     registry: staging
