@@ -22,11 +22,13 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -45,6 +47,7 @@ type JWKSUpdater struct {
 	interval   time.Duration
 	lastHash   string
 	k8sClient  *http.Client
+	oidcClient *http.Client
 	icmsClient *http.Client
 }
 
@@ -75,12 +78,17 @@ func newJWKSUpdater(opts JWKSUpdaterOptions, caCertPath string) (*JWKSUpdater, e
 	if err != nil {
 		return nil, fmt.Errorf("build K8s HTTP client for JWKS updater: %w", err)
 	}
+	oidcClient, err := newOIDCHTTPClientFromCAFile(caCertPath)
+	if err != nil {
+		return nil, fmt.Errorf("build OIDC HTTP client for JWKS updater: %w", err)
+	}
 	return &JWKSUpdater{
-		icmsURL:   opts.ICMSURL,
-		clusterID: opts.ClusterID,
-		tokenPath: opts.TokenPath,
-		interval:  30 * time.Minute,
-		k8sClient: k8sClient,
+		icmsURL:    opts.ICMSURL,
+		clusterID:  opts.ClusterID,
+		tokenPath:  opts.TokenPath,
+		interval:   30 * time.Minute,
+		k8sClient:  k8sClient,
+		oidcClient: oidcClient,
 		icmsClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -135,6 +143,19 @@ const k8sCACertPath = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 // k8sSATokenPath is the standard location for the K8s service account token.
 const k8sSATokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
+const k8sJWKSURL = "https://kubernetes.default.svc/openid/v1/jwks"
+
+const oidcDiscoveryPath = "/.well-known/openid-configuration"
+
+type oidcDiscoveryConfig struct {
+	Issuer  string `json:"issuer"`
+	JWKSURI string `json:"jwks_uri"`
+}
+
+type jwtIssuerClaims struct {
+	Issuer string `json:"iss"`
+}
+
 // newK8sHTTPClient creates an HTTP client that trusts the in-cluster K8s API
 // server. The K8s service-account CA cert at k8sCACertPath is required; a
 // missing/unreadable CA cert is a hard error so the agent surfaces the
@@ -166,40 +187,36 @@ func newK8sHTTPClientFromCAFile(caCertPath string) (*http.Client, error) {
 	}, nil
 }
 
+func newOIDCHTTPClientFromCAFile(caCertPath string) (*http.Client, error) {
+	caCert, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return nil, fmt.Errorf("read K8s CA cert at %s: %w", caCertPath, err)
+	}
+
+	caCertPool, err := x509.SystemCertPool()
+	if err != nil || caCertPool == nil {
+		caCertPool = x509.NewCertPool()
+	}
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("parse K8s CA cert at %s: no PEM certificates found", caCertPath)
+	}
+
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs: caCertPool,
+			},
+		},
+	}, nil
+}
+
 func (u *JWKSUpdater) checkAndPush(ctx context.Context) {
 	log := core.GetLogger(ctx)
 
-	// Authenticate to K8s API server using the pod's service account token.
-	// The /openid/v1/jwks endpoint requires authentication on most clusters.
-	saToken, err := os.ReadFile(k8sSATokenPath)
+	jwksData, err := u.fetchJWKS(ctx)
 	if err != nil {
-		log.WithError(err).Error("Failed to read K8s SA token for JWKS fetch")
-		return
-	}
-
-	jwksReq, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://kubernetes.default.svc/openid/v1/jwks", nil)
-	if err != nil {
-		log.WithError(err).Error("Failed to create JWKS fetch request")
-		return
-	}
-	jwksReq.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(saToken)))
-
-	resp, err := u.k8sClient.Do(jwksReq)
-	if err != nil {
-		log.WithError(err).Error("Failed to fetch JWKS from K8s API server")
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		log.WithField("status", resp.StatusCode).WithField("body", string(body)).Error("K8s API returned non-200 for JWKS")
-		return
-	}
-
-	jwksData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.WithError(err).Error("Failed to read JWKS response")
+		log.WithError(err).Error("Failed to fetch JWKS")
 		return
 	}
 
@@ -256,4 +273,198 @@ func (u *JWKSUpdater) checkAndPush(ctx context.Context) {
 		// instead of grepping logs for the rejection line.
 		metrics.RecordUpstreamRequest(nvcametrics.UpstreamOperationJWKSPush, nvcaerrors.HTTPStatusError(pushResp.StatusCode, nil))
 	}
+}
+
+func (u *JWKSUpdater) fetchJWKS(ctx context.Context) ([]byte, error) {
+	log := core.GetLogger(ctx)
+	issuerURL, err := issuerURLFromJWTFile(u.tokenPath)
+	if err == nil && issuerURL != "" {
+		jwksData, err := u.fetchJWKSFromIssuer(ctx, issuerURL)
+		if err == nil {
+			return jwksData, nil
+		}
+		return nil, fmt.Errorf("fetch JWKS from projected token issuer %q: %w", issuerURL, err)
+	} else if err != nil {
+		log.WithError(err).Warn("Failed to read issuer from projected token, falling back to K8s API server")
+	}
+
+	return u.fetchJWKSFromK8s(ctx)
+}
+
+func (u *JWKSUpdater) fetchJWKSFromK8s(ctx context.Context) ([]byte, error) {
+	saToken, err := os.ReadFile(k8sSATokenPath)
+	if err != nil {
+		return nil, fmt.Errorf("read K8s SA token for JWKS fetch: %w", err)
+	}
+
+	jwksReq, err := http.NewRequestWithContext(ctx, http.MethodGet, k8sJWKSURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create K8s JWKS fetch request: %w", err)
+	}
+	jwksReq.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(saToken)))
+
+	resp, err := u.k8sClient.Do(jwksReq)
+	if err != nil {
+		return nil, fmt.Errorf("fetch JWKS from K8s API server: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("K8s API returned non-200 for JWKS: status=%d body=%s", resp.StatusCode, string(body))
+	}
+
+	jwksData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read K8s JWKS response: %w", err)
+	}
+	return jwksData, nil
+}
+
+func (u *JWKSUpdater) fetchJWKSFromIssuer(ctx context.Context, issuerURL string) ([]byte, error) {
+	discoveryURL, err := oidcDiscoveryURL(issuerURL)
+	if err != nil {
+		return nil, err
+	}
+
+	client := u.oidcClient
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create OIDC discovery request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch OIDC discovery document: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("OIDC discovery returned non-200: status=%d body=%s", resp.StatusCode, string(body))
+	}
+
+	var discovery oidcDiscoveryConfig
+	if err := json.NewDecoder(resp.Body).Decode(&discovery); err != nil {
+		return nil, fmt.Errorf("decode OIDC discovery document: %w", err)
+	}
+	if discovery.Issuer == "" {
+		return nil, fmt.Errorf("OIDC discovery document missing issuer")
+	}
+	if err := requireMatchingOIDCIssuer(issuerURL, discovery.Issuer); err != nil {
+		return nil, err
+	}
+	if discovery.JWKSURI == "" {
+		return nil, fmt.Errorf("OIDC discovery document missing jwks_uri")
+	}
+	jwksURL, err := resolveOIDCJWKSURL(issuerURL, discovery.JWKSURI)
+	if err != nil {
+		return nil, err
+	}
+
+	jwksReq, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create issuer JWKS request: %w", err)
+	}
+	jwksResp, err := client.Do(jwksReq)
+	if err != nil {
+		return nil, fmt.Errorf("fetch issuer JWKS: %w", err)
+	}
+	defer jwksResp.Body.Close()
+	if jwksResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(jwksResp.Body)
+		return nil, fmt.Errorf("issuer JWKS endpoint returned non-200: status=%d body=%s", jwksResp.StatusCode, string(body))
+	}
+
+	jwksData, err := io.ReadAll(jwksResp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read issuer JWKS response: %w", err)
+	}
+	return jwksData, nil
+}
+
+func oidcDiscoveryURL(issuerURL string) (string, error) {
+	normalized, err := normalizeOIDCIssuerURL(issuerURL)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(normalized)
+	if err != nil {
+		return "", fmt.Errorf("parse OIDC issuer URL: %w", err)
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + oidcDiscoveryPath
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
+func requireMatchingOIDCIssuer(expectedIssuer, discoveryIssuer string) error {
+	expected, err := normalizeOIDCIssuerURL(expectedIssuer)
+	if err != nil {
+		return err
+	}
+	actual, err := normalizeOIDCIssuerURL(discoveryIssuer)
+	if err != nil {
+		return fmt.Errorf("parse OIDC discovery issuer URL: %w", err)
+	}
+	if expected != actual {
+		return fmt.Errorf("OIDC discovery issuer mismatch: token issuer=%q discovery issuer=%q", expected, actual)
+	}
+	return nil
+}
+
+func normalizeOIDCIssuerURL(issuerURL string) (string, error) {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(issuerURL), "/"))
+	if err != nil {
+		return "", fmt.Errorf("parse OIDC issuer URL: %w", err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("OIDC issuer URL must be absolute")
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
+func resolveOIDCJWKSURL(issuerURL, jwksURI string) (string, error) {
+	jwksURL, err := url.Parse(jwksURI)
+	if err != nil {
+		return "", fmt.Errorf("parse OIDC jwks_uri: %w", err)
+	}
+	if jwksURL.IsAbs() {
+		return jwksURL.String(), nil
+	}
+
+	normalizedIssuer, err := normalizeOIDCIssuerURL(issuerURL)
+	if err != nil {
+		return "", err
+	}
+	base, err := url.Parse(strings.TrimRight(normalizedIssuer, "/") + "/")
+	if err != nil {
+		return "", fmt.Errorf("parse OIDC issuer URL: %w", err)
+	}
+	return base.ResolveReference(jwksURL).String(), nil
+}
+
+func issuerURLFromJWTFile(tokenPath string) (string, error) {
+	tokenBytes, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return "", fmt.Errorf("read projected token: %w", err)
+	}
+	parts := strings.Split(strings.TrimSpace(string(tokenBytes)), ".")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("parse projected token: expected JWT with at least two segments")
+	}
+	claimsBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("decode projected token claims: %w", err)
+	}
+	var claims jwtIssuerClaims
+	if err := json.Unmarshal(claimsBytes, &claims); err != nil {
+		return "", fmt.Errorf("unmarshal projected token claims: %w", err)
+	}
+	return strings.TrimSpace(claims.Issuer), nil
 }

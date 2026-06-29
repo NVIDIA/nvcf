@@ -1193,12 +1193,12 @@ func (a *Agent) Start(ctx context.Context) error {
 				return fmt.Errorf("create NATS queue client: %w", err)
 			}
 
-			// JWKS updater is PSAT-only: it polls the cluster's K8s API server
-			// /openid/v1/jwks endpoint and pushes rotations to ICMS so ICMS can
-			// keep verifying PSATs through a key rotation. SPIRE-mode clusters
-			// run a different trust pipeline — ICMS already has the SPIRE trust
-			// bundle out-of-band, and pushing K8s API JWKS would clobber it
-			// and break SVID verification on the next introspect.
+			// JWKS updater is PSAT-only: it discovers the projected token issuer's
+			// public JWKS endpoint and pushes rotations to ICMS so ICMS can keep
+			// verifying PSATs through a key rotation. SPIRE-mode clusters run a
+			// different trust pipeline: ICMS already has the SPIRE trust bundle
+			// out-of-band, and pushing K8s API JWKS would clobber it and break SVID
+			// verification on the next introspect.
 			//
 			// Launched as a plain goroutine today (matches other non-controller
 			// background loops in this package). The Start signature also

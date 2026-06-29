@@ -18,19 +18,32 @@ limitations under the License.
 package nvca
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestNewJWKSUpdater(t *testing.T) {
 	// The constructor requires the in-cluster K8s CA cert at k8sCACertPath,
@@ -46,6 +59,232 @@ func TestNewJWKSUpdater(t *testing.T) {
 	}, missingCACertPath)
 	require.Error(t, err, "missing K8s CA cert must fail closed")
 	assert.Contains(t, err.Error(), missingCACertPath)
+}
+
+func TestJWKSUpdater_FetchesJWKSFromProjectedTokenIssuer(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		jwksURI func(string) string
+	}{
+		{
+			name: "relative jwks_uri",
+			jwksURI: func(_ string) string {
+				return "/keys"
+			},
+		},
+		{
+			name: "absolute jwks_uri",
+			jwksURI: func(baseURL string) string {
+				return baseURL + "/keys"
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			publicJWKS := `{"keys":[{"kty":"RSA","kid":"public-rotated-key"}]}`
+			internalJWKS := `{"keys":[{"kty":"RSA","kid":"internal-current-key"}]}`
+
+			var discoveryHits int
+			var keysHits int
+			var jwksURI string
+			var issuerURL string
+			issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/.well-known/openid-configuration":
+					discoveryHits++
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"issuer":"` + issuerURL + `","jwks_uri":"` + jwksURI + `"}`))
+				case "/keys":
+					keysHits++
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(publicJWKS))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer issuer.Close()
+			issuerURL = issuer.URL
+			jwksURI = tt.jwksURI(issuer.URL)
+
+			token := unsignedJWTWithIssuer(issuer.URL)
+			tokenPath := filepath.Join(t.TempDir(), "psat")
+			require.NoError(t, os.WriteFile(tokenPath, []byte(token), 0o600))
+
+			var pushedBody []byte
+			icms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPut, r.Method)
+				assert.Equal(t, "/v1/nvca/clusters/cluster-123/jwks", r.URL.Path)
+				assert.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
+				body, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				pushedBody = body
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer icms.Close()
+
+			internalFetches := 0
+			updater := &JWKSUpdater{
+				icmsURL:   icms.URL,
+				clusterID: "cluster-123",
+				tokenPath: tokenPath,
+				k8sClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					internalFetches++
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(internalJWKS)),
+						Header:     make(http.Header),
+						Request:    req,
+					}, nil
+				})},
+				icmsClient: icms.Client(),
+			}
+
+			updater.checkAndPush(ctx)
+
+			require.NotEmpty(t, pushedBody)
+			var pushed map[string]string
+			require.NoError(t, json.Unmarshal(pushedBody, &pushed))
+			assert.JSONEq(t, publicJWKS, pushed["jwks"])
+			assert.NotContains(t, pushed["jwks"], "internal-current-key")
+			assert.Equal(t, 1, discoveryHits)
+			assert.Equal(t, 1, keysHits)
+			assert.Equal(t, 0, internalFetches)
+		})
+	}
+}
+
+func TestJWKSUpdater_DoesNotFallbackToInternalJWKSWhenProjectedIssuerFetchFails(t *testing.T) {
+	ctx := context.Background()
+	internalJWKS := `{"keys":[{"kty":"RSA","kid":"internal-current-key"}]}`
+
+	var discoveryHits int
+	var issuerURL string
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		discoveryHits++
+		http.Error(w, "issuer unavailable", http.StatusServiceUnavailable)
+	}))
+	defer issuer.Close()
+	issuerURL = issuer.URL
+
+	token := unsignedJWTWithIssuer(issuerURL)
+	tokenPath := filepath.Join(t.TempDir(), "psat")
+	require.NoError(t, os.WriteFile(tokenPath, []byte(token), 0o600))
+
+	var pushed bool
+	icms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pushed = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer icms.Close()
+
+	internalFetches := 0
+	updater := &JWKSUpdater{
+		icmsURL:   icms.URL,
+		clusterID: "cluster-123",
+		tokenPath: tokenPath,
+		k8sClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			internalFetches++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(internalJWKS)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		})},
+		icmsClient: icms.Client(),
+	}
+
+	updater.checkAndPush(ctx)
+
+	assert.Equal(t, 1, discoveryHits)
+	assert.Equal(t, 0, internalFetches)
+	assert.False(t, pushed, "issuer JWKS failures must not push stale internal K8s JWKS")
+}
+
+func TestJWKSUpdater_FetchesClusterLocalIssuerWithK8sTrust(t *testing.T) {
+	ctx := context.Background()
+	publicJWKS := `{"keys":[{"kty":"RSA","kid":"cluster-local-issuer-key"}]}`
+
+	var issuerURL string
+	issuer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"issuer":"` + issuerURL + `","jwks_uri":"/keys"}`))
+		case "/keys":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(publicJWKS))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuer.Close()
+	issuerURL = issuer.URL
+
+	tokenPath := filepath.Join(t.TempDir(), "psat")
+	require.NoError(t, os.WriteFile(tokenPath, []byte(unsignedJWTWithIssuer(issuerURL)), 0o600))
+
+	caCertPath := filepath.Join(t.TempDir(), "ca.crt")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Certificate().Raw})
+	require.NoError(t, os.WriteFile(caCertPath, caPEM, 0o600))
+
+	updater, err := newJWKSUpdater(JWKSUpdaterOptions{
+		ICMSURL:   "https://icms.nvidia.com",
+		ClusterID: "cluster-123",
+		TokenPath: tokenPath,
+	}, caCertPath)
+	require.NoError(t, err)
+
+	jwksData, err := updater.fetchJWKS(ctx)
+	require.NoError(t, err)
+	assert.JSONEq(t, publicJWKS, string(jwksData))
+}
+
+func TestJWKSUpdater_RejectsOIDCIssuerMismatch(t *testing.T) {
+	ctx := context.Background()
+
+	var issuerURL string
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"issuer":"https://other-issuer.example.test","jwks_uri":"/keys"}`))
+		case "/keys":
+			_, _ = w.Write([]byte(`{"keys":[{"kty":"RSA","kid":"wrong-issuer-key"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuer.Close()
+	issuerURL = issuer.URL
+
+	tokenPath := filepath.Join(t.TempDir(), "psat")
+	require.NoError(t, os.WriteFile(tokenPath, []byte(unsignedJWTWithIssuer(issuerURL)), 0o600))
+
+	internalFetches := 0
+	updater := &JWKSUpdater{
+		tokenPath: tokenPath,
+		k8sClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			internalFetches++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"keys":[{"kty":"RSA","kid":"internal-current-key"}]}`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		})},
+	}
+
+	_, err := updater.fetchJWKS(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OIDC discovery issuer mismatch")
+	assert.Equal(t, 0, internalFetches)
+}
+
+func unsignedJWTWithIssuer(issuer string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
+	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"` + issuer + `"}`))
+	return header + "." + claims + "."
 }
 
 func TestJWKSHashComparison_SameJWKS(t *testing.T) {
