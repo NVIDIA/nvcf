@@ -24,6 +24,7 @@ RELEASE_RULES = [
     {"type": "test", "release": False},
     {"type": "build", "release": False},
 ]
+VERSION_PLACEHOLDER = "${version}"
 
 
 def bool_env(name, default=False):
@@ -91,8 +92,23 @@ def semverish_sort_key(value):
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", value)]
 
 
-def latest_service_tag(service_name):
-    raw = run(["git", "tag", "-l", f"{service_name}-v*"], capture=True)
+def tag_format(service):
+    return service.get("tag_format") or f"{service['service_name']}-v{VERSION_PLACEHOLDER}"
+
+
+def tag_prefix(service):
+    value = tag_format(service)
+    if not value.endswith(VERSION_PLACEHOLDER):
+        raise SystemExit(f"{service['id']}: tag_format must end with {VERSION_PLACEHOLDER}: {value}")
+    return value[: -len(VERSION_PLACEHOLDER)]
+
+
+def tag_for_version(service, version):
+    return tag_format(service).replace(VERSION_PLACEHOLDER, version, 1)
+
+
+def latest_service_tag(service):
+    raw = run(["git", "tag", "-l", f"{tag_prefix(service)}*"], capture=True)
     tags = [line.strip() for line in raw.splitlines() if line.strip()]
     if not tags:
         return ""
@@ -101,7 +117,7 @@ def latest_service_tag(service_name):
 
 def only_generated_changes(root, service, generated_paths):
     service_path = service["path"]
-    last_tag = latest_service_tag(service["service_name"])
+    last_tag = latest_service_tag(service)
     log_range = f"{last_tag}..HEAD" if last_tag else "HEAD"
     raw = run(
         ["git", "log", log_range, "--name-only", "--pretty=format:", "--", service_path],
@@ -126,7 +142,7 @@ def only_generated_changes(root, service, generated_paths):
     return True
 
 
-def write_semantic_release_files(service_dir, service_name, publish, draft):
+def write_semantic_release_files(service_dir, service_name, release_tag_format, publish, draft):
     deps = {
         "semantic-release": "17.4.4",
         "semantic-release-monorepo": "^7.0.0",
@@ -147,7 +163,7 @@ def write_semantic_release_files(service_dir, service_name, publish, draft):
     }
     release_config = {
         "extends": "semantic-release-monorepo",
-        "tagFormat": f"{service_name}-v${{version}}",
+        "tagFormat": release_tag_format,
         "branches": ["main"],
         "plugins": plugins,
     }
@@ -219,7 +235,7 @@ def create_release(tag, title, notes, draft, dry_run):
 
 def publish_version_file_release(root, service, dry_run, draft):
     version = validate_version_file(root, service)
-    tag = f"{service['service_name']}-v{version}"
+    tag = tag_for_version(service, version)
     existing = run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"], capture=True, check=False).strip()
     if existing:
         print(f"[github-release] {service['id']}: {tag} already exists; skipping")
@@ -264,14 +280,20 @@ def auto_release(args):
             if only_generated_changes(root, service, generated_paths):
                 continue
 
-            write_semantic_release_files(service_dir, service["service_name"], publish=not dry_run, draft=draft)
+            write_semantic_release_files(
+                service_dir,
+                service["service_name"],
+                tag_format(service),
+                publish=not dry_run,
+                draft=draft,
+            )
             install_semantic_release(service_dir)
 
             if dry_run:
                 code, output = stream(["npx", "semantic-release", "--dry-run", "--no-ci", "--debug"], cwd=service_dir)
                 next_version = parse_next_version(output)
                 if next_version:
-                    print(f"[github-release] {service['id']}: would create {service['service_name']}-v{next_version}")
+                    print(f"[github-release] {service['id']}: would create {tag_for_version(service, next_version)}")
                 elif code == 0 and no_release_output(output):
                     print(f"[github-release] {service['id']}: no release-worthy commits")
                 else:
@@ -292,7 +314,7 @@ def parse_release_tag(tag, metadata):
         }
 
     for service in metadata.get("services", []):
-        prefix = f"{service['service_name']}-v"
+        prefix = tag_prefix(service)
         if tag.startswith(prefix):
             version = tag[len(prefix) :]
             if re.fullmatch(SEMVER_PATTERN, version):

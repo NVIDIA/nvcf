@@ -186,7 +186,7 @@
       "id": "image-credential-helper",
       "path": "src/compute-plane-services/image-credential-helper",
       "service_name": "nvcf-image-credential-helper",
-      "tag_format": "nvcf-image-credential-helper-v${version}"
+      "tag_format": "src/compute-plane-services/image-credential-helper/v${version}"
     }
   ]
 }
