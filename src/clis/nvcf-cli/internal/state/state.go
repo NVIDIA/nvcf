@@ -119,7 +119,12 @@ func NewStateManagerForConfig(configName string) *StateManager {
 		if ext := filepath.Ext(contextName); ext != "" {
 			contextName = contextName[:len(contextName)-len(ext)]
 		}
-		statePath = filepath.Join(homeDir, fmt.Sprintf(".nvcf-cli.%s.state", contextName))
+		// ".nvcf-cli" is the default config name; map it back to the default state path
+		if contextName == ".nvcf-cli" {
+			statePath = filepath.Join(homeDir, ".nvcf-cli.state")
+		} else {
+			statePath = filepath.Join(homeDir, fmt.Sprintf(".nvcf-cli.%s.state", contextName))
+		}
 	}
 
 	return &StateManager{

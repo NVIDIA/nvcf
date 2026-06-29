@@ -202,3 +202,34 @@ func TestState_Load_MissingFile(t *testing.T) {
 	// State is non-nil after load
 	assert.NotNil(t, sm.GetState())
 }
+
+// TestNewStateManagerForConfig_StatePath verifies that NewStateManagerForConfig
+// maps config names to the correct state file paths.
+func TestNewStateManagerForConfig_StatePath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	tests := []struct {
+		configName   string
+		wantStatPath string
+	}{
+		// Default cases — empty or "default" → ~/.nvcf-cli.state
+		{"", filepath.Join(home, ".nvcf-cli.state")},
+		{"default", filepath.Join(home, ".nvcf-cli.state")},
+		// Auto-discovered default config (the regression case) → ~/.nvcf-cli.state
+		{".nvcf-cli.yaml", filepath.Join(home, ".nvcf-cli.state")},
+		{filepath.Join(home, ".nvcf-cli.yaml"), filepath.Join(home, ".nvcf-cli.state")},
+		// Explicit named config → ~/.nvcf-cli.<name>.state
+		{"dev.yaml", filepath.Join(home, ".nvcf-cli.dev.state")},
+		{filepath.Join(home, "dev.yaml"), filepath.Join(home, ".nvcf-cli.dev.state")},
+		// A file literally named nvcf-cli.yaml (no leading dot) is a distinct named config
+		{"nvcf-cli.yaml", filepath.Join(home, ".nvcf-cli.nvcf-cli.state")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.configName, func(t *testing.T) {
+			sm := NewStateManagerForConfig(tt.configName)
+			assert.Equal(t, tt.wantStatPath, sm.statePath)
+		})
+	}
+}

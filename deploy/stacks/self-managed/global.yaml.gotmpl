@@ -415,6 +415,9 @@ grpcproxy:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- with (dig "grpcproxy" "workerConnectBaseURL" "" .Values) }}
+  workerConnectBaseURL: {{ . | quote }}
+  {{- end }}
 
   env:
     # Observability
@@ -836,6 +839,11 @@ nvcfGatewayRoutes:
     grpc:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    grpcWorker:
+      enabled: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "enabled" false .Values }}
+      listenerName: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "listenerName" "worker-tcp" .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     nats:
       enabled: {{ $natsRouteEnabled }}
       routeAnnotations:

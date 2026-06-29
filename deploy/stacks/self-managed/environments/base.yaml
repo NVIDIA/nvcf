@@ -266,6 +266,10 @@ ingress:
         routeAnnotations: {}
       grpc:
         routeAnnotations: {}
+      grpcWorker:
+        enabled: false
+        listenerName: worker-tcp
+        routeAnnotations: {}
       nats:
         enabled: false
         routeAnnotations: {}
@@ -280,3 +284,6 @@ ingress:
         name: "" # must be set by the environment when routes.nats.enabled=true
         namespace: "" # must be set by the environment when routes.nats.enabled=true
         listenerName: nats
+
+grpcproxy:
+  workerConnectBaseURL: ""
