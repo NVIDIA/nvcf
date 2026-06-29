@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Validates Fern docs configuration on pull requests that touch docs or fern/.
+
+name: Fern Docs CI
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'fern/**'
+      - '.github/workflows/fern-docs-ci.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fern-check:
+    name: Fern Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '20'
+
+      - name: Install Fern CLI
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r .version fern/fern.config.json)
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+            echo "::error::fern.config.json .version '$VERSION' is not a valid semver"
+            exit 1
+          fi
+          npm install -g "fern-api@${VERSION}"
+
+      - name: Check MDX safety
+        run: |
+          BAD=$(grep -rn '<img\b[^>]*[^/]>\|<img>' docs/ fern/ --include="*.md" --include="*.mdx" || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::Non-self-closing <img> tags found (MDX requires <img ... />):"
+            echo "$BAD"
+            exit 1
+          fi
+
+      - name: Fern check
+        run: fern check
+
+      - name: Check links
+        uses: lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411 # v2.8.0
+        with:
+          args: --offline --no-progress 'docs/**/*.md'
+          fail: true

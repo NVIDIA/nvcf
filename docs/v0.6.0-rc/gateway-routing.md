@@ -66,18 +66,40 @@ Verify the controller pod is running:
 kubectl get pods -n envoy-gateway-system
 ```
 
-### Create GatewayClass
+### Create EnvoyProxy and GatewayClass
 
-Create the GatewayClass resource:
+Create an `EnvoyProxy` resource before you create the `GatewayClass`. The
+`envoyDeployment.replicas` setting controls the Envoy proxy data-plane pods that
+handle ingress traffic. It does not control Envoy Gateway controller pods.
+
+Create the `GatewayClass` with a `parametersRef` that points to the
+`EnvoyProxy` resource:
 
 ```bash
 kubectl apply -f - <<EOF
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: eg
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 2
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: eg
 spec:
   controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: eg
+    namespace: envoy-gateway-system
 EOF
 ```
 
