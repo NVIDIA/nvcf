@@ -34,7 +34,7 @@ Two cluster-level components the NVCA operator depends on. Install both before r
 | KAI Scheduler | `selfManaged.featureGateValues` includes `KAIScheduler`; NVCA polls `Queue` CRs and refuses to become healthy until their quotas are `-1` | [references/kai-scheduler.md](references/kai-scheduler.md) |
 | SMB CSI driver (`smb.csi.k8s.io`) | NVCA's `selfManaged.sharedStorage` runs Samba sidecar pods that export file shares; the resulting PVCs need this CSI driver to bind | [references/smb-csi.md](references/smb-csi.md) |
 
-Both installs are cloud-neutral helm commands pinned to the NVCF-validated versions — see `manifest.yaml` for current pins.
+Both installs are cloud-neutral helm commands pinned to NVCF-validated versions. These are upstream third-party charts (not NVCF images), so they are not in `manifest.yaml`; the per-component reference docs carry the current pin and link the NVCF docs version table.
 
 ## Prerequisites
 

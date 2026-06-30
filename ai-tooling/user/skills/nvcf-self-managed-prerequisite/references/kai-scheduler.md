@@ -8,7 +8,7 @@ An open-source Kubernetes-native scheduler for AI workloads at large scale. The 
 
 ## Version pin
 
-KAI moves with the NVCF stack. Always cross-check the version in the stack `manifest.yaml` before installing — the chart version that ships in the manifest is the one NVCF has validated against the current NVCA / SIS combination.
+KAI moves with the NVCF stack. Cross-check the chart version against the NVCF KAI Scheduler docs version table (linked below) before installing; that table lists the version NVCF has validated against the current NVCA / SIS combination. KAI is an upstream chart, not an NVCF image, so it is not in `manifest.yaml`.
 
 At the time of writing, the pinned chart version is `v0.14.0`. See [NVCF KAI Scheduler docs](https://docs.nvidia.com/cloud-functions/current/latest/cluster-management/kai-scheduler.html) for the canonical version table.
 

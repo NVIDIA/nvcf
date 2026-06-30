@@ -10,7 +10,7 @@ Without the driver installed, the NVCA shared-storage PVCs stay `Pending` and st
 
 ## Version pin
 
-The driver version tracks what NVCF validates against. At the time of writing, the pinned chart version is `v1.17.0`. Always cross-check `manifest.yaml` before installing.
+The driver version tracks what NVCF validates against. At the time of writing, the pinned chart version is `v1.17.0`. csi-driver-smb is an upstream chart (not an NVCF image), so it is not in `manifest.yaml`; check the NVCF cluster-management docs for the current validated version before installing.
 
 ## Install — upstream helm chart (recommended for any cloud)
 
