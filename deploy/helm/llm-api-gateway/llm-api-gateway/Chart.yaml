@@ -18,4 +18,4 @@ name: helm-nvcf-llm-api-gateway
 description: Helm chart for the NVCF LLM API Gateway
 type: application
 version: 0.0.0 # managed by semantic-release
-appVersion: "0.5.0" # bumped manually to match the published llm-api-gateway image tag
+appVersion: "0.7.1" # bumped manually to match the published llm-api-gateway image tag
