@@ -146,8 +146,8 @@ Why the NVCA Host headers matter: the NVCA agent dials the bare load balancer
 URL (which resolves through DNS) and sends a per-service hostname as the HTTP
 `Host` header (`sis.<addr>`, `reval.<addr>`, `nats.<addr>`) so the Gateway
 HTTPRoutes match. These are set as `global.nvcaOperator.selfManaged.*Override`
-in the environment file in Step 2. This requires `helm-nvca-operator` 1.12.0 or
-later.
+in the compute-plane environment file in Step 5. This requires
+`helm-nvca-operator` 1.12.0 or later.
 </Info>
 
 ## Step 2: Configure the control-plane environment and secrets files
@@ -184,12 +184,6 @@ global:
   image:
     registry: nvcr.io              # Container image registry. Change only if you mirror.
     repository: "${REPOSITORY}"    # CHANGE: from "YOUR_ORG/YOUR_TEAM". NGC org/team or mirror path.
-
-  nvcaOperator:                    # ADD: this block is not in base.yaml. NVCA agent Host headers.
-    selfManaged:
-      icmsServiceHostHeaderOverride: "sis.${GATEWAY_ADDR}"     # Host header for SIS so Gateway routes match.
-      revalServiceHostHeaderOverride: "reval.${GATEWAY_ADDR}"  # Host header for reval.
-      natsHostOverride: "nats.${GATEWAY_ADDR}"                 # Host header for NATS.
 
   workerEndpoints:
     essServiceURL: ""              # Control-plane endpoints advertised into worker pods. Empty = in-cluster defaults.
