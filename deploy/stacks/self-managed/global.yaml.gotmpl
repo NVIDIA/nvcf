@@ -97,7 +97,6 @@ cert-manager:
     image:
       repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-startupapicheck
 
-{{- $openbaoServerTag := dig "openbao" "server" "image" "tag" "2.5.4-nv-1.3.0" .Values }}
 openbao:
   {{- if .Values.global.imagePullSecrets }}
   global:
@@ -143,7 +142,6 @@ openbao:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
-      tag: {{ $openbaoServerTag }}
     {{- with include "nvcf.nodeSelector" (dict "type" "vault" "selectors" .Values.global.nodeSelectors) }}
     {{- . | nindent 4 }}
     {{- end }}
@@ -156,36 +154,7 @@ openbao:
       storageClass: {{ .Values.global.storageClass }}
       {{- end }}
       size: {{ .Values.global.storageSize | default "10Gi" }}
-    # the entire `extraContainers` config must be supplied because Helm doesn't merge
-    # YAML lists.
-    extraContainers:
-      - name: auto-unseal-sidecar
-        image: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-openbao:{{ $openbaoServerTag }}
-        volumeMounts:
-          - name: openbao-server-unseal
-            mountPath: /vault/userconfig/unseal
-            readOnly: true
-        command: ["/bin/sh", "-c"]
-        args:
-          - |
-            echo "Starting auto-unseal monitor..."
-            echo http://$HOSTNAME:8200
-            export BAO_ADDR=http://$HOSTNAME:8200
-            while true; do
-              if [ -f /vault/userconfig/unseal/unseal_key ]; then
-                UNSEAL_KEY=$(cat /vault/userconfig/unseal/unseal_key)
-                if [ ! -z "$UNSEAL_KEY" ]; then
-                    bao operator unseal $UNSEAL_KEY
-                    sleep 60
-                    continue
-                else
-                  echo "Unseal key is empty, waiting..."
-                fi
-              else
-                echo "Unseal key file not found, waiting..."
-              fi
-              sleep 10
-            done
+
 nats:
   {{- if .Values.global.imagePullSecrets }}
   global:
@@ -262,11 +231,19 @@ natsAuthCalloutService:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
 
+{{- $workerEndpoints := dig "global" "workerEndpoints" dict .Values }}
 {{- $apiEnvOverrides := dig "api" "env" dict .Values }}
 {{- $llmRouterClientImageDefault := printf "%s/%s/pylon:0.2.1" .Values.global.image.registry .Values.global.image.repository }}
 {{- $llmRouterClientImage := dig "NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE" $llmRouterClientImageDefault $apiEnvOverrides }}
-{{- $essWorkerBaseURL := dig "global" "workerEndpoints" "essServiceURL" "" .Values }}
-{{- $invocationWorkerBaseURL := dig "global" "workerEndpoints" "invocationServiceURL" "" .Values }}
+{{- $nvcfWorkerServiceURL := dig "nvcfServiceURL" "" $workerEndpoints }}
+{{- $nvcfWorkerGrpcServiceURL := dig "nvcfGrpcServiceURL" "" $workerEndpoints }}
+{{- $nvcfNatsWorkerServiceURL := dig "nvcfNatsServiceURL" "" $workerEndpoints }}
+{{- $essWorkerBaseURL := dig "essServiceURL" "" $workerEndpoints }}
+{{- $nvctWorkerServiceURL := dig "nvctServiceURL" "" $workerEndpoints }}
+{{- $nvctWorkerGrpcServiceURL := dig "nvctGrpcServiceURL" "" $workerEndpoints }}
+{{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
+{{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
+{{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
 api:
   fullnameOverride: nvcf-api
   {{- if .Values.global.imagePullSecrets }}
@@ -326,8 +303,19 @@ api:
     NVCF_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
     NVCF_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
     NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: {{ $llmRouterClientImage | quote }}
+    {{- with $nvcfWorkerServiceURL }}
+    NVCF_FQDN: {{ . | quote }}
+    {{- end }}
+    {{- with $nvcfWorkerGrpcServiceURL }}
+    NVCF_GLOBAL_FQDN_GRPC: {{ . | quote }}
+    {{- end }}
+    {{- with $nvcfNatsWorkerServiceURL }}
+    NVCF_NATS_WORKER_URL: {{ . | quote }}
+    {{- end }}
     {{- with $essWorkerBaseURL }}
+    # Keep the legacy worker alias until all API builds consume nvcf.ess.base-url directly.
     NVCF_ESS_WORKER_BASE_URL: {{ . | quote }}
+    NVCF_ESS_BASE_URL: {{ . | quote }}
     {{- end }}
     NVCF_REGISTRIES_NGC_CONTAINER_REGISTRY_URL: "https://nvcr.io"
     NVCF_REGISTRIES_NGC_BASE_URL: "https://api.ngc.nvidia.com"
@@ -345,6 +333,9 @@ api:
     NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_GROUP_SCOPE: "ngc"
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
 
 invocation:
   fullnameOverride: invocation-service
@@ -391,7 +382,14 @@ nvctApi:
   env:
     NVCT_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
     NVCT_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
+    {{- with $nvctWorkerServiceURL }}
+    NVCT_FQDN: {{ . | quote }}
+    {{- end }}
+    {{- with $nvctWorkerGrpcServiceURL }}
+    NVCT_GLOBAL_FQDN_GRPC: {{ . | quote }}
+    {{- end }}
     {{- with $essWorkerBaseURL }}
+    NVCT_ESS_BASE_URL: {{ . | quote }}
     NVCT_ESS_WORKER_BASE_URL: {{ . | quote }}
     {{- end }}
     # Observability
@@ -415,7 +413,7 @@ grpcproxy:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with (dig "grpcproxy" "workerConnectBaseURL" "" .Values) }}
+  {{- with $grpcProxyWorkerConnectBaseURL }}
   workerConnectBaseURL: {{ . | quote }}
   {{- end }}
 
@@ -425,6 +423,12 @@ grpcproxy:
     OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
     {{- else }}
     TRACING: "none" # this is ineffective, but the env list must be non-empty
+    {{- end }}
+    {{- with $nvcfWorkerGrpcServiceURL }}
+    NVCF_FQDN_GRPC: {{ . | quote }}
+    {{- end }}
+    {{- with $nvcfNatsWorkerServiceURL }}
+    NATS_FQDN: {{ . | quote }}
     {{- end }}
     {{- if .Values.rateLimiter.enabled }}
     RATE_LIMIT_ENABLED: "true"
@@ -601,7 +605,7 @@ llmApiGateway:
   image:
     registry: {{ dig "addons" "llm" "gateway" "image" "registry" .Values.global.image.registry .Values }}
     repository: {{ dig "addons" "llm" "gateway" "image" "repository" (printf "%s/llm-api-gateway" .Values.global.image.repository) .Values }}
-    {{- with dig "addons" "llm" "gateway" "image" "tag" "0.7.1" .Values }}
+    {{- with dig "addons" "llm" "gateway" "image" "tag" "" .Values }}
     tag: {{ . | quote }}
     {{- end }}
     {{- with dig "addons" "llm" "gateway" "image" "pullPolicy" "" .Values }}

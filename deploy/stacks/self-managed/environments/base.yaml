@@ -38,12 +38,26 @@ global:
     registry: nvcr.io
     repository: YOUR_ORG/YOUR_TEAM
 
-  # Worker-facing control-plane endpoints advertised by API services into
-  # launched workloads. Leave empty to use service defaults; set per
-  # environment when worker clusters need externally reachable endpoints.
+  # Worker-facing endpoints advertised by control-plane services into launched
+  # workload pods. Leave empty to use service defaults; set per environment when
+  # workers run in a different cluster or DNS domain from the control plane.
   workerEndpoints:
+    # NVCF function worker env: NVCF_FQDN
+    nvcfServiceURL: ""
+    # NVCF function worker env: NVCF_FQDN_GRPC
+    nvcfGrpcServiceURL: ""
+    # NVCF function worker env: NVCF_FQDN_NATS
+    nvcfNatsServiceURL: ""
+    # NVCF function worker env: ESS_FQDN
     essServiceURL: ""
+    # NVCT task worker env: NVCT_FQDN
+    nvctServiceURL: ""
+    # NVCT task worker env: NVCT_FQDN_GRPC
+    nvctGrpcServiceURL: ""
+    # Invocation service worker stream address.
     invocationServiceURL: ""
+    # gRPC proxy worker CONNECT endpoint advertised by the proxy.
+    grpcProxyWorkerConnectURL: ""
 
   nodeSelectors:
     enabled: false
