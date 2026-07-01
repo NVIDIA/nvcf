@@ -1,7 +1,7 @@
 # NVCA Operator Helm chart
 
-NVCA Operator installs and manages reconfiguration, upgrade and health check of NVCF ClusterAgent Service
-used in DGX Cloud and other K8s Clusters to run NVCF Workloads.
+NVCF Cluster Agent (NVCA) Operator installs and manages reconfiguration, upgrades, and health checks of NVCA
+used in Kubernetes Clusters to run NVCF Workloads.
 
 ## Parameters
 
