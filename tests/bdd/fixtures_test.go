@@ -81,6 +81,40 @@ func TestNVCFCLINonlocalFixtureMatchesCLITemplate(t *testing.T) {
 	}
 }
 
+func TestNVCFCLILocalFixtureTargetsLocalGRPCGateway(t *testing.T) {
+	fixtureBytes, err := os.ReadFile("fixtures/nvcf-cli-local.yaml")
+	if err != nil {
+		t.Fatalf("read local CLI fixture: %v", err)
+	}
+	var fixture map[string]any
+	if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
+		t.Fatalf("parse local CLI fixture: %v", err)
+	}
+	if got, want := fixture["base_grpc_url"], "localhost:10081"; got != want {
+		t.Fatalf("base_grpc_url = %v, want %q", got, want)
+	}
+}
+
+func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
+	fixtureBytes, err := os.ReadFile("fixtures/self-managed-local-bdd-multi.yaml")
+	if err != nil {
+		t.Fatalf("read multi-cluster stack fixture: %v", err)
+	}
+	fixture := string(fixtureBytes)
+	for _, want := range []string{
+		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
+		"chart: ../../../helm/gateway-routes/chart",
+		`version: ""`,
+		"grpcWorker:",
+		"enabled: true",
+		"listenerName: worker-tcp",
+	} {
+		if !strings.Contains(fixture, want) {
+			t.Fatalf("multi-cluster stack fixture missing %q", want)
+		}
+	}
+}
+
 func TestNVCTTaskSmokeUsesTaskSimpleSample(t *testing.T) {
 	for _, path := range []string{
 		"../../examples/task-samples/task-simple-sample/Dockerfile",

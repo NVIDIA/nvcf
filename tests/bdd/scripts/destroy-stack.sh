@@ -245,7 +245,10 @@ fi
 # Worker layer first per CR-finalizer ordering: CRs on the cp can
 # wait on worker controllers to clear them. Discover every
 # ncp-local-compute-* cluster on the host.
-mapfile -t COMPUTES < <(
+COMPUTES=()
+while IFS= read -r name; do
+  [[ -n "$name" ]] && COMPUTES+=("$name")
+done < <(
   k3d cluster list -o json |
     jq -r '.[] | select(.name|startswith("ncp-local-compute-")) | .name'
 )

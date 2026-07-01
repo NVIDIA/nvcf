@@ -30,9 +30,9 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
       And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-secrets.yaml"
       And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
       # Conflict precheck: single-cluster ncp-local's k3d serverlb
-      # claims 0.0.0.0:8080/8443/4222, the same host ports
-      # ncp-local-cp needs in the multi-cluster topology. Fail
-      # loudly here so the operator runs
+      # claims 0.0.0.0:8080/8443/10081, and ncp-local-cp also
+      # needs NATS on 4222 plus the worker callback port 10086.
+      # Fail loudly here so the operator runs
       # `make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local`
       # before retrying this feature, rather than discovering the
       # port collision deep inside build-and-deploy-multicluster.

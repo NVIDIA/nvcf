@@ -348,7 +348,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
       When I run command:
         """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml api-key generate --description bdd-load-tester-supreme --scopes invoke_function,list_functions,queue_details,list_functions_details
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml api-key generate --description bdd-load-tester-supreme --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
         """
       Then the command exit code should be 0
 

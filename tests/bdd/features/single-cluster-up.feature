@@ -30,7 +30,8 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
       And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-secrets.yaml"
       And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
       # Conflict precheck: ncp-local-cp's k3d serverlb claims
-      # 0.0.0.0:8080/8443/4222, the same host ports single-cluster
+      # 0.0.0.0:8080/8443/10081, NATS on 4222, and the worker
+      # callback port 10086, overlapping host ports single-cluster
       # ncp-local needs. Fail loudly here so the operator runs
       # `make -C tools/ncp-local-cluster destroy-multicluster`
       # before retrying this feature, rather than discovering the

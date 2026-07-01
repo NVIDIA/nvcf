@@ -32,6 +32,13 @@ The example stack includes:
   (Prometheus, Grafana, Loki, Tempo, and OpenTelemetry Collector)
 - **nvcf-example-dashboards**: Pre-configured Grafana dashboards showing key NVCF control-plane metrics
 
+<Note>
+The observability reference stack supports a single-cluster deployment or the
+control-plane cluster in a split-topology deployment. A separate observability
+reference stack for an individual GPU cluster is not currently supported.
+
+</Note>
+
 ## Prerequisites
 
 Before deploying the example dashboards, you need:
@@ -96,10 +103,27 @@ reference stack:
 helm upgrade \
   --install observability \
   oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack \
-  --version 1.7.0 \
+  --version 1.10.0 \
   --namespace observability \
   --create-namespace
 ```
+
+For a split-topology deployment, run the command against the control-plane
+cluster and disable the NVCA ServiceMonitor. NVCA runs on the GPU cluster, so
+the control-plane observability stack does not have an NVCA scrape target.
+
+```bash
+helm upgrade \
+  --install observability \
+  oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack \
+  --version 1.10.0 \
+  --namespace observability \
+  --create-namespace \
+  --set nvcfServiceMonitors.nvcaEnabled=false
+```
+
+Do not install this reference stack on the GPU cluster. GPU cluster-specific
+observability stack support is not currently available.
 
 This will deploy:
 
@@ -142,10 +166,13 @@ These services are needed for the control-plane to send OTLP traces to Tempo.
 
 Run the following upgrade (use the same chart version and namespace as in Step 1):
 
+For split-topology deployments, `--reuse-values` preserves
+`nvcfServiceMonitors.nvcaEnabled=false` from the initial installation.
+
 ```bash
 helm upgrade observability \
   oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack \
-  --version 1.7.0 \
+  --version 1.10.0 \
   --namespace observability \
   --reuse-values \
   --set fluentBitClusterConfig.enabled=true \

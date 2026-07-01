@@ -115,7 +115,7 @@ echo "${NGC_API_KEY}" | helm registry login nvcr.io/0833294136851237/nvcf-ncp-st
   --username '$oauthtoken' --password-stdin
 
 # Pull the chart
-helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.12.0
+helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.12.6
 ```
 
 **Repository-based Helm Charts (Non-OCI)**
@@ -408,8 +408,8 @@ echo "${NGC_API_KEY}" | helm registry login nvcr.io/0833294136851237/nvcf-ncp-st
   --username '$oauthtoken' --password-stdin
 
 # 2. Pull the Helm chart from NGC
-helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.12.0
-# This creates: helm-nvca-operator-1.12.0.tgz
+helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.12.6
+# This creates: helm-nvca-operator-1.12.6.tgz
 
 # 3. Login to AWS ECR with Helm
 aws ecr get-login-password --region us-east-1 | \
@@ -419,7 +419,7 @@ aws ecr get-login-password --region us-east-1 | \
 aws ecr create-repository --repository-name ${REPO_PREFIX}/helm-nvca-operator --region us-east-1
 
 # 5. Push to ECR as OCI artifact (include repository prefix)
-helm push helm-nvca-operator-1.12.0.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
+helm push helm-nvca-operator-1.12.6.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
 ```
 
 <Note>
@@ -498,8 +498,8 @@ echo "${NGC_API_KEY}" | helm registry login nvcr.io/0833294136851237/nvcf-ncp-st
   --username '$oauthtoken' --password-stdin
 
 # 2. Pull the Helm chart from NGC
-helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.12.0
-# This creates: helm-nvca-operator-1.12.0.tgz
+helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.12.6
+# This creates: helm-nvca-operator-1.12.6.tgz
 
 # 3. Login to Volcano Engine CR with Helm
 helm registry login ${CR_ENDPOINT} \
@@ -507,7 +507,7 @@ helm registry login ${CR_ENDPOINT} \
   --password "${CR_PASSWORD}"
 
 # 4. Push to Volcano Engine CR as OCI artifact
-helm push helm-nvca-operator-1.12.0.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
+helm push helm-nvca-operator-1.12.6.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
 ```
 
 ## Troubleshooting

@@ -46,7 +46,8 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       # setup here. The @llm-gateway scenario is not a standalone tag
       # target.
       # Conflict precheck: ncp-local-cp's k3d serverlb claims
-      # 0.0.0.0:8080/8443/4222, the same host ports single-cluster
+      # 0.0.0.0:8080/8443/10081, NATS on 4222, and the worker
+      # callback port 10086, overlapping host ports single-cluster
       # ncp-local needs. Fail loudly so the operator runs
       # `make -C tools/ncp-local-cluster destroy-multicluster`
       # before retrying. `k3d cluster get` exits 1 when absent (k3d v5).
@@ -165,7 +166,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
       When I run command:
         """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-load-tester-supreme --scopes invoke_function,list_functions,queue_details,list_functions_details --for function
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-load-tester-supreme --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
         """
       Then the command exit code should be 0
 
@@ -175,3 +176,30 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         """
       Then the command exit code should be 0
       And the command output should contain "bdd-echo"
+
+    @function-lifecycle @grpc
+    Scenario: Operator creates, deploys, and invokes the gRPC Load Tester Supreme sample function
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-grpc-load-tester-supreme --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8 --inference-url /grpc --inference-port 8001 --health-protocol GRPC --health-uri / --health-port 8001 --health-timeout PT30S
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_8x --backend ncp-local --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-grpc-load-tester-supreme --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage --request-body '{"message":"bdd-grpc-echo"}' --timeout 120 --poll-duration 5
+        """
+      Then the command exit code should be 0
+      And the command output should contain "bdd-grpc-echo"

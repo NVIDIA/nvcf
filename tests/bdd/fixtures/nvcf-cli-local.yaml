@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 base_http_url: "http://api.localhost:8080"
+base_grpc_url: "localhost:10081"
 invoke_url: "http://invocation.localhost:8080"
 api_keys_service_url: "http://api-keys.localhost:8080"
 icms_url: "http://sis.localhost:8080"

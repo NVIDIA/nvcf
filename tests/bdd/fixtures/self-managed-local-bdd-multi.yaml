@@ -72,12 +72,17 @@ addons:
         serviceMonitor:
           enabled: false
 
+grpcproxy:
+  workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086
+
 # Gateway API Ingress (POC)
 # Application Developer role: Only HTTPRoutes
 # Expects Cluster Operator to provision Gateway resource
 ingress:
   gatewayApi:
     enabled: true
+    chart: ../../../helm/gateway-routes/chart
+    version: ""
     controllerNamespace: envoy-gateway-system
     gateways:
       shared:
@@ -91,5 +96,8 @@ ingress:
         namespace: envoy-gateway-system
         listenerName: nats
     routes:
+      grpcWorker:
+        enabled: true
+        listenerName: worker-tcp
       nats:
         enabled: true

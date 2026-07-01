@@ -67,9 +67,11 @@ logic into `dsl/`.
   The Gherkin comment above the precheck must call out the exact
   `make destroy` command an operator runs to remediate. Both
   single- and multi-cluster control-plane k3d serverlbs claim
-  0.0.0.0:8080/8443/4222, so leaving the wrong topology running
-  causes the bootstrap Make target to fail deep inside k3d with a
-  generic port-bind error; the precheck surfaces this immediately.
+  overlapping host ports, including 8080, 8443, 10081, and NATS on
+  4222. The multi-cluster control plane also claims 10086 for the gRPC
+  worker callback path. Leaving the wrong topology running causes the
+  bootstrap Make target to fail deep inside k3d with a generic port-bind
+  error; the precheck surfaces this immediately.
 - `harness.NewSuite` snapshots `~/.nvcf-cli.nvcf-cli-local.state`
   through the Ledger so the admin JWT `nvcf-cli init` writes during a
   live run is restored (or removed) at suite teardown. HOME is

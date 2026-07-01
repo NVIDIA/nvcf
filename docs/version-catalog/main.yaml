@@ -275,7 +275,7 @@ supplemental_artifacts:
   - name: nvcf-observability-reference-stack
     type: chart
     registry: staging
-    version: 1.7.0
+    version: 1.10.0
   - name: nvcf-example-dashboards
     type: chart
     registry: staging

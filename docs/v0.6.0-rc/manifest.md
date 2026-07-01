@@ -153,7 +153,7 @@ Optional example components for monitoring and observability. These are provided
 
 | Type | Component Name | Full Path |
 | --- | --- | --- |
-| Chart (OCI) | nvcf-observability-reference-stack | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack:1.7.0` |
+| Chart (OCI) | nvcf-observability-reference-stack | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack:1.10.0` |
 | Chart (OCI) | nvcf-example-dashboards | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-example-dashboards:1.6.0` |
 | Chart (OCI) | helm-nvcf-state-metrics | `nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvcf-state-metrics:1.0.1` |
 

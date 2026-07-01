@@ -170,6 +170,7 @@ selfManaged:
   natsURL: nats://nats.localhost:4222
 `
 	writeArtifact(t, repoRoot, stackDir, cluster+"-register-values.yaml", body)
+	writeRegistrationArtifact(t, repoRoot, stackDir, cluster+"-register-values.yaml", body)
 }
 
 // writeSingleClusterComputeRegisterValues seeds the register-values
@@ -193,6 +194,7 @@ selfManaged:
   natsURL: nats://nats.nats-system.svc.cluster.local:4222
 `
 	writeArtifact(t, repoRoot, "nvcf-compute-plane", "ncp-local-register-values.yaml", body)
+	writeRegistrationArtifact(t, repoRoot, "nvcf-compute-plane", "ncp-local-register-values.yaml", body)
 }
 
 // writeHelmfileRegisterValues seeds the compute-plane register-values handoff
@@ -213,6 +215,7 @@ selfManaged:
   natsURL: nats://nats.localhost:4222
 `
 	writeArtifact(t, repoRoot, "nvcf-compute-plane", "ncp-local-register-values.yaml", body)
+	writeRegistrationArtifact(t, repoRoot, "nvcf-compute-plane", "ncp-local-register-values.yaml", body)
 }
 
 // seedStackSecretsTemplate writes minimal stand-ins for the split stack
@@ -400,11 +403,16 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
 		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage --request-body '{\"message\":\"bdd-grpc-echo\"}' --timeout 120 --poll-duration 5": {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n{\"message\":\"bdd-grpc-echo\"}\n",
+		},
 		// Conflict precheck: feature asserts the conflicting
 		// multi-cluster control-plane is absent.
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
 	}))
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 
@@ -432,6 +440,24 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke") {
 		t.Fatal("function invoke CLI command was never invoked")
 	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke --grpc --grpc-plaintext") {
+		t.Fatal("gRPC function invoke CLI command was never invoked")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "bdd-grpc-load-tester-supreme") {
+		t.Fatal("gRPC sample function was never created or deployed")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-grpc-load-tester-supreme",
+		"load_tester_supreme:0.0.8",
+		"--health-protocol GRPC --health-uri / --health-port 8001") {
+		t.Fatal("gRPC sample function was not configured with a gRPC health endpoint")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-load-tester-supreme --for function") {
+		t.Fatal("HTTP sample function API key was not generated for the function service")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-grpc-load-tester-supreme --for function") {
+		t.Fatal("gRPC sample function API key was not generated for the function service")
+	}
 }
 
 // TestMultiClusterHelmfileFeatureFileWiresToSteps runs
@@ -453,6 +479,10 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
 		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage --request-body '{\"message\":\"bdd-grpc-echo\"}' --timeout 120 --poll-duration 5": {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n{\"message\":\"bdd-grpc-echo\"}\n",
+		},
 		"tests/bdd/scripts/run-nvct-task-smoke.sh": {
 			ExitCode: 0,
 			Stdout:   "Task bdd-nvct-task-smoke status: COMPLETED\n",
@@ -462,6 +492,15 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"k3d cluster get ncp-local": {ExitCode: 1},
 	}))
 	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	assertFileContains(t, filepath.Join(suite.Config.RepoRoot, "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml"),
+		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
+		"chart: ../../../helm/gateway-routes/chart",
+		`version: ""`,
+		"grpcWorker:",
+		"enabled: true",
+		"listenerName: worker-tcp",
+	)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
 
@@ -488,6 +527,24 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke") {
 		t.Fatal("function invoke CLI command was never invoked")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke --grpc --grpc-plaintext") {
+		t.Fatal("gRPC function invoke CLI command was never invoked")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "bdd-grpc-load-tester-supreme") {
+		t.Fatal("gRPC sample function was never created or deployed")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-grpc-load-tester-supreme",
+		"load_tester_supreme:0.0.8",
+		"--health-protocol GRPC --health-uri / --health-port 8001") {
+		t.Fatal("gRPC sample function was not configured with a gRPC health endpoint")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-load-tester-supreme --for function") {
+		t.Fatal("HTTP sample function API key was not generated for the function service")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-grpc-load-tester-supreme --for function") {
+		t.Fatal("gRPC sample function API key was not generated for the function service")
 	}
 	if commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-nvct-task-smoke") {
 		t.Fatal("NVCT task smoke should not use nvcf-cli api-key generate because it emits function resources")
@@ -566,6 +623,56 @@ func seedHelmfileLocalBDDMultiFixture(t *testing.T, repoRoot string) {
 addons:
   llm:
     enabled: true
+grpcproxy:
+  workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086
+ingress:
+  gatewayApi:
+    chart: ../../../helm/gateway-routes/chart
+    version: ""
+    routes:
+      grpcWorker:
+        enabled: true
+        listenerName: worker-tcp
+`)
+}
+
+func seedComputePlaneLocalBDDFixture(t *testing.T, repoRoot string) {
+	t.Helper()
+	writeFixture(t, repoRoot, "nvcf-compute-plane-local-bdd.yaml", `global:
+  nodeSelectors:
+    enabled: false
+  nvcaOperator:
+    selfManaged:
+      icmsServiceURL: http://api.sis.svc.cluster.local:8080
+      revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+      natsURL: nats://nats.nats-system.svc.cluster.local:4222
+agentConfig:
+  mergeConfig: |
+    cluster:
+      validationPolicy:
+        name: Unrestricted
+    workload:
+      stargateQUICInsecure: true
+`)
+}
+
+func seedComputePlaneLocalBDDMultiFixture(t *testing.T, repoRoot string) {
+	t.Helper()
+	writeFixture(t, repoRoot, "nvcf-compute-plane-local-bdd-multi.yaml", `global:
+  nodeSelectors:
+    enabled: false
+  nvcaOperator:
+    selfManaged:
+      icmsServiceURL: http://api.sis.svc.cluster.local:8080
+      revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+      natsURL: nats://nats.nats-system.svc.cluster.local:4222
+agentConfig:
+  mergeConfig: |
+    cluster:
+      validationPolicy:
+        name: Unrestricted
+    workload:
+      stargateQUICInsecure: true
 `)
 }
 
@@ -932,6 +1039,36 @@ func commandRanThatContains(runs []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func commandRanThatContainsAll(runs []string, needles ...string) bool {
+	for _, run := range runs {
+		matched := true
+		for _, needle := range needles {
+			if !strings.Contains(run, needle) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func assertFileContains(t *testing.T, path string, needles ...string) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	text := string(content)
+	for _, needle := range needles {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("%s does not contain %q", path, needle)
+		}
+	}
 }
 
 // mustResolveFeaturePath returns the feature file path relative to the
