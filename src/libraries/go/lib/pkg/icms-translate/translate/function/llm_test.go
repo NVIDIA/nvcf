@@ -42,11 +42,11 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 
 	cases := []spec{
 		{
-			name: "container mode with env-set stargate address",
+			name: "container mode with env-set LLM request router address",
 			ls:   &LaunchSpecification{},
 			allEnvSet: map[string]string{
-				"STARGATE_ADDRESS": "stargate.example.com:443",
-				"INFERENCE_PORT":   "8080",
+				"LLM_REQUEST_ROUTER_ADDRESS": "llm-router.example.com:443",
+				"INFERENCE_PORT":             "8080",
 			},
 			tcfg:       TranslateConfig{},
 			instanceID: "inst-123",
@@ -58,7 +58,10 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 				assert.Equal(t, corev1.PullIfNotPresent, c.ImagePullPolicy)
 
 				assert.Contains(t, c.Args, "--upstream-http-base-url=http://127.0.0.1:8080")
-				assert.Contains(t, c.Args, "--stargate-address=stargate.example.com:443")
+				assert.Contains(t, c.Args, "--stargate-address=llm-router.example.com:443")
+				envMap := envSliceToMap(c.Env)
+				assert.Equal(t, "llm-router.example.com:443", envMap["LLM_REQUEST_ROUTER_ADDRESS"])
+				assert.Equal(t, "llm-router.example.com:443", envMap["STARGATE_ADDRESS"])
 				assert.Contains(t, c.Args, "--inference-server-id=inst-123")
 				assert.Contains(t, c.Args, "--auth-token-file=/var/run/llm/worker-token")
 				assert.Contains(t, c.Args, "--reverse-tunnel")
@@ -79,6 +82,24 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 			validate: func(t *testing.T, c corev1.Container) {
 				assert.Contains(t, c.Args, "--stargate-address=default-stargate.example.com:443")
 				assert.Contains(t, c.Args, "--upstream-http-base-url=http://127.0.0.1:9090")
+			},
+		},
+		{
+			name: "LLM request router env controls when both env names are present",
+			ls:   &LaunchSpecification{},
+			allEnvSet: map[string]string{
+				"LLM_REQUEST_ROUTER_ADDRESS": "llm-router.example.com:443",
+				"STARGATE_ADDRESS":           "legacy-router.example.com:443",
+				"INFERENCE_PORT":             "8080",
+			},
+			tcfg:       TranslateConfig{},
+			instanceID: "inst-both",
+			isHelm:     false,
+			validate: func(t *testing.T, c corev1.Container) {
+				assert.Contains(t, c.Args, "--stargate-address=llm-router.example.com:443")
+				envMap := envSliceToMap(c.Env)
+				assert.Equal(t, "llm-router.example.com:443", envMap["LLM_REQUEST_ROUTER_ADDRESS"])
+				assert.Equal(t, "legacy-router.example.com:443", envMap["STARGATE_ADDRESS"])
 			},
 		},
 		{
@@ -185,18 +206,19 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 			},
 		},
 		{
-			name:      "missing stargate address from env and config returns error",
+			name:      "missing request router address from env and config returns error",
 			ls:        &LaunchSpecification{},
 			allEnvSet: map[string]string{},
 			tcfg:      TranslateConfig{},
-			expError:  "stargate address is not set (STARGATE_ADDRESS env or default)",
+			expError: "LLM request router address is not set " +
+				"(LLM_REQUEST_ROUTER_ADDRESS env, STARGATE_ADDRESS legacy env, or default)",
 		},
 		{
-			name: "env stargate overrides config default",
+			name: "request router env overrides config default",
 			ls:   &LaunchSpecification{},
 			allEnvSet: map[string]string{
-				"STARGATE_ADDRESS": "env-stargate.example.com:443",
-				"INFERENCE_PORT":   "8080",
+				"LLM_REQUEST_ROUTER_ADDRESS": "env-llm-router.example.com:443",
+				"INFERENCE_PORT":             "8080",
 			},
 			tcfg: TranslateConfig{
 				DefaultStargateAddress: "config-stargate.example.com:443",
@@ -204,7 +226,7 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 			instanceID: "inst-override",
 			isHelm:     false,
 			validate: func(t *testing.T, c corev1.Container) {
-				assert.Contains(t, c.Args, "--stargate-address=env-stargate.example.com:443")
+				assert.Contains(t, c.Args, "--stargate-address=env-llm-router.example.com:443")
 			},
 		},
 		{
@@ -255,6 +277,8 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 				assert.Equal(t, "inst-env-check", envMap["INSTANCE_ID"])
 				assert.Equal(t, ConfigDirPath, envMap["SHARED_CONFIG_DIR"])
 				assert.Equal(t, "/var/run/llm/worker-token", envMap["WORKER_TOKEN_PATH"])
+				assert.Equal(t, "stargate.example.com:443", envMap["LLM_REQUEST_ROUTER_ADDRESS"])
+				assert.Equal(t, "stargate.example.com:443", envMap["STARGATE_ADDRESS"])
 			},
 		},
 	}

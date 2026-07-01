@@ -140,7 +140,7 @@ func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	msg.LaunchSpecification.EnvironmentB64 = encodeTextEnv(map[string]string{
 		common.UtilsImageEnv:                "nvcr.io/nvidia/utils:latest",
 		common.InitImageEnv:                 "nvcr.io/nvidia/init:latest",
-		"STARGATE_ADDRESS":                  "stargate.example.com:443",
+		"LLM_REQUEST_ROUTER_ADDRESS":        "llm-router.example.com:443",
 		"INFERENCE_PORT":                    "8080",
 		"HELM_CHART_INFERENCE_SERVICE_NAME": "inference-svc",
 		"NVCF_WORKER_TOKEN":                 "worker-token",
@@ -171,9 +171,12 @@ func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	router := findContainerByName(t, utilsPod.Spec.Containers, LLMWorkerContainerName)
 	assert.Equal(t, "nvcr.io/nvidia/router:latest", router.Image)
 	assert.Contains(t, router.Args, "--upstream-http-base-url=http://inference-svc:8080")
-	assert.Contains(t, router.Args, "--stargate-address=stargate.example.com:443")
+	assert.Contains(t, router.Args, "--stargate-address=llm-router.example.com:443")
 	assert.Contains(t, router.Args, "--model-name=model-a")
 	assert.NotContains(t, router.Args, "--model-name=model-b")
+	routerEnv := envSliceToMap(router.Env)
+	assert.Equal(t, "llm-router.example.com:443", routerEnv["LLM_REQUEST_ROUTER_ADDRESS"])
+	assert.Equal(t, "llm-router.example.com:443", routerEnv["STARGATE_ADDRESS"])
 
 	credentialManager := findContainerByName(t, utilsPod.Spec.Containers, "llm-credential-manager")
 	assert.Equal(t, "nvcr.io/nvidia/credential-manager:latest", credentialManager.Image)

@@ -28,6 +28,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/go-logr/logr"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -41,6 +42,23 @@ const (
 	DefaultSyncRequestStatusInterval      = 15 * time.Second
 	DefaultPeriodicInstanceStatusInterval = 5 * time.Minute
 )
+
+func TestSetDefaultsDoesNotBackfillDefaultStargateAddress(t *testing.T) {
+	cfg := nvcaconfig.Config{}
+
+	require.NoError(t, setDefaults(&cfg))
+
+	assert.Empty(t, cfg.Workload.DefaultStargateAddress)
+}
+
+func TestSetDefaultsPreservesConfiguredDefaultStargateAddress(t *testing.T) {
+	cfg := nvcaconfig.Config{}
+	cfg.Workload.DefaultStargateAddress = "llm-router.example.test:50071"
+
+	require.NoError(t, setDefaults(&cfg))
+
+	assert.Equal(t, "llm-router.example.test:50071", cfg.Workload.DefaultStargateAddress)
+}
 
 func TestNewCommand(t *testing.T) {
 	newAgentFunc := func(a cliAgent) func(ctx context.Context, opts *AgentOptions) (cliAgent, error) {

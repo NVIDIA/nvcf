@@ -233,6 +233,8 @@ spec:
       value: DGX-CLOUD.GPU.L40_2x
     - name: INSTANCE_TYPE_VALUE
       value: DGX-CLOUD.GPU.L40
+    - name: LLM_REQUEST_ROUTER_ADDRESS
+      value: stargate.nvcf.svc.cluster.local:50071
     - name: MAX_REQUEST_CONCURRENCY
       value: "1"
     - name: NCA_ID

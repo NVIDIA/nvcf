@@ -35,6 +35,8 @@ const (
 	llmCredentialManagerImageDefault = "nvcr.io/0651155215864979/ncp-dev/nvcf_worker_llm_credentials:2.109.0"
 	llmRouterClientImageEnv          = "LLM_ROUTER_CLIENT_IMAGE"
 	llmRouterClientImageDefault      = "nvcr.io/0651155215864979/ncp-dev/stargate-client:0.4.0"
+	llmRequestRouterAddressEnv       = "LLM_REQUEST_ROUTER_ADDRESS"
+	legacyStargateAddressEnv         = "STARGATE_ADDRESS"
 
 	llmDirMountPath    = "/var/run/llm"
 	llmWorkerTokenPath = llmDirMountPath + "/worker-token"
@@ -52,15 +54,33 @@ func newLLMRouterClientContainer(
 		llmRouterClientImage = llmRouterClientImageDefault
 		// return corev1.Container{}, fmt.Errorf("LLM router client image is not set")
 	}
-	stargateAddress := allEnvSet["STARGATE_ADDRESS"]
-	if stargateAddress == "" {
-		stargateAddress = tcfg.DefaultStargateAddress
+	llmRequestRouterAddress := allEnvSet[llmRequestRouterAddressEnv]
+	if llmRequestRouterAddress == "" {
+		llmRequestRouterAddress = allEnvSet[legacyStargateAddressEnv]
 	}
-	if stargateAddress == "" {
-		return corev1.Container{}, fmt.Errorf("stargate address is not set (STARGATE_ADDRESS env or default)")
+	if llmRequestRouterAddress == "" {
+		llmRequestRouterAddress = tcfg.DefaultStargateAddress
+	}
+	if llmRequestRouterAddress == "" {
+		return corev1.Container{}, fmt.Errorf(
+			"LLM request router address is not set (%s env, %s legacy env, or default)",
+			llmRequestRouterAddressEnv,
+			legacyStargateAddressEnv,
+		)
 	}
 
-	envs := common.MapToEnv(allEnvSet)
+	llmEnvSet := make(map[string]string, len(allEnvSet)+2)
+	for k, v := range allEnvSet {
+		llmEnvSet[k] = v
+	}
+	if llmEnvSet[llmRequestRouterAddressEnv] == "" {
+		llmEnvSet[llmRequestRouterAddressEnv] = llmRequestRouterAddress
+	}
+	if llmEnvSet[legacyStargateAddressEnv] == "" {
+		llmEnvSet[legacyStargateAddressEnv] = llmRequestRouterAddress
+	}
+
+	envs := common.MapToEnv(llmEnvSet)
 	envs = append(envs,
 		corev1.EnvVar{
 			Name:  "INSTANCE_ID",
@@ -91,7 +111,7 @@ func newLLMRouterClientContainer(
 
 	args := []string{
 		fmt.Sprintf("--upstream-http-base-url=%s", upstreamHttpBaseUrl),
-		fmt.Sprintf("--stargate-address=%s", stargateAddress),
+		fmt.Sprintf("--stargate-address=%s", llmRequestRouterAddress),
 		fmt.Sprintf("--inference-server-id=%s", instanceID),
 		fmt.Sprintf("--auth-token-file=%s", llmWorkerTokenPath),
 		"--reverse-tunnel",

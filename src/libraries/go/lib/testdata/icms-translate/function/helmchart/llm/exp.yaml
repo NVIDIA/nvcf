@@ -199,6 +199,8 @@ spec:
       value: DGX-CLOUD.GPU.L40
     - name: LLM_CREDENTIAL_MANAGER_IMAGE
       value: nvcr.io/nvcf-core/llm-credential-manager:0.1.0
+    - name: LLM_REQUEST_ROUTER_ADDRESS
+      value: stargate.nvcf.svc.cluster.local:50071
     - name: LLM_ROUTER_CLIENT_IMAGE
       value: nvcr.io/nvcf-core/stargate-client:0.4.0
     - name: MAX_REQUEST_CONCURRENCY
