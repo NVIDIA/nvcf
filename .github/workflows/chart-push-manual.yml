@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Manually package a Helm chart from the selected ref and push it to the
+# internal NGC dev registry (OCI), so it is consumable by NVCF installs for
+# pre-merge testing -- the GitHub-side counterpart to the GitLab helm-push
+# jobs.
+#
+# Manual (workflow_dispatch) only. Requires repo configuration (set in GitHub
+# repo settings, not in source):
+#   - secret  NGC_NCP_DEV_KEY  : NGC key with push to the ncp-dev registry
+#   - secret NCP_DEV_REGISTRY  : the ncp-dev registry base (host/tenant/repo-prefix)
+name: chart-push (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      chart_dir:
+        description: "Chart root (dir with Chart.yaml), e.g. deploy/helm/llm-api-gateway/llm-api-gateway"
+        required: true
+        type: string
+      version:
+        description: "Chart version ([A-Za-z0-9._-]; default 0.0.0-gh.<run_number>-<short_sha>)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chart-push-${{ github.event.inputs.chart_dir }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  push:
+    name: package + push chart to ncp-dev
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/nvidia/nvcf/bazel-ci:0.8.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate chart and resolve version
+        id: meta
+        env:
+          CHART_DIR: ${{ github.event.inputs.chart_dir }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          case "$CHART_DIR" in
+            deploy/helm/*) : ;;
+            *) echo "ERROR: chart_dir must be under deploy/helm/ (got '$CHART_DIR')" >&2; exit 1 ;;
+          esac
+          if printf '%s' "$CHART_DIR" | grep -q '\.\.'; then
+            echo "ERROR: chart_dir must not contain '..'" >&2; exit 1
+          fi
+          if [ ! -f "${CHART_DIR}/Chart.yaml" ]; then
+            echo "ERROR: no Chart.yaml at ${CHART_DIR}" >&2; exit 1
+          fi
+          v="${INPUT_VERSION}"
+          if [ -z "$v" ]; then
+            v="0.0.0-gh.${RUN_NUMBER}-$(printf '%s' "${SHA}" | cut -c1-8)"
+          fi
+          if ! printf '%s' "$v" | grep -qE '^[A-Za-z0-9._-]+$'; then
+            echo "ERROR: version '$v' must match [A-Za-z0-9._-]" >&2; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Package and push chart
+        env:
+          CHART_DIR: ${{ github.event.inputs.chart_dir }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          NGC_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
+          REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NGC_KEY}" ] || [ -z "${REGISTRY}" ]; then
+            echo "ERROR: set secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY in repo settings" >&2
+            exit 1
+          fi
+          host="${REGISTRY%%/*}"
+          printf '%s' "${NGC_KEY}" | helm registry login "${host}" -u '$oauthtoken' --password-stdin
+          if grep -qE '^dependencies:' "${CHART_DIR}/Chart.yaml"; then
+            helm dependency build "${CHART_DIR}"
+          fi
+          out="$(mktemp -d)"
+          helm package "${CHART_DIR}" --version "${VERSION}" -d "${out}"
+          shopt -s nullglob
+          tgzs=("${out}"/*.tgz)
+          if [ "${#tgzs[@]}" -ne 1 ]; then
+            echo "ERROR: expected exactly one chart archive, got ${#tgzs[@]}" >&2; exit 1
+          fi
+          dest="oci://${REGISTRY}"
+          echo "[push] ${tgzs[0]} -> ${dest} (version ${VERSION})"
+          helm push "${tgzs[0]}" "${dest}"
+          echo "Pushed $(basename "${tgzs[0]}") to ${dest}"

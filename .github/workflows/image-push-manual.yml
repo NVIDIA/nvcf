@@ -1,0 +1,124 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Manually build a service's multi-arch image (linux/amd64 + linux/arm64)
+# from the selected ref and push it to the internal NGC dev registry so it is
+# pullable by NVCF clusters for pre-merge testing -- the GitHub-side
+# counterpart to the GitLab "<svc>-image-push-mr-manual" jobs.
+#
+# Manual (workflow_dispatch) only; no image is pushed automatically.
+# Requires repo configuration (set in GitHub repo settings, not in source):
+#   - secret  NGC_NCP_DEV_KEY   : NGC key with push to the ncp-dev registry
+#   - secret NCP_DEV_REGISTRY   : the ncp-dev registry base (host/tenant/repo-prefix)
+# workflow_dispatch is restricted to users with write access; fork PRs cannot
+# read these, so the credential is not exposed to untrusted contributors.
+name: image-push (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      service_path:
+        description: Service subtree to build and push
+        required: true
+        type: choice
+        options:
+          - src/invocation-plane-services/grpc-proxy
+          - src/invocation-plane-services/http-invocation
+          - src/invocation-plane-services/llm-api-gateway
+          - src/invocation-plane-services/ratelimiter
+          - src/invocation-plane-services/vanity-gateway
+          - src/control-plane-services/nats-auth-callout
+          - src/control-plane-services/function-autoscaler
+          - src/control-plane-services/helm-reval
+          - src/compute-plane-services/nvca
+          - src/compute-plane-services/ess-agent
+          - src/compute-plane-services/image-credential-helper
+      tag:
+        description: "Image tag ([A-Za-z0-9._-]; default gh.<run_number>-<short_sha>)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-push-${{ github.event.inputs.service_path }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  push:
+    name: push to ncp-dev
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/nvidia/nvcf/bazel-ci:0.8.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve and validate tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG}"
+          if [ -z "$tag" ]; then
+            tag="gh.${RUN_NUMBER}-$(printf '%s' "${SHA}" | cut -c1-8)"
+          fi
+          if ! printf '%s' "$tag" | grep -qE '^[A-Za-z0-9._-]+$'; then
+            echo "ERROR: tag '$tag' must match [A-Za-z0-9._-]" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to the NGC dev registry
+        env:
+          NGC_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
+          REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NGC_KEY}" ] || [ -z "${REGISTRY}" ]; then
+            echo "ERROR: set secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY in repo settings" >&2
+            exit 1
+          fi
+          mkdir -p "$HOME/.docker"
+          auth="$(printf '$oauthtoken:%s' "${NGC_KEY}" | base64 -w0)"
+          # Scope the auth key to the push repo prefix (NOT the bare host) so
+          # rules_oci does not apply this token to the public base-image pull
+          # (e.g. distroless), which would 403. Mirrors the NVCF-10337 fix.
+          printf '{"auths":{"%s":{"auth":"%s"}}}\n' "${REGISTRY}" "${auth}" > "$HOME/.docker/config.json"
+          chmod 600 "$HOME/.docker/config.json"
+
+      - name: Build and push multi-arch image(s)
+        working-directory: ${{ github.event.inputs.service_path }}
+        env:
+          SVC_PATH: ${{ github.event.inputs.service_path }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+        run: |
+          set -euo pipefail
+          svc="$(basename "$SVC_PATH")"
+          mapfile -t indexes < <(bazel query --remote_cache= 'kind("oci_image_index", //...)')
+          if [ "${#indexes[@]}" -eq 0 ]; then
+            echo "ERROR: no oci_image_index targets under ${SVC_PATH}" >&2
+            exit 1
+          fi
+          echo "discovered: ${indexes[*]}"
+          for tgt in "${indexes[@]}"; do
+            name="${tgt##*:}"; name="${name%_index}"
+            case "$name" in
+              image)   repo="${svc}" ;;
+              *_image) sub="$(printf '%s' "${name%_image}" | tr '_' '-')"; repo="${svc}-${sub}" ;;
+              *)       sub="$(printf '%s' "$name" | tr '_' '-')"; repo="${svc}-${sub}" ;;
+            esac
+            dest="${REGISTRY}/${repo}"
+            echo "[push] ${tgt} -> ${dest}:${TAG} (+ latest-dispatch)"
+            mkdir -p ci-ghcr
+            printf 'load("@rules_oci//oci:defs.bzl", "oci_push")\n\noci_push(\n    name = "push",\n    image = "%s",\n    repository = "%s",\n    remote_tags = ["%s", "latest-dispatch"],\n)\n' \
+              "$tgt" "$dest" "$TAG" > ci-ghcr/BUILD.bazel
+            bazel run --remote_cache= //ci-ghcr:push
+            rm -rf ci-ghcr
+          done
+          echo "Done: pushed ${#indexes[@]} image(s) under ${REGISTRY}/ at tag ${TAG}"
