@@ -18,14 +18,19 @@ For a deeper reference on each release and on values, see
 the bundles and images, see [Image Mirroring](./image-mirroring.md).
 
 <Info>
-This guide assumes you have already downloaded and extracted both Helmfile
-bundles (see [Image Mirroring](./image-mirroring.md)):
+This guide assumes you have already downloaded and extracted the control-plane
+Helmfile bundle and have a source checkout for the compute plane:
 
 - `nvcf-self-managed-stack` for the control plane.
-- `nvcf-compute-plane-stack` for the compute plane (NVCA operator).
+- `deploy/stacks/nvcf-compute-plane` in the source repository for the compute
+  plane (NVCA operator).
 
 Control-plane commands run from inside the `nvcf-self-managed-stack` directory.
-Compute-plane commands run from inside the `nvcf-compute-plane-stack` directory.
+Compute-plane commands run from the repository root with `make -C`.
+
+```bash
+git clone https://github.com/nvidia/nvcf.git
+```
 </Info>
 
 ## Installation order
@@ -44,9 +49,10 @@ environment file, because it becomes `global.domain` and the NVCA Host headers.
 7. Verify the agent is healthy
 ```
 
-Single-cluster and multi-cluster share steps 1 through 5 conceptually. The
-differences are isolated to which cluster each command targets, and are called
-out in [Single-cluster vs multi-cluster](#single-cluster-vs-multi-cluster).
+Single-cluster and multi-cluster share steps 1 through 4. Step 5 requires a
+compute-plane environment file for both topologies. Only the cluster target and
+control-plane endpoint values differ. See
+[Single-cluster vs multi-cluster](#single-cluster-vs-multi-cluster).
 
 ## Prerequisites
 
@@ -93,8 +99,7 @@ export CLUSTER_REGION="<region-label>"                      # e.g. us-east-1
 export HELMFILE_ENV="eks"                                   # single-cluster example
 # export HELMFILE_ENV="eks-multi"                           # multi-cluster example
 
-# Registry the bundles pull charts and images from
-export REGISTRY="nvcr.io"
+# Repository path the bundles use for charts and images
 export REPOSITORY="<your-ngc-org>/<your-ngc-team>"          # or your mirror path
 
 # NGC credential used for chart/image pulls and the dockerconfig secret
@@ -324,10 +329,11 @@ credential:
 ```bash
 cp secrets/secrets.yaml.template "secrets/${HELMFILE_ENV}-secrets.yaml"
 
-DOCKER_CRED_B64=$(printf '%s' '$oauthtoken:'"${NGC_API_KEY}" | base64 -w0)
+DOCKER_CRED_B64=$(printf '%s' '$oauthtoken:'"${NGC_API_KEY}" | base64 | tr -d '\n')
 # Replace every REPLACE_WITH_BASE64_DOCKER_CREDENTIAL in the secrets file with ${DOCKER_CRED_B64}.
-sed -i "s|REPLACE_WITH_BASE64_DOCKER_CREDENTIAL|${DOCKER_CRED_B64}|g" \
+sed -i.bak "s|REPLACE_WITH_BASE64_DOCKER_CREDENTIAL|${DOCKER_CRED_B64}|g" \
   "secrets/${HELMFILE_ENV}-secrets.yaml"
+rm "secrets/${HELMFILE_ENV}-secrets.yaml.bak"
 ```
 
 <Warning>
@@ -396,22 +402,25 @@ export NVCF_CLI_CONFIG="$(pwd)/nvcf-cli.yaml"
 ## Step 5: Register the GPU cluster and install the NVCA operator
 
 This is where single-cluster and multi-cluster diverge. Pick the matching
-section. Both run from the `nvcf-compute-plane-stack` directory.
+section. Run both from the source repository root.
 
 ```bash
-cd <path to nvcf-compute-plane-stack>/
+cd <path-to-nvcf-repository>
 ```
 
-Create the compute-plane environment file. Both topologies need it: the
-compute-plane bundle's `make install` reads `environments/${HELMFILE_ENV}.yaml`,
-and the `selfManaged` values tell the NVCA agent how to reach the control plane
-through the Gateway.
+Create the compute-plane environment file for either topology. The compute-plane
+Makefile reads
+`deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml`, and the
+`selfManaged` values tell the NVCA agent how to reach the control plane. The
+sections below use different cluster targets and endpoint values.
 
 ```bash
-cp environments/base.yaml "environments/${HELMFILE_ENV}.yaml"
+cp deploy/stacks/nvcf-compute-plane/environments/base.yaml \
+  "deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml"
 ```
 
-Set these keys in `environments/${HELMFILE_ENV}.yaml`:
+Set these keys in
+`deploy/stacks/nvcf-compute-plane/environments/${HELMFILE_ENV}.yaml`:
 
 ```yaml
 global:
@@ -437,17 +446,15 @@ Then follow the matching subsection below.
 ### Single-cluster
 
 The GPU cluster is the same cluster as the control plane, so registration uses
-the current context. Create the pull secret in the NVCA and worker namespaces
-first:
+the current context. Create the pull secret in `nvca-operator`; the operator
+propagates it to the managed namespaces after installation:
 
 ```bash
-for ns in nvcf-backend nvca-system nvca-operator; do
-  kubectl --context "${CONTROL_PLANE_CONTEXT}" create namespace "${ns}" \
-    --dry-run=client -o yaml | kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f -
-  kubectl --context "${CONTROL_PLANE_CONTEXT}" create secret docker-registry nvcr-pull-secret \
-    --docker-server=nvcr.io --docker-username='$oauthtoken' --docker-password="${NGC_API_KEY}" \
-    -n "${ns}" --dry-run=client -o yaml | kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f -
-done
+kubectl --context "${CONTROL_PLANE_CONTEXT}" create namespace nvca-operator \
+  --dry-run=client -o yaml | kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f -
+kubectl --context "${CONTROL_PLANE_CONTEXT}" create secret docker-registry nvcr-pull-secret \
+  --docker-server=nvcr.io --docker-username='$oauthtoken' --docker-password="${NGC_API_KEY}" \
+  -n nvca-operator --dry-run=client -o yaml | kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f -
 ```
 
 Register, then install:
@@ -455,7 +462,7 @@ Register, then install:
 ```bash
 kubectl config use-context "${CONTROL_PLANE_CONTEXT}"
 
-make register-cluster \
+make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME="${CLUSTER_NAME}" \
   NCA_ID=nvcf-default \
   CLUSTER_REGION="${CLUSTER_REGION}" \
@@ -463,7 +470,7 @@ make register-cluster \
   NVCF_CLI="${NVCF_CLI}" \
   NVCF_CLI_CONFIG="${NVCF_CLI_CONFIG}"
 
-make install \
+make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME="${CLUSTER_NAME}" \
   HELMFILE_ENV="${HELMFILE_ENV}" \
   NVCF_CLI="${NVCF_CLI}" \
@@ -489,19 +496,17 @@ then fails authentication at runtime with `Signed JWT rejected: no matching
 key(s) found`.
 </Warning>
 
-You already created `environments/${HELMFILE_ENV}.yaml` with the `selfManaged`
-values above. Create the pull secret in the NVCA and worker namespaces on the
-compute cluster,
-and a compute-scoped kubeconfig:
+You already created the compute-plane environment file with the `selfManaged`
+values above. Create the pull secret in `nvca-operator` on the compute cluster;
+the operator propagates it to the managed namespaces after installation. Also
+create a compute-scoped kubeconfig:
 
 ```bash
-for ns in nvcf-backend nvca-system nvca-operator; do
-  kubectl --context "${COMPUTE_CONTEXT}" create namespace "${ns}" \
-    --dry-run=client -o yaml | kubectl --context "${COMPUTE_CONTEXT}" apply -f -
-  kubectl --context "${COMPUTE_CONTEXT}" create secret docker-registry nvcr-pull-secret \
-    --docker-server=nvcr.io --docker-username='$oauthtoken' --docker-password="${NGC_API_KEY}" \
-    -n "${ns}" --dry-run=client -o yaml | kubectl --context "${COMPUTE_CONTEXT}" apply -f -
-done
+kubectl --context "${COMPUTE_CONTEXT}" create namespace nvca-operator \
+  --dry-run=client -o yaml | kubectl --context "${COMPUTE_CONTEXT}" apply -f -
+kubectl --context "${COMPUTE_CONTEXT}" create secret docker-registry nvcr-pull-secret \
+  --docker-server=nvcr.io --docker-username='$oauthtoken' --docker-password="${NGC_API_KEY}" \
+  -n nvca-operator --dry-run=client -o yaml | kubectl --context "${COMPUTE_CONTEXT}" apply -f -
 
 kubectl --context "${COMPUTE_CONTEXT}" config view --raw --minify --flatten > compute-kubeconfig.yaml
 export COMPUTE_KUBECONFIG="$(pwd)/compute-kubeconfig.yaml"
@@ -512,7 +517,7 @@ Register with the compute context active, then install onto the compute cluster:
 ```bash
 kubectl config use-context "${COMPUTE_CONTEXT}"
 
-make register-cluster \
+make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME="${CLUSTER_NAME}" \
   NCA_ID=nvcf-default \
   CLUSTER_REGION="${CLUSTER_REGION}" \
@@ -521,7 +526,7 @@ make register-cluster \
   NVCF_CLI="${NVCF_CLI}" \
   NVCF_CLI_CONFIG="${NVCF_CLI_CONFIG}"
 
-make install \
+make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME="${CLUSTER_NAME}" \
   HELMFILE_ENV="${HELMFILE_ENV}" \
   KUBECONFIG_FILE="${COMPUTE_KUBECONFIG}" \
@@ -554,7 +559,7 @@ kubectl wait nvcfbackend "${CLUSTER_NAME}" -n nvca-operator \
   --for=jsonpath='{.status.agentStatus}'=healthy --timeout=10m
 ```
 
-For multi-cluster, also confirm the pull secret propagated to `nvca-system`:
+Confirm that the operator propagated the pull secret to `nvca-system`:
 
 ```bash
 kubectl --context "${COMPUTE_CONTEXT}" get secret nvcr-pull-secret -n nvca-system
@@ -570,7 +575,7 @@ are correct.
 | Clusters | One cluster for everything | Control plane on one cluster, NVCA on a separate GPU cluster |
 | Gateway | On the only cluster | On the control-plane cluster only |
 | Control-plane env file | Sets the three NVCA Host-header overrides | Same |
-| Compute-plane env file | Not required (current context, register values carry URLs) | Required: sets `selfManaged` service URLs plus Host headers |
+| Compute-plane env file | Required: uses endpoints reachable from the shared cluster | Required: uses endpoints reachable from the separate compute cluster |
 | Context before `register-cluster` | Control-plane context | Compute context (so JWKS is discovered from the compute cluster) |
 | `KUBECONFIG_FILE` | Not used | Compute-scoped kubeconfig passed to `register-cluster` and `install` |
 | Verify context | Control-plane context | Compute context |

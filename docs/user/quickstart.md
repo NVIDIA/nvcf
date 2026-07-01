@@ -14,6 +14,13 @@ Run the commands from the NVCF repository root unless a step says otherwise.
 The `nvcf-cli self-hosted up` command runs on your workstation. It does not run
 inside Kubernetes.
 
+Clone the public repository before you start:
+
+```bash
+git clone https://github.com/nvidia/nvcf.git
+cd nvcf
+```
+
 ## Prerequisites
 
 Before you start, install and prepare:

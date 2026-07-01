@@ -10,6 +10,13 @@ Cassandra replica, and ephemeral storage. Do not use this for production
 workloads.
 </Info>
 
+Clone the public repository before using any local development flow:
+
+```bash
+git clone https://github.com/nvidia/nvcf.git
+cd nvcf
+```
+
 ## Pick a flow
 
 Four canonical flows are documented, one per page.

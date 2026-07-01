@@ -21,7 +21,7 @@ Want to try NVCF locally first? See [Local Development](./local-development.md) 
 | Helmfile installation | You need manual release control, partial recovery, upgrades, or detailed Helmfile operations. | [Helmfile Installation](./helmfile-installation.md) |
 | Standalone chart installation | You need GitOps integration or chart-by-chart ownership. | [Standalone Deployment](./standalone-deployment.md) |
 
-The control plane and GPU cluster can be the same Kubernetes cluster or separate clusters when you use Helmfile, standalone charts, or the explicit CLI install primitives. The quickstart supports only a single local k3d cluster.
+The control plane and GPU cluster can be the same Kubernetes cluster or separate clusters when you use Helmfile, standalone charts, or the explicit CLI install primitives. The quickstart supports only a single local k3d cluster. For a complete Amazon EKS example of both topologies, see the [CSP End-to-End Example](./csp-end-to-end-example-installation.md).
 
 For remote installs, prepare the Gateway API ingress path and CLI endpoint
 configuration before registering GPU clusters or running post-install CLI
@@ -33,17 +33,23 @@ checks. See [Helmfile Installation](./helmfile-installation.md),
 
 Every installation path follows the same high-level sequence:
 
-1. Mirror NVCF artifacts to your registry. Follow the [image mirroring instructions](./image-mirroring.md) to pull artifacts from NGC and push them to your registry.
+1. Clone the [NVCF source repository](https://github.com/nvidia/nvcf) and run
+   repository-based commands from its root directory.
 
-2. Create or select Kubernetes cluster targets. You need a cluster for the control plane and a GPU cluster for function workloads. These can be the same cluster or separate clusters.
+2. Make NVCF artifacts available to your Kubernetes clusters. Pull them
+   directly from NGC when the clusters have NGC access, or follow the
+   [image mirroring instructions](./image-mirroring.md) to copy them to a
+   registry that the clusters can access.
 
-3. Install the self-hosted control plane. Use the [Quickstart](./quickstart.md) for a local k3d install, [Helmfile Installation](./helmfile-installation.md) for manual Helmfile operations, or [Standalone Deployment](./standalone-deployment.md) for chart-by-chart installation.
+3. Create or select Kubernetes cluster targets. You need a cluster for the control plane and a GPU cluster for function workloads. These can be the same cluster or separate clusters.
 
-4. Register a GPU cluster and install the NVIDIA Cluster Agent. The local quickstart performs this step for the local k3d cluster. For manual installation paths, see [Self-Managed Clusters](./cluster-management/self-managed.md).
+4. Install the self-hosted control plane. Use the [Quickstart](./quickstart.md) for a local k3d install, [Helmfile Installation](./helmfile-installation.md) for manual Helmfile operations, or [Standalone Deployment](./standalone-deployment.md) for chart-by-chart installation.
 
-5. Install Low Latency Streaming if needed for streaming workloads. See [LLS Installation](./lls-installation.md).
+5. Register a GPU cluster and install the NVIDIA Cluster Agent. The local quickstart performs this step for the local k3d cluster. For manual installation paths, see [Self-Managed Clusters](./cluster-management/self-managed.md).
 
-6. Install optional enhancements, such as caches, low latency streaming, or Vanity Gateway routing when your stack package includes that addon. See [Optional Enhancements](./optional-enhancements.md).
+6. Install Low Latency Streaming if needed for streaming workloads. See [LLS Installation](./lls-installation.md).
+
+7. Install optional enhancements, such as caches, low latency streaming, or Vanity Gateway routing when your stack package includes that addon. See [Optional Enhancements](./optional-enhancements.md).
 
 ## Kubernetes Cluster Requirements
 

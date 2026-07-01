@@ -1,11 +1,11 @@
 # Self-Managed Clusters
 
 GPU clusters are registered with the NVCF control plane and managed by the NVCA
-Operator. Use the `nvcf-compute-plane-stack` Helmfile bundle for this workflow.
-The bundle registers one GPU cluster at a time with `nvcf-cli`, then installs
-the operator with the cluster identity returned by registration. The operator
-reads that identity from a local ConfigMap and authenticates through the local
-OpenBao (Vault) instance.
+Operator. Use the compute-plane Makefile in
+`deploy/stacks/nvcf-compute-plane` for this workflow. It registers one GPU
+cluster at a time with `nvcf-cli`, then installs the operator with the cluster
+identity returned by registration. The operator reads that identity from a
+local ConfigMap and authenticates through the local OpenBao (Vault) instance.
 
 <Info>
 A running NVCF control plane (SIS, OpenBao, NATS, Cassandra, and all core
@@ -15,6 +15,13 @@ need to install or operate the NVCA Operator after using the Helmfile
 installation path.
 
 </Info>
+
+Clone the public repository and run the compute-plane commands from its root:
+
+```bash
+git clone https://github.com/nvidia/nvcf.git
+cd nvcf
+```
 
 ## Prerequisites
 
@@ -27,10 +34,6 @@ Before installing the NVCA Operator, ensure the following prerequisites are met:
 - (Optional) The [KAI Scheduler](./kai-scheduler.md) can be installed on the GPU cluster for optimized AI workload scheduling and bin-packing of GPU resources. It is required only when you enable the `KAIScheduler` feature flag. See [NVCA Configuration](./configuration.md).
 
 - `GPU Workload Components` must be available in a user-managed registry that your Kubernetes cluster can access. See `GPU Workload Components` under [self-hosted-artifact-manifest](../manifest.md) for necessary artifacts and [self-hosted-image-mirroring](../image-mirroring.md) for mirroring instructions.
-
-- The `nvcf-compute-plane-stack` bundle is downloaded and extracted on the
-  deployment machine. See [Downloading nvcf-compute-plane-stack](../image-mirroring.md#downloading-nvcf-compute-plane-stack)
-  for bundle download instructions.
 
 - `nvcf-cli` is available on the deployment machine. The compute-plane Makefile
   calls it during cluster registration. See [self-hosted-cli](../cli.md) for
@@ -53,14 +56,16 @@ step, and the operator consumes it:
 
 1. You configure the compute-plane Helmfile environment with registry settings
    and control-plane service URLs.
-2. You run `make register-cluster` from the `nvcf-compute-plane-stack` bundle
-   (see [Register the cluster](#register-the-cluster)). The target runs
+2. From the repository root, you run
+   `make -C deploy/stacks/nvcf-compute-plane register-cluster` (see
+   [Register the cluster](#register-the-cluster)). The target runs
    `nvcf-cli init`, then `nvcf-cli cluster register`. The CLI discovers the GPU
    cluster's OIDC issuer and public JWKS, records them with the control plane
    (ICMS), and writes the `clusterID`, `clusterGroupID`, identity source, and
    service URLs to a registration values file.
-3. You run `make install` from the same bundle. Helmfile installs
-   `helm-nvca-operator` with the compute-plane environment and the registration
+3. From the repository root, you run
+   `make -C deploy/stacks/nvcf-compute-plane install`. Helmfile installs
+   `helm-nvca-operator` with the compute-plane environment and registration
    values for that cluster.
 4. The Helm chart renders a local ConfigMap (`nvcfbackend-self-managed`) holding the cluster
    identity and the SIS, ReVal, and NATS endpoints (plus any host-header overrides). The
@@ -73,22 +78,22 @@ step, and the operator consumes it:
    OpenBao instance. Kubernetes image pull secrets are configured separately in
    the compute-plane environment and namespaces.
 
-## Configure the compute-plane bundle
+## Configure the compute plane
 
-Create an environment file in the `nvcf-compute-plane-stack` bundle. It provides
-the chart registry, image registry, image pull secret name, and control-plane
-service URLs used by the NVCA operator.
+Create the environment file from the repository root. It provides the chart
+registry, image registry, image pull secret name, and control-plane service URLs
+used by the NVCA operator.
 
 ```bash
-cd path/to/nvcf-compute-plane-stack
-touch environments/<environment-name>.yaml
+cd path/to/nvcf
+touch deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml
 ```
 
 Use service URLs that are reachable from the GPU cluster. For a single
 load-balancer-fronted Gateway with hostname-based routing, the agent should dial
 the load balancer address and send route-matching host headers:
 
-```yaml title="environments/<environment-name>.yaml"
+```yaml title="deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml"
 global:
   helm:
     sources:
@@ -161,7 +166,7 @@ multi-cluster installs because the CLI discovers the OIDC issuer and JWKS from
 the target Kubernetes cluster.
 
 ```bash
-make register-cluster \
+make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
   NCA_ID=<nca-id> \
   CLUSTER_REGION=<region> \
@@ -359,7 +364,7 @@ Install with the compute-plane Makefile. The command copies
 Helmfile against the GPU cluster kubeconfig:
 
 ```bash
-make install \
+make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
   HELMFILE_ENV=<environment-name> \
   NCA_ID=<nca-id> \
@@ -566,7 +571,7 @@ re-run the compute-plane registration target and then re-apply the operator with
 the refreshed values:
 
 ```bash
-make register-cluster \
+make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
   NCA_ID=<nca-id> \
   CLUSTER_REGION=<region> \
@@ -575,7 +580,7 @@ make register-cluster \
   NVCF_CLI=<path-to-nvcf-cli> \
   NVCF_CLI_CONFIG=<path-to-nvcf-cli-gpu-register.yaml>
 
-make install \
+make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
   HELMFILE_ENV=<environment-name> \
   NCA_ID=<nca-id> \

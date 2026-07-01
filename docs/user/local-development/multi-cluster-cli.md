@@ -11,6 +11,13 @@ Cassandra replica, and ephemeral storage. Do not use this for production
 workloads.
 </Info>
 
+Clone the public repository and run the remaining commands from its root:
+
+```bash
+git clone https://github.com/nvidia/nvcf.git
+cd nvcf
+```
+
 ## Topology
 
 | k3d cluster | Role | kubectl context |

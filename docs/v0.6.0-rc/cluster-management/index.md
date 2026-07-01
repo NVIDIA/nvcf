@@ -38,8 +38,7 @@ After installing NVCA on a cluster:
 
 ### Supported Kubernetes Versions
 
-- Minimum Kubernetes Supported Version: `v1.25.0`
-- Maximum Kubernetes Supported Version `v1.32.x`
+- Any official supported Kubernetes version
 
 ## Upgrade Advisory
 

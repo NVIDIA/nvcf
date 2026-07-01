@@ -13,9 +13,15 @@ commands run from inside that directory unless otherwise noted. The directory
 contains the control-plane Helmfile definitions, environment templates, and
 sample configurations referenced throughout.
 
-GPU clusters use the split `nvcf-compute-plane-stack` Helmfile bundle. The
-compute-plane bundle registers one GPU cluster at a time and installs the
-NVCA operator into that cluster.
+GPU clusters use the compute-plane Makefile in
+`deploy/stacks/nvcf-compute-plane`. It registers one GPU cluster at a time and
+installs the NVCA operator into that cluster.
+
+Clone the public repository before the GPU cluster steps:
+
+```bash
+git clone https://github.com/nvidia/nvcf.git
+```
 
 ```bash
 cd path/to/nvcf-self-managed-stack
@@ -182,12 +188,15 @@ for the procedure.
 
 Environment configuration files define how NVCF is deployed in your specific environment. They are YAML files that provide values to the Helm charts.
 
-Create your environment file from the template below ([cp-env-eks-example.yaml](samples/configs/cp-env-eks-example.yaml)).
+Set `HELMFILE_ENV` to your environment name and copy the base configuration.
+The filename must match `HELMFILE_ENV` because Helmfile uses it to select the
+environment file. The template below shows the values to configure for Amazon
+EKS ([cp-env-eks-example.yaml](samples/configs/cp-env-eks-example.yaml)).
 
 ```bash
 cd path/to/nvcf-self-managed-stack
-touch environments/<environment-name>.yaml
-# Copy the template into the file
+export HELMFILE_ENV="<environment-name>"
+cp environments/base.yaml "environments/${HELMFILE_ENV}.yaml"
 ```
 
 <Accordion title="Configuration Template (Amazon EKS Environment)">
@@ -574,12 +583,16 @@ Secrets configuration contains any sensitive data required for NVCF operation. T
 
 These credentials will then be used for function deployments. Note that if the registry credentials are not correct you can always update them using the steps in [third-party-registries-self-hosted](./third-party-registries.md).
 
-Create your secrets file from the template below ([example-secrets.yaml](samples/configs/cp-example-secrets.yaml)). You must replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your actual base64-encoded registry credentials.
+Copy the secrets template using the same `HELMFILE_ENV` value from Step 2. The
+filename must match `HELMFILE_ENV` because Helmfile loads the corresponding
+secrets file. The example below shows the required structure
+([example-secrets.yaml](samples/configs/cp-example-secrets.yaml)). You must
+replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your
+actual base64-encoded registry credentials.
 
 ```bash
 cd path/to/nvcf-self-managed-stack
-touch secrets/<environment-name>-secrets.yaml
-# Copy the template into the file
+cp secrets/secrets.yaml.template "secrets/${HELMFILE_ENV}-secrets.yaml"
 ```
 
 <Accordion title="Configuration Template">
@@ -1111,23 +1124,23 @@ curl -s -X GET "http://${GATEWAY_ADDR}/v2/nvcf/functions" \
 
 ### Step 7. Configure the compute-plane Helmfile environment
 
-Use the `nvcf-compute-plane-stack` bundle for each GPU cluster. The
-compute-plane Helmfile installs `helm-nvca-operator` and wires it to the
-control plane values returned by cluster registration.
+Use `deploy/stacks/nvcf-compute-plane` from the source repository for each GPU
+cluster. The compute-plane Helmfile installs `helm-nvca-operator` and wires it
+to the control plane values returned by cluster registration.
 
-Create an environment file in the compute-plane bundle. Use the same Helm chart
-and image registry mirror as the control plane. Set the service URLs to
+Create an environment file in the compute-plane directory. Use the same Helm
+chart and image registry mirror as the control plane. Set the service URLs to
 addresses reachable from the GPU cluster. If the GPU cluster reaches the
 control plane through one load balancer with hostname-based Gateway routing,
 keep the URL pointed at the load balancer and set the host-header overrides to
 the route hostnames.
 
 ```bash
-cd path/to/nvcf-compute-plane-stack
-touch environments/<environment-name>.yaml
+cd path/to/nvcf
+touch deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml
 ```
 
-```yaml title="environments/<environment-name>.yaml"
+```yaml title="deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml"
 global:
   helm:
     sources:
@@ -1154,22 +1167,21 @@ global:
 If your GPU cluster can resolve per-service DNS names directly, set the service
 URLs to those names and omit the host-header override fields.
 
-Create the pull secret on the GPU cluster before installing NVCA. Helmfile
-references the secret from `global.imagePullSecrets`, so the secret must exist
-before the operator pod starts.
+Create the pull secret in `nvca-operator` on the GPU cluster before installing
+NVCA. Helmfile references the secret from `global.imagePullSecrets`, and the
+operator propagates it to the managed namespaces after installation.
 
 ```bash
-for ns in nvca-operator nvca-system nvcf-backend; do
-  kubectl --kubeconfig <gpu-cluster-kubeconfig> \
-    create namespace "$ns" --dry-run=client -o yaml | kubectl --kubeconfig <gpu-cluster-kubeconfig> apply -f -
-  kubectl --kubeconfig <gpu-cluster-kubeconfig> \
-    create secret docker-registry nvcr-pull-secret \
-    --docker-server=nvcr.io \
-    --docker-username='$oauthtoken' \
-    --docker-password="<registry-password>" \
-    --namespace="$ns" \
-    --dry-run=client -o yaml | kubectl --kubeconfig <gpu-cluster-kubeconfig> apply -f -
-done
+kubectl --kubeconfig <gpu-cluster-kubeconfig> \
+  create namespace nvca-operator --dry-run=client -o yaml | \
+  kubectl --kubeconfig <gpu-cluster-kubeconfig> apply -f -
+kubectl --kubeconfig <gpu-cluster-kubeconfig> \
+  create secret docker-registry nvcr-pull-secret \
+  --docker-server=nvcr.io \
+  --docker-username='$oauthtoken' \
+  --docker-password="<registry-password>" \
+  --namespace=nvca-operator \
+  --dry-run=client -o yaml | kubectl --kubeconfig <gpu-cluster-kubeconfig> apply -f -
 ```
 
 ### Step 8. Register and install each GPU cluster
@@ -1180,6 +1192,8 @@ cluster identity values that the operator chart consumes.
 
 Use `KUBECONFIG_FILE` for multi-cluster installs. It makes both registration and
 Helmfile target the GPU cluster instead of the control-plane cluster.
+For a complete Amazon EKS example, see the
+[CSP End-to-End Example](./csp-end-to-end-example-installation.md).
 
 The compute-plane Makefile runs `nvcf-cli init` before `cluster register`. Point
 `NVCF_CLI_CONFIG` at a CLI config that can reach the control-plane gateway.
@@ -1201,11 +1215,11 @@ api_keys_owner_id: "svc@nvcf-api.local"
 client_id: "<nca-id>"
 ```
 
-Register the GPU cluster. The target writes
-`registration/<gpu-cluster-name>-register-values.yaml`.
+Run the compute-plane target from the repository root. The target writes
+`deploy/stacks/nvcf-compute-plane/registration/<gpu-cluster-name>-register-values.yaml`.
 
 ```bash
-make register-cluster \
+make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
   NCA_ID=<nca-id> \
   CLUSTER_REGION=<region> \
@@ -1220,7 +1234,7 @@ registration file into `out/` and runs Helmfile with
 `HELMFILE_ENV=<environment-name>`.
 
 ```bash
-make install \
+make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
   HELMFILE_ENV=<environment-name> \
   NCA_ID=<nca-id> \
@@ -1235,6 +1249,9 @@ kubectl --kubeconfig <gpu-cluster-kubeconfig> \
 
 kubectl --kubeconfig <gpu-cluster-kubeconfig> \
   get nvcfbackends -n nvca-operator
+
+kubectl --kubeconfig <gpu-cluster-kubeconfig> \
+  get secret nvcr-pull-secret -n nvca-system
 
 kubectl --kubeconfig <gpu-cluster-kubeconfig> \
   get pods -n nvca-system
