@@ -33,10 +33,6 @@ on:
           - src/compute-plane-services/nvca
           - src/compute-plane-services/ess-agent
           - src/compute-plane-services/image-credential-helper
-      tag:
-        description: "Image tag ([A-Za-z0-9._-]; default gh.<run_number>-<short_sha>)"
-        required: false
-        default: ""
 
 permissions:
   contents: read
@@ -53,26 +49,25 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/nvidia/nvcf/bazel-ci:0.8.0
+    defaults:
+      run:
+        # In container jobs Actions falls back to plain `sh` (dash), which
+        # rejects `set -o pipefail` and kills every script step at line 1.
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve and validate tag
+      - name: Compute snapshot tag
         id: meta
         env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
           RUN_NUMBER: ${{ github.run_number }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          tag="${INPUT_TAG}"
-          if [ -z "$tag" ]; then
-            tag="gh.${RUN_NUMBER}-$(printf '%s' "${SHA}" | cut -c1-8)"
-          fi
-          if ! printf '%s' "$tag" | grep -qE '^[A-Za-z0-9._-]+$'; then
-            echo "ERROR: tag '$tag' must match [A-Za-z0-9._-]" >&2
-            exit 1
-          fi
+          # Tags are always machine-derived (never user input) so every
+          # published snapshot is deterministic and traceable to its run+commit.
+          tag="gh.${RUN_NUMBER}-$(printf '%s' "${SHA}" | cut -c1-8)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to the NGC dev registry

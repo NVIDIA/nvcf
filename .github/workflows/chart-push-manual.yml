@@ -19,10 +19,6 @@ on:
         description: "Chart root (dir with Chart.yaml), e.g. deploy/helm/llm-api-gateway/llm-api-gateway"
         required: true
         type: string
-      version:
-        description: "Chart version ([A-Za-z0-9._-]; default 0.0.0-gh.<run_number>-<short_sha>)"
-        required: false
-        default: ""
 
 permissions:
   contents: read
@@ -39,6 +35,11 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/nvidia/nvcf/bazel-ci:0.8.0
+    defaults:
+      run:
+        # In container jobs Actions falls back to plain `sh` (dash), which
+        # rejects `set -o pipefail` and kills every script step at line 1.
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,7 +48,6 @@ jobs:
         id: meta
         env:
           CHART_DIR: ${{ github.event.inputs.chart_dir }}
-          INPUT_VERSION: ${{ github.event.inputs.version }}
           RUN_NUMBER: ${{ github.run_number }}
           SHA: ${{ github.sha }}
         run: |
@@ -62,13 +62,9 @@ jobs:
           if [ ! -f "${CHART_DIR}/Chart.yaml" ]; then
             echo "ERROR: no Chart.yaml at ${CHART_DIR}" >&2; exit 1
           fi
-          v="${INPUT_VERSION}"
-          if [ -z "$v" ]; then
-            v="0.0.0-gh.${RUN_NUMBER}-$(printf '%s' "${SHA}" | cut -c1-8)"
-          fi
-          if ! printf '%s' "$v" | grep -qE '^[A-Za-z0-9._-]+$'; then
-            echo "ERROR: version '$v' must match [A-Za-z0-9._-]" >&2; exit 1
-          fi
+          # Versions are always machine-derived (never user input) so every
+          # published snapshot chart is deterministic and traceable.
+          v="0.0.0-gh.${RUN_NUMBER}-$(printf '%s' "${SHA}" | cut -c1-8)"
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Package and push chart
