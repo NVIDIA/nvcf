@@ -45,7 +45,7 @@ releases:
       - template: service
 
   - name: api
-    version: 1.22.3
+    version: 1.22.5
     namespace: nvcf
     inherit:
       - template: service
@@ -68,7 +68,7 @@ releases:
       - nvcf/api
 
   - name: grpc-proxy
-    version: 1.6.6
+    version: 1.6.7
     namespace: nvcf
     inherit:
       - template: service
@@ -191,7 +191,7 @@ releases:
   # --- Gateway API Ingress ---
   - name: ingress
     chart: nvcf/nvcf-gateway-routes
-    version: 1.13.2
+    version: 1.13.4
     needs:
       - nvcf/notary-service
       - api-keys/api-keys
