@@ -20,4 +20,4 @@ description: Colocated gRPC proxy for NCP deployments
 type: application
 
 version: 0.0.0 # autoversioning enabled via release pipeline
-appVersion: "1.28.10"
+appVersion: "1.29.1"
