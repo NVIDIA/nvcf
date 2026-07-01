@@ -42,6 +42,22 @@ const (
 	llmWorkerTokenPath = llmDirMountPath + "/worker-token"
 )
 
+func normalizeLLMRequestRouterAddressEnvAliases(envSet map[string]string) {
+	llmRequestRouterAddress := envSet[llmRequestRouterAddressEnv]
+	if llmRequestRouterAddress == "" {
+		llmRequestRouterAddress = envSet[legacyStargateAddressEnv]
+	}
+	if llmRequestRouterAddress == "" {
+		return
+	}
+	if envSet[llmRequestRouterAddressEnv] == "" {
+		envSet[llmRequestRouterAddressEnv] = llmRequestRouterAddress
+	}
+	if envSet[legacyStargateAddressEnv] == "" {
+		envSet[legacyStargateAddressEnv] = llmRequestRouterAddress
+	}
+}
+
 func newLLMRouterClientContainer(
 	ls *LaunchSpecification,
 	allEnvSet map[string]string,
@@ -59,11 +75,8 @@ func newLLMRouterClientContainer(
 		llmRequestRouterAddress = allEnvSet[legacyStargateAddressEnv]
 	}
 	if llmRequestRouterAddress == "" {
-		llmRequestRouterAddress = tcfg.DefaultStargateAddress
-	}
-	if llmRequestRouterAddress == "" {
 		return corev1.Container{}, fmt.Errorf(
-			"LLM request router address is not set (%s env, %s legacy env, or default)",
+			"LLM request router address is not set (%s env or %s legacy env)",
 			llmRequestRouterAddressEnv,
 			legacyStargateAddressEnv,
 		)
@@ -73,12 +86,10 @@ func newLLMRouterClientContainer(
 	for k, v := range allEnvSet {
 		llmEnvSet[k] = v
 	}
-	if llmEnvSet[llmRequestRouterAddressEnv] == "" {
+	if llmEnvSet[llmRequestRouterAddressEnv] == "" && llmEnvSet[legacyStargateAddressEnv] == "" {
 		llmEnvSet[llmRequestRouterAddressEnv] = llmRequestRouterAddress
 	}
-	if llmEnvSet[legacyStargateAddressEnv] == "" {
-		llmEnvSet[legacyStargateAddressEnv] = llmRequestRouterAddress
-	}
+	normalizeLLMRequestRouterAddressEnvAliases(llmEnvSet)
 
 	envs := common.MapToEnv(llmEnvSet)
 	envs = append(envs,

@@ -20,6 +20,7 @@ package core
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime/pprof"
 	"strings"
 	"sync"
@@ -197,7 +198,7 @@ func (c *TokenKubeConfigurator) Start(ctx context.Context) <-chan *rest.Config {
 				c.once(ctx, out)
 			}
 		}
-		if strings.HasSuffix(os.Args[0], ".test") {
+		if isGoTestBinary() {
 			// avoid panic from test code
 			// normally we should avoid such checks, but for
 			// this special case of panic, should be ok.
@@ -209,6 +210,11 @@ func (c *TokenKubeConfigurator) Start(ctx context.Context) <-chan *rest.Config {
 		log.Fatal("Closing out this kubeconfigurator, all clients will receive a close channel signal")
 	}()
 	return out
+}
+
+func isGoTestBinary() bool {
+	name := filepath.Base(os.Args[0])
+	return strings.HasSuffix(name, ".test") || strings.HasSuffix(name, "_test")
 }
 
 func (c *TokenKubeConfigurator) once(ctx context.Context, out chan<- *rest.Config) {

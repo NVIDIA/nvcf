@@ -313,9 +313,9 @@ func setDefaults(cfg *nvcaconfig.Config) error {
 	if err := k8sutil.SetConfigDefaultResources(cfg); err != nil {
 		return err
 	}
-	// NVCA no longer backfills a default LLM request-router address. The value must
-	// ride down via worker EnvironmentB64 from nvcf-api (LLM_REQUEST_ROUTER_ADDRESS,
-	// with STARGATE_ADDRESS accepted as a legacy alias). Missing => fail-fast in llm.go.
+	// NVCA no longer backfills a default LLM request-router address. The value
+	// rides down via worker EnvironmentB64 from nvcf-api as LLM_REQUEST_ROUTER_ADDRESS;
+	// STARGATE_ADDRESS is accepted as a legacy alias and is still injected downstream.
 	cmdutil.SetEmptyValue(&cfg.Authz.ClientID, os.Getenv(auth.ClientIDEnv))
 	cmdutil.SetEmptyValue(&cfg.Authz.ClientSecretKey, os.Getenv(auth.ClientSecretEnv))
 	return nil

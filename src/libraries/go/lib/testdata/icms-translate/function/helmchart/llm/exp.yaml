@@ -145,7 +145,7 @@ spec:
   containers:
   - args:
     - --upstream-http-base-url=http://myservice.sr-887518b9-0ae0-4481-a273-56c86638bd71.svc.cluster.local:50051
-    - --stargate-address=stargate.nvcf.svc.cluster.local:50071
+    - --stargate-address=llm-request-router.nvcf.svc.cluster.local:50071
     - --inference-server-id=sr-887518b9-0ae0-4481-a273-56c86638bd71-miniservice
     - --auth-token-file=/var/run/llm/worker-token
     - --reverse-tunnel
@@ -200,7 +200,7 @@ spec:
     - name: LLM_CREDENTIAL_MANAGER_IMAGE
       value: nvcr.io/nvcf-core/llm-credential-manager:0.1.0
     - name: LLM_REQUEST_ROUTER_ADDRESS
-      value: stargate.nvcf.svc.cluster.local:50071
+      value: llm-request-router.nvcf.svc.cluster.local:50071
     - name: LLM_ROUTER_CLIENT_IMAGE
       value: nvcr.io/nvcf-core/stargate-client:0.4.0
     - name: MAX_REQUEST_CONCURRENCY
@@ -226,7 +226,7 @@ spec:
     - name: SIDECAR_REGISTRY_CREDENTIAL
       value: eyJhdXRocyI6eyJudmNyLmlvIjp7ImF1dGgiOiJKRzloZFhSb2RHOXJaVzQ2Ym5aaGNHa3RjM1JuTFdGaVl6RXlNdz09In19fQ==
     - name: STARGATE_ADDRESS
-      value: stargate.nvcf.svc.cluster.local:50071
+      value: llm-request-router.nvcf.svc.cluster.local:50071
     - name: TRACING_ACCESS_TOKEN
       value: trace-tok-1
     - name: UTILS_CONTAINER
@@ -360,6 +360,8 @@ spec:
       value: DGX-CLOUD.GPU.L40
     - name: LLM_CREDENTIAL_MANAGER_IMAGE
       value: nvcr.io/nvcf-core/llm-credential-manager:0.1.0
+    - name: LLM_REQUEST_ROUTER_ADDRESS
+      value: llm-request-router.nvcf.svc.cluster.local:50071
     - name: LLM_ROUTER_CLIENT_IMAGE
       value: nvcr.io/nvcf-core/stargate-client:0.4.0
     - name: MAX_REQUEST_CONCURRENCY
@@ -383,7 +385,7 @@ spec:
     - name: SIDECAR_REGISTRY_CREDENTIAL
       value: eyJhdXRocyI6eyJudmNyLmlvIjp7ImF1dGgiOiJKRzloZFhSb2RHOXJaVzQ2Ym5aaGNHa3RjM1JuTFdGaVl6RXlNdz09In19fQ==
     - name: STARGATE_ADDRESS
-      value: stargate.nvcf.svc.cluster.local:50071
+      value: llm-request-router.nvcf.svc.cluster.local:50071
     - name: TRACING_ACCESS_TOKEN
       value: trace-tok-1
     - name: UTILS_CONTAINER

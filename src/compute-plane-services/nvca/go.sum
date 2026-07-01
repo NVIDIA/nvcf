@@ -12,8 +12,6 @@ github.com/NVIDIA/KAI-scheduler v0.12.6 h1:UAzLv3YxiDFxsUM9sHKAKt5NoDcai7BWTXiJk
 github.com/NVIDIA/KAI-scheduler v0.12.6/go.mod h1:56asdZ2ewWn2ALmPM93zxxGWi+8MX3Q0aRlvv2ytfuA=
 github.com/NVIDIA/k8s-dra-driver-gpu v0.0.0-20251017125642-cfe35ffd3d2c h1:/jJnj+Zl8IgQ9qosrvdNOJLBpWjonq7UYSbHpAvc7dQ=
 github.com/NVIDIA/k8s-dra-driver-gpu v0.0.0-20251017125642-cfe35ffd3d2c/go.mod h1:JoDIouMI3LtOXMW86xGC1dye2m+NL/VZ+3hhVpjNAKg=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260601212822-4e2f12a33aba h1:3TT0iNhKkPAStVA+dOFPrhA+f3hN0DhLijNStvKn5Cw=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260601212822-4e2f12a33aba/go.mod h1:a81YFpCa6Wl01ZNx+2wF7NXoPcn0bWWY4GLrUOpnN1g=
 github.com/antithesishq/antithesis-sdk-go v0.4.3-default-no-op h1:+OSa/t11TFhqfrX0EOSqQBDJ0YlpmK0rDSiB19dg9M0=
 github.com/antithesishq/antithesis-sdk-go v0.4.3-default-no-op/go.mod h1:IUpT2DPAKh6i/YhSbt6Gl3v2yvUZjmKncl7U91fup7E=
 github.com/antlr4-go/antlr/v4 v4.13.1 h1:SqQKkuVZ+zWkMMNkjy5FZe5mr5WURWnlpmOuzYWrPrQ=

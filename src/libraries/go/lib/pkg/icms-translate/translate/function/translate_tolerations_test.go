@@ -196,7 +196,7 @@ func TestTranslateContainerLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 		common.ContainerFunctionImageEnv: "nvcr.io/nvidia/function:latest",
 		common.UtilsImageEnv:             "nvcr.io/nvidia/utils:latest",
 		common.InitImageEnv:              "nvcr.io/nvidia/init:latest",
-		"STARGATE_ADDRESS":               "stargate.example.com:443",
+		"LLM_REQUEST_ROUTER_ADDRESS":     "llm-router.example.com:443",
 		"INFERENCE_PORT":                 "8080",
 		"NVCF_WORKER_TOKEN":              "worker-token",
 		"NVCF_FQDN_GRPC":                 "grpc.example.com",
@@ -225,7 +225,15 @@ func TestTranslateContainerLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	router := findContainerByName(t, pod.Spec.Containers, LLMWorkerContainerName)
 	assert.Equal(t, "nvcr.io/nvidia/router:latest", router.Image)
 	assert.Contains(t, router.Args, "--upstream-http-base-url=http://127.0.0.1:8080")
+	assert.Contains(t, router.Args, "--stargate-address=llm-router.example.com:443")
 	assert.Contains(t, router.Args, "--model-name=model-a")
+	routerEnv := envSliceToMap(router.Env)
+	assert.Equal(t, "llm-router.example.com:443", routerEnv["LLM_REQUEST_ROUTER_ADDRESS"])
+	assert.Equal(t, "llm-router.example.com:443", routerEnv["STARGATE_ADDRESS"])
+
+	initEnv := envSliceToMap(findContainerByName(t, pod.Spec.InitContainers, "init").Env)
+	assert.Equal(t, "llm-router.example.com:443", initEnv["LLM_REQUEST_ROUTER_ADDRESS"])
+	assert.Equal(t, "llm-router.example.com:443", initEnv["STARGATE_ADDRESS"])
 
 	credentialManager := findContainerByName(t, pod.Spec.Containers, "llm-credential-manager")
 	assert.Equal(t, "nvcr.io/nvidia/credential-manager:latest", credentialManager.Image)

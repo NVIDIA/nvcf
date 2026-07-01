@@ -185,16 +185,17 @@ type AgentConfig struct {
 	SharedStorage             SharedStorageConfig             `yaml:",omitempty"`
 	InternalPersistentStorage InternalPersistentStorageConfig `yaml:",omitempty"`
 
-	ICMSURL           string            `yaml:",omitempty"`
-	KubeconfigPath    string            `yaml:",omitempty"`
-	SvcAddress        string            `yaml:",omitempty"`
-	AdminAddr         string            `yaml:",omitempty"`
-	DebugAddr         string            `yaml:",omitempty"`
-	SystemNamespace   string            `yaml:",omitempty"`
-	RequestsNamespace string            `yaml:",omitempty"`
-	NamespaceLabels   map[string]string `yaml:",omitempty"`
-	ComputeBackend    string            `yaml:",omitempty"`
-	StaticGPUCapacity uint64            `yaml:",omitempty"`
+	ICMSURL                string            `yaml:",omitempty"`
+	ICMSHostHeaderOverride string            `yaml:"icmsHostHeaderOverride,omitempty"`
+	KubeconfigPath         string            `yaml:",omitempty"`
+	SvcAddress             string            `yaml:",omitempty"`
+	AdminAddr              string            `yaml:",omitempty"`
+	DebugAddr              string            `yaml:",omitempty"`
+	SystemNamespace        string            `yaml:",omitempty"`
+	RequestsNamespace      string            `yaml:",omitempty"`
+	NamespaceLabels        map[string]string `yaml:",omitempty"`
+	ComputeBackend         string            `yaml:",omitempty"`
+	StaticGPUCapacity      uint64            `yaml:",omitempty"`
 	// MinHealthcheckRefreshWait forces the NVCA internal healthchecker
 	// to wait at least this long between refresh calls,
 	// in case the healthchecker is too chatty in specific instances.
@@ -207,7 +208,8 @@ type AgentConfig struct {
 	HelmRepositoryPrefix string `yaml:",omitempty"`
 
 	// ReVal service config
-	HelmReValServiceURL string `yaml:",omitempty"`
+	HelmReValServiceURL                string `yaml:",omitempty"`
+	HelmReValServiceHostHeaderOverride string `yaml:"helmReValServiceHostHeaderOverride,omitempty"`
 	// Helm ReVal OAuth endpoints are selected from HelmReValServiceURL.
 	HelmReValStageOAuthTokenURL             string `yaml:",omitempty"`
 	HelmReValStageOAuthPublicKeysetEndpoint string `yaml:",omitempty"`
@@ -215,7 +217,8 @@ type AgentConfig struct {
 	HelmReValProdOAuthPublicKeysetEndpoint  string `yaml:",omitempty"`
 
 	// NATS service config
-	NATSURL string `yaml:"NATSURL,omitempty"`
+	NATSURL          string `yaml:"NATSURL,omitempty"`
+	NATSHostOverride string `yaml:"NATSHostOverride,omitempty"`
 
 	// CSIVolumeMountOptions for PVC provisioning
 	CSIVolumeMountOptions []string `yaml:",omitempty"`
@@ -565,6 +568,8 @@ type ClusterIssuedTokenSource string
 const (
 	// ClusterIssuedTokenSourcePSAT configures the agent to use the projected service account token authz path.
 	ClusterIssuedTokenSourcePSAT ClusterIssuedTokenSource = "psat"
+
+	ClusterIssuedTokenSourceNone ClusterIssuedTokenSource = "none"
 )
 
 type AuthzConfig struct {

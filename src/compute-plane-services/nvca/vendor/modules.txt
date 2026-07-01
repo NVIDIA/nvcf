@@ -32,7 +32,7 @@ github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/i
 github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/resource
 github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/resource/v1beta1
 github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/listers/resource/v1beta1
-# github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260601212822-4e2f12a33aba
+# github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260601212822-4e2f12a33aba => ../../libraries/go/lib
 ## explicit; go 1.25.0
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core
@@ -1607,6 +1607,7 @@ sigs.k8s.io/structured-merge-diff/v6/value
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
+# github.com/NVIDIA/nvcf/src/libraries/go/lib => ../../libraries/go/lib
 # k8s.io/api => k8s.io/api v0.35.4
 # k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.35.4
 # k8s.io/apimachinery => k8s.io/apimachinery v0.35.4

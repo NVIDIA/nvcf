@@ -2244,3 +2244,100 @@ func simulateMalformedArgsError(t *testing.T) string {
 	require.Error(t, err, "function.Translate should fail on malformed container args")
 	return err.Error()
 }
+
+func TestFunctionTranslateInjectsLegacyStargateAddressFromLLMRequestRouterEnv(t *testing.T) {
+	const (
+		testContainerRegistriesCreds = "eyJrOHNTZWNyZXRzIjpbeyJhdXRocyI6eyJudmNyLmlvIjp7ImF1dGgiOiJjM1JuTFdGaVl6RXlNem8yWmpZek5HUTROUzA1TXpGbExUUXhaall0WVRKbFl5MDJOMkk0TnpVd1pqRXlOMlU9In19fV19"
+		testSidecarRegistryCred      = "eyJhdXRocyI6eyJudmNyLmlvIjp7ImF1dGgiOiJKRzloZFhSb2RHOXJaVzQ2Ym5aaGNHa3RjM1JuTFdGaVl6RXlNdz09In19fQo="
+		testRouterAddress            = "llm-router.example.com:443"
+	)
+	env := strings.Join([]string{
+		common.ContainerFunctionImageEnv + "=nvcr.io/nvidia/fake-image:latest",
+		common.UtilsImageEnv + "=nvcr.io/nvidia/fake-utils:latest",
+		common.InitImageEnv + "=nvcr.io/nvidia/fake-init:latest",
+		common.ContainerRegistriesCredentialsEnv + "=" + testContainerRegistriesCreds,
+		common.SidecarRegistryCredentialEnv + "=" + testSidecarRegistryCred,
+		"INFERENCE_PORT=8080",
+		"LLM_REQUEST_ROUTER_ADDRESS=" + testRouterAddress,
+	}, "\n")
+
+	msg := function.CreationQueueMessage{
+		CreationQueueMessageMetadata: common.CreationQueueMessageMetadata{
+			RequestID:         "request-id",
+			MessageBatchID:    "batch-id",
+			NCAID:             "nca-id",
+			Action:            common.RequestICMSInstances,
+			InstanceCount:     1,
+			InstanceTypeName:  "L40_1x",
+			InstanceTypeValue: "L40",
+			GPUType:           "L40",
+			RequestedGPUCount: 1,
+		},
+		Details: function.Details{
+			FunctionID:        "function-id",
+			FunctionVersionID: "function-version-id",
+			FunctionType:      function.FunctionTypeLLM,
+		},
+		LaunchSpecification: &function.LaunchSpecification{
+			EnvironmentB64:  base64.StdEncoding.EncodeToString([]byte(env)),
+			ICMSEnvironment: "test",
+			CloudProvider:   "DGXCLOUD",
+		},
+	}
+	cfg := function.TranslateConfig{
+		TranslateConfig: common.TranslateConfig{
+			Namespace:                    "test-ns",
+			ObjectNameBase:               "test-worker",
+			InstanceTypeLabelSelectorKey: "nvidia.com/gpu.product",
+			WorkloadResources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{
+					"nvidia.com/gpu": resource.MustParse("1"),
+				},
+			},
+		},
+	}
+
+	objs, err := function.Translate(msg, cfg)
+	require.NoError(t, err)
+
+	var pod *corev1.Pod
+	for _, obj := range objs {
+		if candidate, ok := obj.(*corev1.Pod); ok {
+			pod = candidate
+			break
+		}
+	}
+	require.NotNil(t, pod)
+
+	var llmWorker *corev1.Container
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == function.LLMWorkerContainerName {
+			llmWorker = &pod.Spec.Containers[i]
+			break
+		}
+	}
+	require.NotNil(t, llmWorker)
+	assert.Contains(t, llmWorker.Args, "--stargate-address="+testRouterAddress)
+
+	envMap := make(map[string]string, len(llmWorker.Env))
+	for _, envVar := range llmWorker.Env {
+		envMap[envVar.Name] = envVar.Value
+	}
+	assert.Equal(t, testRouterAddress, envMap["LLM_REQUEST_ROUTER_ADDRESS"])
+	assert.Equal(t, testRouterAddress, envMap["STARGATE_ADDRESS"])
+
+	var initContainer *corev1.Container
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == "init" {
+			initContainer = &pod.Spec.InitContainers[i]
+			break
+		}
+	}
+	require.NotNil(t, initContainer)
+	initEnvMap := make(map[string]string, len(initContainer.Env))
+	for _, envVar := range initContainer.Env {
+		initEnvMap[envVar.Name] = envVar.Value
+	}
+	assert.Equal(t, testRouterAddress, initEnvMap["LLM_REQUEST_ROUTER_ADDRESS"])
+	assert.Equal(t, testRouterAddress, initEnvMap["STARGATE_ADDRESS"])
+}
