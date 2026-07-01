@@ -26,6 +26,8 @@ on:
 
 permissions:
   contents: read
+  # Required to pull the private ghcr.io/nvidia/nvcf/bazel-ci job container.
+  packages: read
 
 concurrency:
   group: chart-push-${{ github.event.inputs.chart_dir }}-${{ github.ref }}

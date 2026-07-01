@@ -40,6 +40,8 @@ on:
 
 permissions:
   contents: read
+  # Required to pull the private ghcr.io/nvidia/nvcf/bazel-ci job container.
+  packages: read
 
 concurrency:
   group: image-push-${{ github.event.inputs.service_path }}-${{ github.ref }}
