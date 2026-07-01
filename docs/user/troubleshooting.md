@@ -551,6 +551,46 @@ HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra sync
 
 If Cassandra was interrupted during migration, also check for dirty migration state before rerunning the full install.
 
+### Cassandra Pods Restart Due to Startup Probe Failures
+
+Symptoms:
+
+- Cassandra pods restart repeatedly without an `OOMKilled` exit code.
+- `kubectl describe` shows `Startup probe failed` or `container killed: failed startup probe`.
+- The issue appears on resource-constrained nodes (Colima on Apple Silicon, low CPU quota, emulated architectures).
+
+Diagnosis:
+
+Check events on the Cassandra pod:
+
+```bash
+kubectl -n cassandra-system describe pod cassandra-0 | grep -A 2 "startup probe"
+```
+
+If the events show repeated startup probe failures before Cassandra finishes initializing, the probe window is too short for the available CPU.
+
+Root cause:
+
+The default startup probe runs `nodetool status` every 10 seconds with a 5-second timeout and allows 60 failures (10-minute window). Under CPU contention or architecture emulation, Cassandra initialization can take longer than this window.
+
+Solution:
+
+Relax the startup probe thresholds in your environment file to widen the window from 10 minutes to 30 minutes:
+
+```yaml
+cassandra:
+  startupProbe:
+    failureThreshold: 120
+    periodSeconds: 15
+    timeoutSeconds: 10
+```
+
+```bash
+HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra sync
+```
+
+The `local` helmfile environment ships these relaxed defaults when using the self-managed stack.
+
 ### Cassandra Migrations Fail After Dirty Migration State
 
 Symptoms:
