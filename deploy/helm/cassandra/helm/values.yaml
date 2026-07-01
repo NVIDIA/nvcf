@@ -47,7 +47,7 @@ cassandra:
     image:
       # registry: must be supplied in additional values
       # repository: must be supplied in additional values
-      tag: 0.8.1
+      tag: 0.10.1
       pullPolicy: Always
 
   image:
