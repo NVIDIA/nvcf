@@ -115,7 +115,7 @@ Components that run on GPU nodes to manage function execution, including the NVC
 | --- | --- | --- |
 | Image | nvca | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvca:3.0.3` |
 | Image | nvca-operator | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvca-operator:3.0.3` |
-| Chart (OCI) | helm-nvca-operator | `nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator:1.12.0` |
+| Chart (OCI) | helm-nvca-operator | `nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator:1.12.6` |
 | Image | nvcf_worker_utils | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf_worker_utils:2.101.0` |
 | Image | nvcf_worker_init | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf_worker_init:2.102.0` |
 | Image | nvcf_worker_niclls | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf_worker_niclls:2.105.7` |

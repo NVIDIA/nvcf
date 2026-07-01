@@ -210,7 +210,7 @@ supplemental_artifacts:
   - name: helm-nvca-operator
     type: chart
     registry: staging
-    version: 1.12.0
+    version: 1.12.6
   - name: nvca-operator
     type: image
     registry: staging
