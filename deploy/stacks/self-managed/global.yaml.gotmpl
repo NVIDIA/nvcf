@@ -136,6 +136,10 @@ openbao:
     {{- . | nindent 4 }}
     {{- end }}
     replicas: {{ .Values.openbao.injector.replicas }}
+    {{- with .Values.openbao.injector.webhook }}
+    webhook:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
     podDisruptionBudget:
       minAvailable: 1
   server:
@@ -237,6 +241,7 @@ natsAuthCalloutService:
 {{- $llmRouterClientImage := dig "NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE" $llmRouterClientImageDefault $apiEnvOverrides }}
 {{- $nvcfWorkerServiceURL := dig "nvcfServiceURL" "" $workerEndpoints }}
 {{- $nvcfWorkerGrpcServiceURL := dig "nvcfGrpcServiceURL" "" $workerEndpoints }}
+{{- $grpcProxyNVCFGrpcServiceURL := dig "grpcproxy" "nvcfGrpcServiceURL" "" .Values | default $nvcfWorkerGrpcServiceURL }}
 {{- $nvcfNatsWorkerServiceURL := dig "nvcfNatsServiceURL" "" $workerEndpoints }}
 {{- $essWorkerBaseURL := dig "essServiceURL" "" $workerEndpoints }}
 {{- $nvctWorkerServiceURL := dig "nvctServiceURL" "" $workerEndpoints }}
@@ -244,6 +249,8 @@ natsAuthCalloutService:
 {{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
+{{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
+{{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
 api:
   fullnameOverride: nvcf-api
   {{- if .Values.global.imagePullSecrets }}
@@ -424,7 +431,7 @@ grpcproxy:
     {{- else }}
     TRACING: "none" # this is ineffective, but the env list must be non-empty
     {{- end }}
-    {{- with $nvcfWorkerGrpcServiceURL }}
+    {{- with $grpcProxyNVCFGrpcServiceURL }}
     NVCF_FQDN_GRPC: {{ . | quote }}
     {{- end }}
     {{- with $nvcfNatsWorkerServiceURL }}
@@ -813,9 +820,21 @@ nvcfGatewayRoutes:
     nvcfApi:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+      grpc:
+        enabled: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "enabled" false .Values }}
+        {{- with $nvcfApiGrpcRouteHostnames }}
+        hostnames:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
     nvctApi:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+      grpc:
+        enabled: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "enabled" false .Values }}
+        {{- with $nvctApiGrpcRouteHostnames }}
+        hostnames:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
     apiKeys:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "apiKeys" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}

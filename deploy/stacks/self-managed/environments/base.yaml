@@ -168,6 +168,18 @@ openbao:
     # Production default: 2 replicas with hard anti-affinity for HA.
     # Override to 1 in single-node / minimal test pools to avoid Pending pods.
     replicas: 2
+    webhook:
+      failurePolicy: Fail
+      namespaceSelector:
+        matchExpressions:
+          - key: kubernetes.io/metadata.name
+            operator: In
+            values:
+              - api-keys
+              - ess
+              - nats-system
+              - nvcf
+              - sis
 
 addons:
   # LLS/TURN Low-Latency Streaming addon
@@ -266,8 +278,16 @@ ingress:
     routes:
       nvcfApi:
         routeAnnotations: {}
+        grpc:
+          enabled: false
+          # Defaults to api-grpc.<global.domain> when enabled. Set to override.
+          hostnames: []
       nvctApi:
         routeAnnotations: {}
+        grpc:
+          enabled: false
+          # Defaults to tasks-grpc.<global.domain> when enabled. Set to override.
+          hostnames: []
       apiKeys:
         routeAnnotations: {}
       invocation:
@@ -300,4 +320,10 @@ ingress:
         listenerName: nats
 
 grpcproxy:
+  # Optional NVCF API gRPC endpoint used only by grpc-proxy.
+  # Leave empty when grpc-proxy can use the same endpoint advertised to workers
+  # through global.workerEndpoints.nvcfGrpcServiceURL. Set this when workers
+  # need an external Gateway or load-balancer URL, but grpc-proxy should stay
+  # on a control-plane-local API service address.
+  nvcfGrpcServiceURL: ""
   workerConnectBaseURL: ""
