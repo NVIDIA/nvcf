@@ -178,7 +178,7 @@ service:
         public: "true"
       level: warn
     metrics:
-      level: normal
+      level: detailed
       readers:
         - pull:
             exporter:

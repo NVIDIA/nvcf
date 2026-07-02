@@ -430,7 +430,7 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 			},
 		},
 		"metrics": {
-			"level": "normal",
+			"level": "detailed",
 			"readers": []map[string]interface{}{
 				{
 					"pull": map[string]interface{}{

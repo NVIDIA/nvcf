@@ -136,7 +136,7 @@ service:
       initial_fields:
         public: "true"
     metrics:
-      level: normal
+      level: detailed
       readers:
         - pull:
             exporter:
