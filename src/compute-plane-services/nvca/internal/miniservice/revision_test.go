@@ -193,7 +193,7 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 				now:        func() time.Time { return fixedTime },
 			}
 
-			err := r.prepareUpgradeIfNeeded(ctx, ms)
+			err := r.prepareUpdateIfNeeded(ctx, ms)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantRevision, ms.Status.Revision)
@@ -500,7 +500,7 @@ func TestRevisionUpgradeCycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, changed, "new values should differ from revision 0")
 
-	require.NoError(t, r.prepareUpgradeIfNeeded(ctx, ms))
+	require.NoError(t, r.prepareUpdateIfNeeded(ctx, ms))
 	assert.Equal(t, int64(1), ms.Status.Revision)
 	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
 	assert.Nil(t, ms.Status.RenderDetails, "render details should be cleared for re-render")
@@ -539,7 +539,7 @@ func TestRevisionUpgradeCycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, changed, "values unchanged since revision 1")
 
-	require.NoError(t, r.prepareUpgradeIfNeeded(ctx, ms))
+	require.NoError(t, r.prepareUpdateIfNeeded(ctx, ms))
 	assert.Equal(t, int64(1), ms.Status.Revision, "revision should not bump when values are unchanged")
 	assert.Equal(t, v1alpha1.MiniServiceRunning, ms.Status.Phase, "phase should remain Running")
 }

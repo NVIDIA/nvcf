@@ -32,18 +32,6 @@ kubectl create namespace container-caching
 Create an image pull secret so that pods can pull container images from your registry.
 
 <Tabs>
-<Tab title="BYOC / NGC">
-
-```bash
-kubectl create secret docker-registry nvcr-creds \
-  --docker-server=nvcr.io \
-  --docker-username='$oauthtoken' \
-  --docker-password="${NGC_API_KEY}" \
-  --namespace=container-caching
-```
-
-</Tab>
-
 <Tab title="Amazon ECR">
 
 ```bash
@@ -90,17 +78,6 @@ Adjust `storageClassName` for your environment (e.g., `gp3` for AWS EKS).
 ### Step 4. Install the chart
 
 <Tabs>
-<Tab title="BYOC (NGC Helm Repo)">
-
-```bash
-helm upgrade --install container-cache \
-  nvcf-byoc/nvcf-container-cache \
-  --namespace container-caching \
-  --values values.yaml
-```
-
-</Tab>
-
 <Tab title="Self-Hosted (OCI)">
 
 Replace `<your-registry>/<your-repo>` with your mirrored registry path.

@@ -201,14 +201,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		controllerutil.AddFinalizer(msCopy, finalizer)
 
 		// Detect spec changes (e.g., helm values update) that require a re-render.
-		if err := r.prepareUpgradeIfNeeded(ctx, msCopy); err != nil {
+		if err := r.prepareUpdateIfNeeded(ctx, msCopy); err != nil {
 			return reconcile.Result{}, err
 		}
 
 		switch msCopy.Status.Phase {
 		case "", v1alpha1.MiniServiceCacheInProgress, v1alpha1.MiniServiceInstalling:
-			log.Info("Performing install action")
-			if res, rerr = r.doInstall(ctx, msCopy, icmsReq); isTerminal(rerr) {
+			if needsWorkloadUpdate(msCopy) {
+				log.Info("Performing workload update action")
+				res, rerr = r.doUpdateWorkload(ctx, msCopy, icmsReq)
+			} else {
+				log.Info("Performing install action")
+				res, rerr = r.doInstall(ctx, msCopy, icmsReq)
+			}
+			if isTerminal(rerr) {
 				msCopy.Status.Phase = v1alpha1.MiniServiceInstallFailed
 				if !meta.IsStatusConditionFalse(msCopy.Status.Conditions, v1alpha1.MiniServiceConditionInstallSuccessful) {
 					meta.SetStatusCondition(&msCopy.Status.Conditions, metav1.Condition{
@@ -405,12 +411,12 @@ func (r *Reconciler) patchMiniService(ctx context.Context, oldObj, newObj *v1alp
 	return nil
 }
 
-// prepareUpgradeIfNeeded detects spec changes by comparing metadata.generation
+// prepareUpdateIfNeeded detects spec changes by comparing metadata.generation
 // to status.observedGeneration. Because generation increments on any spec field change,
 // this method additionally compares helm values against the latest revision ConfigMap.
-// If only non-values fields changed, it returns without triggering an upgrade
+// If only non-values fields changed, it returns without triggering an update
 // (observedGeneration is still updated at the end of Reconcile).
-func (r *Reconciler) prepareUpgradeIfNeeded(ctx context.Context, ms *v1alpha1.MiniService) error {
+func (r *Reconciler) prepareUpdateIfNeeded(ctx context.Context, ms *v1alpha1.MiniService) error {
 	if ms.Status.ObservedGeneration == 0 || ms.Generation == ms.Status.ObservedGeneration {
 		return nil
 	}
@@ -427,7 +433,7 @@ func (r *Reconciler) prepareUpgradeIfNeeded(ctx context.Context, ms *v1alpha1.Mi
 		return fmt.Errorf("check if helm values changed: %w", err)
 	}
 	if !changed {
-		log.Info("Helm values unchanged, skipping upgrade")
+		log.Info("Helm values unchanged, skipping update")
 		return nil
 	}
 
@@ -440,7 +446,8 @@ func (r *Reconciler) prepareUpgradeIfNeeded(ctx context.Context, ms *v1alpha1.Mi
 	ms.Status.Revision++
 	ms.Status.Phase = v1alpha1.MiniServiceInstalling
 
-	log.Info("Upgrade prepared", "newRevision", ms.Status.Revision)
+	log.Info("Update prepared", "newRevision", ms.Status.Revision)
+
 	return nil
 }
 
@@ -704,13 +711,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		return reconcile.Result{}, err
 	}
 
-	isUpgrade := ms.Status.Revision > 0
-	if isUpgrade {
-		log.Info("Applying objects via Server-Side Apply for upgrade", "revision", ms.Status.Revision)
-		err = r.applySSAInfra(ctx, ms, infraObjectMutators, genericInfraMutator, infraObjs...)
-	} else {
-		err = r.applyInfra(ctx, ms, infraObjectMutators, genericInfraMutator, infraObjs...)
-	}
+	err = r.applyInfra(ctx, ms, infraObjectMutators, genericInfraMutator, infraObjs...)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -741,17 +742,13 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		return reconcile.Result{}, err
 	}
 
-	if isUpgrade {
-		err = r.applySSAWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...)
-	} else {
-		err = r.applyWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...)
-	}
+	err = r.applyWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
 
 	if err := r.saveRevisionHistory(ctx, ms); err != nil {
-		log.Error(err, "Failed to save revision history after install")
+		log.Error(err, "Failed to save revision history after initial install")
 		return reconcile.Result{}, err
 	}
 
@@ -760,6 +757,115 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		Type:   v1alpha1.MiniServiceConditionInstallSuccessful,
 		Status: metav1.ConditionTrue,
 		Reason: "AllObjectsApplied",
+	})
+
+	return reconcile.Result{}, nil
+}
+
+// needsWorkloadUpdate checks if a workload update is needed for ms.
+// It returns true if ms is in the Installing phase and has a revision greater than 0,
+// which can only be true if the controller has explicitly transitioned ms to
+// the Installing phase post-Running.
+func needsWorkloadUpdate(ms *v1alpha1.MiniService) bool {
+	return ms.Status.Phase == v1alpha1.MiniServiceInstalling &&
+		ms.Status.Revision > 0
+}
+
+// doUpdateWorkload performs a workload update for a MiniService, doing almost the same operations as doInstall,
+// but without infra install steps. It assumes that the MiniService is already in the Running phase,
+// but a recent change to Helm values has been detected and MiniService transitioned to the Installing phase.
+func (r *Reconciler) doUpdateWorkload(ctx context.Context,
+	ms *v1alpha1.MiniService,
+	icmsReq *nvcav2beta1.ICMSRequest,
+) (reconcile.Result, error) {
+	log := logf.FromContext(ctx)
+
+	log.Info("Updating MiniService workload", "revision", ms.Status.Revision)
+
+	funcLaunchSpec := icmsReq.Spec.CreationMsgInfo.FunctionLaunchSpecification
+	taskLaunchSpec := icmsReq.Spec.CreationMsgInfo.TaskLaunchSpecification
+	if funcLaunchSpec == nil && taskLaunchSpec == nil {
+		return reconcile.Result{}, reconcile.TerminalError(
+			fmt.Errorf("both function and task launch specs are empty in ICMSRequest %s", icmsReq.Name))
+	}
+
+	functionName, taskName, err := getFunctionNameAndTaskName(funcLaunchSpec, taskLaunchSpec)
+	if err != nil {
+		return reconcile.Result{}, reconcile.TerminalError(fmt.Errorf("failed to get function name and task name: %w", err))
+	}
+
+	objsData, isRendered, err := r.getRenderedData(ctx, ms)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	if !isRendered {
+		if objsData, err = r.render(ctx, ms, icmsReq); err != nil {
+			return reconcile.Result{}, err
+		}
+
+		if err := r.saveRenderedData(ctx, ms, objsData); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+
+	workloadObjs, resources, err := decodeObjects(ctx, r.Decoder, objsData)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	// Update the resources status in the MiniService status.
+	updateResourcesStatus(ms, resources)
+
+	// Only add labels and annotations to workload objects. The pod webhook will handle applying metadata to pods.
+	genericWorkloadMutator := newGenericMutator(r.FeatureFlagFetcher, ms, icmsReq,
+		r.ClusterRegion, r.ClusterName, functionName, taskName, false)
+
+	// The utils pod has several init containers that may write files needed by workload pods,
+	// like secrets.json. These init containers should complete before updating workload objects.
+	utilsPod := &corev1.Pod{}
+	utilsPodKey := client.ObjectKey{Namespace: ms.Spec.Namespace, Name: common.UtilsPodName}
+	switch err := r.Client.Get(ctx, utilsPodKey, utilsPod); {
+	case err == nil:
+		// Ensure pod is in a healthy state so an initialized but errored pod
+		// does not result in workload apply.
+		schedulingTimeout := getPodSchedulingTimeout(ctx, icmsReq, r.K8sTimeConfig)
+		if status := getPodStatus(utilsPod, r.K8sTimeConfig, schedulingTimeout); status.TerminalBad {
+			return reconcile.Result{}, reconcile.TerminalError(fmt.Errorf("utils pod is %s: %s", status.Status, status.Reason))
+		}
+		if !isInitContainersComplete(utilsPod) {
+			log.V(1).Info("Utils pod init containers have not completed, waiting for initialization event to update workload")
+			return reconcile.Result{}, nil
+		}
+		log.V(1).Info("Utils pod init containers have completed, proceeding with workload update")
+	case apierrors.IsNotFound(err):
+		// The utils pod must exist at this point in the instance's lifecycle,
+		// so NotFound errors are considered non-transient.
+		log.Error(err, "Utils pod expected to be found but was not during workload update")
+		return reconcile.Result{}, reconcile.TerminalError(err)
+	case k8sutil.IsTransientK8sError(err):
+		log.V(1).Info("Transient error getting utils pod, will retry", "error", err)
+		return reconcile.Result{Requeue: true}, nil
+	default:
+		log.Error(err, "Non-transient error getting utils pod during workload update")
+		return reconcile.Result{}, err
+	}
+
+	err = r.applySSAWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	if err := r.saveRevisionHistory(ctx, ms); err != nil {
+		log.Error(err, "Failed to save revision history after workload update")
+		return reconcile.Result{}, err
+	}
+
+	ms.Status.Phase = v1alpha1.MiniServiceInstalled
+	meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
+		Type:    v1alpha1.MiniServiceConditionInstallSuccessful,
+		Status:  metav1.ConditionTrue,
+		Reason:  "WorkloadObjectsUpdated",
+		Message: fmt.Sprintf("Workload update to revision %d completed successfully", ms.Status.Revision),
 	})
 
 	return reconcile.Result{}, nil
@@ -1275,17 +1381,7 @@ func (r *Reconciler) applyWorkload(ctx context.Context,
 
 const fieldManagerName = "miniservice-controller"
 
-// applySSAInfra applies infra objects using server-side apply for upgrades.
-func (r *Reconciler) applySSAInfra(ctx context.Context,
-	ms *v1alpha1.MiniService,
-	objectMutators objectMutatorSet,
-	genericMutator objectMutator,
-	objs ...client.Object,
-) error {
-	return r.applySSA(ctx, ms, objectMutators, genericMutator, r.Client, objs...)
-}
-
-// applySSAWorkload applies workload objects using server-side apply for upgrades.
+// applySSAWorkload applies workload objects using server-side apply for updates.
 // Like applyWorkload, it may use an impersonating client for RBAC enforcement.
 func (r *Reconciler) applySSAWorkload(ctx context.Context,
 	ms *v1alpha1.MiniService,
@@ -1305,7 +1401,7 @@ func (r *Reconciler) applySSAWorkload(ctx context.Context,
 
 // applySSA uses server-side apply to create or update objects.
 // Unlike create(), which skips existing objects, applySSA applies desired state
-// to both new and existing objects, making it suitable for helm values upgrades.
+// to both new and existing objects, making it suitable for helm values updates.
 func (r *Reconciler) applySSA(ctx context.Context,
 	ms *v1alpha1.MiniService,
 	objectMutators objectMutatorSet,
