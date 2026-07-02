@@ -29,6 +29,92 @@ import (
 	"github.com/spf13/viper"
 )
 
+func TestResolveConfigFilePathHandlesCommonPathForms(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("NVCF_TEST_CONFIG_PATH", filepath.Join("configs", "env.yaml"))
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+
+	tildePath := "~" + string(filepath.Separator) + filepath.Join("configs", "dev.yaml")
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "absolute path",
+			in:   filepath.Join(home, "configs", "prod.yaml"),
+			want: filepath.Join(home, "configs", "prod.yaml"),
+		},
+		{
+			name: "relative path",
+			in:   filepath.Join("configs", "prod.yaml"),
+			want: filepath.Join(cwd, "configs", "prod.yaml"),
+		},
+		{
+			name: "tilde path",
+			in:   tildePath,
+			want: filepath.Join(home, "configs", "dev.yaml"),
+		},
+		{
+			name: "tilde alone uses default filename",
+			in:   "~",
+			want: filepath.Join(home, ".nvcf-cli.yaml"),
+		},
+		{
+			name: "env var path",
+			in:   "$NVCF_TEST_CONFIG_PATH",
+			want: filepath.Join(cwd, "configs", "env.yaml"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveConfigFilePath(tt.in)
+			if got != tt.want {
+				t.Fatalf("resolveConfigFilePath(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetStateManagerForCurrentCommandReusesCacheForEquivalentPaths(t *testing.T) {
+	previousCfgFile := cfgFile
+	previousManager := configStateManager
+	previousManagerKey := configStateManagerKey
+	t.Cleanup(func() {
+		cfgFile = previousCfgFile
+		configStateManager = previousManager
+		configStateManagerKey = previousManagerKey
+		viper.Reset()
+	})
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configStateManager = nil
+	configStateManagerKey = ""
+
+	canonicalPath := filepath.Join(home, "configs", "dev.yaml")
+	cfgFile = canonicalPath
+	first := GetStateManagerForCurrentCommand()
+
+	cfgFile = "~" + string(filepath.Separator) + filepath.Join("configs", "dev.yaml")
+	second := GetStateManagerForCurrentCommand()
+	if first != second {
+		t.Fatalf("expected cached state manager for equivalent config paths")
+	}
+
+	cfgFile = filepath.Join(home, "configs", "..", "configs", "dev.yaml")
+	third := GetStateManagerForCurrentCommand()
+	if second != third {
+		t.Fatalf("expected cleaned absolute path to reuse cached state manager")
+	}
+}
+
 func TestStateForCurrentCommandUsesAutoDiscoveredConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

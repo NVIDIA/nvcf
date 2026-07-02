@@ -18,8 +18,11 @@ limitations under the License.
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"time"
 
@@ -119,9 +122,36 @@ func Execute() error {
 
 func activeConfigFileForState() string {
 	if cfgFile != "" {
-		return cfgFile
+		return resolveConfigFilePath(cfgFile)
 	}
-	return viper.ConfigFileUsed()
+	return resolveConfigFilePath(viper.ConfigFileUsed())
+}
+
+func resolveConfigFilePath(configPath string) string {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return ""
+	}
+
+	const tildePrefix = "~" + string(filepath.Separator)
+	configPath = os.ExpandEnv(configPath)
+	if configPath == "~" {
+		configPath = tildePrefix + ".nvcf-cli.yaml"
+	}
+
+	if strings.HasPrefix(configPath, tildePrefix) {
+		if home, err := os.UserHomeDir(); err == nil {
+			trimmed := strings.TrimPrefix(configPath, tildePrefix)
+			return filepath.Clean(filepath.Join(home, trimmed))
+		}
+		return filepath.Clean(configPath)
+	}
+
+	absolutePath, err := filepath.Abs(configPath)
+	if err == nil {
+		return filepath.Clean(absolutePath)
+	}
+	return filepath.Clean(configPath)
 }
 
 // GetCurrentConfigName returns the name of the current config file for state management
@@ -135,18 +165,11 @@ func GetStateManagerForCurrentCommand() *state.StateManager {
 	if configFile == "" {
 		return state.DefaultStateManager
 	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = ""
-	}
-	key := home + "\x00" + configFile
-	if configStateManager != nil && configStateManagerKey == key {
+	if configStateManager != nil && configStateManagerKey == configFile {
 		return configStateManager
 	}
-
 	configStateManager = state.GetStateManagerForConfig(configFile)
-	configStateManagerKey = key
+	configStateManagerKey = configFile
 	return configStateManager
 }
 
@@ -265,5 +288,7 @@ func initConfig() {
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil && viper.GetBool("debug") {
 		fmt.Fprintf(os.Stderr, "Using config file: %s\n", viper.ConfigFileUsed())
+	} else if err != nil && !errors.As(err, &viper.ConfigFileNotFoundError{}) {
+		fmt.Fprintf(os.Stderr, "Error reading config file: %v\n", err)
 	}
 }
