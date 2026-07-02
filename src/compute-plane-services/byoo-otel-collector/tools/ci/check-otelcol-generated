@@ -30,6 +30,10 @@ cp "${PROJECT_ROOT}/otel-collector-build.yaml" "${TMPROOT}/"
 mkdir -p "${TMPROOT}/scripts"
 cp "${SCRIPT}" "${TMPROOT}/scripts/"
 chmod +x "${TMPROOT}/scripts/regenerate-otelcol.sh"
+if [ -d "${OUT_DIR}/logchunkprocessor" ]; then
+  mkdir -p "${TMPROOT}/otelcol"
+  cp -R "${OUT_DIR}/logchunkprocessor" "${TMPROOT}/otelcol/"
+fi
 
 # Run the regen against the tmp root.
 (

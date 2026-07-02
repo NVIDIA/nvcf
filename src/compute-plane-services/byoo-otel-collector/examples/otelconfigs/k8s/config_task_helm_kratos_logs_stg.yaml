@@ -158,6 +158,15 @@ exporters:
     headers:
       collector-id: ${file:/etc/byoo-otel-collector/secrets/kratos-logs-stage-collectorId}
     logs_endpoint: https://kratos-logs-ingest.example.invalid:8443/v1/mtls/logs
+    sending_queue:
+      batch:
+        flush_timeout: 200ms
+        max_size: 1000000
+        min_size: 1000000
+        sizer: bytes
+      enabled: true
+      num_consumers: 10
+      queue_size: 1000
     tls:
       cert_file: /etc/byoo-otel-collector/secrets/kratos-logs-stage-clientCert
       key_file: /etc/byoo-otel-collector/secrets/kratos-logs-stage-clientKey

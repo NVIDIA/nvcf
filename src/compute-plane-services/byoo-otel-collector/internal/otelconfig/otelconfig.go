@@ -31,14 +31,17 @@ import (
 )
 
 type envConfig struct {
-	NvcfBackendType       string `split_words:"true" required:"true"`
-	NvcfInstanceID        string `split_words:"true" required:"true"`
-	NvcfNamespace         string `split_words:"true" required:"true"`
-	NvcfWorkloadType      string `split_words:"true" required:"true"`
-	NvcfFunctionID        string `split_words:"true"`
-	NvcfFunctionVersionID string `split_words:"true"`
-	NvctTaskID            string `split_words:"true"`
-	NvcfZoneName          string `split_words:"true"`
+	NvcfBackendType                  string `split_words:"true" required:"true"`
+	NvcfInstanceID                   string `split_words:"true" required:"true"`
+	NvcfNamespace                    string `split_words:"true" required:"true"`
+	NvcfWorkloadType                 string `split_words:"true" required:"true"`
+	NvcfFunctionID                   string `split_words:"true"`
+	NvcfFunctionVersionID            string `split_words:"true"`
+	NvctTaskID                       string `split_words:"true"`
+	NvcfZoneName                     string `split_words:"true"`
+	ByooLogChunkMaxBodyBytes         int    `split_words:"true"`
+	ByooLogChunkDryRun               bool   `split_words:"true"`
+	ByooLogExporterBatchMaxSizeBytes int    `split_words:"true"`
 }
 
 func processEnvConfig(env *envConfig) error {
@@ -66,6 +69,13 @@ func getTemplateConfig() (TemplateConfig, error) {
 	tcgf.WorkloadType = WorkloadType(env.NvcfWorkloadType)
 	tcgf.Namespace = env.NvcfNamespace
 	tcgf.InstanceID = env.NvcfInstanceID
+	tcgf.LogChunking.MaxBodyBytes = env.ByooLogChunkMaxBodyBytes
+	tcgf.LogChunking.DryRun = env.ByooLogChunkDryRun
+	logExporterBatchMaxSizeBytes, err := resolvedLogExporterBatchMaxSizeBytes(env.ByooLogExporterBatchMaxSizeBytes)
+	if err != nil {
+		return TemplateConfig{}, fmt.Errorf("BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES: %w", err)
+	}
+	tcgf.LogExporterBatchMaxSizeBytes = logExporterBatchMaxSizeBytes
 
 	functionID := env.NvcfFunctionID
 	functionVersionID := env.NvcfFunctionVersionID

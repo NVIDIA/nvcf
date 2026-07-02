@@ -22,7 +22,7 @@
 # silent upstream changes cannot bypass the cache.
 #
 # This directory is its own Go module (otelcol/go.mod) with module
-# `github.com/NVIDIA/byoo-otel-collector/otelcol` pinned via
+# `github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol` pinned via
 # otel-collector-build.yaml's dist.module field.
 
 # Build the otelcol-contrib binary via `go build` against the host's
@@ -110,6 +110,7 @@ genrule(
         "*.go",
         "go.mod",
         "go.sum",
+        "logchunkprocessor/**/*.go",
     ]),
     outs = ["otelcol-contrib"],
     # GO_BIN can be overridden via env when the host installs go at a

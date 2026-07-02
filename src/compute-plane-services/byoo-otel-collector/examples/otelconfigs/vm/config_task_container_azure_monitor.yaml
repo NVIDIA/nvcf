@@ -138,6 +138,15 @@ receivers:
 exporters:
   azuremonitor/AZURE_MONITOR-azure-monitor-prd-logs:
     connection_string: InstrumentationKey=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-instrumentationKey};IngestionEndpoint=endpoint;LiveEndpoint=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-liveEndpoint};ApplicationId=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-applicationId}
+    sending_queue:
+      batch:
+        flush_timeout: 200ms
+        max_size: 1000000
+        min_size: 1000000
+        sizer: bytes
+      enabled: true
+      num_consumers: 10
+      queue_size: 1000
   azuremonitor/AZURE_MONITOR-azure-monitor-prd-metrics:
     connection_string: InstrumentationKey=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-instrumentationKey};IngestionEndpoint=endpoint;LiveEndpoint=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-liveEndpoint};ApplicationId=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-applicationId}
   azuremonitor/AZURE_MONITOR-azure-monitor-prd-traces:

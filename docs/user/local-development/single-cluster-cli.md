@@ -46,6 +46,18 @@ export SAMPLE_NGC_ORG="<your-ngc-org>"
 export SAMPLE_NGC_TEAM="<your-ngc-team>"
 ```
 
+Create the Docker credential file that k3d mounts into the local nodes:
+
+```bash
+mkdir -p tools/ncp-local-cluster/secrets
+printf '{"auths":{"nvcr.io":{"auth":"%s"}}}\n' "$(printf '%s' "\$oauthtoken:${NGC_API_KEY}" | base64 | tr -d '\n')" > tools/ncp-local-cluster/secrets/docker-config.json
+```
+
+<Warning>
+`docker-config.json` contains your NGC credential and is gitignored. Do not
+commit or share this file.
+</Warning>
+
 ## Step 1: Bring up the local k3d cluster
 
 The canonical single-cluster topology lives in `tools/ncp-local-cluster/`.

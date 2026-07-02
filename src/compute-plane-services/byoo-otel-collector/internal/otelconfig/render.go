@@ -63,6 +63,8 @@ type OpenTelemetryConfig struct {
 	} `yaml:"service"`
 }
 
+const defaultLogExporterBatchMaxSizeBytes = 1000000
+
 // Initialize the maps if they are nil
 func initializeConfigMaps(otelConfig *OpenTelemetryConfig) {
 	if otelConfig.Receivers == nil {
@@ -135,7 +137,31 @@ func getCredentialsPath() string {
 	return "/etc/byoo-otel-collector/secrets"
 }
 
-func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {
+func resolvedLogExporterBatchMaxSizeBytes(configured int) (int, error) {
+	if configured < 0 {
+		return 0, fmt.Errorf("log exporter batch max size bytes must be greater than or equal to 0")
+	}
+	if configured == 0 {
+		return defaultLogExporterBatchMaxSizeBytes, nil
+	}
+	return configured, nil
+}
+
+func logExporterSendingQueue(batchMaxSizeBytes int) map[string]interface{} {
+	return map[string]interface{}{
+		"enabled":       true,
+		"num_consumers": 10,
+		"queue_size":    1000,
+		"batch": map[string]interface{}{
+			"flush_timeout": "200ms",
+			"sizer":         "bytes",
+			"min_size":      batchMaxSizeBytes,
+			"max_size":      batchMaxSizeBytes,
+		},
+	}
+}
+
+func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig, batchMaxSizeBytes int) (exporterId string, err error) {
 	var exporterType, exporterName string
 	var exporterCredential interface{}
 
@@ -186,8 +212,8 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"api": map[string]interface{}{
-				"site":              config.Telemetries.Logs.Endpoint,
-				"key":               exporterCredential,
+				"site":                config.Telemetries.Logs.Endpoint,
+				"key":                 exporterCredential,
 				"fail_on_invalid_key": false,
 			},
 			"host_metadata": map[string]interface{}{
@@ -204,7 +230,7 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"logs_endpoint": config.Telemetries.Logs.Endpoint,
-			"encoding": "json",
+			"encoding":      "json",
 			"headers": map[string]interface{}{
 				"collector-id": collectorId,
 			},
@@ -247,6 +273,7 @@ func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (expo
 	default:
 		return "", fmt.Errorf("invalid logs provider: %s", config.Telemetries.Logs.Provider)
 	}
+	otelConfig.Exporters[exporterId]["sending_queue"] = logExporterSendingQueue(batchMaxSizeBytes)
 	return exporterId, nil
 }
 
@@ -316,8 +343,8 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"api": map[string]interface{}{
-				"site":              config.Telemetries.Metrics.Endpoint,
-				"key":               exporterCredential,
+				"site":                config.Telemetries.Metrics.Endpoint,
+				"key":                 exporterCredential,
 				"fail_on_invalid_key": false,
 			},
 			"host_metadata": map[string]interface{}{
@@ -331,7 +358,7 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 			// shutdown timeout flushes the final batch before the task pod exits.
 			"metrics": map[string]interface{}{
 				"sums": map[string]interface{}{
-					"cumulative_monotonic_mode": "to_delta",
+					"cumulative_monotonic_mode":          "to_delta",
 					"initial_cumulative_monotonic_value": "keep",
 				},
 			},
@@ -417,8 +444,8 @@ func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (ex
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"api": map[string]interface{}{
-				"site":              config.Telemetries.Traces.Endpoint,
-				"key":               exporterCredential,
+				"site":                config.Telemetries.Traces.Endpoint,
+				"key":                 exporterCredential,
 				"fail_on_invalid_key": false,
 			},
 			"host_metadata": map[string]interface{}{
@@ -544,7 +571,11 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 
 	// Process Logs (if present)
 	if config.Telemetries.Logs != nil {
-		exporterId, err := exporterLogs(config, otelConfig)
+		logExporterBatchMaxSizeBytes, err := resolvedLogExporterBatchMaxSizeBytes(tmplConfig.LogExporterBatchMaxSizeBytes)
+		if err != nil {
+			return err
+		}
+		exporterId, err := exporterLogs(config, otelConfig, logExporterBatchMaxSizeBytes)
 		if err != nil {
 			return fmt.Errorf("failed to generate exporter for logs: %v", err)
 		}
@@ -553,7 +584,15 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		logPipeline := otelConfig.Service.Pipelines["logs"]
 		logPipeline.Receivers = []string{"otlp"}
 		logPipeline.Exporters = []string{exporterId}
-		logPipeline.Processors = []string{"memory_limiter", "attributes/add-metadata", "batch"}
+		logPipeline.Processors = []string{"memory_limiter", "attributes/add-metadata"}
+		if tmplConfig.LogChunking.MaxBodyBytes > 0 {
+			otelConfig.Processors["logchunk/byoo"] = map[string]interface{}{
+				"max_body_bytes": tmplConfig.LogChunking.MaxBodyBytes,
+				"dry_run":        tmplConfig.LogChunking.DryRun,
+			}
+			logPipeline.Processors = append(logPipeline.Processors, "logchunk/byoo")
+		}
+		logPipeline.Processors = append(logPipeline.Processors, "batch")
 		otelConfig.Service.Pipelines["logs"] = logPipeline
 	}
 
@@ -587,4 +626,3 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 
 	return nil
 }
-

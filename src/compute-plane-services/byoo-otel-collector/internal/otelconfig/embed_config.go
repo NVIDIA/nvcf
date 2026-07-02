@@ -46,6 +46,15 @@ type TemplateConfig struct {
 	TaskID            string
 	InstanceID        string
 	ZoneName          string
+	LogChunking       LogChunkingConfig
+	// LogExporterBatchMaxSizeBytes configures exporterhelper byte batching for logs.
+	// Zero uses the default selected for BYOO.
+	LogExporterBatchMaxSizeBytes int
+}
+
+type LogChunkingConfig struct {
+	MaxBodyBytes int
+	DryRun       bool
 }
 
 func ExecuteTemplate(w io.Writer, tcfg TemplateConfig) error {

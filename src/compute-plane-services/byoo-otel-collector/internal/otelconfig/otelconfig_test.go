@@ -82,6 +82,9 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCF_ZONE_NAME":     "zone-1",
 			},
 			expectErr: false,
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.Equal(t, defaultLogExporterBatchMaxSizeBytes, cfg.LogExporterBatchMaxSizeBytes)
+			},
 		},
 		{
 			name: "valid FunctionID",
@@ -96,6 +99,35 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCF_ZONE_NAME":           "zone-1",
 			},
 			expectErr: false,
+		},
+		{
+			name: "custom log exporter batch max size",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":                      "gfn",
+				"NVCF_INSTANCE_ID":                       "test-instance",
+				"NVCF_NAMESPACE":                         "test-ns",
+				"NVCF_WORKLOAD_TYPE":                     "function",
+				"NVCT_TASK_ID":                           "task-123",
+				"NVCF_ZONE_NAME":                         "zone-1",
+				"BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES": "2000000",
+			},
+			expectErr: false,
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.Equal(t, 2_000_000, cfg.LogExporterBatchMaxSizeBytes)
+			},
+		},
+		{
+			name: "negative log exporter batch max size",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":                      "gfn",
+				"NVCF_INSTANCE_ID":                       "test-instance",
+				"NVCF_NAMESPACE":                         "test-ns",
+				"NVCF_WORKLOAD_TYPE":                     "function",
+				"NVCT_TASK_ID":                           "task-123",
+				"NVCF_ZONE_NAME":                         "zone-1",
+				"BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES": "-1",
+			},
+			expectErr: true,
 		},
 		{
 			name: "missing NVCF_FUNCTION_ID",
@@ -157,19 +189,44 @@ func TestGetTemplateConfig(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Backup and set env
-			backup := map[string]string{}
-			for k := range tc.env {
-				backup[k] = os.Getenv(k)
-				os.Setenv(k, tc.env[k])
+			envKeys := []string{
+				"NVCF_BACKEND_TYPE",
+				"NVCF_INSTANCE_ID",
+				"NVCF_NAMESPACE",
+				"NVCF_WORKLOAD_TYPE",
+				"NVCF_FUNCTION_ID",
+				"NVCF_FUNCTION_VERSION_ID",
+				"NVCT_TASK_ID",
+				"NVCF_ZONE_NAME",
+				"NVCF_CLUSTER_REGION",
+				"BYOO_LOG_CHUNK_MAX_BODY_BYTES",
+				"BYOO_LOG_CHUNK_DRY_RUN",
+				"BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES",
+			}
+			backup := map[string]*string{}
+			for _, k := range envKeys {
+				if v, ok := os.LookupEnv(k); ok {
+					value := v
+					backup[k] = &value
+				} else {
+					backup[k] = nil
+				}
+				os.Unsetenv(k)
+			}
+			for k, v := range tc.env {
+				os.Setenv(k, v)
 			}
 			defer func() {
 				for k, v := range backup {
-					os.Setenv(k, v)
+					if v == nil {
+						os.Unsetenv(k)
+					} else {
+						os.Setenv(k, *v)
+					}
 				}
 			}()
 
-			_, err := getTemplateConfig()
+			cfg, err := getTemplateConfig()
 			if tc.expectErr {
 				if err == nil {
 					t.Errorf("expected error but got nil")
@@ -177,6 +234,9 @@ func TestGetTemplateConfig(t *testing.T) {
 			} else {
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
+				}
+				if tc.expect != nil {
+					tc.expect(t, cfg)
 				}
 			}
 		})

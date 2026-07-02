@@ -9,7 +9,7 @@ dist:
   # scripts/regenerate-otelcol.sh and tools/ci/check-otelcol-generated).
   # Pinning the module name keeps the generated go.mod stable across
   # regenerations so version bumps produce reviewable diffs.
-  module: github.com/NVIDIA/byoo-otel-collector/otelcol
+  module: github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol
   output_path: ./output # the output path which contains otelcol-contrib binary
 
 exporters:

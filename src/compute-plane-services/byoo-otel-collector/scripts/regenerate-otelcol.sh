@@ -63,11 +63,33 @@ fi
 echo "regenerate-otelcol: moving generated files into ${OUT_DIR}"
 mkdir -p "${OUT_DIR}"
 # Replace, not append. Deletes any stale generated files (e.g. when
-# components are dropped from the YAML).
+# components are dropped from the YAML). Keep first-party processor source
+# packages that live inside the generated collector module.
 find "${OUT_DIR}" -mindepth 1 -maxdepth 1 \
   ! -name "BUILD.bazel" \
+  ! -name "logchunkprocessor" \
   -exec rm -rf {} +
 mv "${PROJECT_ROOT}"/output/* "${OUT_DIR}/"
 rmdir "${PROJECT_ROOT}/output"
+
+COMPONENTS_GO="${OUT_DIR}/components.go"
+if ! grep -Fq 'logchunkprocessor "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor"' "${COMPONENTS_GO}"; then
+  perl -0pi -e 's/(\n\ttransformprocessor "github\.com\/open-telemetry\/opentelemetry-collector-contrib\/processor\/transformprocessor"\n)/$1\tlogchunkprocessor "github.com\/NVIDIA\/nvcf\/src\/compute-plane-services\/byoo-otel-collector\/otelcol\/logchunkprocessor"\n/' "${COMPONENTS_GO}"
+  grep -Fq 'logchunkprocessor "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor"' "${COMPONENTS_GO}" || {
+    echo "regenerate-otelcol: failed to insert logchunkprocessor import into ${COMPONENTS_GO}" >&2
+    exit 1
+  }
+  perl -0pi -e 's/(\n\t\ttransformprocessor\.NewFactory\(\),\n)/$1\t\tlogchunkprocessor.NewFactory(),\n/' "${COMPONENTS_GO}"
+  grep -Fq 'logchunkprocessor.NewFactory(),' "${COMPONENTS_GO}" || {
+    echo "regenerate-otelcol: failed to insert logchunkprocessor factory into ${COMPONENTS_GO}" >&2
+    exit 1
+  }
+  perl -0pi -e 's/(\n\t\ttransformprocessor\.NewFactory\(\)\.Type\(\): "github\.com\/open-telemetry\/opentelemetry-collector-contrib\/processor\/transformprocessor v0\.153\.0",\n)/$1\t\tlogchunkprocessor.NewFactory().Type(): "github.com\/NVIDIA\/nvcf\/src\/compute-plane-services\/byoo-otel-collector\/otelcol\/logchunkprocessor v0.0.0",\n/' "${COMPONENTS_GO}"
+  grep -Fq 'logchunkprocessor.NewFactory().Type(): "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor v0.0.0"' "${COMPONENTS_GO}" || {
+    echo "regenerate-otelcol: failed to insert logchunkprocessor module metadata into ${COMPONENTS_GO}" >&2
+    exit 1
+  }
+  gofmt -w "${COMPONENTS_GO}"
+fi
 
 echo "regenerate-otelcol: done. Stage and commit ${OUT_DIR}/ if anything changed."

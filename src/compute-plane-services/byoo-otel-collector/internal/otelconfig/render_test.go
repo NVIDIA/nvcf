@@ -301,6 +301,88 @@ func Test_generateExportersAndService(t *testing.T) {
 	}
 }
 
+func TestGenerateExportersAndServiceAddsLogChunkProcessor(t *testing.T) {
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Logs: &Telemetry{
+				Name:     "example-logs",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderSplunk,
+				Endpoint: "https://splunk.example.invalid",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+
+	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
+		Namespace: "test-namespace",
+		LogChunking: LogChunkingConfig{
+			MaxBodyBytes: 983040,
+			DryRun:       true,
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{
+		"memory_limiter",
+		"attributes/add-metadata",
+		"logchunk/byoo",
+		"batch",
+	}, otelConfig.Service.Pipelines["logs"].Processors)
+	assert.Equal(t, map[string]interface{}{
+		"max_body_bytes": 983040,
+		"dry_run":        true,
+	}, otelConfig.Processors["logchunk/byoo"])
+
+	exporter := otelConfig.Exporters["splunk_hec/SPLUNK-example-logs-logs"]
+	assert.Equal(t, map[string]interface{}{
+		"enabled":       true,
+		"num_consumers": 10,
+		"queue_size":    1000,
+		"batch": map[string]interface{}{
+			"flush_timeout": "200ms",
+			"sizer":         "bytes",
+			"min_size":      defaultLogExporterBatchMaxSizeBytes,
+			"max_size":      defaultLogExporterBatchMaxSizeBytes,
+		},
+	}, exporter["sending_queue"])
+}
+
+func TestGenerateExportersAndServiceUsesCustomLogExporterBatchMaxSize(t *testing.T) {
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Logs: &Telemetry{
+				Name:     "example-logs",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderSplunk,
+				Endpoint: "https://splunk.example.invalid",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+
+	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
+		Namespace:                    "test-namespace",
+		LogExporterBatchMaxSizeBytes: 2_000_000,
+	})
+
+	assert.NoError(t, err)
+	exporter := otelConfig.Exporters["splunk_hec/SPLUNK-example-logs-logs"]
+	assert.Equal(t, map[string]interface{}{
+		"enabled":       true,
+		"num_consumers": 10,
+		"queue_size":    1000,
+		"batch": map[string]interface{}{
+			"flush_timeout": "200ms",
+			"sizer":         "bytes",
+			"min_size":      2_000_000,
+			"max_size":      2_000_000,
+		},
+	}, exporter["sending_queue"])
+}
+
 // Test_exporterMetrics_Datadog_KeepsFirstCumulativeSample is a regression test
 // for the missing nvct_worker_service_result_total metric in Datadog (task
 // scenario). Without metrics.sums.initial_cumulative_monotonic_value=keep, the

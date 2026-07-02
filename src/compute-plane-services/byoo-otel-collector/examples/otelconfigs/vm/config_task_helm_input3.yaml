@@ -156,6 +156,15 @@ exporters:
     host_metadata:
       enabled: true
       hostname_source: first_resource
+    sending_queue:
+      batch:
+        flush_timeout: 200ms
+        max_size: 1000000
+        min_size: 1000000
+        sizer: bytes
+      enabled: true
+      num_consumers: 10
+      queue_size: 1000
   otlphttp/GRAFANA_CLOUD-something-e2e-grafana-all-types-http-metrics:
     auth:
       authenticator: basicauth/GRAFANA_CLOUD-something-e2e-grafana-all-types-http-metrics

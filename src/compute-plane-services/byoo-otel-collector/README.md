@@ -119,6 +119,29 @@ Exposed Ports:
 
 The configuration produced by otelconfig-generator guarantees that only `otlp` telemetry and selected platform metrics are received, processed and exported by the collector using the generated configuration.
 
+### 🧩 Oversized Log Chunking
+
+Some telemetry backends reject a single log entry when its body is larger than the backend's per-entry size limit. The BYOO collector can insert a custom `logchunk/byoo` processor into the logs pipeline to split oversized UTF-8 string log bodies into correlated chunks before export.
+
+Chunking is disabled by default. Configure it with:
+
+- `BYOO_LOG_CHUNK_MAX_BODY_BYTES`: maximum log body size in bytes before chunking. `0` disables the processor. Enabled values must be at least `4` bytes so chunks can preserve UTF-8 rune boundaries. Use `983040` bytes for normal BYOO deployments to leave room for log attributes and exporter envelope overhead under a `1000000` byte backend entry limit.
+- `BYOO_LOG_CHUNK_DRY_RUN`: records oversized-log metrics and warnings without mutating log payloads. Dry-run metric datapoints use `mode=dry_run`.
+- `BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES`: serialized log export request batch size used for exporterhelper byte splitting. `0` or unset uses the default `1000000` bytes.
+
+When chunking is enabled, each emitted chunk preserves the original log metadata and adds these attributes so chunks can be grouped in the backend:
+
+- `log.chunk.id`
+- `log.chunk.index`
+- `log.chunk.count`
+- `log.chunk.offset_bytes`
+- `log.chunk.original_size_bytes`
+- `log.chunk.final`
+
+The processor emits `otelcol_processor_logchunk_*` metrics for oversized records, original bytes, emitted chunks, output bytes, and errors. The metric `mode` attribute distinguishes active chunking (`mode=chunk`) from dry run (`mode=dry_run`).
+
+The generated exporter configuration also uses exporterhelper byte batching with `sending_queue.batch.sizer=bytes` and configurable `min_size=max_size` where applicable. That exporter-side split limits serialized request size, but it cannot split a single oversized log record; the log chunk processor handles the per-record body limit.
+
 ### 🔐 Secrets Management
 
 Secrets-extractor handles ESS (Encrypted Secret Store) secrets, flattening them into individual files for easy consumption by the OpenTelemetry Collector.
