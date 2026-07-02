@@ -58,6 +58,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve service name for cache keys
+        id: svc
+        env:
+          SVC_PATH: ${{ github.event.inputs.service_path }}
+        run: |
+          set -euo pipefail
+          echo "name=$(basename "$SVC_PATH")" >> "$GITHUB_OUTPUT"
+
+      # Same repository/install caching as bazel.yml, plus a Bazel disk
+      # cache so compiled actions survive between dispatches. Without
+      # this every dispatch recompiled the full dependency tree from
+      # scratch. Keyed per service so caches do not evict each other;
+      # the restore-keys prefix tolerates lockfile drift.
+      - name: Cache Bazel repository + disk caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
+            ~/.bazel-disk-cache
+          key: bazel-dispatch-${{ steps.svc.outputs.name }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', github.event.inputs.service_path), format('{0}/.bazelversion', github.event.inputs.service_path)) }}
+          restore-keys: |
+            bazel-dispatch-${{ steps.svc.outputs.name }}-
+
       - name: Compute snapshot tag
         id: meta
         env:
@@ -80,6 +104,10 @@ jobs:
             echo "ERROR: set secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY in repo settings" >&2
             exit 1
           fi
+          # Tolerate a trailing slash in the secret value: appending the
+          # image name to "host/tenant/prefix/" yields "prefix//name",
+          # which nvcr.io rejects with NAME_INVALID.
+          REGISTRY="${REGISTRY%/}"
           mkdir -p "$HOME/.docker"
           auth="$(printf '$oauthtoken:%s' "${NGC_KEY}" | base64 -w0)"
           # Scope the auth key to the push repo prefix (NOT the bare host) so
@@ -96,7 +124,9 @@ jobs:
           REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
         run: |
           set -euo pipefail
+          REGISTRY="${REGISTRY%/}"
           svc="$(basename "$SVC_PATH")"
+          export BAZEL_DISK_CACHE="${HOME}/.bazel-disk-cache"
           mapfile -t indexes < <(bazel query --remote_cache= 'kind("oci_image_index", //...)')
           if [ "${#indexes[@]}" -eq 0 ]; then
             echo "ERROR: no oci_image_index targets under ${SVC_PATH}" >&2
@@ -115,7 +145,7 @@ jobs:
             mkdir -p ci-ghcr
             printf 'load("@rules_oci//oci:defs.bzl", "oci_push")\n\noci_push(\n    name = "push",\n    image = "%s",\n    repository = "%s",\n    remote_tags = ["%s", "latest-dispatch"],\n)\n' \
               "$tgt" "$dest" "$TAG" > ci-ghcr/BUILD.bazel
-            bazel run --remote_cache= //ci-ghcr:push
+            bazel run --remote_cache= --disk_cache="${BAZEL_DISK_CACHE}" //ci-ghcr:push
             rm -rf ci-ghcr
           done
           echo "Done: pushed ${#indexes[@]} image(s) under ${REGISTRY}/ at tag ${TAG}"

@@ -79,6 +79,7 @@ jobs:
             echo "ERROR: set secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY in repo settings" >&2
             exit 1
           fi
+          REGISTRY="${REGISTRY%/}"
           host="${REGISTRY%%/*}"
           printf '%s' "${NGC_KEY}" | helm registry login "${host}" -u '$oauthtoken' --password-stdin
           if grep -qE '^dependencies:' "${CHART_DIR}/Chart.yaml"; then
