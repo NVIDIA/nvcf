@@ -2790,6 +2790,52 @@ func TestEncodeAgentConfig_ConfiguresSelfHostedControlPlaneEndpoints(t *testing.
 	assert.Equal(t, "nats.gateway.example.test", got.Agent.NATSHostOverride)
 }
 
+func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
+	mergeCfg := nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{
+			BYOOResources: nvcaconfig.ResourceRequirements{
+				Limits: nvcaconfig.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("500m"),
+					corev1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+				Requests: nvcaconfig.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("500m"),
+					corev1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			},
+			BYOOFluentBitResources: nvcaconfig.ResourceRequirements{
+				Limits: nvcaconfig.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("200m"),
+					corev1.ResourceMemory: resource.MustParse("256Mi"),
+				},
+				Requests: nvcaconfig.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("100m"),
+					corev1.ResourceMemory: resource.MustParse("128Mi"),
+				},
+			},
+			BYOOLogChunking: nvcaconfig.BYOOLogChunkingConfig{
+				MaxBodyBytes:              983040,
+				DryRun:                    true,
+				ExporterBatchMaxSizeBytes: ptr.To[int64](1000000),
+			},
+		},
+	}
+
+	data, err := encodeAgentConfig(nvcaconfig.Config{}, mergeCfg, nil, agentHostOverrides{})
+	require.NoError(t, err)
+
+	got, err := nvcaconfig.DecodeConfig(data)
+	require.NoError(t, err)
+	byooLimits := corev1.ResourceList(got.Agent.BYOOResources.Limits)
+	fluentBitRequests := corev1.ResourceList(got.Agent.BYOOFluentBitResources.Requests)
+	assert.True(t, byooLimits.Memory().Equal(resource.MustParse("2Gi")))
+	assert.True(t, fluentBitRequests.Cpu().Equal(resource.MustParse("100m")))
+	assert.Equal(t, int64(983040), got.Agent.BYOOLogChunking.MaxBodyBytes)
+	assert.True(t, got.Agent.BYOOLogChunking.DryRun)
+	require.NotNil(t, got.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
+	assert.Equal(t, int64(1000000), *got.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
+}
+
 func TestAgentHostOverrideConfig_ClearsReValHostForSelfHostedColocatedService(t *testing.T) {
 	natsHostOverride := "nats.gateway.example.test"
 	nb := &nvidiaiov1.NVCFBackend{

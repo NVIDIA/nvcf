@@ -47,6 +47,7 @@ type MetadataInput struct {
 	PodAnnotations                map[string]string
 	PodLabels                     map[string]string
 	EnvVars                       []corev1.EnvVar
+	OTelCollectorEnvVars          []corev1.EnvVar
 	TerminationGracePeriodSeconds *int64
 }
 
@@ -76,6 +77,7 @@ func (r *Reconciler) buildMiniserviceMetadata(
 		PodAnnotations:                in.PodAnnotations,
 		PodLabels:                     in.PodLabels,
 		EnvVars:                       envVars,
+		OTelCollectorEnvVars:          in.OTelCollectorEnvVars,
 		NodeAffinityKey:               nodefeatures.UniformInstanceTypeLabelKey,
 		NodeAffinityValue:             icmsReq.Spec.CreationMsgInfo.GetInstanceTypeLabelSelValue(),
 		ServiceAccountName:            serviceAccountName,

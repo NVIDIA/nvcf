@@ -25,6 +25,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	evanphxpatch "github.com/evanphx/json-patch/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1183,6 +1184,44 @@ func TestMiniserviceMutatePodSpec_BYOObservability(t *testing.T) {
 			tt.verify(t, &tt.ps)
 		})
 	}
+}
+
+func TestMiniserviceMutatePodSpec_BYOOLogChunkingEnvVarsOnlyCollector(t *testing.T) {
+	meta := nvcatypes.MiniserviceMetadata{
+		EnvVars: []corev1.EnvVar{
+			{Name: "SHARED_ENV", Value: "shared"},
+		},
+		OTelCollectorEnvVars: []corev1.EnvVar{
+			{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
+			{Name: nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
+		},
+	}
+	ps := corev1.PodSpec{
+		InitContainers: []corev1.Container{{Name: "init"}},
+		Containers: []corev1.Container{
+			{Name: "app"},
+			{
+				Name: common.ByooOTelCollectorPodNameBase,
+				Env: []corev1.EnvVar{
+					{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "1000000"},
+				},
+			},
+		},
+	}
+
+	wh := &miniserviceMutatingWebhook{fff: &featureflagmock.Fetcher{}}
+	wh.mutatePodSpec(&ps, meta)
+
+	initByName := envMap(ps.InitContainers[0].Env)
+	appByName := envMap(ps.Containers[0].Env)
+	collectorByName := envMap(ps.Containers[1].Env)
+	assert.Equal(t, "shared", initByName["SHARED_ENV"])
+	assert.Equal(t, "shared", appByName["SHARED_ENV"])
+	assert.Equal(t, "shared", collectorByName["SHARED_ENV"])
+	assert.NotContains(t, initByName, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
+	assert.Equal(t, "983040", collectorByName[nvcaconfig.BYOOLogChunkMaxBodyBytesEnv])
+	assert.Equal(t, "1000000", collectorByName[nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv])
 }
 
 func envNames(envs []corev1.EnvVar) []string {

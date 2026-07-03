@@ -462,6 +462,9 @@ func TestBuildMiniserviceMetadata_RoundtripWithConfigMap(t *testing.T) {
 		ImagePullSecrets:   pullSecrets,
 		GeneralLabels:      generalLabels,
 		GeneralAnnotations: generalAnnotations,
+		OTelCollectorEnvVars: []corev1.EnvVar{
+			{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
+		},
 	})
 	require.NoError(t, err)
 
@@ -484,4 +487,5 @@ func TestBuildMiniserviceMetadata_RoundtripWithConfigMap(t *testing.T) {
 	assert.Equal(t, meta.SchedulerName, got.SchedulerName)
 	assert.Nil(t, got.TerminationGracePeriodSeconds)
 	assert.Equal(t, meta.EnvVars, got.EnvVars)
+	assert.Equal(t, meta.OTelCollectorEnvVars, got.OTelCollectorEnvVars)
 }

@@ -50,6 +50,9 @@ func TestMiniserviceMetadata_ToConfigMapData_Roundtrip(t *testing.T) {
 			{Name: "NVCF_FUNCTION_ID", Value: "fn-001"},
 			{Name: "EXTRA_ENV", Value: "extra-value"},
 		},
+		OTelCollectorEnvVars: []corev1.EnvVar{
+			{Name: "BYOO_LOG_CHUNK_MAX_BODY_BYTES", Value: "983040"},
+		},
 		NodeAffinityKey:               "nvca.nvcf.nvidia.io/instance-type",
 		NodeAffinityValue:             "ON-PREM.GPU.A100x2",
 		ServiceAccountName:            "miniservice-instance-permissions",
@@ -75,6 +78,7 @@ func TestMiniserviceMetadata_ToConfigMapData_Roundtrip(t *testing.T) {
 	assert.Equal(t, "fn-001", got.EnvVars[0].Value)
 	assert.Equal(t, "EXTRA_ENV", got.EnvVars[1].Name)
 	assert.Equal(t, "extra-value", got.EnvVars[1].Value)
+	assert.Equal(t, meta.OTelCollectorEnvVars, got.OTelCollectorEnvVars)
 	assert.Equal(t, meta.NodeAffinityKey, got.NodeAffinityKey)
 	assert.Equal(t, meta.NodeAffinityValue, got.NodeAffinityValue)
 	assert.Equal(t, meta.ServiceAccountName, got.ServiceAccountName)
@@ -124,6 +128,7 @@ func TestMiniserviceMetadata_ToConfigMapData_EmptyComplexFields(t *testing.T) {
 	assert.Nil(t, got.Annotations)
 	assert.Nil(t, got.Labels)
 	assert.Nil(t, got.EnvVars)
+	assert.Nil(t, got.OTelCollectorEnvVars)
 	assert.Empty(t, got.NodeAffinityKey)
 	assert.Empty(t, got.NodeAffinityValue)
 }

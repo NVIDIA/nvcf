@@ -104,8 +104,12 @@ func TestNewCommand(t *testing.T) {
 	// With empty config, should pass.
 	t.Run("empty config file", func(t *testing.T) {
 		a, block := newMockCLIAgent()
+		var gotOpts *AgentOptions
 		cmd := newCobraCommand(
-			newAgentFunc(a),
+			func(ctx context.Context, opts *AgentOptions) (cliAgent, error) {
+				gotOpts = opts
+				return a, nil
+			},
 			setFlag,
 			initLogger,
 		)
@@ -131,7 +135,10 @@ agent:
 		case err = <-errCh:
 			cancel()
 		}
-		assert.NoError(t, err)
+		require.NoError(t, err)
+		require.NotNil(t, gotOpts)
+		require.NotNil(t, gotOpts.Config.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
+		assert.Equal(t, nvcaconfig.DefaultBYOOLogExporterBatchMaxSizeBytes, *gotOpts.Config.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
 	})
 
 	t.Run("configured control plane endpoints populate agent options", func(t *testing.T) {

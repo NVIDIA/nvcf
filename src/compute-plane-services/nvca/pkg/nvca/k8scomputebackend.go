@@ -316,6 +316,16 @@ func (c K8sComputeBackend) translateFunctionLaunchSpecification(
 	if err != nil {
 		return nil, nvcaerrors.TerminalError(err)
 	}
+	if reqType == ftContainer {
+		envs := c.bk8s.cfg.Agent.BYOOLogChunking.EnvVars()
+		for _, obj := range objs {
+			pod, ok := obj.(*corev1.Pod)
+			if !ok {
+				continue
+			}
+			k8sutil.AddBYOOLogChunkingEnvVarsToPodSpec(&pod.Spec, envs)
+		}
+	}
 
 	// Ignore pod instances following the first, since NVCA multiplies them by instance count internally.
 	addedFirstInstancePod := false

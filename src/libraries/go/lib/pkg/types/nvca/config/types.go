@@ -18,6 +18,7 @@ package nvcaconfig
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -48,6 +49,65 @@ type ResourceRequirements struct {
 	Limits   ResourceList           `yaml:",omitempty"`
 	Requests ResourceList           `yaml:",omitempty"`
 	Claims   []corev1.ResourceClaim `yaml:",omitempty"`
+}
+
+const (
+	// BYOOLogChunkMaxBodyBytesEnv is the BYOO collector env var that enables log chunking.
+	BYOOLogChunkMaxBodyBytesEnv = "BYOO_LOG_CHUNK_MAX_BODY_BYTES"
+	// BYOOLogChunkDryRunEnv is the BYOO collector env var that records chunking metrics without mutating logs.
+	BYOOLogChunkDryRunEnv = "BYOO_LOG_CHUNK_DRY_RUN"
+	// BYOOLogExporterBatchMaxSizeBytesEnv is the BYOO collector env var for exporterhelper byte batch splitting.
+	BYOOLogExporterBatchMaxSizeBytesEnv = "BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES"
+
+	// DefaultBYOOLogExporterBatchMaxSizeBytes keeps serialized exporter batches near the backend limit.
+	DefaultBYOOLogExporterBatchMaxSizeBytes int64 = 1000000
+)
+
+type BYOOLogChunkingConfig struct {
+	MaxBodyBytes              int64  `yaml:"maxBodyBytes,omitempty"`
+	DryRun                    bool   `yaml:"dryRun,omitempty"`
+	ExporterBatchMaxSizeBytes *int64 `yaml:"exporterBatchMaxSizeBytes,omitempty"`
+}
+
+func (c BYOOLogChunkingConfig) IsZero() bool {
+	return c.MaxBodyBytes == 0 && !c.DryRun && c.ExporterBatchMaxSizeBytes == nil
+}
+
+func (c BYOOLogChunkingConfig) Complete() BYOOLogChunkingConfig {
+	if c.ExporterBatchMaxSizeBytes == nil {
+		defaultValue := DefaultBYOOLogExporterBatchMaxSizeBytes
+		c.ExporterBatchMaxSizeBytes = &defaultValue
+	}
+	return c
+}
+
+// EnvVars returns BYOO collector env vars for the supplied config.
+func (c BYOOLogChunkingConfig) EnvVars() []corev1.EnvVar {
+	envs := []corev1.EnvVar{}
+	if c.MaxBodyBytes > 0 {
+		envs = append(envs, corev1.EnvVar{
+			Name:  BYOOLogChunkMaxBodyBytesEnv,
+			Value: strconv.FormatInt(c.MaxBodyBytes, 10),
+		})
+	}
+	if c.DryRun {
+		envs = append(envs, corev1.EnvVar{
+			Name:  BYOOLogChunkDryRunEnv,
+			Value: strconv.FormatBool(c.DryRun),
+		})
+	}
+	if c.ExporterBatchMaxSizeBytes != nil && *c.ExporterBatchMaxSizeBytes > 0 {
+		envs = append(envs, corev1.EnvVar{
+			Name:  BYOOLogExporterBatchMaxSizeBytesEnv,
+			Value: strconv.FormatInt(*c.ExporterBatchMaxSizeBytes, 10),
+		})
+	}
+	return envs
+}
+
+// BYOOLogChunkingEnvVars returns BYOO collector env vars for the supplied config.
+func BYOOLogChunkingEnvVars(config BYOOLogChunkingConfig) []corev1.EnvVar {
+	return config.EnvVars()
 }
 
 func (r *ResourceRequirements) ToK8sResourceRequirements() corev1.ResourceRequirements {
@@ -277,6 +337,9 @@ type AgentConfig struct {
 	// when the agent calculates them for registration.
 	// Quantities must be strings.
 	BYOOFluentBitResources ResourceRequirements `yaml:",omitempty"`
+
+	// BYOOLogChunking contains BYOO OTel collector log chunking and exporter batch settings.
+	BYOOLogChunking BYOOLogChunkingConfig `yaml:",omitempty"`
 }
 
 func (t AgentConfig) Complete(env Environment) AgentConfig {
@@ -285,6 +348,7 @@ func (t AgentConfig) Complete(env Environment) AgentConfig {
 	}
 
 	t.AgentTimeConfig = t.AgentTimeConfig.Complete()
+	t.BYOOLogChunking = t.BYOOLogChunking.Complete()
 	return t
 }
 

@@ -1631,8 +1631,7 @@ func (bc *BackendK8sCache) mergeAgentConfigs(nb *nvidiaiov1.NVCFBackend) nvidiai
 	// OTel collector config: prefer NVCFBackend spec, fall back to bc.* (Helm env vars)
 	config.OTelCollectorConfig = bc.getEffectiveOTelCollectorConfig(nb)
 
-	// ByooResources comes from NVCFBackend spec (after overrides are merged)
-	// This allows Helm values to override via nvcfBackend.overrides.agent.byooResources
+	// ByooResources from NVCFBackend spec override the generated config when present.
 	if nb.Spec.AgentConfig.ByooResources != nil {
 		nb.Spec.AgentConfig.ByooResources.DeepCopyInto(config.ByooResources)
 	}
@@ -1679,6 +1678,10 @@ func (bc *BackendK8sCache) mergeAgentConfigs(nb *nvidiaiov1.NVCFBackend) nvidiai
 	}
 
 	return config
+}
+
+func resourceRequirementsConfigured(rr corev1.ResourceRequirements) bool {
+	return len(rr.Limits) > 0 || len(rr.Requests) > 0 || len(rr.Claims) > 0
 }
 
 func (bc *BackendK8sCache) getEffectiveAgentConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (nvidiaiov1.AgentConfig, error) {
@@ -2364,8 +2367,8 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 		cfg.Workload.TaskEnvOverrides = envOverrides
 	}
 
-	// Pass byooResources to NVCA for BYOO otel collector container in function pods
-	if effectiveConfig.ByooResources != nil {
+	// Pass NVCFBackend BYOO collector resources to NVCA when the backend spec overrides them.
+	if effectiveConfig.ByooResources != nil && resourceRequirementsConfigured(*effectiveConfig.ByooResources) {
 		cfg.Agent.BYOOResources = nvcaconfig.ResourceRequirements{
 			Limits:   nvcaconfig.ResourceList(effectiveConfig.ByooResources.Limits),
 			Requests: nvcaconfig.ResourceList(effectiveConfig.ByooResources.Requests),

@@ -131,6 +131,14 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 		metrics.EventErrorTotal.WithLabelValues(metricLabels...).Inc()
 		return err
 	}
+	envs := c.bk8s.cfg.Agent.BYOOLogChunking.EnvVars()
+	for _, obj := range objs {
+		pod, ok := obj.(*corev1.Pod)
+		if !ok {
+			continue
+		}
+		k8sutil.AddBYOOLogChunkingEnvVarsToPodSpec(&pod.Spec, envs)
+	}
 
 	ownerRefsForReq := getOwnerRefForRequest(req)
 

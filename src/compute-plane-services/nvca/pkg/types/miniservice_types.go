@@ -57,6 +57,7 @@ type MiniserviceMetadata struct {
 	PodAnnotations                map[string]string   `json:"podAnnotations,omitempty"`
 	PodLabels                     map[string]string   `json:"podLabels,omitempty"`
 	EnvVars                       []corev1.EnvVar     `json:"envVars,omitempty"`
+	OTelCollectorEnvVars          []corev1.EnvVar     `json:"otelCollectorEnvVars,omitempty"`
 	NodeAffinityKey               string              `json:"nodeAffinityKey,omitempty"`
 	NodeAffinityValue             string              `json:"nodeAffinityValue,omitempty"`
 	ServiceAccountName            string              `json:"serviceAccountName,omitempty"`
