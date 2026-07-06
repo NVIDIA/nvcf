@@ -147,12 +147,12 @@ oci.pull(
     image = "nvcr.io/nvidia/distroless/cc",
     platforms = [
         "linux/amd64",
-        "linux/arm64",
+        "linux/arm64/v8",
     ],
 )
 use_repo(
     oci,
     "distroless_cc",
     "distroless_cc_linux_amd64",
-    "distroless_cc_linux_arm64",
+    "distroless_cc_linux_arm64_v8",
 )
