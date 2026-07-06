@@ -19,40 +19,40 @@ OTEL_COLLECTOR_VERSION=${OTEL_COLLECTOR_VERSION:-"968b0f9f"}
 
 set -euo pipefail
 
+MODE="${1:-all}"
+
 export ESS_SECRETS_PATH="$(pwd)/examples/secrets"
 mkdir -p _output
 
-if command -v ./_output/bin/otelcol-contrib > /dev/null 2>&1; then
-    echo "No need to download"
-else
-    # Set NGC CLI environment variables
+ensure_otelcol_binary() {
+    if [ -x ./_output/bin/otelcol-contrib ]; then
+        echo "No need to download"
+        return
+    fi
+
     if [ -z "${NGC_CLI_API_KEY:-}" ]; then
         echo "Error: NGC_CLI_API_KEY environment variable for production is required"
         exit 1
     fi
-    # Set NGC CLI environment variables
+
     export NGC_CLI_ORG=qtfpt1h0bieu
     export NGC_CLI_TEAM=nvcf-core
     echo "Downloading otelcol-contrib from NGC otelcol-contrib:${OTEL_COLLECTOR_VERSION}"
     mkdir -p _output/bin
-    otel_path=$(ngc registry resource download-version qtfpt1h0bieu/nvcf-core/otelcol-contrib:${OTEL_COLLECTOR_VERSION} | grep Downloaded | grep -o '/.*$') # Download otelcol-contrib from NGC
-    mv ${otel_path}/otelcol-contrib _output/bin/
+    otel_path=$(ngc registry resource download-version qtfpt1h0bieu/nvcf-core/otelcol-contrib:${OTEL_COLLECTOR_VERSION} | grep Downloaded | grep -o '/.*$')
+    mv "${otel_path}/otelcol-contrib" _output/bin/
     chmod +x _output/bin/otelcol-contrib
-fi
+}
 
 validate_otel_config() {
     local config_path="$1"
 
-    # Temporarily disable automatic exit on error
     set +e
     timeout_output=$(timeout 2 ./_output/bin/otelcol-contrib --config="$config_path" 2>&1)
     exit_code=$?
-    # Re-enable automatic exit on error
     set -e
 
-    # Analyze exit code and output
     if [[ $exit_code -eq 0 || $exit_code -eq 124 || $exit_code -eq 143 ]]; then
-        # normal startup terminated by timeout
         echo "Configuration check passed"
     else
         echo "Unknown error (exit code: $exit_code)"
@@ -61,20 +61,32 @@ validate_otel_config() {
     fi
 }
 
-####### GFN tests
+reset_runtime_dirs() {
+    rm -rf _output/test _output/otelconfigs
+    mkdir -p _output/test
+    touch _output/test/token
+}
 
-# Since in-cluster files won't exist in local tests,
-# replace them in embedded configs with local paths.
-mkdir -p _output/test/
-touch _output/test/token
+patch_template() {
+    local template_path="$1"
+    cp "${template_path}" "${template_path}.bk"
+    sed -i 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' "${template_path}"
+}
 
-for input_file in testdata/*.json; do
-    if [ -f "$input_file" ]; then
+restore_template() {
+    local template_path="$1"
+    mv "${template_path}.bk" "${template_path}"
+}
+
+run_vm_container() {
+    reset_runtime_dirs
+
+    for input_file in testdata/*.json; do
+        [ -f "$input_file" ] || continue
         echo "=== Test $input_file ==="
 
-        ### Task
         echo "Generating configs for GFN container task..."
-        go run scripts/generate-otelconfig.go $input_file _output/otelconfigs vm container task
+        go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs vm container task
         sed -i 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' _output/otelconfigs/config.task_vm_container.yaml
 
         echo "Validate configs ..."
@@ -82,34 +94,29 @@ for input_file in testdata/*.json; do
         validate_otel_config _output/otelconfigs/config.task_vm_container.yaml
         rm _output/otelconfigs/config.task_vm_container.yaml
 
-        ### Function
         echo "Generating configs for GFN container function..."
-        go run scripts/generate-otelconfig.go $input_file _output/otelconfigs vm container function
+        go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs vm container function
         sed -i 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' _output/otelconfigs/config.function_vm_container.yaml
 
         echo "Validate configs ..."
         ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.function_vm_container.yaml
-        # validate_otel_config _output/otelconfigs/config.function_vm_container.yaml
-        # rm _output/otelconfigs/config.function_vm_container.yaml
-    fi
-done
+        # Runtime startup validation is intentionally skipped here to
+        # preserve the existing CI behavior for this config shape.
+    done
+}
 
-rm -rf _output/test
-rm -rf _output/otelconfigs
+run_vm_helm() {
+    local template_path="internal/otelconfig/templates/config-vm-helm.yaml.tmpl"
 
-# Since in-cluster files won't exist in local tests,
-# replace them in embedded configs with local paths.
-mkdir -p _output/test/
-cp internal/otelconfig/templates/config-vm-helm.yaml.tmpl internal/otelconfig/templates/config-vm-helm.yaml.tmpl.bk
-sed -i 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' internal/otelconfig/templates/config-vm-helm.yaml.tmpl
-touch _output/test/token
+    reset_runtime_dirs
+    patch_template "${template_path}"
 
-for input_file in testdata/*.json; do
-    if [ -f "$input_file" ]; then
+    for input_file in testdata/*.json; do
+        [ -f "$input_file" ] || continue
         echo "=== Test $input_file ==="
 
-        echo "Generating configs for GFN helm function..."
-        go run scripts/generate-otelconfig.go $input_file _output/otelconfigs vm helm task
+        echo "Generating configs for GFN helm task..."
+        go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs vm helm task
 
         echo "Validate configs ..."
         ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.task_vm_helm.yaml
@@ -117,66 +124,59 @@ for input_file in testdata/*.json; do
         rm _output/otelconfigs/config.task_vm_helm.yaml
 
         echo "Generating configs for GFN helm function..."
-        go run scripts/generate-otelconfig.go $input_file _output/otelconfigs vm helm function
+        go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs vm helm function
 
         echo "Validate configs ..."
         ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.function_vm_helm.yaml
         validate_otel_config _output/otelconfigs/config.function_vm_helm.yaml
         rm _output/otelconfigs/config.function_vm_helm.yaml
-    fi
-done
+    done
 
-mv internal/otelconfig/templates/config-vm-helm.yaml.tmpl.bk internal/otelconfig/templates/config-vm-helm.yaml.tmpl
+    restore_template "${template_path}"
+}
 
-####### NON-GFN tests
+run_k8s_container() {
+    local template_path="internal/otelconfig/templates/config-k8s-container.yaml.tmpl"
 
-# Since in-cluster files won't exist in local tests,
-# replace them in embedded configs with local paths.
-mkdir -p _output/test/
-cp internal/otelconfig/templates/config-k8s-container.yaml.tmpl internal/otelconfig/templates/config-k8s-container.yaml.tmpl.bk
-sed -i 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' internal/otelconfig/templates/config-k8s-container.yaml.tmpl
-touch _output/test/token
+    reset_runtime_dirs
+    patch_template "${template_path}"
 
-for input_file in testdata/*.json; do
-    if [ -f "$input_file" ]; then
+    for input_file in testdata/*.json; do
+        [ -f "$input_file" ] || continue
         echo "=== Test $input_file ==="
 
-        echo "Generating configs for non-GFN container function..."
-        go run scripts/generate-otelconfig.go $input_file _output/otelconfigs k8s container task
+        echo "Generating configs for non-GFN container task..."
+        go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs k8s container task
 
         echo "Validate configs ..."
         ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.task_k8s_container.yaml
         validate_otel_config _output/otelconfigs/config.task_k8s_container.yaml
         rm _output/otelconfigs/config.task_k8s_container.yaml
 
-        echo "Generating configs for non-GFN helm function..."
-        go run scripts/generate-otelconfig.go $input_file _output/otelconfigs k8s container function
+        echo "Generating configs for non-GFN container function..."
+        go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs k8s container function
 
         echo "Validate configs ..."
         ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.function_k8s_container.yaml
         validate_otel_config _output/otelconfigs/config.function_k8s_container.yaml
         rm _output/otelconfigs/config.function_k8s_container.yaml
-    fi
-done
+    done
 
-mv internal/otelconfig/templates/config-k8s-container.yaml.tmpl.bk internal/otelconfig/templates/config-k8s-container.yaml.tmpl
+    restore_template "${template_path}"
+}
 
-rm -rf _output/test
-rm -rf _output/otelconfigs
+run_k8s_helm() {
+    local template_path="internal/otelconfig/templates/config-k8s-helm.yaml.tmpl"
 
-# Since in-cluster files won't exist in local tests,
-# replace them in embedded configs with local paths.
-mkdir -p _output/test/
-cp internal/otelconfig/templates/config-k8s-helm.yaml.tmpl internal/otelconfig/templates/config-k8s-helm.yaml.tmpl.bk
-sed -i 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' internal/otelconfig/templates/config-k8s-helm.yaml.tmpl
-touch _output/test/token
+    reset_runtime_dirs
+    patch_template "${template_path}"
 
-for input_file in testdata/*.json; do
-    if [ -f "$input_file" ]; then
+    for input_file in testdata/*.json; do
+        [ -f "$input_file" ] || continue
         echo "=== Test $input_file ==="
 
-        echo "Generating configs for non-GFN helm function..."
-        go run scripts/generate-otelconfig.go $input_file _output/otelconfigs k8s helm task
+        echo "Generating configs for non-GFN helm task..."
+        go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs k8s helm task
 
         echo "Validate configs ..."
         ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.task_k8s_helm.yaml
@@ -184,16 +184,42 @@ for input_file in testdata/*.json; do
         rm _output/otelconfigs/config.task_k8s_helm.yaml
 
         echo "Generating configs for non-GFN helm function..."
-        go run scripts/generate-otelconfig.go $input_file _output/otelconfigs k8s helm function
+        go run scripts/generate-otelconfig.go "$input_file" _output/otelconfigs k8s helm function
 
         echo "Validate configs ..."
         ./_output/bin/otelcol-contrib validate --config=_output/otelconfigs/config.function_k8s_helm.yaml
         validate_otel_config _output/otelconfigs/config.function_k8s_helm.yaml
         rm _output/otelconfigs/config.function_k8s_helm.yaml
-    fi
-done
+    done
 
-mv internal/otelconfig/templates/config-k8s-helm.yaml.tmpl.bk internal/otelconfig/templates/config-k8s-helm.yaml.tmpl
+    restore_template "${template_path}"
+}
 
-rm -rf _output/test
-rm -rf _output/otelconfigs
+ensure_otelcol_binary
+
+case "${MODE}" in
+    all)
+        run_vm_container
+        run_vm_helm
+        run_k8s_container
+        run_k8s_helm
+        ;;
+    vm-container)
+        run_vm_container
+        ;;
+    vm-helm)
+        run_vm_helm
+        ;;
+    k8s-container)
+        run_k8s_container
+        ;;
+    k8s-helm)
+        run_k8s_helm
+        ;;
+    *)
+        echo "Usage: $0 [all|vm-container|vm-helm|k8s-container|k8s-helm]" >&2
+        exit 1
+        ;;
+esac
+
+rm -rf _output/test _output/otelconfigs
