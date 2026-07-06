@@ -41,6 +41,8 @@ import (
 const (
 	InstanceTypeAllocatableMetricName          = "nvca_instance_type_allocatable"
 	InstanceTypeCapacityMetricName             = "nvca_instance_type_capacity"
+	GPUNodeUnclassifiedCountMetricName         = "nvca_gpu_node_unclassified_count"
+	GPUNodeTotalCountMetricName                = "nvca_gpu_node_total_count"
 	ContainerCrashTotalMetricName              = "nvca_container_crash_total"
 	ContainerRestartTotalMetricName            = "nvca_container_restart_total"
 	EventErrorTotalMetricName                  = "nvca_event_error_total"
@@ -125,6 +127,8 @@ const (
 	K8sResourceLabel         = "resource"
 	QueueTypeLabel           = "queue_type"
 	GPUNameLabel             = "gpu_name"
+	GPUFamilyLabel           = "gpu_family"
+	GPUMachineLabel          = "gpu_machine"
 	MiniServicePhaseLabel    = "miniservice_phase"
 	FromPhaseLabel           = "from_phase"
 	ToPhaseLabel             = "to_phase"
@@ -240,6 +244,8 @@ type Metrics struct {
 	InstanceTypeAllocatable   *prometheus.GaugeVec // node must be schedulable to be allocatable
 	InstanceTypeCapacity      *prometheus.GaugeVec
 	InstanceTypeUnschedulable *prometheus.GaugeVec // amount where node is schedule=false according to NVCA
+	GPUNodeUnclassifiedCount  *prometheus.GaugeVec // count of GPU-bearing nodes with no recognized instance-type label
+	GPUNodeTotalCount         *prometheus.GaugeVec // total count of GPU-bearing nodes seen, classified and unclassified
 
 	// Storage controller metrics
 	StorageRequestDuration *prometheus.SummaryVec
@@ -320,6 +326,8 @@ func (m *Metrics) Destroy() {
 	prometheus.Unregister(m.InstanceTypeCapacity)
 	prometheus.Unregister(m.InstanceTypeAllocatable)
 	prometheus.Unregister(m.InstanceTypeUnschedulable)
+	prometheus.Unregister(m.GPUNodeUnclassifiedCount)
+	prometheus.Unregister(m.GPUNodeTotalCount)
 	prometheus.Unregister(m.StorageRequestDuration)
 	prometheus.Unregister(m.MiniServiceReconcilePhaseTotal)
 	prometheus.Unregister(m.MiniServicePhaseTransitionsTotal)
@@ -516,6 +524,15 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 		Name: InstanceTypeUnschedulableMetricName,
 		Help: "Count of instances that could be deployed on unschedulable node resources by instance type",
 	}, withDefaultLabels(InstanceTypeLabel))
+	m.GPUNodeUnclassifiedCount = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: GPUNodeUnclassifiedCountMetricName,
+		Help: "Count of nodes with GPU resources present but no recognized instance-type label, " +
+			"indicating a GPU discovery or labeling gap, bucketed by GPU family and machine type",
+	}, withDefaultLabels(GPUFamilyLabel, GPUMachineLabel))
+	m.GPUNodeTotalCount = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: GPUNodeTotalCountMetricName,
+		Help: "Total count of GPU-bearing nodes seen, classified and unclassified, bucketed by GPU family and machine type",
+	}, withDefaultLabels(GPUFamilyLabel, GPUMachineLabel))
 
 	// Storage controller metrics (uses storage labels for backwards compatibility)
 	m.StorageRequestDuration = promFactory.NewSummaryVec(prometheus.SummaryOpts{
@@ -845,6 +862,19 @@ func (m *Metrics) SetInstanceTypeMetrics(instanceType string, capacity, allocata
 	m.InstanceTypeCapacity.WithLabelValues(m.WithDefaultLabelValues(instanceType)...).Set(capacity)
 	m.InstanceTypeAllocatable.WithLabelValues(m.WithDefaultLabelValues(instanceType)...).Set(allocatable)
 	m.InstanceTypeUnschedulable.WithLabelValues(m.WithDefaultLabelValues(instanceType)...).Set(unschedulable)
+}
+
+// SetUnclassifiedGPUNodeCount sets the count of GPU-bearing nodes, for the given GPU family and
+// machine type, that could not be attributed to any known instance type due to a missing or
+// unrecognized instance-type label.
+func (m *Metrics) SetUnclassifiedGPUNodeCount(gpuFamily, gpuMachine string, count float64) {
+	m.GPUNodeUnclassifiedCount.WithLabelValues(m.WithDefaultLabelValues(gpuFamily, gpuMachine)...).Set(count)
+}
+
+// SetTotalGPUNodeCount sets the total count of GPU-bearing nodes seen, classified and
+// unclassified, for the given GPU family and machine type.
+func (m *Metrics) SetTotalGPUNodeCount(gpuFamily, gpuMachine string, count float64) {
+	m.GPUNodeTotalCount.WithLabelValues(m.WithDefaultLabelValues(gpuFamily, gpuMachine)...).Set(count)
 }
 
 // RecordK8sAPISuccess increments the K8s API success counter

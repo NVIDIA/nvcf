@@ -375,6 +375,8 @@ func TestAllExpectedMetricsExist(t *testing.T) {
 	metrics.K8sAPISuccessTotal.WithLabelValues(metrics.WithDefaultLabelValues("node")...).Add(0)
 	metrics.K8sAPIFailureTotal.WithLabelValues(metrics.WithDefaultLabelValues("node")...).Add(0)
 	metrics.SetInstanceTypeMetrics("test-type", 0, 0, 0)
+	metrics.SetUnclassifiedGPUNodeCount("test-family", "test-machine", 0)
+	metrics.SetTotalGPUNodeCount("test-family", "test-machine", 0)
 	metrics.RecordStorageRequestDuration("success", 1.0)
 	metrics.RecordMiniServiceReconcilePhase("test-nca", "test-phase")
 	metrics.RecordMiniServicePhaseTransition("test-nca", "Installed", "Running")
@@ -401,6 +403,8 @@ func TestAllExpectedMetricsExist(t *testing.T) {
 		nvcametrics.InstanceTypeCapacityMetricName,
 		nvcametrics.InstanceTypeAllocatableMetricName,
 		nvcametrics.InstanceTypeUnschedulableMetricName,
+		nvcametrics.GPUNodeUnclassifiedCountMetricName,
+		nvcametrics.GPUNodeTotalCountMetricName,
 		nvcametrics.StorageRequestDurationMetricName,
 		nvcametrics.MiniServiceReconcilePhaseTotalMetricName,
 		nvcametrics.MiniServicePhaseTransitionsTotalMetricName,
@@ -441,6 +445,8 @@ func TestMetricTypes(t *testing.T) {
 	metrics.K8sAPISuccessTotal.WithLabelValues(metrics.WithDefaultLabelValues("node")...).Add(0)
 	metrics.K8sAPIFailureTotal.WithLabelValues(metrics.WithDefaultLabelValues("node")...).Add(0)
 	metrics.SetInstanceTypeMetrics("test-type", 0, 0, 0)
+	metrics.SetUnclassifiedGPUNodeCount("test-family", "test-machine", 0)
+	metrics.SetTotalGPUNodeCount("test-family", "test-machine", 0)
 	metrics.RecordStorageRequestDuration("success", 1.0)
 	metrics.RecordMiniServiceReconcilePhase("test-nca", "test-phase")
 	metrics.RecordMiniServicePhaseTransition("test-nca", "Installed", "Running")
@@ -476,6 +482,8 @@ func TestMetricTypes(t *testing.T) {
 		nvcametrics.InstanceTypeCapacityMetricName:             dto.MetricType_GAUGE,
 		nvcametrics.InstanceTypeAllocatableMetricName:          dto.MetricType_GAUGE,
 		nvcametrics.InstanceTypeUnschedulableMetricName:        dto.MetricType_GAUGE,
+		nvcametrics.GPUNodeUnclassifiedCountMetricName:         dto.MetricType_GAUGE,
+		nvcametrics.GPUNodeTotalCountMetricName:                dto.MetricType_GAUGE,
 		nvcametrics.StorageRequestDurationMetricName:           dto.MetricType_SUMMARY,
 		nvcametrics.MiniServiceReconcilePhaseTotalMetricName:   dto.MetricType_COUNTER,
 		nvcametrics.MiniServicePhaseTransitionsTotalMetricName: dto.MetricType_COUNTER,

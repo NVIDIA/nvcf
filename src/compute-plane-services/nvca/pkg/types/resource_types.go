@@ -40,7 +40,19 @@ import (
 const (
 	trueVal           = "true"
 	InstanceTypeLabel = "nvca.nvcf.nvidia.io/instance-type"
+	GPUFamilyLabel    = "nvidia.com/gpu.family"
+	GPUMachineLabel   = "nvidia.com/gpu.machine"
+	nodeLogField      = "node"
 )
+
+// GPUNodeClassification identifies a GPU family/machine combination for classification-gap
+// metrics, and the unclassified/total node counts seen for that combination.
+type GPUNodeClassification struct {
+	GPUFamily    string
+	GPUMachine   string
+	Unclassified uint64
+	Total        uint64
+}
 
 type BackendGPUs []BackendGPU
 
@@ -85,25 +97,32 @@ func (bs BackendGPUs) ToRegistration(
 	return rgs
 }
 
+// AddInstanceCapacity computes per-instance-type capacity from live node state and returns the
+// updated gpus along with, per GPU family/machine combination, the count of GPU-bearing nodes
+// that could not be attributed to any instance type (missing or unrecognized
+// nvca.nvcf.nvidia.io/instance-type label) and the total count of GPU-bearing nodes seen
+// (classified and unclassified). The unclassified count signals a GPU discovery/labeling gap:
+// hardware NVCA can see on the node but cannot classify, so it is silently excluded from every
+// nvca_instance_type_* metric.
 func AddInstanceCapacity(
 	ctx context.Context,
 	gpus []RegistrationGPU,
 	nodeLister listersv1.NodeLister,
 	sharedClusterOn *atomic.Bool,
-) ([]RegistrationGPU, error) {
+) ([]RegistrationGPU, []GPUNodeClassification, error) {
 	log := core.GetLogger(ctx)
 
 	goodNodes := map[string][]*corev1.Node{}
 	unschedulableNodes := map[string][]*corev1.Node{}
 	nodes, err := nodeLister.List(labels.Everything())
 	if err != nil {
-		return nil, fmt.Errorf("list nodes: %v", err)
+		return nil, nil, fmt.Errorf("list nodes: %v", err)
 	}
 
 	log.WithField("count", len(nodes)).Debug("Adding instance capacity from all nodes")
 
 	for _, node := range nodes {
-		log := log.WithField("node", node.Name)
+		log := log.WithField(nodeLogField, node.Name)
 		// Non-ready nodes should not be in published capacity.
 		// Once they become ready, this method will pick them up.
 		if !IsNodeReady(node) {
@@ -124,6 +143,7 @@ func AddInstanceCapacity(
 		goodNodes[key] = append(goodNodes[key], node)
 	}
 
+	consumedLabels := map[string]struct{}{}
 	for i, gpu := range gpus {
 		for j, it := range gpu.InstanceTypes {
 			// Multinode instance types are a multiple of the max instance type,
@@ -139,6 +159,7 @@ func AddInstanceCapacity(
 			instGPU := *resource.NewQuantity(int64(it.GPUCount), resource.DecimalSI) //nolint:gosec
 
 			itName := InstanceName(it.Name).WithoutMultiplierMultiNode()
+			consumedLabels[itName] = struct{}{}
 			log := log.WithFields(logrus.Fields{
 				"instance_type":  it.Name,
 				"instance_label": itName,
@@ -147,8 +168,8 @@ func AddInstanceCapacity(
 				capacity := calculateAvailability(node.Status.Allocatable, instGPU)
 
 				log.WithFields(logrus.Fields{
-					"node":     node.Name,
-					"capacity": capacity,
+					nodeLogField: node.Name,
+					"capacity":   capacity,
 				}).Debug("Node capacity")
 
 				instanceCapacity += capacity
@@ -157,8 +178,8 @@ func AddInstanceCapacity(
 				capacity := calculateAvailability(node.Status.Allocatable, instGPU)
 
 				log.WithFields(logrus.Fields{
-					"node":     node.Name,
-					"capacity": capacity,
+					nodeLogField: node.Name,
+					"capacity":   capacity,
 				}).Debug("Node unschedulable capacity")
 
 				unschedulableCapacity += capacity
@@ -167,7 +188,47 @@ func AddInstanceCapacity(
 			gpus[i].InstanceTypes[j].UnschedulableCapacity = unschedulableCapacity
 		}
 	}
-	return gpus, nil
+
+	type classificationKey struct {
+		gpuFamily  string
+		gpuMachine string
+	}
+	classifications := map[classificationKey]*GPUNodeClassification{}
+	for _, nodeSet := range []map[string][]*corev1.Node{goodNodes, unschedulableNodes} {
+		for label, nodesForLabel := range nodeSet {
+			for _, node := range nodesForLabel {
+				if _, anyFound := ParseGPUResourceList(node.Status.Allocatable).GPU(); !anyFound {
+					continue
+				}
+				key := classificationKey{gpuFamily: node.Labels[GPUFamilyLabel], gpuMachine: node.Labels[GPUMachineLabel]}
+				c, ok := classifications[key]
+				if !ok {
+					c = &GPUNodeClassification{GPUFamily: key.gpuFamily, GPUMachine: key.gpuMachine}
+					classifications[key] = c
+				}
+				c.Total++
+				if _, ok := consumedLabels[label]; ok {
+					continue
+				}
+				// Debug, not Warn: this fires per unclassified node on every reconcile, and the
+				// gap is already surfaced (and alertable) via nvca_gpu_node_unclassified_count.
+				log.WithFields(logrus.Fields{
+					nodeLogField:     node.Name,
+					"instance_label": label,
+					GPUFamilyLabel:   key.gpuFamily,
+					GPUMachineLabel:  key.gpuMachine,
+				}).Debug("Node has GPU resources but no recognized instance-type label")
+				c.Unclassified++
+			}
+		}
+	}
+
+	gpuNodeClassifications := make([]GPUNodeClassification, 0, len(classifications))
+	for _, c := range classifications {
+		gpuNodeClassifications = append(gpuNodeClassifications, *c)
+	}
+
+	return gpus, gpuNodeClassifications, nil
 }
 
 func IsNodeReady(node *corev1.Node) bool {

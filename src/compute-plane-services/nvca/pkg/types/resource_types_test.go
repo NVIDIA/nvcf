@@ -1270,7 +1270,7 @@ func TestBackendGPUsToRegistration(t *testing.T) {
 
 			nodes := backendGPUSToNodes(c.backendGPUs)
 			actual := c.backendGPUs.ToRegistration(c.allowMultiNodeWorkloads, c.infraOverhead)
-			actual, err := AddInstanceCapacity(ctx, actual, fakeNodeInformer{nodes: nodes}, nil)
+			actual, _, err := AddInstanceCapacity(ctx, actual, fakeNodeInformer{nodes: nodes}, nil)
 			require.NoError(t, err)
 			require.Equal(t, len(c.expected), len(actual))
 			for i, expGPU := range c.expected {
@@ -1793,7 +1793,7 @@ func TestAddInstanceAvailability(t *testing.T) {
 				tt.sharedClusterOn.Store(true)
 			}
 
-			got, err := AddInstanceCapacity(context.Background(), tt.gpus, mockNodeLister, tt.sharedClusterOn)
+			got, _, err := AddInstanceCapacity(context.Background(), tt.gpus, mockNodeLister, tt.sharedClusterOn)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -1805,6 +1805,98 @@ func TestAddInstanceAvailability(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAddInstanceCapacity_UnclassifiedGPUNodes(t *testing.T) {
+	gpus := []RegistrationGPU{
+		{
+			InstanceTypes: []RegistrationInstanceType{
+				{
+					Name:         "ON-PREM.GPU.A100_1x",
+					CPU:          "2",
+					SystemMemory: "16Gi",
+					Storage:      "25Gi",
+					GPUCount:     1,
+				},
+			},
+		},
+	}
+
+	nodes := []*corev1.Node{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "recognized-node",
+				Labels: map[string]string{
+					InstanceTypeLabel: "ON-PREM.GPU.A100",
+					GPUFamilyLabel:    "blackwell",
+					GPUMachineLabel:   "GB200-NVL",
+				},
+			},
+			Status: corev1.NodeStatus{
+				Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+				Allocatable: corev1.ResourceList{
+					GPUResourceKey: resource.MustParse("1"),
+				},
+			},
+		},
+		{
+			// Missing the instance-type label entirely, but has GPU resources: a discovery gap.
+			// Also missing GPU family/machine labels.
+			ObjectMeta: metav1.ObjectMeta{Name: "unlabeled-gpu-node"},
+			Status: corev1.NodeStatus{
+				Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+				Allocatable: corev1.ResourceList{
+					GPUResourceKey: resource.MustParse("1"),
+				},
+			},
+		},
+		{
+			// Unrecognized instance-type label value, with GPU resources: also a discovery gap.
+			// Shares the same GPU family/machine as recognized-node.
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "mislabeled-gpu-node",
+				Labels: map[string]string{
+					InstanceTypeLabel: "ON-PREM.GPU.UNKNOWN_1x",
+					GPUFamilyLabel:    "blackwell",
+					GPUMachineLabel:   "GB200-NVL",
+				},
+			},
+			Status: corev1.NodeStatus{
+				Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionFalse}},
+				Allocatable: corev1.ResourceList{
+					GPUResourceKey: resource.MustParse("1"),
+				},
+			},
+		},
+		{
+			// No instance-type label and no GPU resources: an ordinary non-GPU node, not a gap.
+			ObjectMeta: metav1.ObjectMeta{Name: "non-gpu-node"},
+			Status: corev1.NodeStatus{
+				Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+				Allocatable: corev1.ResourceList{
+					corev1.ResourceCPU: resource.MustParse("8"),
+				},
+			},
+		},
+	}
+
+	lister := new(mockNodeLister)
+	lister.On("List", mock.Anything).Return(nodes, nil)
+
+	got, classifications, err := AddInstanceCapacity(context.Background(), gpus, lister, nil)
+	require.NoError(t, err)
+	require.Len(t, got[0].InstanceTypes, 1)
+	assert.Equal(t, uint64(1), got[0].InstanceTypes[0].MaxInstances)
+
+	byFamilyMachine := make(map[[2]string]GPUNodeClassification, len(classifications))
+	for _, c := range classifications {
+		byFamilyMachine[[2]string{c.GPUFamily, c.GPUMachine}] = c
+	}
+	require.Len(t, byFamilyMachine, 2)
+	assert.Equal(t, GPUNodeClassification{GPUFamily: "blackwell", GPUMachine: "GB200-NVL", Unclassified: 1, Total: 2},
+		byFamilyMachine[[2]string{"blackwell", "GB200-NVL"}])
+	assert.Equal(t, GPUNodeClassification{GPUFamily: "", GPUMachine: "", Unclassified: 1, Total: 1},
+		byFamilyMachine[[2]string{"", ""}])
 }
 
 // mockNodeLister implements the NodeLister interface for testing

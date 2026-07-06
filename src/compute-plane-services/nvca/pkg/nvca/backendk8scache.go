@@ -1615,7 +1615,7 @@ func (c *BackendK8sCache) getGPUUsageStats(ctx context.Context) (map[nvcatypes.G
 		return nil, fmt.Errorf("failed to get infra overhead: %w", err)
 	}
 	regBackendGPUs := nvcatypes.BackendGPUs(bg).ToRegistration(multiNodeWorkloadsEnabled, infraOverhead)
-	regBackendGPUs, err = nvcatypes.AddInstanceCapacity(ctx, regBackendGPUs, c.nodeLister, c.sharedClusterOn)
+	regBackendGPUs, _, err = nvcatypes.AddInstanceCapacity(ctx, regBackendGPUs, c.nodeLister, c.sharedClusterOn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add instance availability to backend GPUs: %w", err)
 	}
@@ -1688,20 +1688,32 @@ func (c *BackendK8sCache) GetRegisteredBackendGPUs(ctx context.Context,
 	var (
 		regBackendGPUs = types.BackendGPUs(backendGPUs).ToRegistration(multiNodeWorkloadsEnabled, infraOverhead)
 	)
-	regBackendGPUs, err = types.AddInstanceCapacity(ctx, regBackendGPUs, c.nodeLister, c.sharedClusterOn)
+	regBackendGPUs, gpuNodeClassifications, err := types.AddInstanceCapacity(ctx, regBackendGPUs, c.nodeLister, c.sharedClusterOn)
 	if err != nil {
 		return nil, err
 	}
-	err = c.UpdateInstanceTypeMetrics(ctx, regBackendGPUs)
+	err = c.UpdateInstanceTypeMetrics(ctx, regBackendGPUs, gpuNodeClassifications)
 	if err != nil {
 		return nil, err
 	}
 	return regBackendGPUs, nil
 }
 
-func (c *BackendK8sCache) UpdateInstanceTypeMetrics(ctx context.Context, gpus []types.RegistrationGPU) error {
+func (c *BackendK8sCache) UpdateInstanceTypeMetrics(
+	ctx context.Context,
+	gpus []types.RegistrationGPU,
+	gpuNodeClassifications []types.GPUNodeClassification,
+) error {
 	log := core.GetLogger(ctx)
 	metrics := nvcametrics.FromContext(ctx)
+	// Reset before repopulating so a gpu_family/gpu_machine combination that disappears from the
+	// cluster (e.g. a node pool decommissioned) doesn't leave a stale nonzero series behind.
+	metrics.GPUNodeUnclassifiedCount.Reset()
+	metrics.GPUNodeTotalCount.Reset()
+	for _, classification := range gpuNodeClassifications {
+		metrics.SetUnclassifiedGPUNodeCount(classification.GPUFamily, classification.GPUMachine, float64(classification.Unclassified))
+		metrics.SetTotalGPUNodeCount(classification.GPUFamily, classification.GPUMachine, float64(classification.Total))
+	}
 
 	allocatedInstanceGPUs, err := c.getAllocatedInstanceGPUs(ctx)
 	if err != nil {

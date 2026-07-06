@@ -177,6 +177,32 @@ sum(nvca_instance_type_unschedulable)
 
 ---
 
+### `nvca_gpu_node_unclassified_count`
+
+**Type:** Gauge
+
+**Description:** Count of nodes that have GPU resources present in `status.allocatable` but no recognized `nvca.nvcf.nvidia.io/instance-type` label (missing entirely, or set to a value NVCA does not know about). These nodes' GPUs are excluded from `nvca_instance_type_capacity`, `nvca_instance_type_allocatable`, and `nvca_instance_type_unschedulable`, since those metrics are bucketed per instance type. A nonzero value indicates a GPU discovery/labeling gap independent of the per-instance-type numbers.
+
+**Labels:**
+
+- `gpu_family` - Value of the `nvidia.com/gpu.family` node label (e.g. `blackwell`)
+- `gpu_machine` - Value of the `nvidia.com/gpu.machine` node label (e.g. `GB200-NVL`)
+
+---
+
+### `nvca_gpu_node_total_count`
+
+**Type:** Gauge
+
+**Description:** Total count of GPU nodes that are part of the cluster, both classified (attributed to a known instance type) and unclassified (`nvca_gpu_node_unclassified_count`). Use alongside the unclassified count to gauge the proportion of GPU capacity NVCA is failing to classify.
+
+**Labels:**
+
+- `gpu_family` - Value of the `nvidia.com/gpu.family` node label (e.g. `blackwell`)
+- `gpu_machine` - Value of the `nvidia.com/gpu.machine` node label (e.g. `GB200-NVL`)
+
+---
+
 ## Event Metrics
 
 ### `nvca_event_error_total`
