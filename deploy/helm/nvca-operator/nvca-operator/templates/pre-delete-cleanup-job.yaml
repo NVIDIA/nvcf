@@ -80,8 +80,6 @@ spec:
           - "{{ include "nvcaop.fullname" . }}"
           - --service-account-name
           - "{{ include "nvcaop.serviceAccountName" . }}"
-          - --hook-cluster-role-binding-name
-          - "{{ include "nvcaop.fullname" . }}-pre-delete-cleanup"
           - --log-level
           - "{{ .Values.logLevel }}"
         resources:

@@ -331,6 +331,19 @@ func TestAgentOptions_String_IncludesNVCAOperatorVersion(t *testing.T) {
 	assert.Contains(t, str, "bartnvbackend")
 }
 
+func TestAgentOptions_String_IncludesClusterIDs(t *testing.T) {
+	agentOpts := AgentOptions{
+		NCAId:          "randomNCAId123",
+		ClusterName:    "bartnvbackend",
+		ClusterID:      "cluster-id-123",
+		ClusterGroupID: "cluster-group-id-123",
+	}
+
+	str := agentOpts.sanitizedString()
+	assert.Contains(t, str, `ClusterID:"cluster-id-123"`)
+	assert.Contains(t, str, `ClusterGroupID:"cluster-group-id-123"`)
+}
+
 func TestAgentOptions_String_IncludesIdentitySourceAndPSATPath(t *testing.T) {
 	agentOpts := AgentOptions{
 		Config: nvcaconfig.Config{

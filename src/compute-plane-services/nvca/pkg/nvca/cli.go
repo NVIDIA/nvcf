@@ -332,6 +332,10 @@ func configureAndCheckCLI(log *logrus.Entry, opts *AgentOptions) error {
 		return fmt.Errorf("cannot enable both skip-self-destruct and force-self-destruct flags simultaneously")
 	}
 
+	if featureflag.SelfHosted.Enabled() && strings.TrimSpace(opts.ClusterID) == "" {
+		return fmt.Errorf("clusterID is required when %s feature flag is enabled", featureflag.SelfHosted.Key)
+	}
+
 	if featureflag.AttrHostIsolation.Enabled() {
 		// Non-CSP host isolation requires Kata VM's, which must be enforced at startup.
 		// CSP host isolation VM's already exist as node "hosts".

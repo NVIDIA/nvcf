@@ -294,6 +294,23 @@ func TestMaintenanceModeMutualExclusivityLogic(t *testing.T) {
 	assert.Contains(t, actualError.Error(), "mutually exclusive")
 }
 
+func TestConfigureAndCheckCLI_SelfHostedRequiresClusterID(t *testing.T) {
+	require.NoError(t, (&featureflag.CLIFlag{}).Set(featureflag.SelfHosted.Key))
+	t.Cleanup(func() {
+		require.NoError(t, (&featureflag.CLIFlag{}).Set("-"+featureflag.SelfHosted.Key))
+	})
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+
+	err := configureAndCheckCLI(logrus.NewEntry(logger), &AgentOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clusterID is required")
+
+	err = configureAndCheckCLI(logrus.NewEntry(logger), &AgentOptions{ClusterID: "registered-cluster-id"})
+	require.NoError(t, err)
+}
+
 func newMockCLIAgent() (cliAgent, chan struct{}) {
 	block := make(chan struct{})
 	a := &mockAgent{

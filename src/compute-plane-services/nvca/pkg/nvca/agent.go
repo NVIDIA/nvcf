@@ -399,6 +399,8 @@ func (o *AgentOptions) sanitizedString() string {
 	var sanitized AgentOptions
 	sanitized.NCAId = o.NCAId
 	sanitized.ClusterName = o.ClusterName
+	sanitized.ClusterID = o.ClusterID
+	sanitized.ClusterGroupID = o.ClusterGroupID
 	sanitized.ClusterDescription = o.ClusterDescription
 	sanitized.KubeConfigPath = o.KubeConfigPath
 	sanitized.ICMSURL = o.EffectiveICMSURL()
@@ -1220,9 +1222,10 @@ func (a *Agent) Start(ctx context.Context) error {
 			// elected startup without touching the updater itself.
 			if source == nvcaconfig.ClusterIssuedTokenSourcePSAT {
 				jwksUpdater, jerr := NewJWKSUpdater(JWKSUpdaterOptions{
-					ICMSURL:   a.EffectiveICMSURL(),
-					ClusterID: a.ClusterID,
-					TokenPath: psatPath,
+					ICMSURL:                a.EffectiveICMSURL(),
+					ICMSHostHeaderOverride: a.ICMSHostHeaderOverride,
+					ClusterID:              a.ClusterID,
+					TokenPath:              psatPath,
 				})
 				if jerr != nil {
 					log.WithError(jerr).Error("Failed to construct JWKS updater")

@@ -153,6 +153,60 @@ func TestJWKSUpdater_FetchesJWKSFromProjectedTokenIssuer(t *testing.T) {
 	}
 }
 
+func TestJWKSUpdater_PushUsesICMSHostHeaderOverride(t *testing.T) {
+	ctx := context.Background()
+	publicJWKS := `{"keys":[{"kty":"RSA","kid":"public-rotated-key"}]}`
+
+	var issuerURL string
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"issuer":"` + issuerURL + `","jwks_uri":"/keys"}`))
+		case "/keys":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(publicJWKS))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuer.Close()
+	issuerURL = issuer.URL
+
+	token := unsignedJWTWithIssuer(t, issuer.URL)
+	tokenPath := filepath.Join(t.TempDir(), "psat")
+	require.NoError(t, os.WriteFile(tokenPath, []byte(token), 0o600))
+
+	var pushedBody []byte
+	icms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "sis.gateway.example.test", r.Host)
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		pushedBody = body
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer icms.Close()
+
+	updater := &JWKSUpdater{
+		icmsURL:                icms.URL,
+		icmsHostHeaderOverride: "sis.gateway.example.test",
+		clusterID:              "cluster-123",
+		tokenPath:              tokenPath,
+		k8sClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			t.Fatalf("internal JWKS should not be fetched when issuer JWKS is reachable")
+			return nil, nil
+		})},
+		icmsClient: icms.Client(),
+	}
+
+	updater.checkAndPush(ctx)
+
+	require.NotEmpty(t, pushedBody)
+	var pushed map[string]string
+	require.NoError(t, json.Unmarshal(pushedBody, &pushed))
+	assert.JSONEq(t, publicJWKS, pushed["jwks"])
+}
+
 func TestJWKSUpdater_DoesNotFallbackToInternalJWKSWhenProjectedIssuerFetchFails(t *testing.T) {
 	ctx := context.Background()
 	internalJWKS := `{"keys":[{"kty":"RSA","kid":"internal-current-key"}]}`

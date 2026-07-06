@@ -44,14 +44,15 @@ import (
 
 // JWKSUpdater periodically checks the K8s OIDC JWKS and pushes updates to ICMS.
 type JWKSUpdater struct {
-	icmsURL    string
-	clusterID  string
-	tokenPath  string
-	interval   time.Duration
-	lastHash   string
-	k8sClient  *http.Client
-	oidcClient *http.Client
-	icmsClient *http.Client
+	icmsURL                string
+	icmsHostHeaderOverride string
+	clusterID              string
+	tokenPath              string
+	interval               time.Duration
+	lastHash               string
+	k8sClient              *http.Client
+	oidcClient             *http.Client
+	icmsClient             *http.Client
 	// k8sSATokenPath defaults to k8sSATokenPath and is overrideable in tests.
 	k8sSATokenPath string
 }
@@ -60,6 +61,8 @@ type JWKSUpdater struct {
 type JWKSUpdaterOptions struct {
 	// ICMSURL is the base URL of the ICMS service to push JWKS to.
 	ICMSURL string
+	// ICMSHostHeaderOverride optionally overrides the Host header for ICMS pushes.
+	ICMSHostHeaderOverride string
 	// ClusterID identifies this cluster in the ICMS push path.
 	ClusterID string
 	// TokenPath is the projected SA token file the agent reads to authenticate
@@ -88,12 +91,13 @@ func newJWKSUpdater(opts JWKSUpdaterOptions, caCertPath string) (*JWKSUpdater, e
 		return nil, fmt.Errorf("build OIDC HTTP client for JWKS updater: %w", err)
 	}
 	return &JWKSUpdater{
-		icmsURL:    opts.ICMSURL,
-		clusterID:  opts.ClusterID,
-		tokenPath:  opts.TokenPath,
-		interval:   30 * time.Minute,
-		k8sClient:  k8sClient,
-		oidcClient: oidcClient,
+		icmsURL:                opts.ICMSURL,
+		icmsHostHeaderOverride: opts.ICMSHostHeaderOverride,
+		clusterID:              opts.ClusterID,
+		tokenPath:              opts.TokenPath,
+		interval:               30 * time.Minute,
+		k8sClient:              k8sClient,
+		oidcClient:             oidcClient,
 		icmsClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -265,6 +269,9 @@ func (u *JWKSUpdater) checkAndPush(ctx context.Context) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+	if u.icmsHostHeaderOverride != "" {
+		req.Host = u.icmsHostHeaderOverride
+	}
 
 	metrics := nvcametrics.FromContext(ctx)
 
