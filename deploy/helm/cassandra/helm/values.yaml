@@ -20,6 +20,8 @@ cassandra:
 
   global:
     imagePullSecrets: []
+    security:
+      allowInsecureImages: true
 
   hooks:
     initializeCluster:
@@ -45,14 +47,14 @@ cassandra:
 
   migrations:
     image:
-      # registry: must be supplied in additional values
-      # repository: must be supplied in additional values
+      registry: ""
+      repository: ""
       tag: 0.10.1
       pullPolicy: Always
 
   image:
-    # registry: must be supplied in additional values
-    # repository: must be supplied in additional values
+    registry: ""
+    repository: ""
     tag: 5.0.6-nv-1
     pullPolicy: IfNotPresent
     debug: true
@@ -60,8 +62,8 @@ cassandra:
   dynamicSeedDiscovery:
     enabled: true
     image:
-      # registry: must be supplied in additional values
-      # repository: must be supplied in additional values
+      registry: ""
+      repository: ""
       tag: 5.0.6-nv-1
       pullPolicy: IfNotPresent
     resources:

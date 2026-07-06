@@ -18,8 +18,8 @@ apikeys:
   replicaCount: 1
 
   image:
-    registry: "" # must be supplied in additional values
-    repository: "" # must be supplied in additional values
+    registry: ""
+    repository: ""
     pullPolicy: IfNotPresent
     tag: "1.2.14"
 

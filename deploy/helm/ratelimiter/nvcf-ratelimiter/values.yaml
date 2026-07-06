@@ -33,8 +33,8 @@ rateLimiter:
   replicaCount: 1
 
   image:
-    registry: "" # base registry, must be supplied (e.g. nvcr.io)
-    repository: "" # base repository, must be supplied (e.g. 0651155215864979/ncp-dev)
+    registry: ""
+    repository: ""
     # Image name is chart-owned and appended to registry/repository.
     name: "nvcf-ratelimiter"
     pullPolicy: IfNotPresent

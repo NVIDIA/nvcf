@@ -93,7 +93,7 @@ tracing:
     secretAccessToken: ""
 
 image:
-  repository: nvcf-nats-auth-callout-service
+  repository: ""
   pullPolicy: IfNotPresent
   tag: ""
 

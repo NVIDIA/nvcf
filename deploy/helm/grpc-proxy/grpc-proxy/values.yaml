@@ -24,8 +24,8 @@ grpcproxy:
   replicaCount: 1
 
   image:
-    registry: "" # must be supplied
-    repository: "" # must be supplied
+    registry: ""
+    repository: ""
 
     pullPolicy: IfNotPresent
 

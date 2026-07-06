@@ -23,11 +23,9 @@ adminIssuerProxy:
 
   image:
     # Container image repository path. This field is required and must be set during installation.
-    # Example: "nvcf/admin-issuer-proxy"
     repository: ""
 
     # Container image registry URL. This field is required and must be set during installation.
-    # Example: "registry.example.com"
     registry: ""
 
     # Image pull policy for the container. Valid values: Always, IfNotPresent, Never

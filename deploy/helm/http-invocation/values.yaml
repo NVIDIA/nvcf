@@ -19,7 +19,7 @@ replicaCount: 1
 nameOverride: nvcf-invocation-service
 
 image:
-  repository: nvcr.io/0651155215864979/ncp-dev/nvcf-invocation-service
+  repository: ""
   pullPolicy: IfNotPresent
   tag: latest
 
@@ -119,7 +119,7 @@ otelCollector:
 
   image:
     name: "otel-collector"
-    repository: "otel/opentelemetry-collector-contrib"
+    repository: ""
     # `latest` + IfNotPresent lets nodes drift onto different actual
     # digests of "latest". Pin to a concrete version in the issue #7
     # follow-up.

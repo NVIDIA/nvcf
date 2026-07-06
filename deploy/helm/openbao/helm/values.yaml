@@ -44,8 +44,8 @@ openbao:
 
   migrations:
     image:
-      # registry: must be supplied in additional values
-      # repository: must be supplied in additional values
+      registry: ""
+      repository: ""
       tag: 0.16.1
       pullPolicy: IfNotPresent
     issuerDiscovery:
@@ -72,8 +72,8 @@ openbao:
         memory: 512Mi
 
     image:
-      # registry: must be supplied in additional values
-      # repository: must be supplied in additional values
+      registry: ""
+      repository: ""
       tag: 2.5.4-nv-1.3.0
       pullPolicy: IfNotPresent
 
@@ -232,12 +232,12 @@ openbao:
         cpu: 250m
         memory: 256Mi
     image:
-      # registry: must be supplied in additional values
-      # repository: must be supplied in additional values
+      registry: ""
+      repository: ""
       tag: 1.7.4
       pullPolicy: IfNotPresent
     agentImage:
-      # registry: must be supplied in additional values
-      # repository: must be supplied in additional values
+      registry: ""
+      repository: ""
       tag: 2.5.4-nv-1.3.0
       pullPolicy: IfNotPresent

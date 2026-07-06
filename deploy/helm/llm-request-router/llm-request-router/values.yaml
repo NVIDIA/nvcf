@@ -20,7 +20,7 @@ llmRequestRouter:
   replicaCount: 3
 
   image:
-    registry: "nvcr.io"
+    registry: ""
     repository: ""
     tag: "0.3.0"
     pullPolicy: IfNotPresent

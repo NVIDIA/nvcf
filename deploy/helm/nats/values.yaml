@@ -19,12 +19,12 @@ nats:
   global:
     image:
       pullSecretNames: []
-      registry: docker.io
+      registry: ""
       pullPolicy: IfNotPresent
   container:
     image:
-      registry: docker.io
-      repository: synadia/nats-server
+      registry: ""
+      repository: ""
       tag: 2.11.17-alpine3.22
       pullPolicy: IfNotPresent
     env:
@@ -70,16 +70,16 @@ nats:
   reloader:
     enabled: true
     image:
-      registry: docker.io
-      repository: natsio/nats-server-config-reloader
+      registry: ""
+      repository: ""
       tag: 0.23.0
       pullPolicy: IfNotPresent
   natsBox:
     enabled: true
     container:
       image:
-        registry: docker.io
-        repository: natsio/nats-box
+        registry: ""
+        repository: ""
         tag: 0.19.5-nonroot
         pullPolicy: IfNotPresent
     # Add contexts configuration to mount the nkeys secret

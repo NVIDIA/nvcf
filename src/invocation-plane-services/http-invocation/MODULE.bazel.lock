@@ -383,7 +383,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/cc",
-              "identifier": "sha256:80e21701e5253088ee8ca22f2ad8fc5d08ca5bf730a6eea5d68ea268c33e9831",
+              "identifier": "sha256:92a46f84206c3e4610043eaef50946451019e3c479b71d280015919ba311babb",
               "platform": "linux/amd64",
               "target_name": "distroless_cc_linux_amd64",
               "bazel_tags": []
@@ -396,7 +396,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/cc",
-              "identifier": "sha256:80e21701e5253088ee8ca22f2ad8fc5d08ca5bf730a6eea5d68ea268c33e9831",
+              "identifier": "sha256:92a46f84206c3e4610043eaef50946451019e3c479b71d280015919ba311babb",
               "platform": "linux/arm64",
               "target_name": "distroless_cc_linux_arm64",
               "bazel_tags": []
@@ -410,7 +410,7 @@
               "scheme": "https",
               "registry": "nvcr.io",
               "repository": "nvidia/distroless/cc",
-              "identifier": "sha256:80e21701e5253088ee8ca22f2ad8fc5d08ca5bf730a6eea5d68ea268c33e9831",
+              "identifier": "sha256:92a46f84206c3e4610043eaef50946451019e3c479b71d280015919ba311babb",
               "platforms": {
                 "@@platforms//cpu:x86_64": "@distroless_cc_linux_amd64",
                 "@@platforms//cpu:arm64": "@distroless_cc_linux_arm64"

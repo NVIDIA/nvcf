@@ -18,8 +18,8 @@
 # installing; the server refuses to start otherwise.
 reval:
   image:
-    registry: ghcr.io
-    repository: nvidia/nvcf-helm-reval-api/reval-server
+    registry: ""
+    repository: ""
     tag: "latest"
     pullPolicy: IfNotPresent
 

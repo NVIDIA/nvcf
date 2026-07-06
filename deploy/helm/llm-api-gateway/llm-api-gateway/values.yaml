@@ -17,7 +17,7 @@ llmApiGateway:
   replicaCount: 3
 
   image:
-    registry: "nvcr.io"
+    registry: ""
     repository: ""
     tag: "0.8.3"
     pullPolicy: IfNotPresent
