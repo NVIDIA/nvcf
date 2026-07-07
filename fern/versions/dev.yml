@@ -8,6 +8,14 @@ navigation:
   - page: Quickstart
     path: ../../docs/user/quickstart.md
 
+  - section: Release Notes
+    skip-slug: true
+    contents:
+      - page: Release Notes Overview
+        path: ../../docs/user/release-notes/index.md
+      - page: "0.5.0 to 0.6.0 Upgrade"
+        path: ../../docs/user/release-notes/0.6.0.md
+
   - section: Before You Deploy
     skip-slug: true
     contents:
