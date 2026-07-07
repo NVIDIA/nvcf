@@ -180,6 +180,16 @@ var AllUpstreamOperations = []string{
 	UpstreamOperationJWKSPush,
 }
 
+// storageRequestDurationBucketsSeconds are the explicit histogram buckets (in
+// seconds) for nvca_storage_controller_request_duration. Storage provisioning
+// is a long-running operation with a 4-minute (240s) SLO, so the buckets are
+// coarse and spread across minutes rather than using the default sub-second
+// Prometheus buckets. The 240s boundary is included so the "Storage Provisioner
+// Latency" panel can report the fraction of requests within SLO directly. This
+// follows OpenTelemetry explicit-bucket guidance for long-running operations:
+// https://opentelemetry.io/docs/specs/otel/metrics/data-model/#histogram
+var storageRequestDurationBucketsSeconds = []float64{10, 30, 60, 120, 180, 240, 300, 600, 1200, 1800}
+
 func getDefaultLabels() []string {
 	return []string{
 		NCAIDLabel,
@@ -252,7 +262,7 @@ type Metrics struct {
 	GPUNodeTotalCount         *prometheus.GaugeVec // total count of GPU-bearing nodes seen, classified and unclassified
 
 	// Storage controller metrics
-	StorageRequestDuration *prometheus.SummaryVec
+	StorageRequestDuration *prometheus.HistogramVec
 
 	// MiniService controller metrics
 	MiniServiceReconcilePhaseTotal   *prometheus.CounterVec
@@ -553,13 +563,14 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 		Help: "Total count of GPU-bearing nodes seen, classified and unclassified, bucketed by GPU family and machine type",
 	}, withDefaultLabels(GPUFamilyLabel, GPUMachineLabel))
 
-	// Storage controller metrics (uses storage labels for backwards compatibility)
-	m.StorageRequestDuration = promFactory.NewSummaryVec(prometheus.SummaryOpts{
+	// Storage controller metrics (uses storage labels for backwards compatibility).
+	// Histogram (not summary) so latency SLO panels can be built from _bucket{le=...}
+	// series; buckets are tuned for the long-running 4-minute provisioning SLO.
+	m.StorageRequestDuration = promFactory.NewHistogramVec(prometheus.HistogramOpts{
 		Name: StorageRequestDurationMetricName,
-		Help: "Duration of NVCA Storage Controller request to terminal state. " +
+		Help: "Duration (seconds) of NVCA Storage Controller request to terminal state. " +
 			"storage_request_phase is the terminal phase of the request.",
-		MaxAge:     1 * time.Hour,
-		Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
+		Buckets: storageRequestDurationBucketsSeconds,
 	}, withStorageLabels(StorageRequestPhaseLabel))
 	// Pre-register all known storage phases so the series appear on the first Prometheus scrape
 	// even before any StorageRequest reaches a terminal state.

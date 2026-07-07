@@ -615,9 +615,9 @@ sum(rate(nvca_model_cache_result_total[5m])) > 0.1
 
 ### `nvca_storage_controller_request_duration`
 
-**Type:** Summary
+**Type:** Histogram
 
-**Description:** Duration of NVCA Storage Controller request to terminal state in **seconds**. Tracks how long it takes for storage requests to reach completion or failure.
+**Description:** Duration of NVCA Storage Controller request to terminal state in seconds. Tracks how long it takes for storage requests to reach completion or failure. Storage provisioning is a long-running operation with a 4-minute (240s) SLO, so the buckets are coarse and minutes-scale rather than the default sub-second Prometheus buckets, following OpenTelemetry explicit-bucket guidance for long-running operations.
 
 **Labels:**
 
@@ -628,22 +628,26 @@ sum(rate(nvca_model_cache_result_total[5m])) > 0.1
 
 **Note:** This metric uses 3 labels (excluding `nvca_nca_id`) for backwards compatibility.
 
-**Quantiles:** 50th, 90th, 99th percentiles
+**Buckets (seconds):** `[10, 30, 60, 120, 180, 240, 300, 600, 1200, 1800]`. The 240s boundary is the "Storage Provisioner Latency" panel SLO threshold.
 
 **Usage:**
 
 ```promql
-# Median storage request duration by phase
-nvca_storage_controller_request_duration{quantile="0.5"}
+# Fraction of storage requests within the 4-minute SLO (per phase)
+sum by (storage_request_phase) (rate(nvca_storage_controller_request_duration_bucket{le="240"}[5m]))
+  / sum by (storage_request_phase) (rate(nvca_storage_controller_request_duration_count[5m]))
 
-# 99th percentile storage request duration
-nvca_storage_controller_request_duration{quantile="0.99"}
+# 99th percentile storage request duration by phase
+histogram_quantile(0.99, sum by (storage_request_phase, le) (rate(nvca_storage_controller_request_duration_bucket[5m])))
+
+# Median (p50) storage request duration
+histogram_quantile(0.5, sum by (le) (rate(nvca_storage_controller_request_duration_bucket[5m])))
 
 # Average storage request duration by phase
 rate(nvca_storage_controller_request_duration_sum[5m]) / rate(nvca_storage_controller_request_duration_count[5m])
 
-# Alert on slow storage requests
-nvca_storage_controller_request_duration{quantile="0.99"} > 300
+# Alert on slow storage requests (p99 over the 4-minute SLO)
+histogram_quantile(0.99, sum by (le) (rate(nvca_storage_controller_request_duration_bucket[5m]))) > 240
 ```
 
 ---
@@ -1282,10 +1286,10 @@ sum by (http_status) (rate(nvca_upstream_request_total{operation="heartbeat", st
 # Slow storage requests
 - alert: SlowStorageRequests
   expr: |
-    nvca_storage_controller_request_duration{quantile="0.99"} > 300
+    histogram_quantile(0.99, sum by (le) (rate(nvca_storage_controller_request_duration_bucket[5m]))) > 240
   for: 15m
   annotations:
-    summary: Storage requests are taking longer than expected (>5 minutes at p99)
+    summary: Storage requests are taking longer than the 4-minute SLO (p99 > 240s)
 
 # High model cache failure rate
 - alert: HighModelCacheFailureRate

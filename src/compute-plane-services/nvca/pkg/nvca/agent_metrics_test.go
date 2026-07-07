@@ -485,7 +485,7 @@ func TestMetricTypes(t *testing.T) {
 		nvcametrics.InstanceTypeUnschedulableMetricName:        dto.MetricType_GAUGE,
 		nvcametrics.GPUNodeUnclassifiedCountMetricName:         dto.MetricType_GAUGE,
 		nvcametrics.GPUNodeTotalCountMetricName:                dto.MetricType_GAUGE,
-		nvcametrics.StorageRequestDurationMetricName:           dto.MetricType_SUMMARY,
+		nvcametrics.StorageRequestDurationMetricName:           dto.MetricType_HISTOGRAM,
 		nvcametrics.MiniServiceReconcilePhaseTotalMetricName:   dto.MetricType_COUNTER,
 		nvcametrics.MiniServicePhaseTransitionsTotalMetricName: dto.MetricType_COUNTER,
 		nvcametrics.MiniServiceFailuresTotalMetricName:         dto.MetricType_COUNTER,

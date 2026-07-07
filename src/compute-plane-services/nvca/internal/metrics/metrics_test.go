@@ -1812,13 +1812,13 @@ func TestMetricsInitializedToZero(t *testing.T) {
 	t.Run("StorageRequestDuration pre-registered for all phases", func(t *testing.T) {
 		// Verify all 6 storage phases appear on the first scrape so Prometheus panels
 		// can compute Ready vs all-terminal ratios without gaps.
-		findSummaryCount := func(phase string) (uint64, bool) {
+		findHistogramCount := func(phase string) (uint64, bool) {
 			for _, mf := range metricFamilies {
 				if *mf.Name == StorageRequestDurationMetricName {
 					for _, metric := range mf.Metric {
 						for _, label := range metric.Label {
 							if *label.Name == StorageRequestPhaseLabel && *label.Value == phase {
-								return metric.Summary.GetSampleCount(), true
+								return metric.Histogram.GetSampleCount(), true
 							}
 						}
 					}
@@ -1827,10 +1827,28 @@ func TestMetricsInitializedToZero(t *testing.T) {
 			return 0, false
 		}
 		for _, phase := range []string{"Pending", "InitRunning", "Creating", "Ready", "Failed", "RuntimeError"} {
-			count, found := findSummaryCount(phase)
+			count, found := findHistogramCount(phase)
 			assert.True(t, found, "StorageRequestDuration should be pre-registered for phase %s", phase)
 			assert.Equal(t, uint64(0), count, "StorageRequestDuration count should be zero for phase %s", phase)
 		}
+	})
+
+	t.Run("StorageRequestDuration uses long-running SLO buckets", func(t *testing.T) {
+		// The metric must be a histogram with the coarse, minutes-scale buckets tuned
+		// for the 4-minute (240s) provisioning SLO, including the 240s boundary.
+		var bounds []float64
+		for _, mf := range metricFamilies {
+			if *mf.Name == StorageRequestDurationMetricName {
+				require.NotEmpty(t, mf.Metric)
+				for _, b := range mf.Metric[0].Histogram.Bucket {
+					bounds = append(bounds, b.GetUpperBound())
+				}
+				break
+			}
+		}
+		assert.Equal(t, storageRequestDurationBucketsSeconds, bounds,
+			"histogram bucket boundaries must match the OTel-aligned long-running buckets")
+		assert.Contains(t, bounds, float64(240), "the 240s SLO boundary must be a bucket")
 	})
 }
 
