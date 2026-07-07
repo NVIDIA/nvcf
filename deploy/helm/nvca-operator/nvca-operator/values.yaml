@@ -123,6 +123,9 @@ resources:
 ## @param agent.secretMirrorNamespace Default namespace to mirror custom secrets for nvcf workloads
 ## @param agent.secretMirrorLabelSelector Label selector on the secrets in the sourceNamespace
 ## @param agent.customAnnotations Map of custom annotations to add to the agent pod
+## @param agent.gpuProfiling.functionIds Comma/space/newline-separated NVCF function IDs (or "*" for all) whose pods NVCA labels for NVIDIA Nsight GPU profiling. Empty disables profiling. The operator creates and mirrors the nvca-gpu-profiling-config ConfigMap from this value at deploy/upgrade time.
+## @param agent.gpuProfiling.labelKey Pod label key NVCA applies to profiled function pods (the label the Nsight Operator watches for). Empty uses the built-in default "nvidia-nsight-profile".
+## @param agent.gpuProfiling.labelValue Pod label value NVCA applies to profiled function pods. Empty uses the built-in default "enabled".
 ## @param agent.workload.tolerations K8s tolerations for NVCA-created workload pods
 ## @param agent.functionEnvOverrides Map of environment variable overrides for function workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "UTILS_CONTAINER": "nvcr.io/custom/utils:v1.0"})
 ## @param agent.taskEnvOverrides Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})
@@ -136,6 +139,13 @@ agent:
   secretMirrorNamespace: nvca-operator
   secretMirrorLabelSelector: ""
   customAnnotations: {}
+  ## GPU (Nsight) profiling opt-in: NVCF function IDs to profile ("*" = all) and an optional
+  ## label override (defaults to nvidia-nsight-profile=enabled). Drives the
+  ## nvca-gpu-profiling-config ConfigMap the operator mirrors into the agent namespace.
+  gpuProfiling:
+    functionIds: ""
+    labelKey: ""
+    labelValue: ""
   tolerations: []
   workload:
     tolerations: []

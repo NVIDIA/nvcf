@@ -309,6 +309,27 @@
                     "description": "Map of custom annotations to add to the agent pod",
                     "default": {}
                 },
+                "gpuProfiling": {
+                    "type": "object",
+                    "description": "NVIDIA Nsight GPU profiling opt-in for NVCF function pods",
+                    "properties": {
+                        "functionIds": {
+                            "type": "string",
+                            "description": "Comma/space/newline-separated NVCF function IDs (or \"*\" for all) to enable Nsight GPU profiling for. Empty disables profiling.",
+                            "default": ""
+                        },
+                        "labelKey": {
+                            "type": "string",
+                            "description": "Pod label key NVCA applies to profiled function pods. Empty uses the built-in default \"nvidia-nsight-profile\".",
+                            "default": ""
+                        },
+                        "labelValue": {
+                            "type": "string",
+                            "description": "Pod label value NVCA applies to profiled function pods. Empty uses the built-in default \"enabled\".",
+                            "default": ""
+                        }
+                    }
+                },
                 "functionEnvOverrides": {
                     "type": "object",
                     "description": "Map of environment variable overrides for function workloads (e.g., {\"INIT_CONTAINER\": \"nvcr.io/custom/init:v1.0\", \"UTILS_CONTAINER\": \"nvcr.io/custom/utils:v1.0\"})",
