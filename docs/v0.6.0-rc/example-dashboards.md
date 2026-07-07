@@ -101,12 +101,16 @@ Once your self-managed NVCF control-plane is up and running, install the observa
 reference stack:
 
 ```bash
+# Add and update the public NVCF Helm repository
+helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
+helm repo update
+
 # Check NGC for the latest version of this Helm chart:
-# https://registry.ngc.nvidia.com/orgs/0833294136851237/teams/nvcf-ncp-staging/containers/nvcf-observability-reference-stack/tags
+# https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nvcf/helm-charts/nvcf-observability-reference-stack
 
 helm upgrade \
   --install observability \
-  oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack \
+  nvcf/nvcf-observability-reference-stack \
   --version 1.10.0 \
   --namespace observability \
   --create-namespace
@@ -119,7 +123,7 @@ the control-plane observability stack does not have an NVCA scrape target.
 ```bash
 helm upgrade \
   --install observability \
-  oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack \
+  nvcf/nvcf-observability-reference-stack \
   --version 1.10.0 \
   --namespace observability \
   --create-namespace \
@@ -175,7 +179,7 @@ For split-topology deployments, `--reuse-values` preserves
 
 ```bash
 helm upgrade observability \
-  oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack \
+  nvcf/nvcf-observability-reference-stack \
   --version 1.10.0 \
   --namespace observability \
   --reuse-values \
@@ -202,11 +206,11 @@ enabled, install the example dashboards:
 
 ```bash
 # Check NGC for the latest version of this Helm chart:
-# https://registry.ngc.nvidia.com/orgs/0833294136851237/teams/nvcf-ncp-staging/containers/nvcf-example-dashboards/tags
+# https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nvcf/helm-charts/nvcf-example-dashboards
 
 helm upgrade \
   --install nvcf-example-dashboards \
-  oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-example-dashboards \
+  nvcf/nvcf-example-dashboards \
   --version 1.6.0 \
   --namespace observability \
   --create-namespace
@@ -348,5 +352,5 @@ with your own observability infrastructure.
 ## Related Documentation
 
 - [self-hosted-observability](./observability.md): Production observability configuration
-- [nvcf-observability-reference-stack on NGC](https://catalog.ngc.nvidia.com/orgs/0833294136851237/teams/nvcf-ncp-staging/helm-charts/nvcf-observability-reference-stack)
-- [nvcf-example-dashboards on NGC](https://catalog.ngc.nvidia.com/orgs/0833294136851237/teams/nvcf-ncp-staging/helm-charts/nvcf-example-dashboards)
+- [nvcf-observability-reference-stack on NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nvcf/helm-charts/nvcf-observability-reference-stack)
+- [nvcf-example-dashboards on NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nvcf/helm-charts/nvcf-example-dashboards)

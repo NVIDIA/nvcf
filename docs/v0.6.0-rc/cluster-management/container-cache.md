@@ -93,8 +93,12 @@ Adjust `storageClassName` for your environment (e.g., `gp3` for AWS EKS).
 <Tab title="BYOC (NGC Helm Repo)">
 
 ```bash
+helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
+helm repo update
+
 helm upgrade --install container-cache \
-  nvcf-byoc/nvcf-container-cache \
+  nvcf/nvcf-container-cache \
+  --version 0.25.22 \
   --namespace container-caching \
   --values values.yaml
 ```
@@ -108,7 +112,7 @@ Replace `<your-registry>/<your-repo>` with your mirrored registry path.
 ```bash
 helm upgrade --install container-cache \
   oci://<your-registry>/<your-repo>/nvcf-container-cache \
-  --version 0.25.6 \
+  --version 0.25.22 \
   --namespace container-caching \
   --values values.yaml
 ```

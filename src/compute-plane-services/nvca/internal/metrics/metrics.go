@@ -75,6 +75,7 @@ const (
 
 	// Cluster attribute metrics
 	KataRuntimeIsolationEnabledMetricName = "nvca_kata_runtime_isolation_enabled"
+	MaintenanceModeStateMetricName        = "nvca_maintenance_mode_state"
 
 	// Cluster-validator metrics — populated by a SharedInformer that
 	// watches the cluster-validator-summary ConfigMap. The dynamic-cardinality
@@ -160,6 +161,9 @@ const (
 
 	// Scheduler workload count labels
 	SchedulerNameLabel = "scheduler_name"
+
+	// Maintenance-mode label
+	MaintenanceModeLabel = "mode"
 
 	// UpstreamOperation values for use with RecordUpstreamRequest.
 	UpstreamOperationHeartbeat   = "heartbeat"
@@ -273,6 +277,12 @@ type Metrics struct {
 	// Cluster attribute metrics
 	KataRuntimeIsolationEnabled *prometheus.GaugeVec
 
+	// MaintenanceModeState reports the active maintenance mode: the series
+	// whose mode label matches the active mode is set to 1 and every other
+	// mode series is 0 (one-hot encoding). See SetMaintenanceModeState() for
+	// the update protocol.
+	MaintenanceModeState *prometheus.GaugeVec
+
 	// Cluster-validator metrics — see SetClusterValidatorSummary() for the
 	// update protocol. The dynamic-cardinality vectors (Endpoint, NetpolPair)
 	// are prune-on-update so only the current run's label values are
@@ -342,6 +352,7 @@ func (m *Metrics) Destroy() {
 	prometheus.Unregister(m.GCCleanerRunTotal)
 	prometheus.Unregister(m.ModelCacheResultTotal)
 	prometheus.Unregister(m.KataRuntimeIsolationEnabled)
+	prometheus.Unregister(m.MaintenanceModeState)
 	prometheus.Unregister(m.ClusterValidatorReady)
 	prometheus.Unregister(m.ClusterValidatorCheckStatus)
 	prometheus.Unregister(m.ClusterValidatorEndpointReachable)
@@ -383,6 +394,14 @@ func WithKataRuntimeIsolationEnabled(enabled bool) DefaultMetricsOption {
 			}
 			m.KataRuntimeIsolationEnabled.WithLabelValues(m.WithDefaultLabelValues()...).Set(val)
 		}
+	}
+}
+
+// WithMaintenanceMode sets the initial value of the maintenance-mode gauge.
+// This should be called once at agent startup with the configured mode.
+func WithMaintenanceMode(mode types.MaintenanceMode) DefaultMetricsOption {
+	return func(m *Metrics) {
+		m.SetMaintenanceModeState(mode)
 	}
 }
 
@@ -662,6 +681,17 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	}, withDefaultLabels())
 	// Initialize to 0 (disabled) so it appears on first Prometheus scrape
 	m.KataRuntimeIsolationEnabled.WithLabelValues(m.WithDefaultLabelValues()...).Set(0)
+
+	m.MaintenanceModeState = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: MaintenanceModeStateMetricName,
+		Help: "Whether NVCA is in a maintenance mode on this cluster. The series whose " +
+			"mode label matches the active mode is 1 and every other mode series is 0 " +
+			"(one-hot encoding). mode is one of None, CordonOnly, CordonAndDrain.",
+	}, withDefaultLabels(MaintenanceModeLabel))
+	// Initialize every mode to 0 so all series appear on the first Prometheus scrape.
+	for _, mode := range types.AllMaintenanceModes {
+		m.MaintenanceModeState.WithLabelValues(m.WithDefaultLabelValues(mode.String())...).Set(0)
+	}
 
 	// Cluster-validator metrics. Fixed-cardinality vectors (Ready,
 	// LastRun*, CheckStatus per known check) are initialized to zero so
@@ -1025,6 +1055,22 @@ func (m *Metrics) SetKataRuntimeIsolationEnabled(enabled bool) {
 		val = 1.0
 	}
 	m.KataRuntimeIsolationEnabled.WithLabelValues(m.WithDefaultLabelValues()...).Set(val)
+}
+
+// SetMaintenanceModeState updates the maintenance-mode gauge: the series for
+// the given mode is set to 1 and every other known mode is set to 0 (one-hot
+// encoding). Safe to call repeatedly; unknown modes leave all series at 0.
+func (m *Metrics) SetMaintenanceModeState(mode types.MaintenanceMode) {
+	if m == nil || m.MaintenanceModeState == nil {
+		return
+	}
+	for _, mm := range types.AllMaintenanceModes {
+		val := 0.0
+		if mm == mode {
+			val = 1.0
+		}
+		m.MaintenanceModeState.WithLabelValues(m.WithDefaultLabelValues(mm.String())...).Set(val)
+	}
 }
 
 // RecordWorkloadStatus records the terminal outcome of a workload.

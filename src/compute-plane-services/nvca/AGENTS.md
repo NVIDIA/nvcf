@@ -373,6 +373,7 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 | `GCCleanerRunTotal` | `cleaner_name` | `Name()` methods in `internal/gc/*/cleaner.go` |
 | `GCCleanerRunTotal` | `status` | `success`, `failure` |
 | `KataRuntimeIsolationEnabled` | _(default labels only)_ | Initialized to 0; set via `SetKataRuntimeIsolationEnabled()` in `pkg/nvca/agent.go` |
+| `MaintenanceModeState` | `mode` | `MaintenanceMode` enum in `pkg/types/types.go` (`AllMaintenanceModes`); one-hot, set via `SetMaintenanceModeState()` / `WithMaintenanceMode()` |
 | `WorkloadResultTotal` | `workload_type` | `container`, `helm` (defined in `AllWorkloadTypes`) |
 | `WorkloadResultTotal` | `workload_kind` | Constants in `internal/metrics/workloadtypes/types.go` (`AllWorkloadKinds`) |
 | `WorkloadResultTotal` | `workload_status` | `success`, `failure` |
@@ -388,6 +389,7 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 - Adding a new MiniService event error type
 - Adding a new failure category or workload type/kind in `internal/metrics/workloadtypes/`
 - Adding a new upstream operation constant to `AllUpstreamOperations` in `internal/metrics/metrics.go`
+- Adding a new maintenance mode to `AllMaintenanceModes` in `pkg/types/types.go`
 
 **Why this matters:**
 - Prometheus `absent()` alerts fail on non-existent metrics

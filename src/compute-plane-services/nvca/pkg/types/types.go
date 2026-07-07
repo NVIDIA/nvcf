@@ -295,6 +295,15 @@ func (m MaintenanceMode) String() string {
 	return string(m)
 }
 
+// AllMaintenanceModes lists every MaintenanceMode value, used to
+// zero-initialize the maintenance-mode metric so all series appear on the
+// first Prometheus scrape.
+var AllMaintenanceModes = []MaintenanceMode{
+	MaintenanceModeNone,
+	MaintenanceModeCordon,
+	MaintenanceModeCordonAndDrain,
+}
+
 // HealthStatusRequest is the payload type for reporting NVCA health to ICMS.
 type HealthStatusRequest struct {
 	Status              HealthStatus            `json:"status,omitempty"`

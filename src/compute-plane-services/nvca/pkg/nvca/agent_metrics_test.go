@@ -412,6 +412,7 @@ func TestAllExpectedMetricsExist(t *testing.T) {
 		nvcametrics.MiniServiceReadyStatusMetricName,
 		nvcametrics.MiniServiceReValRequestTotalMetricName,
 		nvcametrics.MiniServiceEventErrorTotalMetricName,
+		nvcametrics.MaintenanceModeStateMetricName,
 	}
 
 	for _, expectedMetric := range expectedMetrics {
@@ -491,6 +492,7 @@ func TestMetricTypes(t *testing.T) {
 		nvcametrics.MiniServiceReadyStatusMetricName:           dto.MetricType_GAUGE,
 		nvcametrics.MiniServiceReValRequestTotalMetricName:     dto.MetricType_COUNTER,
 		nvcametrics.MiniServiceEventErrorTotalMetricName:       dto.MetricType_COUNTER,
+		nvcametrics.MaintenanceModeStateMetricName:             dto.MetricType_GAUGE,
 	}
 
 	for metricName, expectedType := range expectedTypes {

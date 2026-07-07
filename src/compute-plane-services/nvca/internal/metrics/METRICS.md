@@ -366,9 +366,15 @@ sum by (image_registry) (nvca_image_pull_issue_total)
 - `workload_type` - Kubernetes workload type: `container` or `helm`
 - `workload_kind` - NVCF request kind, derived from `req.Spec.Action`: `function` or `task`
 - `workload_status` - Terminal status: `success` or `failure`
-- `failure_category` - Failure root cause (empty string for success). See table below.
+- `failure_category` - Failure root cause (empty string for success). See tables below.
 
 **Failure Categories:**
+
+Each `failure_category` value is derived from the workload's terminal `ICMSInstanceState`
+by `ICMSInstanceStateToFailureCategory` in `metrics.go`. The state itself is set by the
+pod/miniservice reconcilers in `pkg/nvca/`. The mapping table below is the quick reference;
+the detailed table that follows tells a cluster manager what each value means, what
+condition in NVCA raises it, and where to look first.
 
 | Category | Description | Mapped from ICMSInstanceState |
 |----------|-------------|-------------------------------|
@@ -376,6 +382,7 @@ sum by (image_registry) (nvca_image_pull_issue_total)
 | `init_stuck` | Init container stuck | `ICMSInstanceFailedInitContainerStuck` |
 | `init_restart_loop` | Init container restart loop | `ICMSInstanceFailedInitContainerRestartLoop` |
 | `container_restart_loop` | Application container restart loop | `ICMSInstanceFailedContainerRestartLoop` |
+| `create_container_error` | Kubelet cannot create the container | `ICMSInstanceFailedCreateContainerError` |
 | `no_capacity` | No GPU/node capacity available | `ICMSInstanceKilledNoCapacity` |
 | `admission_error` | Pod admission rejected | `ICMSInstanceKilledAdmissionError` |
 | `shared_storage` | Shared storage failure | `ICMSInstanceSharedStorageFailure` |
@@ -388,9 +395,38 @@ sum by (image_registry) (nvca_image_pull_issue_total)
 | `precondition_failure` | Precondition check failed | `ICMSInstanceTerminatedPreconditionFailure` |
 | `unknown` | Generic failure (fallback) | `ICMSInstanceFailed` |
 
-**Cardinality:** 64 series (2 workload types × 2 workload kinds × 16 status/category combinations)
+Triage guide. Use this table to deduce the cause of a workload-deployment
+failure from the `failure_category` label. "When it fires" describes the
+condition NVCA detects; "Owner" is the party who usually has to act; "Where to
+look / recommended action" is the first debugging step for a cluster manager.
 
-**Zero-initialized:** Yes — all 64 label combinations are pre-initialized to 0 on startup.
+| Category | When it fires | Owner | Where to look / recommended action |
+|----------|---------------|-------|-------------------------------------|
+| `image_pull` | Pod scheduled but the kubelet cannot pull the container image past `MaxImagePullErrorThreshold` (ImagePull/ErrImagePull/ImagePullBackOff). | Function owner / registry | Check image tag exists and the pull secret is valid. `nvca_image_pull_issue_total{image_registry=...}` shows the registry. Verify registry reachability and rate limits from the node. |
+| `init_stuck` | An init container has not completed within `PodLaunchThresholdMinutesOnInitFailure` (or `IsPodStuckInitializing` trips). | Function owner | Inspect init container logs and events. Common causes: model/asset download hanging, a dependency service unreachable, or an init command that never exits. |
+| `init_restart_loop` | An init container keeps restarting (crash on start, repeated non-zero exit). | Function owner | Read init container logs from the last few restarts. Usually a bad entrypoint, missing config, or a failing readiness precondition inside the init step. |
+| `container_restart_loop` | The application container keeps restarting after start (CrashLoopBackOff). | Function owner | Read application logs across restarts. Look for OOMKilled (raise memory request/limit), missing env/secret, or an application-level panic on startup. |
+| `create_container_error` | Kubelet reports CreateContainerError / CreateContainerConfigError; the container spec cannot be realized. Not zero-initialized, so it only appears once observed. | Cluster manager | Check pod events for the exact message. Typical causes: a referenced ConfigMap/Secret or volume mount is missing, or an invalid device/runtime request on the node. |
+| `no_capacity` | Pod stays Pending and unscheduled past `PodScheduledThreshold` (no node with the requested GPU/resources). | Cluster manager | Confirm GPU nodes of the requested type are Ready and have free capacity. Check taints, node selectors, and the scheduler (`SchedulerWorkloadCount`). Scale the node pool or free workers. |
+| `admission_error` | The API server rejects the pod at admission (webhook/quota/policy denial). | Cluster manager | Read the admission rejection in pod events. Check admission webhooks, ResourceQuota, LimitRange, and PodSecurity/network policies in the target namespace. |
+| `shared_storage` | The miniservice/helm workload fails provisioning or mounting shared (SMB/read) storage. | Cluster manager | Verify the SMB CSI driver is healthy and the share/credentials are valid. Check PVC and pod events for mount errors. |
+| `persistent_storage` | Internal persistent-storage (PVC) provisioning or attach fails. | Cluster manager | Check the storage class, provisioner health, and PVC binding state. Look for attach/detach errors in pod and PV events. |
+| `degraded_worker` | A Running pod is detected unhealthy/degraded by `IsPodDegraded` (for example a GPU/node fault) after start. | Cluster manager | Inspect node health and GPU state (XID errors, NVLink). Cordon and remediate the node. If `autoPurgeDegradedWorkers` is off, the workload is left for manual handling. |
+| `not_found` | The expected pod/miniservice for an active request no longer exists (deleted out from under NVCA). | Cluster manager | Usually a manual delete or an external controller/GC removed the workload. Correlate with `nvca_orphaned_resource_cleanup_total` and cluster audit logs. |
+| `terminal_error` | NVCA classifies the failure as unrecoverable and terminates the request with a terminal error. | Function owner / cluster manager | Read `SystemFailure` on the termination update for the specific reason. This is a hard stop; the request will not be retried as-is. |
+| `sync_action` | The workload is terminated by a sync/reconcile action (a newer desired state supersedes it). | Expected / control plane | Normally benign: the control plane replaced or scaled down the request. Only investigate if it correlates with unexpected churn. |
+| `service_maintenance` | The workload is terminated for planned service maintenance. | Expected / cluster manager | Expected during maintenance windows. Confirm the maintenance was intended; workloads should reschedule afterward. |
+| `precondition_failure` | A precondition check fails before or during deployment, so the request is terminated. | Cluster manager | Read `SystemFailure` for the failed precondition. Verify the cluster meets the workload's requirements (features, capabilities, config). |
+| `unknown` | Generic `ICMSInstanceFailed` with no more specific mapping (fallback bucket). | Cluster manager | A rising `unknown` rate means a failure mode is not yet categorized. Inspect pod/miniservice events and file an issue so the state can be mapped to a specific category. |
+
+**Cardinality:** 64 zero-initialized series (2 workload types × 2 workload kinds × 16
+status/category combinations: 15 zero-initialized failure categories plus the empty
+success category). `create_container_error` is not zero-initialized, so it appears as an
+additional series only after it is first observed.
+
+**Zero-initialized:** Yes. The 64 combinations listed above are pre-initialized to 0 on
+startup. `create_container_error` is intentionally excluded from `AllFailureCategories`
+and shows up only when the condition occurs.
 
 **Usage:**
 
@@ -907,6 +943,46 @@ sum by (nvca_cluster_name) (nvca_kata_runtime_isolation_enabled)
 
 # Detect Kata state changes
 changes(nvca_kata_runtime_isolation_enabled[1h]) > 0
+```
+
+---
+
+### `nvca_maintenance_mode_state`
+
+**Type:** Gauge
+
+**Description:** Whether NVCA is in a maintenance mode on this cluster. The series whose `mode` label matches the active maintenance mode is 1, and every other `mode` series is 0 (one-hot encoding). Set at agent startup from the configured maintenance mode (config or feature flags). Backs the informational "NVCA Desired State Signal" panel and lets workload-deployment failures be correlated with cluster maintenance windows.
+
+**Labels:**
+
+- `mode` - Maintenance mode. One of:
+  - `None` - normal operation; workloads deploy as usual
+  - `CordonOnly` - creation of new functions/tasks is paused (cordoned); existing workloads keep running
+  - `CordonAndDrain` - creation is cordoned and existing workloads are drained
+- `nvca_nca_id` - NVCA instance identifier
+- `nvca_cluster_name` - Kubernetes cluster name
+- `nvca_cluster_group` - Cluster group identifier
+- `nvca_version` - NVCA version
+
+**Cardinality:** 3 series per NVCA instance (one per mode).
+
+**Zero-initialized:** Yes. All three `mode` series are pre-initialized to 0 on startup, then the active mode is set to 1.
+
+**Usage:**
+
+```promql
+# Active maintenance mode per cluster (returns the mode label of the active series)
+nvca_maintenance_mode_state == 1
+
+# Is this cluster draining?
+nvca_maintenance_mode_state{mode="CordonAndDrain"} == 1
+
+# Clusters not in normal operation
+nvca_maintenance_mode_state{mode="None"} == 0
+
+# Correlate deployment failures with maintenance windows
+sum by (failure_category) (rate(nvca_workload_result_total{workload_status="failure"}[5m]))
+  and on(nvca_cluster_name) (nvca_maintenance_mode_state{mode="None"} == 0)
 ```
 
 ---

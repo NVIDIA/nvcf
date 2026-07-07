@@ -1134,6 +1134,100 @@ func TestKataRuntimeIsolationEnabledMetricNilSafety(t *testing.T) {
 	})
 }
 
+// TestMaintenanceModeStateMetric tests the maintenance-mode gauge: exactly one
+// mode series is 1 and the rest are 0 (one-hot encoding).
+func TestMaintenanceModeStateMetric(t *testing.T) {
+	ctx := context.Background()
+	reg := prometheus.NewRegistry()
+	ctx = WithDefaultMetrics(ctx, "nca-123", "test-cluster", "test-group", "v1.0.0", WithRegisterer(reg))
+	metrics := FromContext(ctx)
+	t.Cleanup(func() { metrics.Destroy() })
+	require.NotNil(t, metrics)
+	require.NotNil(t, metrics.MaintenanceModeState)
+
+	// modeValues returns the gauge value keyed by the `mode` label value.
+	modeValues := func() map[string]float64 {
+		metricFamilies, err := reg.Gather()
+		require.NoError(t, err)
+		out := map[string]float64{}
+		for _, mf := range metricFamilies {
+			if *mf.Name != MaintenanceModeStateMetricName {
+				continue
+			}
+			for _, metric := range mf.Metric {
+				for _, lp := range metric.Label {
+					if *lp.Name == MaintenanceModeLabel {
+						out[*lp.Value] = *metric.Gauge.Value
+					}
+				}
+			}
+		}
+		return out
+	}
+
+	t.Run("InitializedToZeroForAllModes", func(t *testing.T) {
+		values := modeValues()
+		require.Len(t, values, len(types.AllMaintenanceModes), "every mode series should be present")
+		for _, mm := range types.AllMaintenanceModes {
+			assert.Equal(t, float64(0), values[mm.String()], "mode %s should start at 0", mm)
+		}
+	})
+
+	t.Run("OneHotOnSet", func(t *testing.T) {
+		metrics.SetMaintenanceModeState(types.MaintenanceModeCordonAndDrain)
+		values := modeValues()
+		assert.Equal(t, float64(1), values[types.MaintenanceModeCordonAndDrain.String()])
+		assert.Equal(t, float64(0), values[types.MaintenanceModeCordon.String()])
+		assert.Equal(t, float64(0), values[types.MaintenanceModeNone.String()])
+	})
+
+	t.Run("SwitchClearsPreviousMode", func(t *testing.T) {
+		metrics.SetMaintenanceModeState(types.MaintenanceModeNone)
+		values := modeValues()
+		assert.Equal(t, float64(1), values[types.MaintenanceModeNone.String()])
+		assert.Equal(t, float64(0), values[types.MaintenanceModeCordonAndDrain.String()])
+		assert.Equal(t, float64(0), values[types.MaintenanceModeCordon.String()])
+	})
+}
+
+// TestMaintenanceModeStateMetricNilSafety tests nil-safety.
+func TestMaintenanceModeStateMetricNilSafety(t *testing.T) {
+	var metrics *Metrics
+	assert.NotPanics(t, func() {
+		metrics.SetMaintenanceModeState(types.MaintenanceModeCordon)
+	})
+}
+
+// TestWithMaintenanceModeOption tests the WithMaintenanceMode option sets the
+// active mode series to 1 at construction.
+func TestWithMaintenanceModeOption(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ctx := WithDefaultMetrics(context.Background(), "nca-123", "test-cluster", "test-group", "v1.0.0",
+		WithRegisterer(reg),
+		WithMaintenanceMode(types.MaintenanceModeCordon))
+	metrics := FromContext(ctx)
+	t.Cleanup(func() { metrics.Destroy() })
+	require.NotNil(t, metrics)
+
+	metricFamilies, err := reg.Gather()
+	require.NoError(t, err)
+	found := false
+	for _, mf := range metricFamilies {
+		if *mf.Name != MaintenanceModeStateMetricName {
+			continue
+		}
+		for _, metric := range mf.Metric {
+			for _, lp := range metric.Label {
+				if *lp.Name == MaintenanceModeLabel && *lp.Value == types.MaintenanceModeCordon.String() {
+					assert.Equal(t, float64(1), *metric.Gauge.Value, "configured mode should be 1")
+					found = true
+				}
+			}
+		}
+	}
+	assert.True(t, found, "MaintenanceModeState metric for CordonOnly should be found")
+}
+
 // TestWithKataRuntimeIsolationEnabledOption tests the WithKataRuntimeIsolationEnabled option
 func TestWithKataRuntimeIsolationEnabledOption(t *testing.T) {
 	t.Run("WithEnabled", func(t *testing.T) {

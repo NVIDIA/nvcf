@@ -97,8 +97,8 @@ Services that manage the NVCF platform including API gateway, deployment orchest
 | Chart (HTTP) | helm-nvcf-sis | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-sis:1.17.0` |
 | Image | nvcf-grpc-proxy | `nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.29.1` |
 | Chart (HTTP) | helm-nvcf-grpc-proxy | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-grpc-proxy:1.6.7` |
-| Image | nvcf-invocation-service | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-invocation-service:0.5.2` |
-| Chart (HTTP) | helm-nvcf-invocation-service | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-invocation-service:1.5.4` |
+| Image | nvcf-invocation-service | `nvcr.io/nvidia/nvcf/nvcf-invocation-service:0.8.5` |
+| Chart (HTTP) | helm-nvcf-invocation-service | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-invocation-service:1.5.5` |
 | Image | ess-api | `nvcr.io/nvidia/nvcf/ess-api:v0.57.26` |
 | Chart (HTTP) | helm-nvcf-ess-api | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-ess-api:1.6.1` |
 | Image | notary-service | `nvcr.io/0833294136851237/nvcf-ncp-staging/notary-service:1.9.4` |
@@ -157,8 +157,8 @@ Optional example components for monitoring and observability. These are provided
 
 | Type | Component Name | Full Path |
 | --- | --- | --- |
-| Chart (OCI) | nvcf-observability-reference-stack | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack:1.10.0` |
-| Chart (OCI) | nvcf-example-dashboards | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-example-dashboards:1.6.0` |
+| Chart (HTTP) | nvcf-observability-reference-stack | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-observability-reference-stack:1.10.0` |
+| Chart (HTTP) | nvcf-example-dashboards | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-example-dashboards:1.6.0` |
 | Chart (HTTP) | helm-nvcf-state-metrics | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-state-metrics:1.0.1` |
 
 #### Container Caching Components
@@ -168,7 +168,7 @@ Optional components for accelerating container image pulls across all workload t
 | Type | Component Name | Full Path |
 | --- | --- | --- |
 | Image | nvcf-container-cache | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-container-cache:v1.1.31` |
-| Chart (OCI) | helm-nvcf-container-cache | `nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvcf-container-cache:0.25.6` |
+| Chart (HTTP) | nvcf-container-cache | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-container-cache:0.25.22` |
 | Image | nvcf-proxy-tls-certs | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-proxy-tls-certs:1.2.0` |
 
 #### Other Published Components
@@ -286,7 +286,7 @@ Helmfile and CLI resources for deployment.
 | Component Name | Description |
 | --- | --- |
 | nvcf-container-cache | Accelerates container image pulls by caching layers locally on nodes |
-| helm-nvcf-container-cache | Helm chart for container cache deployment |
+| nvcf-container-cache (chart) | Helm chart for container cache deployment |
 | nvcf-proxy-tls-certs | TLS certificate management for container cache proxy |
 
 #### Deployment Resources

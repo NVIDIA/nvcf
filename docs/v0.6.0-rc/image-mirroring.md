@@ -138,7 +138,7 @@ echo "${NGC_API_KEY}" | helm registry login nvcr.io/0833294136851237/nvcf-ncp-st
   --username '$oauthtoken' --password-stdin
 
 # Pull the chart
-helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack --version 1.10.0
+helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvcf-api --version 1.23.1
 ```
 
 **Other Repository-based Helm Charts (Non-OCI)**

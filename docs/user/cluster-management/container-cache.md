@@ -85,7 +85,7 @@ Replace `<your-registry>/<your-repo>` with your mirrored registry path.
 ```bash
 helm upgrade --install container-cache \
   oci://<your-registry>/<your-repo>/nvcf-container-cache \
-  --version 0.25.6 \
+  --version 0.25.22 \
   --namespace container-caching \
   --values values.yaml
 ```

@@ -36,6 +36,9 @@ publications:
   - name: nvcf-grpc-proxy
     version: 1.29.1
     registry: public-images
+  - name: nvcf-invocation-service
+    version: 0.8.5
+    registry: public-images
   - name: nvcf-nats-auth-callout-service
     version: 0.5.10
     registry: public-images
@@ -83,7 +86,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-invocation-service
-    version: 1.5.4
+    version: 1.5.5
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-llm-api-gateway
@@ -136,6 +139,18 @@ publications:
     chart_format: http
   - name: nvcf-gateway-routes
     version: 1.13.4
+    registry: public-helm
+    chart_format: http
+  - name: nvcf-container-cache
+    version: 0.25.22
+    registry: public-helm
+    chart_format: http
+  - name: nvcf-example-dashboards
+    version: 1.6.0
+    registry: public-helm
+    chart_format: http
+  - name: nvcf-observability-reference-stack
+    version: 1.10.0
     registry: public-helm
     chart_format: http
   - name: helm-nvca-operator
@@ -264,7 +279,7 @@ artifacts:
   - name: helm-nvcf-invocation-service
     type: chart
     registry: staging
-    version: 1.5.4
+    version: 1.5.5
   - name: helm-nvcf-llm-api-gateway
     type: chart
     registry: staging
@@ -348,7 +363,7 @@ artifacts:
   - name: nvcf-invocation-service
     type: image
     registry: staging
-    version: 0.5.2
+    version: 0.8.5
   - name: nvcf-nats-auth-callout-service
     type: image
     registry: staging
@@ -439,14 +454,16 @@ supplemental_artifacts:
     type: chart
     registry: staging
     version: 1.6.0
-  - name: nvcf-container-cache
+  - id: nvcf-container-cache-image
+    name: nvcf-container-cache
     type: image
     registry: staging
     version: v1.1.31
-  - name: helm-nvcf-container-cache
+  - id: nvcf-container-cache-chart
+    name: nvcf-container-cache
     type: chart
     registry: staging
-    version: 0.25.6
+    version: 0.25.22
   - name: nvcf-proxy-tls-certs
     type: image
     registry: staging
