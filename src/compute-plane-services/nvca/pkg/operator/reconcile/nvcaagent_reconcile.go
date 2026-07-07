@@ -101,6 +101,11 @@ const (
 	//nolint:gosec // G101: This is a ConfigMap name, not a credential
 	nvcfCustomAnnotationsConfigMapName = "nvca-namespace-pod-annotations"
 
+	// nvcfGPUProfilingConfigMapName is the operator-managed GPU-profiling ConfigMap. The chart
+	// creates it at deploy/upgrade time and the operator mirrors it into the agent namespace;
+	// optional (absent = profiling off). Must match profiling.ConfigMapName.
+	nvcfGPUProfilingConfigMapName = "nvca-gpu-profiling-config"
+
 	// BYOO Prometheus egress policy
 	EgressBYOOOTelPrometheusNetworkPolicyNameKey = "allow-egress-prometheus-nvcf-byoo"
 
@@ -575,6 +580,12 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(ctx context.Context, nb *nvidiaio
 			nb.Namespace, nb.Name, err)
 	}
 
+	err = bc.setupGPUProfilingConfigMap(ctx, nb)
+	if err != nil {
+		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", nvcfGPUProfilingConfigMapName,
+			nb.Namespace, nb.Name, err)
+	}
+
 	err = bc.setupVaultConfigmap(ctx, nb)
 	if err != nil {
 		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", NVCAVaultConfigmapName,
@@ -970,6 +981,31 @@ func (bc *BackendK8sCache) mirrorConfigMap(ctx context.Context, nb *nvidiaiov1.N
 	cmTemplate := corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      srcName,
+			Namespace: getSystemNamespace(nb),
+		},
+		Data: srcCM.Data,
+	}
+	return bc.createOrUpdateConfigMap(ctx, &cmTemplate)
+}
+
+// setupGPUProfilingConfigMap mirrors the chart-created nvca-gpu-profiling-config ConfigMap
+// into the agent's system namespace, where NVCA reads it live. Unlike mirrorConfigMap it is
+// optional: an absent source is skipped (profiling stays off) rather than failing reconcile.
+func (bc *BackendK8sCache) setupGPUProfilingConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
+	log := core.GetLogger(ctx)
+
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(ctx, nvcfGPUProfilingConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		if k8serr.IsNotFound(err) {
+			log.Debugf("%v configmap not found, skipping GPU profiling config mirror", nvcfGPUProfilingConfigMapName)
+			return nil
+		}
+		return err
+	}
+
+	cmTemplate := corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nvcfGPUProfilingConfigMapName,
 			Namespace: getSystemNamespace(nb),
 		},
 		Data: srcCM.Data,

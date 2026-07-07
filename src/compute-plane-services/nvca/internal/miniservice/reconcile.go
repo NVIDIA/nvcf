@@ -488,6 +488,13 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		PodLabels:      make(map[string]string),
 	}
 
+	// Enable NVIDIA Nsight GPU profiling for this function's workload pods when it is in
+	// the profiling allowlist. The label is injected onto admitted pods by the miniservice
+	// mutating webhook via metaInput.PodLabels.
+	if r.NsightProfilingAllowlist.ShouldProfile(icmsReq.Spec.FunctionDetails.FunctionID) {
+		metaInput.PodLabels[r.NsightProfilingAllowlist.LabelKey()] = r.NsightProfilingAllowlist.LabelValue()
+	}
+
 	ms.Status.Phase = v1alpha1.MiniServiceInstalling
 
 	unfilteredInfraObjs, err := r.translateWorkload(ms, icmsReq)

@@ -59,6 +59,12 @@ const (
 	// This should be wiped from user-owned objects if set.
 	InfraObjectAnnotationKey = labelFQDNPrefix + "/nvca-infra-object"
 
+	// GpuProfilingLabelKey / GpuProfilingLabelValue are the default profiling pod label the
+	// Nsight Operator watches for. Overridable at deploy time via the nvca-gpu-profiling-config
+	// ConfigMap (labelKey / labelValue). Intentionally not namespaced under labelFQDNPrefix.
+	GpuProfilingLabelKey   = "nvidia-nsight-profile"
+	GpuProfilingLabelValue = "enabled"
+
 	// WorkloadInstanceTypeLabel denotes what instance type will exist in a given namespace.
 	WorkloadInstanceTypeLabel = labelFQDNPrefix + "/workload-instance-type"
 

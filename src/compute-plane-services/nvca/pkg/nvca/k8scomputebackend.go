@@ -574,6 +574,16 @@ func (c K8sComputeBackend) applyFunctionCreationMessage(ctx context.Context, req
 			pod.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
 		}
 
+		// Enable NVIDIA Nsight GPU profiling for this pod when its function is in the
+		// profiling allowlist. The label must be present at pod creation for the Nsight
+		// Operator's admission webhook to inject profiling.
+		if c.bk8s.nsightProfilingAllowlist.ShouldProfile(req.Spec.FunctionDetails.FunctionID) {
+			if pod.Labels == nil {
+				pod.Labels = map[string]string{}
+			}
+			pod.Labels[c.bk8s.nsightProfilingAllowlist.LabelKey()] = c.bk8s.nsightProfilingAllowlist.LabelValue()
+		}
+
 		if requeue, err := c.initializeImageCredentialHelper(ctx, req, mf); err != nil || requeue {
 			if err != nil {
 				err = fmt.Errorf("ensure image credential updater objects: %w", err)

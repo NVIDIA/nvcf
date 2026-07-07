@@ -28,6 +28,7 @@ limitations under the License.
 - **Comprehensive Authentication**: Multi-token support with automatic scope management
 - **Simple Architecture**: Everything works via direct HTTPS - no cluster access required
 - **NVCT Task Support**: First-class commands for NVIDIA Cloud Tasks (`nvcf-cli task ...`)
+- **Cluster Diagnostics**: One-command health report and support bundle for self-managed deployments (`nvcf-cli cluster-dump`)
 
 **[Jump to Token Generation Guide](#automatic-token-generation-)**
 
@@ -1781,6 +1782,82 @@ nvcf-cli cluster agent kill-function func-abc ver-def --compute-plane-context ed
 # Wipe every function on the cluster (CI/automation form)
 nvcf-cli cluster agent kill-all --compute-plane-context edge-1 --yes --confirm <cluster-name>
 ```
+
+---
+
+## Cluster Diagnostics (`cluster-dump`)
+
+`nvcf-cli cluster-dump` collects a diagnostic snapshot of a self-managed NVCF
+deployment across the control-plane and compute-plane clusters in one command.
+It is the operator equivalent of a must-gather: run it to triage an issue, or to
+produce a support bundle to share with NVIDIA.
+
+The default report prints to stdout and covers, per plane:
+
+- Kubernetes version and a per-node table (ready, cordoned, Memory/Disk/PID
+  pressure, roles, GPU count, version, age)
+- Helm releases, flagging any not in the `deployed` state
+- Every pod with its ready state, status, restart count, and age
+- Recent warning events
+- Compute plane only: the NVCFBackend custom resource, GPU reconciliation
+  (NVCFBackend reported capacity/allocated vs node capacity and MiniService
+  reservations), ICMSRequest triage (with failed requests flagged), and any
+  namespaces stuck Terminating (read-only finalizer diagnosis)
+
+Every probe degrades to a per-plane warning rather than aborting, so a partially
+broken cluster still produces a useful report.
+
+### Selecting clusters
+
+```bash
+# Both planes
+nvcf-cli cluster-dump --control-plane-context k3d-ncp-local-cp \
+  --compute-plane-context k3d-ncp-local-compute-1
+
+# Control plane only (single-cluster); defaults to the current kube context
+nvcf-cli cluster-dump --control-plane-context k3d-ncp-local-cp
+
+# Compute plane only
+nvcf-cli cluster-dump --compute-only --compute-plane-context k3d-ncp-local-compute-1
+```
+
+### Support bundle
+
+Add `--bundle <path>` to also write a full bundle. A path ending in `.tar.gz` or
+`.tgz` writes a single archive; any other path writes a directory tree. On top of
+the report, the bundle adds raw artifacts: per-namespace resource manifests,
+bounded pod logs (current and previous), and helm manifest/values. It also
+writes `dump.json`, a `summary.txt`, and a collated `upload.txt` you can attach
+to a support ticket.
+
+```bash
+# Archive (best for sharing)
+nvcf-cli cluster-dump --control-plane-context cp --compute-plane-context co \
+  --bundle ./nvcf-support.tar.gz
+
+# Directory tree
+nvcf-cli cluster-dump --control-plane-context cp --compute-plane-context co \
+  --bundle ./nvcf-dump
+```
+
+### Redaction and tuning
+
+Secret values are masked by default. Captured Secret data, Secret documents in
+rendered helm manifests, and helm values under sensitive keys are masked before
+anything is written to disk.
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--bundle <path>` | (off) | Write a support bundle (`.tar.gz`/`.tgz` archive, else a directory) |
+| `--compute-only` | `false` | Collect only the compute plane |
+| `--redact` | `secrets` | Redaction level: `secrets`, `none`, or `all` |
+| `--include` | all | Limit heavy bundle artifacts (advanced): `resources,logs,helm` |
+| `--log-tail` | `2000` | Max log lines per container in the bundle |
+| `--max-log-bytes` | `1048576` | Max log bytes per container in the bundle |
+| `--output` / `--json` | stdout text | Write the report to a file / emit JSON |
+
+The report is also available as JSON (`--json` or a `.json --output` extension),
+which carries `nodeDetails`, `gpu`, `icmsRequests`, and `stuckNamespaces`.
 
 ---
 

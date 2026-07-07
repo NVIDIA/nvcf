@@ -43,6 +43,7 @@ go_library(
         "//pkg/nvca/enforce",
         "//pkg/nvca/enforce/kaischeduler",
         "//pkg/nvca/health",
+        "//pkg/profiling",
         "//pkg/storage",
         "//pkg/types",
         "//vendor/github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1",

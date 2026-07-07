@@ -63,6 +63,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/profiling"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -120,6 +121,9 @@ type ControllerOptions struct {
 	CustomAnnotations *sync.Map
 	// Kartas are live Karta objects from the cluster, to include in status checkers.
 	Kartas []*kartav1alpha1.Karta
+	// NsightProfilingAllowlist tracks which functions should have NVIDIA Nsight GPU
+	// profiling enabled. Shared with BackendK8sCache.
+	NsightProfilingAllowlist *profiling.Allowlist
 
 	// Internal use.
 	cacheDir string

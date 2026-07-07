@@ -63,6 +63,7 @@ go_library(
         "//pkg/nvca/errors",
         "//pkg/nvca/fnds",
         "//pkg/nvca/health",
+        "//pkg/profiling",
         "//pkg/queue",
         "//pkg/queue/nats",
         "//pkg/queue/sqs",

@@ -157,6 +157,7 @@ func startControllerManagerForAgent(
 			ImageCredentialHelperImage: a.ImageCredentialHelperImage,
 			CustomAnnotations:          a.backendk8scache.customAnnotations,
 			Kartas:                     kartas,
+			NsightProfilingAllowlist:   a.backendk8scache.nsightProfilingAllowlist,
 		},
 	); err != nil {
 		log.WithError(err).Error("Failed to create miniservice controller")

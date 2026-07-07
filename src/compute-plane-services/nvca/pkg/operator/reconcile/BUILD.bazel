@@ -126,6 +126,7 @@ go_test(
         "backendk8scache_test.go",
         "cli_test.go",
         "crd_reconcile_test.go",
+        "gpu_profiling_configmap_test.go",
         "miniservice_restrictions_test.go",
         "namespace_helpers_test.go",
         "nvcaagent_reconcile_test.go",

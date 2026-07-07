@@ -81,6 +81,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/fnds"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/profiling"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
@@ -168,6 +169,9 @@ type BackendK8sCache struct {
 	helmSharedStorageEnabled             bool
 	helmInternalPersistentStorageEnabled bool
 	featureFlagFetcher                   featureflag.Fetcher
+	// nsightProfilingAllowlist tracks which functions should have NVIDIA Nsight GPU
+	// profiling enabled. Populated from an optional ConfigMap and refreshed periodically.
+	nsightProfilingAllowlist *profiling.Allowlist
 	// If true, nvca will request once for PVC rebind for model-cache setup
 	pvcRebindEnabled bool
 	// For credential updater jobs.
@@ -525,6 +529,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		icmsRequestWQ:                        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		nodeUpdateWQ:                         workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		featureFlagFetcher:                   b.featureFlagFetcher,
+		nsightProfilingAllowlist:             profiling.New(),
 		lowLatencyStreamingEnabled:           b.lowLatencyStreamingEnabled,
 		helmRepositoryPrefix:                 b.helmRepositoryPrefix,
 		pvcRebindEnabled:                     b.pvcRebindEnabled,
@@ -559,6 +564,10 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 	if c.podInstanceNamespace == "" {
 		c.podInstanceNamespace = c.requestsNamespace
 	}
+
+	// Load the optional Nsight profiling allowlist and keep it refreshed so operators
+	// can change which functions are profiled without restarting NVCA.
+	c.startNsightProfilingAllowlistRefresh(ctx)
 
 	if c.namespaceLabels == nil {
 		return nil, nil, fmt.Errorf("namespace labels are required")
@@ -1172,6 +1181,73 @@ func makeNamespacedName(obj metav1.Object) apitypes.NamespacedName {
 		Namespace: obj.GetNamespace(),
 		Name:      obj.GetName(),
 	}
+}
+
+// nsightProfilingRefreshInterval is how often the Nsight profiling allowlist ConfigMap
+// is re-read from the API server.
+const nsightProfilingRefreshInterval = time.Minute
+
+// startNsightProfilingAllowlistRefresh reads the optional Nsight profiling ConfigMap once
+// and then re-reads it periodically until ctx is cancelled, keeping the in-memory allowlist
+// current. A missing ConfigMap is treated as "profile nothing".
+func (c *BackendK8sCache) startNsightProfilingAllowlistRefresh(ctx context.Context) {
+	// lastSig logs at Info only on change (Debug otherwise) so the per-minute refresh does
+	// not spam Info. Only accessed from refresh, which runs serially.
+	var lastSig string
+
+	refresh := func() {
+		log := core.GetLogger(ctx)
+		allowlist := c.nsightProfilingAllowlist
+		cm, err := c.clients.K8s.CoreV1().ConfigMaps(c.systemNamespace).Get(
+			ctx, profiling.ConfigMapName, metav1.GetOptions{})
+		switch {
+		case err != nil && k8serrors.IsNotFound(err):
+			allowlist.LoadFromConfigMap(nil)
+		case err != nil:
+			log.WithError(err).Warnf("failed to read GPU profiling ConfigMap %s/%s",
+				c.systemNamespace, profiling.ConfigMapName)
+			return
+		default:
+			allowlist.LoadFromConfigMap(cm)
+		}
+
+		fields := logrus.Fields{
+			"configMap":   fmt.Sprintf("%s/%s", c.systemNamespace, profiling.ConfigMapName),
+			"wildcard":    allowlist.IsWildcard(),
+			"functionIDs": allowlist.FunctionIDs(),
+			"labelKey":    allowlist.LabelKey(),
+			"labelValue":  allowlist.LabelValue(),
+		}
+		sig := fmt.Sprintf("wildcard=%t;ids=%s;label=%s=%s",
+			allowlist.IsWildcard(), strings.Join(allowlist.FunctionIDs(), ","),
+			allowlist.LabelKey(), allowlist.LabelValue())
+		if sig != lastSig {
+			lastSig = sig
+			log.WithFields(fields).Info("GPU profiling allowlist updated")
+		} else {
+			log.WithFields(fields).Debug("GPU profiling allowlist unchanged")
+		}
+	}
+
+	refresh()
+
+	go func() {
+		t := time.NewTicker(nsightProfilingRefreshInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				// select is non-deterministic when ctx.Done() and t.C are both ready;
+				// re-check before refreshing to avoid a spurious warning on shutdown.
+				if ctx.Err() != nil {
+					return
+				}
+				refresh()
+			}
+		}
+	}()
 }
 
 // parseCustomAnnotationsFromConfigMap extracts and parses custom annotations from a ConfigMap

@@ -615,7 +615,7 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 					})
 
 					switch newCM.Name {
-					case nvcfCustomNetworkPoliciesConfigMapName, nvcfCustomAnnotationsConfigMapName, nvcfBackendChartDefaultsConfigMapName:
+					case nvcfCustomNetworkPoliciesConfigMapName, nvcfCustomAnnotationsConfigMapName, nvcfGPUProfilingConfigMapName, nvcfBackendChartDefaultsConfigMapName:
 						log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
 						diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
 						log.WithField("diff", diff).Debugf("configmap data diff")
