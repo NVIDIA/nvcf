@@ -73,6 +73,19 @@ Use the `nvcf/nvcf-internal` repository for detailed internal k3d workflows.
 If creating a net-new environment, use unique cluster names, ports, Helmfile
 environments, secrets files, CLI configs, and artifact directories.
 
+## GitLab CI Manual Actions
+
+Treat manual GitLab CI actions as remote write operations. Before triggering a
+manual job, retrying or restarting a job or pipeline, canceling CI, or using a
+push/API side effect to retrigger CI, ask the user for explicit approval in the
+current thread. Do this even when the user asks an agent to fix CI, restart a
+pipeline or job, get a release unstuck, or investigate a failed pipeline.
+
+The approval request must name the exact project, ref, pipeline or job name and
+ID when available, and the expected side effect. Do not treat a broad request
+such as "fix CI", "restart the pipeline", or "get this released" as permission
+to press a manual CI button or retrigger CI.
+
 ## Writing AGENTS.md Files
 
 Every subtree that an agent may work in should have its own `AGENTS.md` with build commands, test commands, code style, and any subtree-specific conventions. Keep each file under 400 lines; split into separate docs or skills when it grows past that.
