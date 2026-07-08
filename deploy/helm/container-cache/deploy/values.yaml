@@ -37,14 +37,17 @@ images:
 cache:
   # Size for storing cache keys.
   keyStorageSize: 50m
-  # Max cache size.
-  maxSize: 500g
   # Period a resource can remain in cache without being accessed.
   # Immutable blobs (SHA256-addressed) are safe to keep long; disk pressure
-  # is handled by min_free watermark, so this only cleans truly abandoned entries.
+  # is handled by the min_free watermark (persistentVolumeClaim.freeProxyPct),
+  # so this only cleans truly abandoned entries.
   inactive: 30d
-  # Cache validity period.
-  valid: 12h
+  # Cache validity period for immutable objects (NGC model blobs, S3
+  # objects, registry blobs). Content-addressed data never changes, so long
+  # validity avoids refetching; disk pressure is handled by the min_free
+  # watermark, not by expiry. Presigned-URL redirect caching (hf.conf) keeps
+  # its own short validity tied to URL lifetime.
+  valid: 31d
   # HTTP/2 for ingress listeners where applicable.
   http2: off
   # Nginx worker connections per worker process. Bounded by worker_rlimit_nofile
@@ -112,8 +115,13 @@ persistentVolumeClaim:
   sizeProxyGB: 200
   # Container cache volume size (Gi).
   sizeGB: 100
-  # Cleanup watermark percentage (keep this much free on proxy cache volume).
-  freeProxyPct: 10
+  # Cleanup watermark percentage (keep this much free on the proxy cache
+  # volume): eviction starts when the volume passes (100 - freeProxyPct)
+  # percent usage, i.e. 15 means evict at 85 percent full. This is the only
+  # space-based eviction trigger; there is no per-zone max_size because a
+  # deployment serves either s3 or ngc/hf traffic, and a per-zone split would
+  # strand the idle zone's share of the volume.
+  freeProxyPct: 15
 
 # Service configuration.
 service:
