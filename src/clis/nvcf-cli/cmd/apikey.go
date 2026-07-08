@@ -20,6 +20,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -325,6 +326,67 @@ func generateNVCTAPIKey(config *client.Config, description string, expiresAt tim
 	return apikeys.NewClient(apiKeysConfig).GenerateAPIKey(context.Background(), description, expiresAt, customScopes)
 }
 
+// nvcfAPIKeysConfig builds the api-keys client config for NVCF (function) keys.
+// An optional ownerOverride replaces the default owner (used by clear-all).
+func nvcfAPIKeysConfig(config *client.Config, ownerOverride string) *apikeys.Config {
+	owner := getConfigValueWithDefault("API_KEYS_OWNER_ID", "svc@nvcf-api.local")
+	if ownerOverride != "" {
+		owner = ownerOverride
+	}
+	return &apikeys.Config{
+		ServiceURL:    getConfigValueWithDefault("api_keys_service_url", "https://api-keys.nvcf.nvidia.com"),
+		ServiceID:     getConfigValueWithDefault("API_KEYS_SERVICE_ID", "nvidia-cloud-functions-ncp-service-id-aketm"),
+		IssuerService: getConfigValueWithDefault("API_KEYS_ISSUER_SERVICE", "nvcf-api"),
+		OwnerID:       owner,
+		JWTToken:      config.Token,
+		HostHeader:    getConfigValueWithDefault("api_keys_host", ""),
+		Debug:         config.Debug,
+	}
+}
+
+// nvctAPIKeysConfig builds the api-keys client config for NVCT (task) keys.
+// Task keys are issued under a separate issuer/owner, so they are only visible
+// and deletable through this config -- listing/deleting under the function
+// issuer alone silently misses them (NVBug 6417533).
+func nvctAPIKeysConfig(config *client.Config, ownerOverride string) *apikeys.Config {
+	owner := getConfigValueWithDefault("api_keys_nvct_owner_id", "svc@nvct-api.local")
+	if ownerOverride != "" {
+		owner = ownerOverride
+	}
+	return &apikeys.Config{
+		ServiceURL:    getConfigValueWithDefault("api_keys_service_url", "https://api-keys.nvcf.nvidia.com"),
+		ServiceID:     getConfigValueWithDefault("api_keys_nvct_service_id", "nvidia-cloud-tasks-ncp-service-id-nvcttasks"),
+		IssuerService: getConfigValueWithDefault("api_keys_nvct_issuer_service", "nvct-api"),
+		OwnerID:       owner,
+		JWTToken:      config.Token,
+		HostHeader:    getConfigValueWithDefault("api_keys_host", ""),
+		Debug:         config.Debug,
+	}
+}
+
+// listedAPIKey pairs an API key with the service (function or task) it belongs
+// to, since the api-keys service response carries no issuer field.
+type listedAPIKey struct {
+	apikeys.APIKey
+	Service string `json:"service"`
+}
+
+// deleteAllKeys deletes every key in the list through the given client and
+// returns the number successfully deleted.
+func deleteAllKeys(ctx context.Context, c *apikeys.Client, keys []apikeys.APIKey, service string) int {
+	deleted := 0
+	for _, key := range keys {
+		logging.Info("Deleting %s key: %s (%s)", service, key.ID, key.Description)
+		if err := c.DeleteAPIKey(ctx, key.ID); err != nil {
+			logging.Error("Failed to delete key %s: %v", key.ID, err)
+		} else {
+			logging.Success("Deleted key: %s", key.ID)
+			deleted++
+		}
+	}
+	return deleted
+}
+
 // validateAPIKey validates an NVCF function API key against the NVCF audience.
 func validateAPIKey(config *client.Config, apiKey string) error {
 	ctx := context.Background()
@@ -503,24 +565,29 @@ func runListAPIKeys(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	// Create API Keys service client
-	apiKeysConfig := &apikeys.Config{
-		ServiceURL:    getConfigValueWithDefault("api_keys_service_url", "https://api-keys.nvcf.nvidia.com"),
-		ServiceID:     getConfigValueWithDefault("API_KEYS_SERVICE_ID", "nvidia-cloud-functions-ncp-service-id-aketm"),
-		IssuerService: getConfigValueWithDefault("API_KEYS_ISSUER_SERVICE", "nvcf-api"),
-		OwnerID:       getConfigValueWithDefault("API_KEYS_OWNER_ID", "svc@nvcf-api.local"),
-		JWTToken:      config.Token,                                   // Pass the JWT token for authentication
-		HostHeader:    getConfigValueWithDefault("api_keys_host", ""), // Host header for self-hosted routing
-		Debug:         config.Debug,
-	}
+	// Function (NVCF) and task (NVCT) keys are issued under separate issuers,
+	// so enumerate both to give a complete picture (NVBug 6417533).
+	nvcfClient := apikeys.NewClient(nvcfAPIKeysConfig(config, ""))
+	nvctClient := apikeys.NewClient(nvctAPIKeysConfig(config, ""))
 
-	apiKeysClient := apikeys.NewClient(apiKeysConfig)
+	var keys []listedAPIKey
 
-	// List API keys
-	keys, err := apiKeysClient.ListAPIKeys(ctx)
+	functionKeys, err := nvcfClient.ListAPIKeys(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list API keys: %w", err)
+		return fmt.Errorf("failed to list function API keys: %w", err)
 	}
+	for _, k := range functionKeys {
+		keys = append(keys, listedAPIKey{APIKey: k, Service: "function"})
+	}
+
+	taskKeys, err := nvctClient.ListAPIKeys(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list task API keys: %w", err)
+	}
+	for _, k := range taskKeys {
+		keys = append(keys, listedAPIKey{APIKey: k, Service: "task"})
+	}
+
 	if IsJSONOutput() {
 		return OutputJSON(map[string]interface{}{
 			"keys": keys,
@@ -535,8 +602,8 @@ func runListAPIKeys(cmd *cobra.Command, args []string) error {
 	// Display the keys
 	logging.Success("Found %d API key(s):", len(keys))
 	logging.Plain("")
-	logging.Plain("%-20s %-30s %-25s %-25s %-10s", "ID", "Description", "Created", "Expires", "Status")
-	logging.Plain("%-20s %-30s %-25s %-25s %-10s", "----", "-----------", "-------", "-------", "------")
+	logging.Plain("%-20s %-10s %-30s %-25s %-25s %-10s", "ID", "Service", "Description", "Created", "Expires", "Status")
+	logging.Plain("%-20s %-10s %-30s %-25s %-25s %-10s", "----", "-------", "-----------", "-------", "-------", "------")
 
 	for _, key := range keys {
 		created := key.CreatedAt.Format("2006-01-02 15:04:05")
@@ -548,8 +615,8 @@ func runListAPIKeys(cmd *cobra.Command, args []string) error {
 			description = description[:25] + "..."
 		}
 
-		logging.Plain("%-20s %-30s %-25s %-25s %-10s",
-			key.ID, description, created, expires, key.Status)
+		logging.Plain("%-20s %-10s %-30s %-25s %-25s %-10s",
+			key.ID, key.Service, description, created, expires, key.Status)
 	}
 
 	return nil
@@ -579,23 +646,21 @@ func runDeleteAPIKey(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	// Create API Keys service client
-	apiKeysConfig := &apikeys.Config{
-		ServiceURL:    getConfigValueWithDefault("api_keys_service_url", "https://api-keys.nvcf.nvidia.com"),
-		ServiceID:     getConfigValueWithDefault("API_KEYS_SERVICE_ID", "nvidia-cloud-functions-ncp-service-id-aketm"),
-		IssuerService: getConfigValueWithDefault("API_KEYS_ISSUER_SERVICE", "nvcf-api"),
-		OwnerID:       getConfigValueWithDefault("API_KEYS_OWNER_ID", "svc@nvcf-api.local"),
-		JWTToken:      config.Token,                                   // Pass the JWT token for authentication
-		HostHeader:    getConfigValueWithDefault("api_keys_host", ""), // Host header for self-hosted routing
-		Debug:         config.Debug,
-	}
-
-	apiKeysClient := apikeys.NewClient(apiKeysConfig)
-
-	// Delete the API key
-	err = apiKeysClient.DeleteAPIKey(ctx, keyID)
-	if err != nil {
-		return fmt.Errorf("failed to delete API key: %w", err)
+	// The key ID alone does not reveal which issuer minted it, so try the
+	// function (NVCF) issuer first and fall back to the task (NVCT) issuer only
+	// when the key was not found there. Any other error (auth, 5xx, network) is
+	// surfaced directly rather than triggering a spurious second call (NVBug
+	// 6417533).
+	functionErr := apikeys.NewClient(nvcfAPIKeysConfig(config, "")).DeleteAPIKey(ctx, keyID)
+	if functionErr != nil {
+		if !errors.Is(functionErr, apikeys.ErrKeyNotFound) {
+			return fmt.Errorf("failed to delete API key '%s': %w", keyID, functionErr)
+		}
+		taskErr := apikeys.NewClient(nvctAPIKeysConfig(config, "")).DeleteAPIKey(ctx, keyID)
+		if taskErr != nil {
+			return fmt.Errorf("failed to delete API key '%s' under function or task issuer: [function] %v; [task] %v",
+				keyID, functionErr, taskErr)
+		}
 	}
 	if IsJSONOutput() {
 		return OutputJSON(map[string]interface{}{
@@ -754,55 +819,71 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	// Determine owner ID
-	ownerID := getConfigValueWithDefault("API_KEYS_OWNER_ID", "svc@nvcf-api.local")
+	// Optional explicit owner override (applies to both issuers when given).
+	ownerOverride := ""
 	if len(args) > 0 && args[0] != "" {
-		ownerID = args[0]
+		ownerOverride = args[0]
 	}
-
-	logging.Info("Fetching all API keys for owner: %s", ownerID)
 
 	ctx := context.Background()
 
-	// Create API Keys service client
-	apiKeysConfig := &apikeys.Config{
-		ServiceURL:    getConfigValueWithDefault("api_keys_service_url", "https://api-keys.nvcf.nvidia.com"),
-		ServiceID:     getConfigValueWithDefault("API_KEYS_SERVICE_ID", "nvidia-cloud-functions-ncp-service-id-aketm"),
-		IssuerService: getConfigValueWithDefault("API_KEYS_ISSUER_SERVICE", "nvcf-api"),
-		OwnerID:       ownerID,
-		HostHeader:    getConfigValueWithDefault("api_keys_host", ""), // Host header for self-hosted routing
-		Debug:         config.Debug,
-	}
+	// Function (NVCF) and task (NVCT) keys live under separate issuers; clear
+	// both so task keys (which count against the actor cap) are removed too
+	// (NVBug 6417533).
+	nvcfCfg := nvcfAPIKeysConfig(config, ownerOverride)
+	nvctCfg := nvctAPIKeysConfig(config, ownerOverride)
+	nvcfClient := apikeys.NewClient(nvcfCfg)
+	nvctClient := apikeys.NewClient(nvctCfg)
 
-	apiKeysClient := apikeys.NewClient(apiKeysConfig)
+	logging.Info("Fetching all API keys (function and task)...")
 
-	// List all API keys for this owner
-	keys, err := apiKeysClient.ListAPIKeys(ctx)
+	functionKeys, err := nvcfClient.ListAPIKeys(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list API keys: %w", err)
+		return fmt.Errorf("failed to list function API keys: %w", err)
+	}
+	taskKeys, err := nvctClient.ListAPIKeys(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list task API keys: %w", err)
 	}
 
-	if len(keys) == 0 {
+	// Distinct owner IDs whose keys were actually found (an owner appears only
+	// if it had keys; deduped when an override makes both issuers the same owner).
+	ownerIds := []string{}
+	seenOwner := map[string]bool{}
+	addOwner := func(hasKeys bool, owner string) {
+		if hasKeys && !seenOwner[owner] {
+			seenOwner[owner] = true
+			ownerIds = append(ownerIds, owner)
+		}
+	}
+	addOwner(len(functionKeys) > 0, nvcfCfg.OwnerID)
+	addOwner(len(taskKeys) > 0, nvctCfg.OwnerID)
+
+	total := len(functionKeys) + len(taskKeys)
+	if total == 0 {
 		if IsJSONOutput() {
 			return OutputJSON(map[string]interface{}{
-				"ownerId": ownerID,
-				"deleted": 0,
-				"total":   0,
+				"ownerIds": ownerIds,
+				"deleted":  0,
+				"total":    0,
 			})
 		}
-		logging.Info("No API keys found for owner: %s", ownerID)
+		logging.Info("No API keys found")
 		return nil
 	}
 
-	logging.Info("Found %d API key(s) to delete", len(keys))
+	logging.Info("Found %d API key(s) to delete (%d function, %d task)", total, len(functionKeys), len(taskKeys))
 
 	// Interactive confirmation prompt unless --force is used
 	if !clearForce {
-		logging.Warning("Are you sure you want to delete ALL %d API key(s) for owner '%s'?", len(keys), ownerID)
+		logging.Warning("Are you sure you want to delete ALL %d API key(s)?", total)
 		logging.Plain("This action cannot be undone. All keys will be immediately invalidated.")
 		logging.Plain("Keys to be deleted:")
-		for _, key := range keys {
-			logging.Plain("  - %s (%s)", key.ID, key.Description)
+		for _, key := range functionKeys {
+			logging.Plain("  - %s (function) %s", key.ID, key.Description)
+		}
+		for _, key := range taskKeys {
+			logging.Plain("  - %s (task) %s", key.ID, key.Description)
 		}
 
 		if !promptForConfirmation("Do you want to proceed?") {
@@ -811,32 +892,23 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Delete all keys
-	deletedCount := 0
-	for _, key := range keys {
-		logging.Info("Deleting key: %s (%s)", key.ID, key.Description)
-		err = apiKeysClient.DeleteAPIKey(ctx, key.ID)
-		if err != nil {
-			logging.Error("Failed to delete key %s: %v", key.ID, err)
-		} else {
-			logging.Success("Deleted key: %s", key.ID)
-			deletedCount++
-		}
-	}
+	// Delete each key through the client whose issuer matches its origin.
+	deletedCount := deleteAllKeys(ctx, nvcfClient, functionKeys, "function")
+	deletedCount += deleteAllKeys(ctx, nvctClient, taskKeys, "task")
+
 	if IsJSONOutput() {
 		return OutputJSON(map[string]interface{}{
-			"ownerId": ownerID,
-			"deleted": deletedCount,
-			"total":   len(keys),
+			"ownerIds": ownerIds,
+			"deleted":  deletedCount,
+			"total":    total,
 		})
 	}
 
-	logging.Success("Successfully deleted %d out of %d API key(s) for owner: %s", deletedCount, len(keys), ownerID)
+	logging.Success("Successfully deleted %d out of %d API key(s)", deletedCount, total)
 
-	// Clear local API key if we deleted keys for the current configured owner
-	currentConfigOwner := getConfigValueWithDefault("API_KEYS_OWNER_ID", "svc@nvcf-api.local")
-	if ownerID == currentConfigOwner && deletedCount > 0 {
-		// Load and clear state
+	// Clear the local API key from state only when clearing the current actor's
+	// keys (no explicit owner override) and something was actually deleted.
+	if ownerOverride == "" && deletedCount > 0 {
 		if err := LoadStateForCurrentCommand(); err == nil {
 			currentState := GetCurrentState()
 			if currentState.APIKey != "" {

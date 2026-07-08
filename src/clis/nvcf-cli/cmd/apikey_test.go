@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,6 +201,127 @@ func TestApikeyGenerate_BothKeys(t *testing.T) {
 	require.Len(t, *issuers, 2, "expected two key generation calls (function + task)")
 	assert.Contains(t, *issuers, "nvcf-api", "should generate function key via NVCF issuer")
 	assert.Contains(t, *issuers, "nvct-api", "should generate task key via NVCT issuer")
+}
+
+// --- list / delete / clear-all cover NVCT task keys (NVBug 6417533) -----------
+
+type apiKeysRecorder struct {
+	listIssuers   []string
+	deleteIssuers []string
+	deletedIDs    []string
+}
+
+func sliceContains(s []string, v string) bool {
+	for _, item := range s {
+		if item == v {
+			return true
+		}
+	}
+	return false
+}
+
+// fakeAPIKeysListServer serves GET /v1/keys (returning functionKeys under the
+// NVCF issuer and taskKeys under the NVCT issuer) and DELETE /v1/keys/{id}
+// (succeeding only when the key is deleted through its owning issuer, 404
+// otherwise). It records which issuers were used and which ids were deleted.
+func fakeAPIKeysListServer(t *testing.T, functionKeys, taskKeys []string) (*httptest.Server, *apiKeysRecorder) {
+	t.Helper()
+	rec := &apiKeysRecorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		issuer := r.Header.Get("Key-Issuer-Service")
+		switch {
+		case r.URL.Path == "/v1/keys" && r.Method == http.MethodGet:
+			rec.listIssuers = append(rec.listIssuers, issuer)
+			ids := functionKeys
+			if issuer == "nvct-api" {
+				ids = taskKeys
+			}
+			keys := make([]map[string]any, 0, len(ids))
+			for _, id := range ids {
+				keys = append(keys, map[string]any{"id": id, "description": issuer, "status": "active"})
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"keys": keys})
+		case strings.HasPrefix(r.URL.Path, "/v1/keys/") && r.Method == http.MethodDelete:
+			id := strings.TrimPrefix(r.URL.Path, "/v1/keys/")
+			owned := (issuer == "nvcf-api" && sliceContains(functionKeys, id)) ||
+				(issuer == "nvct-api" && sliceContains(taskKeys, id))
+			if !owned {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			rec.deleteIssuers = append(rec.deleteIssuers, issuer)
+			rec.deletedIDs = append(rec.deletedIDs, id)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, rec
+}
+
+func TestApikeyList_CoversFunctionAndTaskKeys(t *testing.T) {
+	srv, rec := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1"})
+	configureApikeyTest(t, srv.URL)
+
+	require.NoError(t, runListAPIKeys(nil, nil))
+
+	assert.Contains(t, rec.listIssuers, "nvcf-api", "list should query the function issuer")
+	assert.Contains(t, rec.listIssuers, "nvct-api", "list should query the task issuer")
+}
+
+func TestApikeyClearAll_DeletesFunctionAndTaskKeys(t *testing.T) {
+	srv, rec := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1", "task-2"})
+	configureApikeyTest(t, srv.URL)
+
+	clearForce = true
+	t.Cleanup(func() { clearForce = false })
+
+	require.NoError(t, runClearAllAPIKeys(nil, nil))
+
+	assert.Contains(t, rec.deleteIssuers, "nvcf-api", "clear-all should delete via the function issuer")
+	assert.Contains(t, rec.deleteIssuers, "nvct-api", "clear-all should delete via the task issuer")
+	assert.ElementsMatch(t, []string{"fn-1", "task-1", "task-2"}, rec.deletedIDs)
+}
+
+func TestApikeyDelete_FallsBackToTaskIssuer(t *testing.T) {
+	// The id belongs to the task issuer only, so delete must fall back to it
+	// after the function-issuer attempt 404s.
+	srv, rec := fakeAPIKeysListServer(t, nil, []string{"task-1"})
+	configureApikeyTest(t, srv.URL)
+
+	deleteForce = true
+	t.Cleanup(func() { deleteForce = false })
+
+	require.NoError(t, runDeleteAPIKey(nil, []string{"task-1"}))
+
+	assert.Equal(t, []string{"task-1"}, rec.deletedIDs, "task key should be deleted via the task issuer")
+	assert.Equal(t, []string{"nvct-api"}, rec.deleteIssuers)
+}
+
+// A non-404 error from the function issuer (e.g. 5xx/auth) must surface directly
+// and must NOT trigger a spurious delete against the task issuer.
+func TestApikeyDelete_DoesNotFallBackOnNon404(t *testing.T) {
+	var deleteIssuers []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v1/keys/") {
+			deleteIssuers = append(deleteIssuers, r.Header.Get("Key-Issuer-Service"))
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	configureApikeyTest(t, srv.URL)
+
+	deleteForce = true
+	t.Cleanup(func() { deleteForce = false })
+
+	err := runDeleteAPIKey(nil, []string{"some-id"})
+	require.Error(t, err)
+	assert.Equal(t, []string{"nvcf-api"}, deleteIssuers, "must not attempt the task issuer on a non-404 error")
 }
 
 // --- validateAPIKey / validateNVCTAPIKey audience routing ---------------------

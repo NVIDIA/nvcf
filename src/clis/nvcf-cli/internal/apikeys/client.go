@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,6 +30,12 @@ import (
 
 	"nvcf-cli/internal/logging"
 )
+
+// ErrKeyNotFound is returned by DeleteAPIKey when the service responds 404 for
+// the given key/issuer. Callers use errors.Is to distinguish a genuine
+// "not found" from transient/auth failures (for example, to decide whether to
+// retry the delete under a different issuer).
+var ErrKeyNotFound = errors.New("api key not found")
 
 // Client provides API Keys service operations via direct HTTP calls
 type Client struct {
@@ -382,6 +389,9 @@ func (c *Client) DeleteAPIKey(ctx context.Context, keyID string) error {
 	}
 
 	// Check status code
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("%w: %s", ErrKeyNotFound, string(body))
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}

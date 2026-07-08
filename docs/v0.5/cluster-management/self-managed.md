@@ -75,7 +75,7 @@ Create `nvca-operator-values.yaml` ([download template](samples/nvca-operator-va
 # Operator image
 image:
   repository: "<REGISTRY>/<REPOSITORY>/nvca-operator"
-  tag: "2.52.0"
+  tag: "2.52.1"
 
 # NVCA agent image
 nvcaImage:
@@ -96,7 +96,7 @@ ngcConfig:
 
 # Self-managed backend configuration
 selfManaged:
-  nvcaVersion: "2.52.0" # NVCA agent version to deploy
+  nvcaVersion: "2.52.1" # NVCA agent version to deploy
   featureGateValues: ["DynamicGPUDiscovery", "SelfHosted", "KAIScheduler"]
   imageCredHelper:
     imageRepository: "<REGISTRY>/<REPOSITORY>/nvcf-image-credential-helper"
