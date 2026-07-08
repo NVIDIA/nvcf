@@ -835,12 +835,6 @@ func TestAuthGate_RefreshTokenForcesReMint(t *testing.T) {
 		selfHostedToken = ""
 	})
 
-	// Force the TTY seam to true so the non-interactive gate does not short-circuit
-	// before reaching the init path under test.
-	prevTTY := stdinIsTerminal
-	t.Cleanup(func() { stdinIsTerminal = prevTTY })
-	stdinIsTerminal = func() bool { return true }
-
 	// Stub client.LoadConfig by patching the seam at authGatePhase5 level:
 	// inject baseHTTPURL via env so the real LoadConfig returns our server URL.
 	t.Setenv("NVCF_BASE_HTTP_URL", srv.URL)
@@ -957,12 +951,6 @@ func TestAuthGate_FingerprintMismatchReMints(t *testing.T) {
 		selfHostedToken = ""
 	})
 
-	// Force the TTY seam to true so the non-interactive gate does not short-circuit
-	// before reaching the init path under test.
-	prevTTY := stdinIsTerminal
-	t.Cleanup(func() { stdinIsTerminal = prevTTY })
-	stdinIsTerminal = func() bool { return true }
-
 	t.Setenv("NVCF_BASE_HTTP_URL", srv.URL)
 
 	var sink progress.EventSink = nullSink{}
@@ -971,10 +959,10 @@ func TestAuthGate_FingerprintMismatchReMints(t *testing.T) {
 	assert.Equal(t, 1, initCalled, "init must be called when fingerprint has changed (key rotation)")
 }
 
-// TestAuthGate_NonInteractiveExitsCleanly verifies that --non-interactive bails
-// out with a clear error rather than letting `nvcf-cli init` block on a stdin
-// read in CI. REQ-8.
-func TestAuthGate_NonInteractiveExitsCleanly(t *testing.T) {
+// TestAuthGate_NonInteractiveAttemptsInit verifies that --non-interactive still
+// attempts the admin-token mint. The init path calls the API Keys admin route
+// directly, so CI/headless callers should not fail before the API call is tried.
+func TestAuthGate_NonInteractiveAttemptsInit(t *testing.T) {
 	srv := newTestFingerprintServer(t, "key-x")
 
 	stateDir := t.TempDir()
@@ -1005,24 +993,18 @@ func TestAuthGate_NonInteractiveExitsCleanly(t *testing.T) {
 		selfHostedToken = ""
 	})
 
-	// TTY=true so the only reason to bail is --non-interactive.
-	prevTTY := stdinIsTerminal
-	t.Cleanup(func() { stdinIsTerminal = prevTTY })
-	stdinIsTerminal = func() bool { return true }
-
 	t.Setenv("NVCF_BASE_HTTP_URL", srv.URL)
 
 	var sink progress.EventSink = nullSink{}
 	err := authGatePhase5(context.Background(), sink, time.Now())
-	require.Error(t, err, "auth gate must error under --non-interactive when no cached token")
-	assert.Contains(t, err.Error(), "non-interactive")
-	assert.Equal(t, 0, initCalled, "runSelfHostedInit must NOT be invoked under --non-interactive")
+	require.NoError(t, err, "auth gate must try init under --non-interactive when no cached token")
+	assert.Equal(t, 1, initCalled, "runSelfHostedInit must be invoked under --non-interactive")
 }
 
-// TestAuthGate_NonTTYExitsCleanly verifies that piped (non-TTY) stdin bails
-// out the same way as --non-interactive, since `nvcf-cli init` cannot prompt.
-// REQ-8.
-func TestAuthGate_NonTTYExitsCleanly(t *testing.T) {
+// TestAuthGate_NonTTYAttemptsInit verifies that piped (non-TTY) stdin still
+// attempts the admin-token mint. The init path does not need stdin when the
+// self-hosted API Keys admin route is reachable.
+func TestAuthGate_NonTTYAttemptsInit(t *testing.T) {
 	srv := newTestFingerprintServer(t, "key-y")
 
 	stateDir := t.TempDir()
@@ -1053,18 +1035,12 @@ func TestAuthGate_NonTTYExitsCleanly(t *testing.T) {
 		selfHostedToken = ""
 	})
 
-	// Simulate piped/non-TTY stdin; --non-interactive is not set.
-	prevTTY := stdinIsTerminal
-	t.Cleanup(func() { stdinIsTerminal = prevTTY })
-	stdinIsTerminal = func() bool { return false }
-
 	t.Setenv("NVCF_BASE_HTTP_URL", srv.URL)
 
 	var sink progress.EventSink = nullSink{}
 	err := authGatePhase5(context.Background(), sink, time.Now())
-	require.Error(t, err, "auth gate must error under non-TTY stdin when no cached token")
-	assert.Contains(t, err.Error(), "TTY")
-	assert.Equal(t, 0, initCalled, "runSelfHostedInit must NOT be invoked when stdin is not a TTY")
+	require.NoError(t, err, "auth gate must try init under non-TTY stdin when no cached token")
+	assert.Equal(t, 1, initCalled, "runSelfHostedInit must be invoked when stdin is not a TTY")
 }
 
 // recordingSink captures every progress event for later assertions. Used by

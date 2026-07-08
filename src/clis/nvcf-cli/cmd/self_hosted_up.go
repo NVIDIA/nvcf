@@ -35,7 +35,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 
 	corev1 "k8s.io/api/core/v1"
@@ -1322,11 +1321,6 @@ func selfHostedInitArgs() []string {
 // requiring a real HTTP server. Production callers use auth.Probe directly.
 var authProbe = auth.Probe
 
-// stdinIsTerminal is a package-level seam so tests can simulate TTY / non-TTY
-// stdin without manipulating the actual file descriptor. Production callers
-// resolve to term.IsTerminal against os.Stdin.
-var stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
-
 // authGatePhase5 implements the M+8.G decision tree:
 //  1. Probe control-plane fingerprint from config.BaseHTTPURL.
 //  2. Load cached SelfHostedAuth from state.
@@ -1345,15 +1339,6 @@ func authGatePhase5(ctx context.Context, sink progress.EventSink, _ time.Time) e
 	}
 	if !selfHostedRefreshToken && tryUseCachedAdminToken(ctx, sink, fp) {
 		return nil
-	}
-	// REQ-8: with no cached token usable, the next step would prompt via
-	// `nvcf-cli init`. Bail with a clear, actionable error when --non-interactive
-	// is set or stdin is not a TTY, rather than letting init block on a stdin read
-	// in CI.
-	if selfHostedNonInter || !stdinIsTerminal() {
-		return fmt.Errorf("admin token required but cannot prompt " +
-			"(--non-interactive set or stdin is not a TTY); " +
-			"pass --token=$JWT or run `nvcf-cli init` interactively first")
 	}
 	_ = sink.Emit(ctx, progress.LastProgress{
 		Num:    5,
