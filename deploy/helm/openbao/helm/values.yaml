@@ -46,7 +46,7 @@ openbao:
     image:
       registry: ""
       repository: ""
-      tag: 0.16.1
+      tag: 0.16.2
       pullPolicy: IfNotPresent
     issuerDiscovery:
       enabled: false
@@ -74,7 +74,7 @@ openbao:
     image:
       registry: ""
       repository: ""
-      tag: 2.5.4-nv-1.3.0
+      tag: 2.5.5-nv-1.3.1
       pullPolicy: IfNotPresent
 
     podManagementPolicy: Parallel
@@ -239,5 +239,5 @@ openbao:
     agentImage:
       registry: ""
       repository: ""
-      tag: 2.5.4-nv-1.3.0
+      tag: 2.5.5-nv-1.3.1
       pullPolicy: IfNotPresent
