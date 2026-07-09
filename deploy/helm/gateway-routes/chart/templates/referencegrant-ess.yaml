@@ -13,24 +13,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-{{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.sis.enabled }}
+{{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.ess.enabled }}
 ---
-# ReferenceGrant allows HTTPRoute in the shared gateway namespace to reference
-# the Service in the sis namespace (cross-namespace reference).
+# ReferenceGrant allows HTTPRoute in traefik-gateway namespace to reference
+# Service in the ess namespace (cross-namespace reference).
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
-  name: allow-httproute-to-sis
-  namespace: {{ .Values.nvcfGatewayRoutes.routes.sis.backend.namespace }}
+  name: allow-httproute-to-ess
+  namespace: {{ .Values.nvcfGatewayRoutes.routes.ess.backend.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
 spec:
-  # Allow references FROM the shared gateway namespace
+  # Allow references FROM traefik-gateway namespace
   from:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
       namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
-  # TO Services in the sis namespace
+  # TO Services in the ess namespace
   to:
     - group: ""
       kind: Service

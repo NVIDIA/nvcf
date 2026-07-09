@@ -104,3 +104,5 @@ ingress:
     routes:
       nats:
         enabled: true
+      ess: 
+        enabled: true

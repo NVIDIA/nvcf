@@ -13,18 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-{{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.reval.enabled }}
+{{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.ess.enabled }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: {{ .Values.nvcfGatewayRoutes.routes.reval.name }}
+  name: {{ .Values.nvcfGatewayRoutes.routes.ess.name }}
   namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
-    app.kubernetes.io/component: reval-route
+    app.kubernetes.io/component: ess-route
   annotations:
-    {{- toYaml .Values.nvcfGatewayRoutes.routes.reval.routeAnnotations | nindent 4 }}
+    {{- toYaml .Values.nvcfGatewayRoutes.routes.ess.routeAnnotations | nindent 4 }}
 spec:
   # Attach to the shared Gateway
   parentRefs:
@@ -32,9 +32,9 @@ spec:
       namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
       sectionName: {{ .Values.nvcfGatewayRoutes.gateways.shared.listenerName }}
 
-  # Hostname matching for Helm ReVal service
+  # Hostname matching for ESS service
   hostnames:
-    {{- range .Values.nvcfGatewayRoutes.routes.reval.hostnames }}
+    {{- range .Values.nvcfGatewayRoutes.routes.ess.hostnames }}
     - {{ tpl . $ | quote }}
     {{- end }}
 
@@ -45,7 +45,7 @@ spec:
             type: PathPrefix
             value: /
       backendRefs:
-        - name: {{ .Values.nvcfGatewayRoutes.routes.reval.backend.name }}
-          namespace: {{ .Values.nvcfGatewayRoutes.routes.reval.backend.namespace }}
-          port: {{ .Values.nvcfGatewayRoutes.routes.reval.backend.port }}
+        - name: {{ .Values.nvcfGatewayRoutes.routes.ess.backend.name }}
+          namespace: {{ .Values.nvcfGatewayRoutes.routes.ess.backend.namespace }}
+          port: {{ .Values.nvcfGatewayRoutes.routes.ess.backend.port }}
 {{- end }}

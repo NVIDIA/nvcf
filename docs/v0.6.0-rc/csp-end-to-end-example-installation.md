@@ -299,6 +299,9 @@ ingress:
       nats:
         enabled: true              # CHANGE: from false. Create the NATS route (the NVCA agent needs it).
         routeAnnotations: {}       # Optional annotations for the NATS route.
+      ess:
+        enabled: true              # CHANGE: from false. Create the ESS route (the nvcf worker container needs it).
+        routeAnnotations: {}       # Optional annotations for the ESS route.
     gateways:
       shared:
         name: nvcf-gateway         # CHANGE: from "". Gateway the HTTP routes attach to.

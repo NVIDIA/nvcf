@@ -101,3 +101,5 @@ ingress:
         listenerName: worker-tcp
       nats:
         enabled: true
+      ess: 
+        enabled: true

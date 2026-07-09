@@ -226,6 +226,20 @@ nvcfGatewayRoutes:
         namespace: nats-system
         port: 4222
       routeAnnotations: {}
+    
+    # NVCF Worker Container needs to be able to fetch secrets for function pods
+    # In split/multi cluster planes, ess resides in control-plane and requires
+    # route for worker pods in compute-plane to communicate
+    ess:
+      enabled: false # Disabled by default. Explicitly opt-in for split/multi-cluster planes
+      name: ess
+      hostnames:
+        - "ess.{{ .Values.nvcfGatewayRoutes.domain }}"
+      backend:
+        name: ess-api
+        namespace: ess
+        port: 8080
+      routeAnnotations: {}
 
   # PodMonitors for Envoy Gateway proxy pods.
   podMonitors:
