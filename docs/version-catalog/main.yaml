@@ -11,6 +11,12 @@ registries:
   public-images:
     host: nvcr.io
     namespace: nvidia/nvcf
+  public-resources:
+    host: nvcr.io
+    namespace: nvidia/nvcf
+  selfhosted-ga:
+    host: nvcr.io
+    namespace: 0833294136851237/selfhosted-ga
   staging:
     host: nvcr.io
     namespace: 0833294136851237/nvcf-ncp-staging
@@ -57,16 +63,82 @@ publications:
   - name: nvca-operator
     version: 3.0.3
     registry: public-images
+  - name: admin-token-issuer-proxy
+    version: 1.0.2
+    registry: public-images
+  - name: ess-agent
+    version: 1.3.1
+    registry: public-images
+  - name: nats-box
+    version: 0.19.7-nonroot
+    registry: public-images
+  - name: notary-service
+    version: 1.8.1
+    registry: public-images
+  - name: nvcf-api-keys-service
+    version: 1.5.0
+    registry: public-images
+  - name: nvcf-container-cache
+    version: v1.1.36
+    registry: public-images
+  - name: nvcf-openbao-migrations
+    version: 0.16.1
+    registry: public-images
+  - name: nvcf-proxy-tls-certs
+    version: v1.2.10
+    registry: public-images
+  - name: nvcf-service-oss
+    version: 1.9.0-hotfix.1
+    registry: public-images
+  - name: nvcf_worker_init
+    version: 1.0.1
+    registry: public-images
+  - name: nvcf_worker_llm_credentials
+    version: 1.0.1
+    registry: public-images
+  - name: nvcf_worker_utils
+    version: 1.0.1
+    registry: public-images
+  - name: nvct-service-oss
+    version: 1.5.9-hotfix.1
+    registry: public-images
+  - name: pylon
+    version: 0.3.0
+    registry: public-images
+  - name: spot
+    version: 1.563.1-hotfix.1
+    registry: public-images
+  - name: alpine-k8s
+    version: 1.36.1-ea
+    registry: selfhosted-ga
+  - name: llm-api-gateway
+    version: 0.8.3-ea
+    registry: selfhosted-ga
+  - name: llm-request-router
+    version: 0.3.0-ea
+    registry: selfhosted-ga
+  - name: nats-server-config-reloader
+    version: 0.23.0-ea
+    registry: selfhosted-ga
+  - name: nvcf-openbao
+    version: 2.5.4-nv-1.3.0-ea
+    registry: selfhosted-ga
+  - name: bitnami-cassandra
+    version: 5.0.6-nv-1-ea
+    registry: selfhosted-ga
+  - name: nvcf-cassandra-migrations
+    version: 0.8.1-ea
+    registry: selfhosted-ga
   - name: helm-admin-token-issuer-proxy
     version: 1.4.3
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-api-keys
-    version: 1.5.1
+    version: 1.6.0
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-api
-    version: 1.22.5
+    version: 1.23.5
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-cassandra
@@ -106,11 +178,11 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-notary-service
-    version: 1.4.1
+    version: 1.4.2
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-nvct-api
-    version: 1.4.2
+    version: 1.4.3
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-openbao-server
@@ -122,7 +194,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-sis
-    version: 1.17.0
+    version: 1.18.3
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-state-metrics
@@ -158,21 +230,27 @@ publications:
     registry: public-helm
     chart_format: http
 version_overrides:
-  - name: nvcf_worker_utils
-    version: 2.109.4
-    source: helm-nvcf-api:1.23.1
-  - name: nvcf_worker_init
-    version: 2.109.4
-    source: helm-nvcf-api:1.23.1
-  - name: ess-agent
-    version: 1.1.0
-    source: helm-nvcf-api:1.23.1
+  - name: alpine-k8s
+    version: 1.36.1-ea
+    source: artifacts-0.6.0.txt (EA mirror tag)
+  - name: llm-api-gateway
+    version: 0.8.3-ea
+    source: supplemental artifact (EA mirror tag)
   - name: llm-request-router
-    version: 0.3.0
-    source: helm-nvcf-llm-request-router:1.6.3
-  - name: pylon
-    version: 0.3.0
-    source: stargate:0.3.0 paired release
+    version: 0.3.0-ea
+    source: helm-nvcf-llm-request-router:1.6.3 (EA mirror tag)
+  - name: nats-server-config-reloader
+    version: 0.23.0-ea
+    source: artifacts-0.6.0.txt (EA mirror tag)
+  - name: nvcf-openbao
+    version: 2.5.4-nv-1.3.0-ea
+    source: artifacts-0.6.0.txt (EA mirror tag)
+  - name: bitnami-cassandra
+    version: 5.0.6-nv-1-ea
+    source: artifacts-0.6.0.txt (EA mirror tag)
+  - name: nvcf-cassandra-migrations
+    version: 0.8.1-ea
+    source: artifacts-0.6.0.txt (EA mirror tag)
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -514,6 +592,12 @@ manifest:
       requirement: required
       description: Prepares function resources before the user container starts.
       github_url: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-init
+    - artifact_id: nvcf_worker_llm_credentials
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Maintains a current NVCF worker token for LLM function workloads.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-llm-credentials
     - artifact_id: ess-agent
       plane: compute
       kind: service-image
@@ -575,11 +659,11 @@ manifest:
       github_url: https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli
 stack:
   name: nvcf-self-managed-stack
-  version: 0.6.0-rc.98
-  registry: staging
+  version: 0.6.0
+  registry: public-resources
   gitlab_project_id: 182049
   package_name: ncp-deploy
-  artifacts_file: artifacts-0.6.0-rc.98.txt
+  artifacts_file: artifacts-0.6.0.txt
 denylist:
   - name: strap
     reason: Legacy name replaced by nvcf-service-oss
@@ -623,11 +707,11 @@ artifacts:
   - name: alpine-k8s
     type: image
     registry: staging
-    version: 1.36.1
+    version: 1.36.1-ea
   - name: bitnami-cassandra
     type: image
     registry: staging
-    version: 5.0.6-nv-1
+    version: 5.0.6-nv-1-ea
   - name: cert-manager-cainjector
     type: image
     registry: staging
@@ -644,6 +728,10 @@ artifacts:
     type: image
     registry: staging
     version: v1.20.2
+  - name: ess-agent
+    type: image
+    registry: staging
+    version: 1.3.1
   - name: ess-api
     type: image
     registry: staging
@@ -655,11 +743,11 @@ artifacts:
   - name: helm-nvcf-api-keys
     type: chart
     registry: staging
-    version: 1.5.1
+    version: 1.6.0
   - name: helm-nvcf-api
     type: chart
     registry: staging
-    version: 1.23.1
+    version: 1.23.6
   - name: helm-nvcf-cassandra
     type: chart
     registry: staging
@@ -699,11 +787,11 @@ artifacts:
   - name: helm-nvcf-notary-service
     type: chart
     registry: staging
-    version: 1.4.1
+    version: 1.4.2
   - name: helm-nvcf-nvct-api
     type: chart
     registry: staging
-    version: 1.4.2
+    version: 1.4.3
   - name: helm-nvcf-openbao-server
     type: chart
     registry: staging
@@ -715,7 +803,7 @@ artifacts:
   - name: helm-nvcf-sis
     type: chart
     registry: staging
-    version: 1.17.0
+    version: 1.18.3
   - name: helm-nvcf-state-metrics
     type: chart
     registry: staging
@@ -735,7 +823,7 @@ artifacts:
   - name: nats-server-config-reloader
     type: image
     registry: staging
-    version: 0.23.0
+    version: 0.23.0-ea
   - name: nats-server
     type: image
     registry: staging
@@ -743,19 +831,19 @@ artifacts:
   - name: notary-service
     type: image
     registry: staging
-    version: 1.9.4
+    version: 1.8.1
   - name: nvcf-api-keys-service
     type: image
     registry: staging
-    version: 1.2.14
+    version: 1.5.0
   - name: nvcf-cassandra-migrations
     type: image
     registry: staging
-    version: 0.8.1
+    version: 0.8.1-ea
   - name: nvcf-gateway-routes
     type: chart
     registry: staging
-    version: 1.13.4
+    version: 1.14.0
   - name: nvcf-grpc-proxy
     type: image
     registry: staging
@@ -775,19 +863,35 @@ artifacts:
   - name: nvcf-openbao
     type: image
     registry: staging
-    version: 2.5.4-nv-1.3.0
+    version: 2.5.4-nv-1.3.0-ea
   - name: nvcf-service-oss
     type: image
     registry: staging
-    version: 1.9.0
+    version: 1.9.0-hotfix.1
+  - name: nvcf_worker_init
+    type: image
+    registry: staging
+    version: 1.0.1
+  - name: nvcf_worker_llm_credentials
+    type: image
+    registry: staging
+    version: 1.0.1
+  - name: nvcf_worker_utils
+    type: image
+    registry: staging
+    version: 1.0.1
   - name: nvct-service-oss
     type: image
     registry: staging
-    version: 1.5.5
+    version: 1.5.9-hotfix.1
   - name: oss-vault-k8s
     type: image
     registry: staging
     version: 1.7.4
+  - name: pylon
+    type: image
+    registry: staging
+    version: 0.3.1
   - name: reval-server
     type: image
     registry: staging
@@ -795,16 +899,12 @@ artifacts:
   - name: spot
     type: image
     registry: staging
-    version: 1.563.1
+    version: 1.563.1-hotfix.1
 supplemental_artifacts:
   - name: nvcf-cli
     type: resource
-    registry: staging
-    version: 0.0.30
-  - name: pylon
-    type: image
-    registry: staging
-    version: 0.3.0
+    registry: public-resources
+    version: 1.10.3
   - name: helm-nvca-operator
     type: chart
     registry: staging
@@ -819,29 +919,17 @@ supplemental_artifacts:
     version: 3.0.3
   - name: nvcf-compute-plane-stack
     type: resource
-    registry: staging
+    registry: public-resources
     version: 1.0.6
   - name: llm-api-gateway
     type: image
     registry: staging
-    version: 0.8.3
+    version: 0.8.3-ea
   - name: llm-request-router
     type: image
     registry: staging
     repository_name: stargate
-    version: 0.3.0
-  - name: nvcf_worker_utils
-    type: image
-    registry: staging
-    version: 2.109.4
-  - name: nvcf_worker_init
-    type: image
-    registry: staging
-    version: 2.109.4
-  - name: ess-agent
-    type: image
-    registry: staging
-    version: 1.1.0
+    version: 0.3.0-ea
   - name: nvcf-image-credential-helper
     type: image
     registry: staging
@@ -858,7 +946,7 @@ supplemental_artifacts:
     name: nvcf-container-cache
     type: image
     registry: staging
-    version: v1.1.31
+    version: v1.1.36
   - id: nvcf-container-cache-chart
     name: nvcf-container-cache
     type: chart
@@ -867,7 +955,7 @@ supplemental_artifacts:
   - name: nvcf-proxy-tls-certs
     type: image
     registry: staging
-    version: 1.2.0
+    version: v1.2.10
 outputs:
   - path: docs/user/manifest.md
     blocks:

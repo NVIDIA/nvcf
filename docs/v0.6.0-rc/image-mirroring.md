@@ -96,10 +96,10 @@ Failing to specify the correct platform will result in `exec format error` when 
 
    ```bash
    # For amd64 clusters (most EKS, GKE, AKS clusters)
-   docker pull --platform linux/amd64 nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-openbao:2.5.1-nv-1.1.0
+   docker pull --platform linux/amd64 nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot
 
    # For arm64 clusters (Graviton-based EKS, etc.)
-   docker pull --platform linux/arm64 nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-openbao:2.5.1-nv-1.1.0
+   docker pull --platform linux/arm64 nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot
    ```
 
 ### Pulling Helm Charts
@@ -123,22 +123,6 @@ helm pull nvcf/helm-nvca-operator --version 1.12.7
 
 # Prerelease charts require --devel when searching
 helm search repo nvcf/helm-nvcf-vanity-gateway --versions --devel
-```
-
-**OCI-compliant Helm Charts**
-
-Use this form only for rows marked `Chart (OCI)` in the artifact manifest.
-
-```bash
-# Set your API key
-export NGC_API_KEY=<api key generated from the Personal API key steps above>
-
-# Login to the registry
-echo "${NGC_API_KEY}" | helm registry login nvcr.io/0833294136851237/nvcf-ncp-staging \
-  --username '$oauthtoken' --password-stdin
-
-# Pull the chart
-helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvcf-api --version 1.23.1
 ```
 
 **Other Repository-based Helm Charts (Non-OCI)**
@@ -216,11 +200,11 @@ export COMPUTE_STACK_VERSION="1.0.6"
 
 # Download a specific control-plane stack version
 ngc registry resource download-version \
-  "0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:${STACK_VERSION}"
+  "nvidia/nvcf/nvcf-self-managed-stack:${STACK_VERSION}"
 
 # Download a specific compute-plane stack version
 ngc registry resource download-version \
-  "0833294136851237/nvcf-ncp-staging/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
+  "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
 ```
 
 {/* docs-version-sync:END image-mirroring-resource-examples */}
@@ -243,7 +227,7 @@ and its listed artifact versions are QA-qualified together.
 # Set the version
 export VERSION="0.6.0-rc.98"
 
-ngc registry resource download-version "0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:${VERSION}" && \
+ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VERSION}" && \
    mkdir -p nvcf-self-managed-stack && \
    tar -xzf nvcf-self-managed-stack_v${VERSION}/nvcf-self-managed-stack-${VERSION}.tar.gz -C nvcf-self-managed-stack && \
    rm -rf nvcf-self-managed-stack_v${VERSION}
@@ -274,7 +258,7 @@ Download and extract:
 # Set the version
 export COMPUTE_VERSION="1.0.6"
 
-ngc registry resource download-version "0833294136851237/nvcf-ncp-staging/nvcf-compute-plane-stack:${COMPUTE_VERSION}" && \
+ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}" && \
    mkdir -p nvcf-compute-plane-stack && \
    tar -xzf nvcf-compute-plane-stack_v${COMPUTE_VERSION}/nvcf-compute-plane-stack-${COMPUTE_VERSION}.tar.gz -C nvcf-compute-plane-stack && \
    rm -rf nvcf-compute-plane-stack_v${COMPUTE_VERSION}
@@ -304,12 +288,12 @@ Use the CLI version shown in the artifact manifest for this stack release.
 
 ```bash
 # Set the version
-export VERSION="0.0.30"
+export VERSION="1.10.3"
 
 # Set your platform (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64)
 export PLATFORM="linux-amd64"
 
-ngc registry resource download-version "0833294136851237/nvcf-ncp-staging/nvcf-cli:${VERSION}"
+ngc registry resource download-version "nvidia/nvcf/nvcf-cli:${VERSION}"
 
 tar -xzf nvcf-cli_v${VERSION}/${PLATFORM}/nvcf-cli-${PLATFORM}-${VERSION}.tar.gz
 mv nvcf-cli-${PLATFORM}-${VERSION} nvcf-cli
@@ -368,9 +352,9 @@ global:
     repository: nvcf-self-hosted
 ```
 
-The resulting image path would be: `<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/nvcf-self-hosted/nvcf-openbao:2.5.1-nv-1.1.0`
+The resulting image path would be: `<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/nvcf-self-hosted/nats-box:0.19.7-nonroot`
 
-In ECR, you must create repositories with the **full path** including the prefix, e.g., `nvcf-self-hosted/bitnami-cassandra`, `nvcf-self-hosted/nvcf-openbao`, etc.
+In ECR, you must create repositories with the **full path** including the prefix, e.g., `nvcf-self-hosted/notary-service`, `nvcf-self-hosted/nats-box`, etc.
 
 </Info>
 
@@ -389,14 +373,14 @@ aws ecr get-login-password --region us-east-1 | \
 
 ```bash
 # Create ECR repository with the full path (including prefix)
-aws ecr create-repository --repository-name ${REPO_PREFIX}/nvcf-openbao --region us-east-1
+aws ecr create-repository --repository-name ${REPO_PREFIX}/nats-box --region us-east-1
 
 # Tag the image for ECR (include repository prefix in path)
-docker tag nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-openbao:2.5.1-nv-1.1.0 \
-  <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nvcf-openbao:2.5.1-nv-1.1.0
+docker tag nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot \
+  <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nats-box:0.19.7-nonroot
 
 # Push to ECR
-docker push <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nvcf-openbao:2.5.1-nv-1.1.0
+docker push <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nats-box:0.19.7-nonroot
 ```
 
 **Push a Helm Chart to ECR**
@@ -444,7 +428,7 @@ global:
     repository: nvcf-self-hosted
 ```
 
-The resulting image path would be: `cr-example-cn-beijing.cr.volces.com/nvcf-self-hosted/nvcf-openbao:2.5.1-nv-1.1.0`
+The resulting image path would be: `cr-example-cn-beijing.cr.volces.com/nvcf-self-hosted/nats-box:0.19.7-nonroot`
 
 </Info>
 
@@ -475,11 +459,11 @@ CR_ENDPOINT="cr-example-cn-beijing.cr.volces.com"
 NAMESPACE="nvcf-self-hosted"
 
 # Tag the image for Volcano Engine CR
-docker tag nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-openbao:2.5.1-nv-1.1.0 \
-  ${CR_ENDPOINT}/${NAMESPACE}/nvcf-openbao:2.5.1-nv-1.1.0
+docker tag nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot \
+  ${CR_ENDPOINT}/${NAMESPACE}/nats-box:0.19.7-nonroot
 
 # Push to Volcano Engine CR
-docker push ${CR_ENDPOINT}/${NAMESPACE}/nvcf-openbao:2.5.1-nv-1.1.0
+docker push ${CR_ENDPOINT}/${NAMESPACE}/nats-box:0.19.7-nonroot
 ```
 
 **Push a Helm Chart to Volcano Engine CR**

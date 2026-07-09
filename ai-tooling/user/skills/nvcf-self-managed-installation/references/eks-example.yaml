@@ -19,17 +19,14 @@ global:
     sources:
       # OCI registry where NVCF Helm charts are stored
       registry: nvcr.io
-      # NGC org ID + team path. Must use the numeric org ID (e.g. "0651155215864979/nvcf-ncp-staging"),
-      # not the org name — nvcr.io returns 403 for the name form. Find your org ID in the NGC
-      # portal under Organization > Settings, or from the source-registry-config.yaml in your
-      # image-manifest repo.
-      repository: "<numeric-org-id>/nvcf-ncp-staging"
+      # Public NVCF namespace for Helm chart artifacts.
+      repository: "nvidia/nvcf"
 
   image:
     # OCI registry where NVCF container images are stored (often same as chart registry)
     registry: nvcr.io
-    # Must use the numeric NGC org ID, not the org name (see helm.sources.repository note above).
-    repository: "<numeric-org-id>/nvcf-ncp-staging"
+    # Public NVCF namespace for container images.
+    repository: "nvidia/nvcf"
 
   # Storage class for persistent volumes (Cassandra, NATS JetStream, OpenBao)
   # On EKS, common choices: gp3, gp2, io1

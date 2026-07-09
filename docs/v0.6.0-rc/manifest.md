@@ -99,23 +99,23 @@ The following tables list the complete artifact inventory.
 | Artifact | Version | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
 | `admin-token-issuer-proxy` | `1.0.2` | Optional | Proxies admin token requests for the reference architecture. | `nvcr.io/0833294136851237/nvcf-ncp-staging/admin-token-issuer-proxy:1.0.2` |  |
-| `alpine-k8s` | `1.36.1` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `nvcr.io/0833294136851237/nvcf-ncp-staging/alpine-k8s:1.36.1` |  |
+| `alpine-k8s` | `1.36.1-ea` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `nvcr.io/0833294136851237/selfhosted-ga/alpine-k8s:1.36.1-ea` |  |
 | `cert-manager-cainjector` | `v1.20.2` | Required | Injects certificate authority data into Kubernetes resources. | `nvcr.io/nvidia/nvcf/cert-manager-cainjector:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-controller` | `v1.20.2` | Required | Reconciles certificates and issuers for the control plane. | `nvcr.io/nvidia/nvcf/cert-manager-controller:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-startupapicheck` | `v1.20.2` | Required | Verifies that the cert-manager API is ready. | `nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-webhook` | `v1.20.2` | Required | Validates and converts cert-manager API resources. | `nvcr.io/nvidia/nvcf/cert-manager-webhook:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `ess-api` | `v0.57.26` | Required | Provides encrypted application secrets to NVCF workloads. | `nvcr.io/nvidia/nvcf/ess-api:v0.57.26` |  |
-| `llm-api-gateway` | `0.8.3` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/0833294136851237/nvcf-ncp-staging/llm-api-gateway:0.8.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
-| `llm-request-router` | `0.3.0` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/0833294136851237/nvcf-ncp-staging/stargate:0.3.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
+| `llm-api-gateway` | `0.8.3-ea` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/0833294136851237/selfhosted-ga/llm-api-gateway:0.8.3-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
+| `llm-request-router` | `0.3.0-ea` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/0833294136851237/selfhosted-ga/stargate:0.3.0-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 | `nats-box` | `0.19.7-nonroot` | Required | Provides NATS administration and diagnostic utilities. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nats-box:0.19.7-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
 | `nats-server` | `2.11.17-alpine3.22` | Required | Provides messaging for function deployment and invocation. | `nvcr.io/nvidia/nvcf/nats-server:2.11.17-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
-| `nats-server-config-reloader` | `0.23.0` | Required | Reloads NATS server configuration when mounted settings change. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nats-server-config-reloader:0.23.0` | [Upstream](https://github.com/nats-io/k8s) |
+| `nats-server-config-reloader` | `0.23.0-ea` | Required | Reloads NATS server configuration when mounted settings change. | `nvcr.io/0833294136851237/selfhosted-ga/nats-server-config-reloader:0.23.0-ea` | [Upstream](https://github.com/nats-io/k8s) |
 | `notary-service` | `1.9.4` | Required | Signs and validates functions and cluster nodes. | `nvcr.io/0833294136851237/nvcf-ncp-staging/notary-service:1.9.4` |  |
 | `nvcf-api-keys-service` | `1.2.14` | Required | Creates and manages NVCF API keys. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-api-keys-service:1.2.14` |  |
 | `nvcf-grpc-proxy` | `1.29.1` | Required | Proxies bidirectional gRPC traffic between the control and compute planes. | `nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.29.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/grpc-proxy) |
 | `nvcf-invocation-service` | `0.8.5` | Required | Routes stateless HTTP function invocation requests. | `nvcr.io/nvidia/nvcf/nvcf-invocation-service:0.8.5` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/http-invocation) |
 | `nvcf-nats-auth-callout-service` | `0.5.10` | Required | Authorizes NATS clients for NVCF services and workloads. | `nvcr.io/nvidia/nvcf/nvcf-nats-auth-callout-service:0.5.10` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/nats-auth-callout) |
-| `nvcf-openbao` | `2.5.4-nv-1.3.0` | Required | Stores and manages control-plane secrets. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-openbao:2.5.4-nv-1.3.0` | [Upstream](https://github.com/openbao/openbao) |
+| `nvcf-openbao` | `2.5.4-nv-1.3.0-ea` | Required | Stores and manages control-plane secrets. | `nvcr.io/0833294136851237/selfhosted-ga/nvcf-openbao:2.5.4-nv-1.3.0-ea` | [Upstream](https://github.com/openbao/openbao) |
 | `nvcf-openbao-migrations` | `0.16.1` | Required | Applies the OpenBao configuration required by NVCF. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-openbao-migrations:0.16.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/openbao) |
 | `nvcf-service-oss` | `1.9.0` | Required | Provides the primary NVCF control-plane API. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-service-oss:1.9.0` |  |
 | `nvct-service-oss` | `1.5.5` | Required | Provides tenant-scoped NVCF control-plane operations. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvct-service-oss:1.5.5` |  |
@@ -155,15 +155,15 @@ These Early Access artifacts have known CVE impact. Use only the QA-qualified ve
 
 | Artifact | Version | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
-| `bitnami-cassandra` | `5.0.6-nv-1` | Required | Stores NVCF account, function, cluster, and service state during Early Access. | `nvcr.io/0833294136851237/nvcf-ncp-staging/bitnami-cassandra:5.0.6-nv-1` | [Upstream](https://github.com/bitnami/containers/tree/main/bitnami/cassandra) |
-| `nvcf-cassandra-migrations` | `0.8.1` | Required | Applies the Cassandra schemas required by Early Access NVCF services. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-cassandra-migrations:0.8.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
+| `bitnami-cassandra` | `5.0.6-nv-1-ea` | Required | Stores NVCF account, function, cluster, and service state during Early Access. | `nvcr.io/0833294136851237/selfhosted-ga/bitnami-cassandra:5.0.6-nv-1-ea` | [Upstream](https://github.com/bitnami/containers/tree/main/bitnami/cassandra) |
+| `nvcf-cassandra-migrations` | `0.8.1-ea` | Required | Applies the Cassandra schemas required by Early Access NVCF services. | `nvcr.io/0833294136851237/selfhosted-ga/nvcf-cassandra-migrations:0.8.1-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
 
 ### Tools and deployment resources
 
 | Artifact | Version | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- |
-| `nvcf-cli` | `0.0.30` | Manages functions, deployments, and clusters from the command line. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-cli:0.0.30` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli) |
-| `nvcf-compute-plane-stack` | `1.0.6` | Provides the Helmfile bundle for compute-plane deployment. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-compute-plane-stack:1.0.6` |  |
+| `nvcf-cli` | `1.10.3` | Manages functions, deployments, and clusters from the command line. | `nvcr.io/nvidia/nvcf/nvcf-cli:1.10.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli) |
+| `nvcf-compute-plane-stack` | `1.0.6` | Provides the Helmfile bundle for compute-plane deployment. | `nvcr.io/nvidia/nvcf/nvcf-compute-plane-stack:1.0.6` |  |
 | `nvcf-self-managed-stack` | `0.6.0-rc.98` | Provides the Helmfile bundle for control-plane deployment. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:0.6.0-rc.98` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
 
 {/* docs-version-sync:END manifest-artifact-registry-paths */}

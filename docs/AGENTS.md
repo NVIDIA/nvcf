@@ -2,6 +2,12 @@
 
 Use this file when navigating or editing NVCF documentation under `docs/`.
 
+## Ownership
+
+This `docs/` tree is the canonical source for NVCF product documentation. Do
+not route documentation changes to an external documentation repository or an
+external workspace index.
+
 ## Layout
 
 - `docs/user/`: top-of-tree customer-facing documentation published as `dev`.

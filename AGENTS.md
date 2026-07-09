@@ -14,6 +14,7 @@ Use `python3`, not `python`, when Python is needed. Use the nearest nested `AGEN
 
 Useful pointers:
 - `BAZEL.md` for the contributor-facing Bazel build path
+- `docs/AGENTS.md` for in-repo user and developer documentation
 - `tools/AGENTS.md` for repo tooling
 - `deploy/helm/AGENTS.md` for native Helm chart guidance
 - `migrations/AGENTS.md` for native migration image guidance
@@ -28,6 +29,12 @@ Useful pointers:
 If a referenced skill is outdated, update it before finishing.
 
 ## Cross-repo and stack routing
+
+Documentation is monorepo-native. User docs, version catalogs, and Fern
+navigation are owned under `docs/` and `fern/` in this repository. Do not route
+documentation changes through an external documentation repository or an
+external workspace index. Start with `docs/AGENTS.md` and the nearest nested
+guidance.
 
 Use `imports.yaml` to decide whether a subtree is monorepo-native or still
 owned by an upstream repo. Native subprojects are edited here. Upstream-owned

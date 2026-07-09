@@ -192,7 +192,7 @@ Fix your `secrets/<environment-name>-secrets.yaml` file, then follow the "Recove
    aws ecr describe-images --repository-name <your-ecr-repository-name> --region <your-region>
 
    # For NGC (if using)
-   ngc registry image list 0833294136851237/nvcf-ncp-staging/*
+   ngc registry image list nvidia/nvcf/*
    ```
 
 3. Check network connectivity from cluster to registry
