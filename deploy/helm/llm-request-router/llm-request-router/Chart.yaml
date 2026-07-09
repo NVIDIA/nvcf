@@ -18,4 +18,4 @@ name: helm-nvcf-llm-request-router
 description: Helm chart for the NVCF LLM Request Router backed by Stargate
 type: application
 version: 0.0.0 # managed by semantic-release
-appVersion: "0.3.0" # match the versioned stargate image tag
+appVersion: "0.3.2" # match the versioned stargate image tag
