@@ -28,8 +28,6 @@ metadata:
 
 # NVCF Self-Managed Stack Operations
 
-Operational guide for the `nvcf-self-managed-stack` helmfile bundle used to deploy the NVCF control plane.
-
 ## Instructions
 
 Use this skill for install, upgrade, or teardown work in `nvcf-self-managed-stack`; validate tooling first, follow the documented helmfile flow, and prefer targeted troubleshooting over ad hoc chart edits. For `functionType: "LLM"` deployments, read [LLM Function Enablement](references/helmfile-structure.md#llm-function-enablement) before applying the stack.
@@ -181,27 +179,18 @@ above.
    > whichever registry holds the user image (set it to your mirror if the image is mirrored
    > there).
 
-### 3. Set the gateway address in your environment file
+### 3. Set the route domain
 
-Your environment file (`environments/<env>.yaml`) requires `global.domain` to be set to the external address of your Envoy Gateway or load balancer. How to obtain it depends on timing:
-
-If Envoy Gateway is already installed (recommended, install it before the NVCF stack):
+`global.domain` sets the hostname suffix for routes such as `api.<domain>`. It does not configure the Gateway or its load balancer. Query the exact existing Gateway:
 
 ```bash
-GATEWAY_ADDRESS=$(kubectl get gateway -n envoy-gateway -o jsonpath='{.items[0].status.addresses[0].value}')
-echo "$GATEWAY_ADDRESS"
+GATEWAY_ADDRESS=$(kubectl get gateway <gateway-name> -n <gateway-namespace> -o jsonpath='{.status.addresses[0].value}')
+test -n "$GATEWAY_ADDRESS"
 ```
 
-Set this value in your environment file:
+The address may be a hostname or IP. Cloud provider and Gateway configuration determine the load balancer type and address format. The self-managed stack does not select either.
 
-```yaml
-global:
-  domain: "<GATEWAY_ADDRESS>"
-```
-
-If Envoy Gateway is not yet installed: Use a placeholder value (e.g., `placeholder.local`), complete the `helmfile sync`, then update the domain once the gateway address is available and re-sync. See Example 4 in [examples.md](examples.md) for the update flow.
-
-On AWS EKS: The gateway address is typically the DNS name of the AWS Network Load Balancer created by the Envoy Gateway controller (e.g., `k8s-envoygateway-xxxxxxxx.us-west-2.elb.amazonaws.com`).
+For temporary testing without DNS, use a stable reserved suffix such as `global.domain: "nvcf.test"`, connect to `GATEWAY_ADDRESS`, and send `Host: api.nvcf.test`. For production, use your base DNS domain and point its route records to `GATEWAY_ADDRESS`. If the endpoint later changes, keep `global.domain` stable and update only DNS or the client destination. See Example 4 in [examples.md](examples.md).
 
 ### 4. Preview and deploy
 
@@ -505,14 +494,6 @@ HELMFILE_ENV=<env> helmfile --selector name=api sync
 kubectl logs -n nvcf job/nvcf-api-account-bootstrap   # confirm the account was created
 ```
 
-For expanded debugging recipes, see [references/debugging.md](references/debugging.md).
-
 ## Additional Resources
 
-- For worked examples, see [examples.md](examples.md)
-- For a commented EKS environment file, see [references/eks-example.yaml](references/eks-example.yaml)
-- For helmfile structure details, see [references/helmfile-structure.md](references/helmfile-structure.md)
-- For per-chart imagePullSecrets keys, see [references/pull-secrets.md](references/pull-secrets.md)
-- For debugging recipes, see [references/debugging.md](references/debugging.md)
-
-After deployment, use the `nvcf-self-managed-cli` skill to create functions, create tasks, manage API keys, and invoke endpoints.
+See [worked examples](examples.md), the [EKS environment example](references/eks-example.yaml), [helmfile structure](references/helmfile-structure.md), [pull secret details](references/pull-secrets.md), and [debugging recipes](references/debugging.md). After deployment, use the `nvcf-self-managed-cli` skill to create functions, create tasks, manage API keys, and invoke endpoints.

@@ -194,40 +194,30 @@ Follow the [Clean Installation](#) steps in SKILL.md.
 
 ---
 
-## Example 4: Recover from Gateway Address Change
+## Example 4: Recover from a Gateway Endpoint Change
 
-The Gateway/LB was recreated (e.g., TCPRoute misconfiguration) and got a new address.
+The separately provisioned Gateway or its load balancer was recreated and got a new endpoint.
 
-### Step 1: Get new address
+### Step 1: Get the new endpoint
 
 ```bash
-GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway \
+GATEWAY_ADDR=$(kubectl get gateway <gateway-name> -n <gateway-namespace> \
   -o jsonpath='{.status.addresses[0].value}')
-echo "$GATEWAY_ADDR"
+test -n "$GATEWAY_ADDR"
 ```
 
-### Step 2: Update environment file
+### Step 2: Update DNS
 
-Edit `environments/<env>.yaml` and replace the `domain` value:
+Keep `global.domain` unchanged. Point the DNS records for the rendered route hostnames, such as `api.<domain>` and `*.invocation.<domain>`, to `GATEWAY_ADDR`. No stack sync is required when only the Gateway endpoint changes.
 
-```yaml
-global:
-  domain: "NEW_GATEWAY_ADDR"
-```
+For a temporary test environment without DNS, keep its reserved route suffix unchanged and connect directly to `GATEWAY_ADDR` with the matching `Host` header.
 
-### Step 3: Re-sync affected releases
+### Step 3: Verify DNS and routing
 
 ```bash
-HELMFILE_ENV=<env> helmfile --selector release-group=ingress sync
-HELMFILE_ENV=<env> helmfile --selector release-group=services sync
-HELMFILE_ENV=<env> helmfile --selector name=admin-issuer-proxy sync
-```
-
-### Step 4: Verify routes
-
-```bash
+dig +short "api.<domain>"
 kubectl get httproutes -A
-kubectl get tcproutes -A
+curl -H "Host: api.<domain>" "http://$GATEWAY_ADDR/health"
 ```
 
 ---

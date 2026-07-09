@@ -16,10 +16,10 @@ github.com/MadAppGang/httplog v1.3.0 h1:1XU54TO8kiqTeO+7oZLKAM3RP/cJ7SadzslRcKsp
 github.com/MadAppGang/httplog v1.3.0/go.mod h1:gpYEdkjh/Cda6YxtDy4AB7KY+fR7mb3SqBZw74A5hJ4=
 github.com/MadAppGang/httplog/zap v1.2.1 h1:8sxJ82E3vQhIBu7IlfVUKIk1Vf4g82UB6aPtqaHMxno=
 github.com/MadAppGang/httplog/zap v1.2.1/go.mod h1:vZZ0MO9h5ANSi5iIUFV/Iq3Kn6qD/UqZ7hJu4f7AF50=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260603225940-3f25378378ab h1:yMHNMX0XojcyO4kLSJ+sYfxpxcE1UgryQIGE2JOInGM=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260603225940-3f25378378ab/go.mod h1:a81YFpCa6Wl01ZNx+2wF7NXoPcn0bWWY4GLrUOpnN1g=
-github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260603225940-3f25378378ab h1:Vt91Vl+xl8HL/39Fh7LZp5WutUv5gCLuYtPPNBENQyY=
-github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260603225940-3f25378378ab/go.mod h1:EHUXrTYsYSpFZlfkUUQBJzFEGe5Agt2PCmV24CX1XRQ=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260709073524-72781c61e05c h1:HZtiedPn1EKAEfMYoay6z9CjpJxteKqO7b7JOWxgycg=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260709073524-72781c61e05c/go.mod h1:nj3yBW2weO0qzi1ML45tBqviLa2Y/KG9qCalxQuJVB8=
+github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260709073524-72781c61e05c h1:lH0gol7LMZrKe0tV1ZTnWK3mfPI7crJu6DubK/bTfMc=
+github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260709073524-72781c61e05c/go.mod h1:LYrJLNwPMTruA5cu+9GuMhNvji24ErB1UwcaaB/yooE=
 github.com/TylerBrock/colorjson v0.0.0-20200706003622-8a50f05110d2 h1:ZBbLwSJqkHBuFDA6DUhhse0IGJ7T5bemHyNILUjvOq4=
 github.com/TylerBrock/colorjson v0.0.0-20200706003622-8a50f05110d2/go.mod h1:VSw57q4QFiWDbRnjdX8Cb3Ow0SFncRw+bA/ofY6Q83w=
 github.com/anmitsu/go-shlex v0.0.0-20161002113705-648efa622239/go.mod h1:2FmKhYUyUczH0OGQWaF5ceTx0UBShxjsH6f8oGKYe2c=
@@ -235,8 +235,8 @@ github.com/panjf2000/ants/v2 v2.11.3 h1:AfI0ngBoXJmYOpDh9m516vjqoUu2sLrIVgppI9TZ
 github.com/panjf2000/ants/v2 v2.11.3/go.mod h1:8u92CYMUc6gyvTIw8Ru7Mt7+/ESnJahz5EVtqfrilek=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 h1:onHthvaw9LFnH4t2DcNVpwGmV9E1BkGknEliJkfwQj0=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58/go.mod h1:DXv8WO4yhMYhSNPKjeNKa5WY9YCIEBRbNzFFPJbWO6Y=
-github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
-github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
+github.com/pelletier/go-toml/v2 v2.3.0 h1:k59bC/lIZREW0/iVaQR8nDHxVq8OVlIzYCOJf421CaM=
+github.com/pelletier/go-toml/v2 v2.3.0/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pkg/diff v0.0.0-20210226163009-20ebb0f2a09e/go.mod h1:pJLUxLENpZxwdsKMEsNbx1VGcRFpLqf3715MtcvvzbA=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=

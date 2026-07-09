@@ -3,8 +3,8 @@ module github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init
 go 1.25.0
 
 require (
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260603225940-3f25378378ab
-	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260603225940-3f25378378ab
+	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260709073524-72781c61e05c
+	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260709073524-72781c61e05c
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.10
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.10
@@ -108,7 +108,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/openzipkin/zipkin-go v0.4.3 // indirect
-	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/pelletier/go-toml/v2 v2.3.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect

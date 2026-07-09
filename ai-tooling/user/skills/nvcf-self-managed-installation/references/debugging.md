@@ -346,25 +346,25 @@ Use the split compute-plane workflow:
 4. For fake GPU and cluster prerequisite issues, follow the
    `nvcf-self-managed-cli` skill's compute-plane troubleshooting workflow.
 
-## Failure: Gateway Address Changed
+## Failure: Gateway Endpoint Changed
 
 ### Symptoms
 
-SIS cluster registration fails. API returns connection errors. HTTPRoutes/TCPRoutes reference old address.
+Requests through the configured route domain fail after the Gateway or its load balancer is replaced. The Gateway reports a new endpoint.
 
 ### Diagnosis
 
 ```bash
-# Check current gateway address
-kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonpath='{.status.addresses[0].value}'
-
-# Compare with environment file domain
-grep domain environments/<env>.yaml
+GATEWAY_ADDR=$(kubectl get gateway <gateway-name> -n <gateway-namespace> \
+  -o jsonpath='{.status.addresses[0].value}')
+test -n "$GATEWAY_ADDR"
+dig +short "api.<domain>"
+curl -H "Host: api.<domain>" "http://$GATEWAY_ADDR/health"
 ```
 
 ### Fix
 
-See Example 4 in [examples.md](/ai-tooling/user/skills/nvcf-self-managed-installation/examples.md): update domain in environment file, re-sync ingress and services.
+Update DNS records under `global.domain` to target `GATEWAY_ADDR`, or update the direct client destination in a no-DNS test environment. Keep `global.domain` unchanged. See [Example 4](../examples.md#example-4-recover-from-a-gateway-endpoint-change).
 
 ## Useful Namespace-to-Service Mapping
 

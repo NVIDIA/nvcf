@@ -9,11 +9,11 @@
 # (see "Overriding Helm Chart Values" in SKILL.md).
 
 global:
-  # Domain: external address of your Envoy Gateway / load balancer.
-  # On AWS EKS this is typically the NLB DNS name, e.g.:
-  #   k8s-envoygateway-xxxxxxxx.us-west-2.elb.amazonaws.com
-  # See "Set the gateway address" in SKILL.md for how to obtain this.
-  domain: "<GATEWAY_ADDRESS>"
+  # Route hostname suffix. For production, use a base DNS domain and point
+  # its route records to the Gateway status address. For direct tests without
+  # DNS, use a stable reserved suffix such as nvcf.test and send the matching
+  # Host header while connecting to the Gateway address. See SKILL.md step 3.
+  domain: "<ROUTE_DOMAIN>"
 
   helm:
     sources:
