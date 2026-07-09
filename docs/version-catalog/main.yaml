@@ -103,31 +103,38 @@ publications:
     version: 1.5.9-hotfix.1
     registry: public-images
   - name: pylon
-    version: 0.3.0
+    version: 0.3.1
     registry: public-images
   - name: spot
     version: 1.563.1-hotfix.1
     registry: public-images
   - name: alpine-k8s
-    version: 1.36.1-ea
+    version: 1.36.1
+    published_version: 1.36.1-ea
     registry: selfhosted-ga
   - name: llm-api-gateway
-    version: 0.8.3-ea
+    version: 0.8.3
+    published_version: 0.8.3-ea
     registry: selfhosted-ga
   - name: llm-request-router
-    version: 0.3.0-ea
+    version: 0.3.0
+    published_version: 0.3.0-ea
     registry: selfhosted-ga
   - name: nats-server-config-reloader
-    version: 0.23.0-ea
+    version: 0.23.0
+    published_version: 0.23.0-ea
     registry: selfhosted-ga
   - name: nvcf-openbao
-    version: 2.5.4-nv-1.3.0-ea
+    version: 2.5.4-nv-1.3.0
+    published_version: 2.5.4-nv-1.3.0-ea
     registry: selfhosted-ga
   - name: bitnami-cassandra
-    version: 5.0.6-nv-1-ea
+    version: 5.0.6-nv-1
+    published_version: 5.0.6-nv-1-ea
     registry: selfhosted-ga
   - name: nvcf-cassandra-migrations
-    version: 0.8.1-ea
+    version: 0.8.1
+    published_version: 0.8.1-ea
     registry: selfhosted-ga
   - name: helm-admin-token-issuer-proxy
     version: 1.4.3
@@ -138,7 +145,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-api
-    version: 1.23.5
+    version: 1.23.6
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-cassandra
@@ -210,7 +217,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: nvcf-gateway-routes
-    version: 1.13.4
+    version: 1.14.0
     registry: public-helm
     chart_format: http
   - name: nvcf-container-cache
@@ -230,27 +237,12 @@ publications:
     registry: public-helm
     chart_format: http
 version_overrides:
-  - name: alpine-k8s
-    version: 1.36.1-ea
-    source: artifacts-0.6.0.txt (EA mirror tag)
   - name: llm-api-gateway
-    version: 0.8.3-ea
-    source: supplemental artifact (EA mirror tag)
+    version: 0.8.3
+    source: supplemental artifact missing from artifacts-0.6.0.txt
   - name: llm-request-router
-    version: 0.3.0-ea
-    source: helm-nvcf-llm-request-router:1.6.3 (EA mirror tag)
-  - name: nats-server-config-reloader
-    version: 0.23.0-ea
-    source: artifacts-0.6.0.txt (EA mirror tag)
-  - name: nvcf-openbao
-    version: 2.5.4-nv-1.3.0-ea
-    source: artifacts-0.6.0.txt (EA mirror tag)
-  - name: bitnami-cassandra
-    version: 5.0.6-nv-1-ea
-    source: artifacts-0.6.0.txt (EA mirror tag)
-  - name: nvcf-cassandra-migrations
-    version: 0.8.1-ea
-    source: artifacts-0.6.0.txt (EA mirror tag)
+    version: 0.3.0
+    source: helm-nvcf-llm-request-router:1.6.3 (image missing from artifacts-0.6.0.txt)
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -707,11 +699,11 @@ artifacts:
   - name: alpine-k8s
     type: image
     registry: staging
-    version: 1.36.1-ea
+    version: 1.36.1
   - name: bitnami-cassandra
     type: image
     registry: staging
-    version: 5.0.6-nv-1-ea
+    version: 5.0.6-nv-1
   - name: cert-manager-cainjector
     type: image
     registry: staging
@@ -823,7 +815,7 @@ artifacts:
   - name: nats-server-config-reloader
     type: image
     registry: staging
-    version: 0.23.0-ea
+    version: 0.23.0
   - name: nats-server
     type: image
     registry: staging
@@ -839,7 +831,7 @@ artifacts:
   - name: nvcf-cassandra-migrations
     type: image
     registry: staging
-    version: 0.8.1-ea
+    version: 0.8.1
   - name: nvcf-gateway-routes
     type: chart
     registry: staging
@@ -863,7 +855,7 @@ artifacts:
   - name: nvcf-openbao
     type: image
     registry: staging
-    version: 2.5.4-nv-1.3.0-ea
+    version: 2.5.4-nv-1.3.0
   - name: nvcf-service-oss
     type: image
     registry: staging
@@ -924,12 +916,12 @@ supplemental_artifacts:
   - name: llm-api-gateway
     type: image
     registry: staging
-    version: 0.8.3-ea
+    version: 0.8.3
   - name: llm-request-router
     type: image
     registry: staging
     repository_name: stargate
-    version: 0.3.0-ea
+    version: 0.3.0
   - name: nvcf-image-credential-helper
     type: image
     registry: staging

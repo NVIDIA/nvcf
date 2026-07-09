@@ -229,6 +229,40 @@ func TestCatalogRefreshPreservesVersionQualifiedPublications(t *testing.T) {
 	}
 }
 
+func TestArtifactPathUsesPublishedVersionAlias(t *testing.T) {
+	catalog := testCatalog()
+	catalog.Registries["ea-images"] = Registry{Host: "nvcr.io", Namespace: "example/selfhosted-ga"}
+	catalog.Publications = []Publication{{
+		Name:             "llm-api-gateway",
+		Version:          "0.3.0",
+		PublishedVersion: "0.3.0-ea",
+		Registry:         "ea-images",
+	}}
+
+	raw, err := MarshalCatalog(catalog)
+	if err != nil {
+		t.Fatalf("MarshalCatalog failed: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "catalog.yaml")
+	writeFile(t, path, string(raw))
+	loaded, err := LoadCatalog(path)
+	if err != nil {
+		t.Fatalf("LoadCatalog failed: %v", err)
+	}
+	artifact, ok := loaded.findArtifact("llm-api-gateway")
+	if !ok {
+		t.Fatal("catalog is missing llm-api-gateway")
+	}
+	got, err := loaded.artifactPath(artifact)
+	if err != nil {
+		t.Fatalf("artifactPath failed: %v", err)
+	}
+	if want := "nvcr.io/example/selfhosted-ga/llm-api-gateway:0.3.0-ea"; got != want {
+		t.Fatalf("artifactPath = %q, want %q", got, want)
+	}
+}
+
 func TestCatalogRefreshAppliesVersionOverrides(t *testing.T) {
 	base := testCatalog()
 	base.VersionOverrides = []VersionOverride{{

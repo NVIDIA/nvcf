@@ -108,10 +108,11 @@ const (
 )
 
 type Publication struct {
-	Name        string      `yaml:"name"`
-	Version     string      `yaml:"version"`
-	Registry    string      `yaml:"registry"`
-	ChartFormat ChartFormat `yaml:"chart_format,omitempty"`
+	Name             string      `yaml:"name"`
+	Version          string      `yaml:"version"`
+	PublishedVersion string      `yaml:"published_version,omitempty"`
+	Registry         string      `yaml:"registry"`
+	ChartFormat      ChartFormat `yaml:"chart_format,omitempty"`
 }
 
 type VersionOverride struct {
@@ -459,8 +460,12 @@ func (catalog *Catalog) DenylistMap() map[string]DenylistEntry {
 
 func (catalog *Catalog) artifactPath(artifact Artifact) (string, error) {
 	registryName := artifact.Registry
+	version := artifact.Version
 	if publication, ok := catalog.publicationFor(artifact); ok {
 		registryName = publication.Registry
+		if publication.PublishedVersion != "" {
+			version = publication.PublishedVersion
+		}
 	}
 	registry, ok := catalog.Registries[registryName]
 	if !ok {
@@ -470,7 +475,7 @@ func (catalog *Catalog) artifactPath(artifact Artifact) (string, error) {
 	if name == "" {
 		name = artifact.Name
 	}
-	return registry.fullPath(name, artifact.Version), nil
+	return registry.fullPath(name, version), nil
 }
 
 func (catalog *Catalog) publicationFor(artifact Artifact) (Publication, bool) {

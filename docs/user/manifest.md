@@ -71,7 +71,7 @@ The following tables list the complete artifact inventory.
 | Artifact | Version | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
 | `helm-admin-token-issuer-proxy` | `1.4.3` | Optional | Deploys the admin token issuer proxy used by the reference architecture. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-admin-token-issuer-proxy:1.4.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/admin-token-issuer-proxy) |
-| `helm-nvcf-api` | `1.23.6` | Required | Deploys the NVCF API service. | `nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvcf-api:1.23.6` |  |
+| `helm-nvcf-api` | `1.23.6` | Required | Deploys the NVCF API service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-api:1.23.6` |  |
 | `helm-nvcf-api-keys` | `1.6.0` | Required | Deploys the API key management service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-api-keys:1.6.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/api-keys-colocated) |
 | `helm-nvcf-cassandra` | `0.15.5` | Required | Deploys Cassandra and its initialization jobs. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-cassandra:0.15.5` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/cassandra) / [Upstream](https://github.com/bitnami/charts/tree/main/bitnami/cassandra) |
 | `helm-nvcf-cert-manager` | `0.1.0` | Required | Deploys the NVCF cert-manager configuration. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-cert-manager:0.1.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/cert-manager) / [Upstream](https://github.com/cert-manager/cert-manager) |
@@ -91,7 +91,7 @@ The following tables list the complete artifact inventory.
 | `helm-nvcf-vanity-gateway` | `0.1.0-nvcf-10204.1` | Optional | Deploys the optional vanity hostname gateway. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-vanity-gateway:0.1.0-nvcf-10204.1` |  |
 | `helm-reval` | `1.3.8` | Required | Deploys the function revalidation service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-reval:1.3.8` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/helm-reval) |
 | `nvcf-example-dashboards` | `1.6.0` | Optional | Deploys example Grafana dashboards for NVCF telemetry. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-example-dashboards:1.6.0` |  |
-| `nvcf-gateway-routes` | `1.14.0` | Optional | Deploys Gateway API routes for the reference architecture. | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-gateway-routes:1.14.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/gateway-routes) |
+| `nvcf-gateway-routes` | `1.14.0` | Optional | Deploys Gateway API routes for the reference architecture. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes:1.14.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/gateway-routes) |
 | `nvcf-observability-reference-stack` | `1.10.0` | Optional | Deploys a reference observability backend for evaluation. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-observability-reference-stack:1.10.0` |  |
 
 ### Control plane services and images
@@ -99,23 +99,23 @@ The following tables list the complete artifact inventory.
 | Artifact | Version | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
 | `admin-token-issuer-proxy` | `1.0.2` | Optional | Proxies admin token requests for the reference architecture. | `nvcr.io/nvidia/nvcf/admin-token-issuer-proxy:1.0.2` |  |
-| `alpine-k8s` | `1.36.1-ea` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `nvcr.io/0833294136851237/selfhosted-ga/alpine-k8s:1.36.1-ea` |  |
+| `alpine-k8s` | `1.36.1` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `nvcr.io/0833294136851237/selfhosted-ga/alpine-k8s:1.36.1-ea` |  |
 | `cert-manager-cainjector` | `v1.20.2` | Required | Injects certificate authority data into Kubernetes resources. | `nvcr.io/nvidia/nvcf/cert-manager-cainjector:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-controller` | `v1.20.2` | Required | Reconciles certificates and issuers for the control plane. | `nvcr.io/nvidia/nvcf/cert-manager-controller:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-startupapicheck` | `v1.20.2` | Required | Verifies that the cert-manager API is ready. | `nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-webhook` | `v1.20.2` | Required | Validates and converts cert-manager API resources. | `nvcr.io/nvidia/nvcf/cert-manager-webhook:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `ess-api` | `v0.57.26` | Required | Provides encrypted application secrets to NVCF workloads. | `nvcr.io/nvidia/nvcf/ess-api:v0.57.26` |  |
-| `llm-api-gateway` | `0.8.3-ea` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/0833294136851237/selfhosted-ga/llm-api-gateway:0.8.3-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
-| `llm-request-router` | `0.3.0-ea` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/0833294136851237/selfhosted-ga/stargate:0.3.0-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
+| `llm-api-gateway` | `0.8.3` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/0833294136851237/selfhosted-ga/llm-api-gateway:0.8.3-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
+| `llm-request-router` | `0.3.0` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/0833294136851237/selfhosted-ga/stargate:0.3.0-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 | `nats-box` | `0.19.7-nonroot` | Required | Provides NATS administration and diagnostic utilities. | `nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
 | `nats-server` | `2.11.17-alpine3.22` | Required | Provides messaging for function deployment and invocation. | `nvcr.io/nvidia/nvcf/nats-server:2.11.17-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
-| `nats-server-config-reloader` | `0.23.0-ea` | Required | Reloads NATS server configuration when mounted settings change. | `nvcr.io/0833294136851237/selfhosted-ga/nats-server-config-reloader:0.23.0-ea` | [Upstream](https://github.com/nats-io/k8s) |
+| `nats-server-config-reloader` | `0.23.0` | Required | Reloads NATS server configuration when mounted settings change. | `nvcr.io/0833294136851237/selfhosted-ga/nats-server-config-reloader:0.23.0-ea` | [Upstream](https://github.com/nats-io/k8s) |
 | `notary-service` | `1.8.1` | Required | Signs and validates functions and cluster nodes. | `nvcr.io/nvidia/nvcf/notary-service:1.8.1` |  |
 | `nvcf-api-keys-service` | `1.5.0` | Required | Creates and manages NVCF API keys. | `nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.5.0` |  |
 | `nvcf-grpc-proxy` | `1.29.1` | Required | Proxies bidirectional gRPC traffic between the control and compute planes. | `nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.29.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/grpc-proxy) |
 | `nvcf-invocation-service` | `0.8.5` | Required | Routes stateless HTTP function invocation requests. | `nvcr.io/nvidia/nvcf/nvcf-invocation-service:0.8.5` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/http-invocation) |
 | `nvcf-nats-auth-callout-service` | `0.5.10` | Required | Authorizes NATS clients for NVCF services and workloads. | `nvcr.io/nvidia/nvcf/nvcf-nats-auth-callout-service:0.5.10` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/nats-auth-callout) |
-| `nvcf-openbao` | `2.5.4-nv-1.3.0-ea` | Required | Stores and manages control-plane secrets. | `nvcr.io/0833294136851237/selfhosted-ga/nvcf-openbao:2.5.4-nv-1.3.0-ea` | [Upstream](https://github.com/openbao/openbao) |
+| `nvcf-openbao` | `2.5.4-nv-1.3.0` | Required | Stores and manages control-plane secrets. | `nvcr.io/0833294136851237/selfhosted-ga/nvcf-openbao:2.5.4-nv-1.3.0-ea` | [Upstream](https://github.com/openbao/openbao) |
 | `nvcf-openbao-migrations` | `0.16.1` | Required | Applies the OpenBao configuration required by NVCF. | `nvcr.io/nvidia/nvcf/nvcf-openbao-migrations:0.16.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/openbao) |
 | `nvcf-service-oss` | `1.9.0-hotfix.1` | Required | Provides the primary NVCF control-plane API. | `nvcr.io/nvidia/nvcf/nvcf-service-oss:1.9.0-hotfix.1` |  |
 | `nvct-service-oss` | `1.5.9-hotfix.1` | Required | Provides tenant-scoped NVCF control-plane operations. | `nvcr.io/nvidia/nvcf/nvct-service-oss:1.5.9-hotfix.1` |  |
@@ -148,7 +148,7 @@ The following tables list the complete artifact inventory.
 | `nvcf_worker_init` | `1.0.1` | Required | Prepares function resources before the user container starts. | `nvcr.io/nvidia/nvcf/nvcf_worker_init:1.0.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-init) |
 | `nvcf_worker_llm_credentials` | `1.0.1` | Optional | Maintains a current NVCF worker token for LLM function workloads. | `nvcr.io/nvidia/nvcf/nvcf_worker_llm_credentials:1.0.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-llm-credentials) |
 | `nvcf_worker_utils` | `1.0.1` | Required | Proxies NATS traffic between function containers and the control plane. | `nvcr.io/nvidia/nvcf/nvcf_worker_utils:1.0.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-utils) |
-| `pylon` | `0.3.1` | Optional | Connects LLM worker pods to the LLM request router. | `nvcr.io/0833294136851237/nvcf-ncp-staging/pylon:0.3.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
+| `pylon` | `0.3.1` | Optional | Connects LLM worker pods to the LLM request router. | `nvcr.io/nvidia/nvcf/pylon:0.3.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 
 ### EA-only CVE-impacted artifacts
 
@@ -156,8 +156,8 @@ These Early Access artifacts have known CVE impact. Use only the QA-qualified ve
 
 | Artifact | Version | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
-| `bitnami-cassandra` | `5.0.6-nv-1-ea` | Required | Stores NVCF account, function, cluster, and service state during Early Access. | `nvcr.io/0833294136851237/selfhosted-ga/bitnami-cassandra:5.0.6-nv-1-ea` | [Upstream](https://github.com/bitnami/containers/tree/main/bitnami/cassandra) |
-| `nvcf-cassandra-migrations` | `0.8.1-ea` | Required | Applies the Cassandra schemas required by Early Access NVCF services. | `nvcr.io/0833294136851237/selfhosted-ga/nvcf-cassandra-migrations:0.8.1-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
+| `bitnami-cassandra` | `5.0.6-nv-1` | Required | Stores NVCF account, function, cluster, and service state during Early Access. | `nvcr.io/0833294136851237/selfhosted-ga/bitnami-cassandra:5.0.6-nv-1-ea` | [Upstream](https://github.com/bitnami/containers/tree/main/bitnami/cassandra) |
+| `nvcf-cassandra-migrations` | `0.8.1` | Required | Applies the Cassandra schemas required by Early Access NVCF services. | `nvcr.io/0833294136851237/selfhosted-ga/nvcf-cassandra-migrations:0.8.1-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
 
 ### Tools and deployment resources
 
