@@ -1,26 +1,24 @@
 ---
 name: nvcf-self-managed-installation
 description: >-
-  Install and deploy the nvcf-self-managed-stack helmfile bundle for NVCF
-  self-hosted deployments. Covers clean control-plane installation, teardown,
-  helm values overrides, image pull secrets, and debugging installation
-  failures. Use when deploying, installing, reinstalling, tearing
-  down, or configuring the NVCF self-managed control plane stack, or when the
-  user mentions helmfile, self-managed, self-hosted, control plane installation,
-  or nvcf-self-managed-stack. Do NOT use for local k3d
-  development environments. For local NVCF self-hosted or self-managed cluster
-  setup with k3d, use the local k3d development workflow instead.
+  Install and operate NVCF self-hosted control-plane and separate compute-plane
+  stacks. Covers Helmfile values and CLI profile installation flows, teardown,
+  values overrides, pull secrets, and troubleshooting. Use for
+  nvcf-self-managed-stack, nvcf-compute-plane-stack, split compute-plane
+  installation, control-plane installation, CLI-generated control-plane
+  profiles, Helmfile, self-managed, or self-hosted deployments. Do NOT use for
+  local k3d environments; use the local k3d development workflow instead.
 license: Apache-2.0
 compatibility: Requires helmfile >= 1.1.0 < 1.2.0, helm >= 3.12, helm-diff plugin, kubectl matching cluster version
 author: "nvcf-core-eng <nvcf-core-eng@exchange.nvidia.com>"
 version: "1.0.0"
-tags: [nvcf, self-managed, helmfile, self-hosted, control-plane, installation, deployment, pull-secrets]
+tags: [nvcf, self-managed, helmfile, self-hosted, control-plane, compute-plane, cli-profile, installation, deployment, pull-secrets]
 tools: [Shell, Read, Edit, Grep, Glob]
 metadata:
   internal: false
   author: "nvcf-core-eng <nvcf-core-eng@exchange.nvidia.com>"
   version: "1.0"
-  tags: [nvcf, self-managed, helmfile, self-hosted, control-plane, installation, deployment, pull-secrets]
+  tags: [nvcf, self-managed, helmfile, self-hosted, control-plane, compute-plane, cli-profile, installation, deployment, pull-secrets]
   languages: [bash, yaml]
   frameworks: [helmfile, helm, kubectl]
   domain: cloud-infrastructure
@@ -28,26 +26,32 @@ metadata:
 
 # NVCF Self-Managed Stack Operations
 
+Operational guide for matching NVCF control-plane and compute-plane Helmfile bundles.
+
 ## Instructions
 
-Use this skill for install, upgrade, or teardown work in `nvcf-self-managed-stack`; validate tooling first, follow the documented helmfile flow, and prefer targeted troubleshooting over ad hoc chart edits. For `functionType: "LLM"` deployments, read [LLM Function Enablement](references/helmfile-structure.md#llm-function-enablement) before applying the stack.
+Use this skill for install, upgrade, or teardown work in matching `nvcf-self-managed-stack` and `nvcf-compute-plane-stack` bundles; keep Helmfile values and CLI profile handoffs separate. For `functionType: "LLM"`, read [LLM Function Enablement](references/helmfile-structure.md#llm-function-enablement).
 
 ## Prerequisites
 
-Before any operation, ask the user for the path to their extracted `nvcf-self-managed-stack` directory. Verify it contains the expected structure:
+Ask for the extracted `nvcf-self-managed-stack` path. For split installation,
+also require the matching-version `nvcf-compute-plane-stack` path. Verify both:
 
 ```bash
-ls <user-provided-path>/helmfile.d/ <user-provided-path>/environments/ <user-provided-path>/secrets/ <user-provided-path>/global.yaml.gotmpl
+ls <control-plane-stack>/helmfile.d/ <control-plane-stack>/environments/ <control-plane-stack>/secrets/ <control-plane-stack>/global.yaml.gotmpl
+ls <compute-plane-stack>/helmfile.d/ <compute-plane-stack>/environments/ <compute-plane-stack>/global.yaml.gotmpl
 ```
 
-If the directory does not exist or is missing expected files, guide the user to download the stack package from NGC:
+If either directory is missing, download matching bundle versions from NGC:
 
 ```bash
 ngc registry resource download-version <org>/nvcf-self-managed-stack:<version>
-tar xzf nvcf-self-managed-stack-<version>.tar.gz
+ngc registry resource download-version <org>/nvcf-compute-plane-stack:<version>
 ```
 
-All subsequent commands assume you are inside this directory.
+Control-plane commands below assume the control-plane bundle root. Split-flow
+commands and root substitution are in
+[Split Compute-Plane Installation](references/compute-plane-installation.md).
 
 ## Before You Start
 
@@ -60,16 +64,16 @@ helm plugin list     # Must include helm-diff >= 3.11
 kubectl version      # Client must be within 1 minor version of cluster
 ```
 
-All commands run from inside the extracted `nvcf-self-managed-stack/` directory:
+Control-plane commands run from the extracted `nvcf-self-managed-stack/` root:
 
 ```bash
 cd path/to/nvcf-self-managed-stack
 ls helmfile.d/ environments/ secrets/ global.yaml.gotmpl
 ```
 
-Identify your environment name -- it corresponds to `environments/<name>.yaml` and `secrets/<name>-secrets.yaml`.
-
-For a commented example of an EKS environment file, see [references/eks-example.yaml](references/eks-example.yaml).
+Identify the environment from `environments/<name>.yaml` and
+`secrets/<name>-secrets.yaml`; for EKS, use the canonical
+[CSP End-to-End Example](https://docs.nvidia.com/nvcf/v0.6.0-rc/csp-end-to-end-example).
 
 ## How Values Flow
 
@@ -269,34 +273,26 @@ Do not enable Vanity Gateway for standard API, API Keys, invocation, LLM
 invocation, or gRPC traffic. Those routes are provided by the base gateway
 routes.
 
-### 7. Install compute-plane components from the split stack
+### 7. Install the separate compute-plane stack
 
-The control-plane stack no longer ships `nvca-operator`. Install compute-plane
-components from `nvcf-compute-plane-stack` after control-plane install
-completes.
+The control-plane stack does not install compute-plane components. After it is healthy, choose exactly one compute-plane handoff:
 
-Recommended path:
+- Helmfile values flow: author separate environment files, then register and
+  install with the compute-plane Makefile.
+- CLI profile flow: use the profile generated by the CLI control-plane install,
+  then run the complete CLI register and install commands.
 
-```bash
-nvcf-cli self-hosted compute-plane register \
-  --control-plane-profile deploy/stacks/self-managed/out/control-plane-profile.yaml \
-  --cluster-name <cluster-name> \
-  --kube-context <compute-kube-context> \
-  --region <region> \
-  --output deploy/stacks/nvcf-compute-plane/out/<cluster-name>-register-values.yaml
-
-nvcf-cli self-hosted compute-plane install \
-  --cluster-name <cluster-name> \
-  --kube-context <compute-kube-context> \
-  --values deploy/stacks/nvcf-compute-plane/out/<cluster-name>-register-values.yaml
-```
-
-For CLI-driven compute-plane lifecycle details, use the
-`nvcf-self-managed-cli` skill.
+Do not mix these handoffs. Follow [Split Compute-Plane Installation](references/compute-plane-installation.md)
+for commands, EKS routing, pull secrets, verification, and teardown order.
 
 ## Clean Teardown
 
-Scope: Only destroy releases managed by this control-plane helmfile stack. The NVCF releases are: `nats`, `openbao-server`, `cassandra`, `api-keys`, `sis`, `api`, `invocation-service`, `grpc-proxy`, `ess-api`, `notary-service`, optional `vanity-gateway`, `admin-issuer-proxy`, and `ingress`. The control-plane namespaces are: `cassandra-system`, `nats-system`, `nvcf`, `api-keys`, `ess`, `sis`, and `vault-system`. Do not delete other helm releases or namespaces on the cluster.
+Destroy every compute plane before the control plane, using the teardown for
+the same handoff; see [Split Compute-Plane Installation](references/compute-plane-installation.md#teardown).
+
+Scope: Only destroy releases managed by this control-plane helmfile stack. The NVCF releases are: `nats`, `openbao-server`, `cassandra`, `api-keys`, `sis`, `api`, `invocation-service`, `grpc-proxy`, `ess-api`, `notary-service`, optional `vanity-gateway`, `admin-issuer-proxy`, and `ingress`; `cert-manager` is included only when `certManager.enabled: true`. The control-plane namespace inventory also includes `cert-manager`, but default namespace cleanup preserves it. Namespace preservation does not preserve the Helm release. External cert-manager must use `certManager.enabled: false`; otherwise Helmfile treats the release as stack-managed. Do not delete other helm releases or namespaces on the cluster.
+
+Before control-plane destroy, identify whether cert-manager is external. For an external installation, require effective `certManager.enabled: false` and abort if it is true. For an intended stack-managed release with effective `certManager.enabled: true`, verify matching stack Helm release metadata and abort on missing or mismatched evidence. Preserve the namespace by default; only plan its removal after verifying namespace provenance and getting explicit confirmation.
 
 ### Standard teardown
 
@@ -309,7 +305,7 @@ HELMFILE_ENV=<env-name> helmfile destroy
 ### Delete namespaces
 
 ```bash
-for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system cert-manager nvca-system nvcf-backend; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system; do
   kubectl delete namespace "$ns" --ignore-not-found
 done
 ```
@@ -432,13 +428,6 @@ Not needed if using a CSP built-in credential helper (e.g., ECR with IAM node ro
 
 For the Kyverno policy YAML and pull secret creation script, see [references/pull-secrets.md](references/pull-secrets.md).
 
-## Fake GPU Operator (compute-plane only)
-
-Fake GPU setup and NVCA validation now belong to the split compute-plane stack.
-Use `nvcf-cli self-hosted compute-plane register/install` and follow the
-`nvcf-self-managed-cli` skill for compute-plane prerequisites, fake GPU
-workflows, and NVCA troubleshooting.
-
 ## Debugging
 
 ### Quick status check
@@ -455,16 +444,13 @@ kubectl get events -n <ns> --sort-by='.lastTimestamp'  # Recent events
 |---------|-------|-----|
 | `ImagePullBackOff` + `401 Unauthorized` | Missing or wrong pull secret | Check secret exists, check SA has imagePullSecrets |
 | `Init:0/1` stuck on service pods | Vault-agent waiting for OpenBao | Check OpenBao pods + migration job status |
-| `Init:0/1` + `vault-agent-init` shows `auth/jwt/login` -> `400 ... no known key successfully validated the token signature` | OpenBao JWT auth configured with a static pubkey instead of the cluster's live JWKS -- the base default `openbao.migrations.issuerDiscovery.enabled: false`. Common on AKS / any OIDC-issuer cluster | Set `openbao.migrations.issuerDiscovery.enabled: true`, delete job `openbao-server-migrations`, re-sync `openbao-server`. See [references/debugging.md](references/debugging.md) "Init:0/1 Stuck" fix #4. (NVBug 6371575) |
+| `Init:0/1` + `vault-agent-init` shows `auth/jwt/login` -> `400 ... no known key successfully validated the token signature` | OpenBao JWT auth configured with a static pubkey instead of the cluster's live JWKS -- the base default `openbao.migrations.issuerDiscovery.enabled: false`. Common on AKS / any OIDC-issuer cluster | Set `openbao.migrations.issuerDiscovery.enabled: true`, delete job `openbao-server-migrations`, re-sync `openbao-server`. See [references/debugging.md](references/debugging.md) "Init:0/1 Stuck" fix #4. |
 | `OOMKilled` on Cassandra | Default resources too small | Override `cassandra.resources` via values block |
 | DB-backed services crash-loop `Bad credentials` connecting to Cassandra | Secrets file set only `DEFAULT_CASSANDRA_PASSWORD`; `cassandra.serviceRolePassword` still defaults to `ch@ng3m3` | Set `cassandra.serviceRolePassword` in the secrets file equal to `DEFAULT_CASSANDRA_PASSWORD`, then re-sync cassandra + the DB-backed services |
 | `Pending` pods | Node selector mismatch or no storage class | `kubectl describe pod`, check labels and storage |
 | Helm release in `failed` state | First install failed partway | `helmfile destroy` the release, then `sync` again |
 | Account bootstrap timeout | Wrong base64 credentials in secrets file | Check `kubectl logs job/nvcf-api-account-bootstrap -n nvcf` |
 | function / account calls return `404 Unknown client_id` | The account-bootstrap post-install hook never ran: the `api` release install failed, or was repaired with live patches instead of a clean re-sync, so the hook (and the account) was skipped | Verify and re-run the hook; see [Verify the account bootstrap ran](#verify-the-account-bootstrap-ran) |
-| NVCA agent `CrashLoopBackOff` + "no backend GPUs found" | No GPU operator or fake GPUs on cluster | Install fake-gpu-operator, see [Fake GPU Operator](#fake-gpu-operator-non-gpu-clusters) |
-| `ImagePullBackOff` in `nvca-system` | Pull secret missing in operator-created namespace | Create secret + update Kyverno policy to include `nvca-system` |
-| Compute-plane install issues (`nvca-operator`, `nvcf-backend`, fake GPU setup) | Split compute-plane stack prerequisites or values are missing | Use `nvcf-self-managed-cli` skill workflows for `compute-plane register/install` diagnostics |
 | Services fail to read vault secrets; `secrets.json` not found | Vault path hardcoded to `/home/app/vault/` in `_helpers.tpl`; the runtime resolves the mounted path relative to the working directory and drops the leading `/` | Override `podAnnotations` and set `JAVA_TOOL_OPTIONS: "-Duser.dir=/"` in release values |
 | NATS connection fails at startup; placement tag mismatch | NATS server tags hardcoded to `dc:ncp`; app derives tag from `AWS_REGION` (e.g., `us-gov-west-1`) | Set `AWS_REGION=ncp` and `NVCF_AWS_REGION=ncp` in env config |
 
@@ -496,4 +482,7 @@ kubectl logs -n nvcf job/nvcf-api-account-bootstrap   # confirm the account was 
 
 ## Additional Resources
 
-See [worked examples](examples.md), the [EKS environment example](references/eks-example.yaml), [helmfile structure](references/helmfile-structure.md), [pull secret details](references/pull-secrets.md), and [debugging recipes](references/debugging.md). After deployment, use the `nvcf-self-managed-cli` skill to create functions, create tasks, manage API keys, and invoke endpoints.
+- Installation: [examples.md](examples.md), the [CSP End-to-End Example](https://docs.nvidia.com/nvcf/v0.6.0-rc/csp-end-to-end-example), and [split compute-plane workflows](references/compute-plane-installation.md)
+- Operations: [Helmfile structure](references/helmfile-structure.md), [pull secrets](references/pull-secrets.md), and [debugging](references/debugging.md)
+
+After deployment, use the `nvcf-self-managed-cli` skill to create functions, create tasks, manage API keys, and invoke endpoints.

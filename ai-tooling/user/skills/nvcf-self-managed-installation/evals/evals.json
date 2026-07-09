@@ -32,6 +32,7 @@
     "ground_truth": "The agent identified the stuck namespaces were caused by finalizers on NVCFBackend custom resources. It removed finalizers from NVCFBackend resources first, then cleared namespace finalizers to force-delete the stuck namespaces. It only targeted NVCF-managed namespaces (nvca-operator, nvcf-backend) and did not touch other cluster resources.",
     "expected_behavior": [
       "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "The agent confirmed and used the compute-plane context for all cleanup commands",
       "The agent used kubectl to patch NVCFBackend resources to remove their finalizers",
       "The agent used kubectl replace --raw to clear namespace finalizers on stuck namespaces",
       "The agent only targeted NVCF-managed namespaces (nvca-operator, nvcf-backend) and did not touch other cluster resources",
@@ -39,16 +40,19 @@
     ]
   },
   {
-    "id": "G6-map-syntax-nodepools",
-    "question": "Install fake GPU operator with 8 H100 GPUs on my cluster",
+    "id": "G6-helmfile-split-workflow",
+    "question": "Install an NVCF control plane and a separate EKS compute plane using the Helmfile stacks. The compute cluster kubeconfig is compute.yaml.",
     "expected_skill": "nvcf-self-managed-installation",
-    "ground_truth": "The agent used map syntax for topology.nodePools (e.g., topology.nodePools.default.gpuCount=8), not array syntax (topology.nodePools[0].gpuCount=8). Array syntax causes an unmarshal error because the chart expects a map with named keys.",
+    "ground_truth": "The agent kept the Helmfile values flow independent from the CLI profile flow. It authored separate control-plane and compute-plane environment files plus a bare-Gateway CLI config with URL and scheme-less Host fields, installed the control plane, ran the compute-plane Makefile register-cluster target with ICMS_URL and the compute kubeconfig, then ran the compute-plane install target with the same environment and kubeconfig. It relied on registration to discover OIDC and JWKS from the compute context.",
     "expected_behavior": [
       "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
-      "The agent used map syntax: --set 'topology.nodePools.default.gpuCount=8'",
-      "The agent did NOT use array syntax: --set 'topology.nodePools[0].gpuCount=8'",
-      "The agent set gpuProduct to an appropriate H100 product name (e.g., NVIDIA-H100-80GB-HBM3)",
-      "The agent included KWOK installation before the fake-gpu-operator"
+      "The agent authored separate environments/<env>.yaml files under deploy/stacks/self-managed and deploy/stacks/nvcf-compute-plane",
+      "The agent installed the control plane before registering or installing the compute plane",
+      "The agent configured base_http_url, invoke_url, base_grpc_url, api_keys_service_url, icms_url, api_host, api_keys_host, invoke_host, and icms_host for the bare Gateway",
+      "The agent used 'make -C deploy/stacks/nvcf-compute-plane register-cluster' with CLUSTER_NAME, NCA_ID, CLUSTER_REGION, ICMS_URL, and KUBECONFIG_FILE=compute.yaml",
+      "The agent used 'make -C deploy/stacks/nvcf-compute-plane install' with CLUSTER_NAME, HELMFILE_ENV, and KUBECONFIG_FILE=compute.yaml",
+      "The agent stated that ICMS_URL maps only to --icms-url, config icms_host supplies the Host header, there is no --icms-host Make or CLI flag, and registration discovers OIDC and JWKS from the compute context",
+      "The agent did not require a control-plane profile for this flow and did not mix in CLI profile commands"
     ]
   },
   {
@@ -80,29 +84,32 @@
     "id": "S1-clean-installation",
     "question": "Perform a clean installation of the NVCF self-managed stack on my AWS EKS cluster. My environment name is 'staging'.",
     "expected_skill": "nvcf-self-managed-installation",
-    "ground_truth": "The agent followed the documented install order: validated tool versions, verified bundle structure, created namespaces, authenticated helm to chart registry, previewed with helmfile template, deployed with helmfile sync, and monitored pods. It explained the 4 deployment phases and approximate wait times.",
+    "ground_truth": "The agent completed the control-plane installation first: validated tools and bundle structure, created control-plane namespaces including cert-manager, authenticated the registries, previewed, deployed, and monitored the four control-plane phases. It then selected one documented handoff and registered and installed the compute plane as a separate stack without mixing profile and Helmfile values flows.",
     "expected_behavior": [
       "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
       "The agent validated tool versions (helmfile, helm, helm-diff, kubectl)",
       "The agent verified the bundle structure exists",
-      "The agent created namespaces for all required components (cassandra-system, nats-system, nvcf, api-keys, ess, sis, nvca-operator, vault-system)",
+      "The agent created control-plane namespaces (cassandra-system, nats-system, nvcf, api-keys, ess, sis, vault-system, cert-manager) without adding compute-only namespaces",
       "The agent ran 'HELMFILE_ENV=staging helmfile template' to preview before deploying",
       "The agent ran 'HELMFILE_ENV=staging helmfile sync' to deploy",
-      "The agent explained the 4 deployment phases (dependencies, services, ingress, workers) and approximate wait times"
+      "The agent explained the 4 control-plane phases (dependencies, services, ingress, observability) and approximate wait times",
+      "After the control plane was healthy, the agent registered and installed the separate compute-plane stack using exactly one documented handoff",
+      "The agent did not mix a CLI-generated control-plane profile with the Helmfile values flow"
     ]
   },
   {
-    "id": "S3-fake-gpu-operator",
-    "question": "My dev cluster has no GPUs. Set up fake GPUs so I can deploy NVCF.",
+    "id": "S3-cli-profile-workflow",
+    "question": "Use nvcf-cli to install my control plane and then register and install a separate compute cluster. Show every required global flag.",
     "expected_skill": "nvcf-self-managed-installation",
-    "ground_truth": "The agent installed KWOK first, then fake-gpu-operator with map syntax for nodePools, labeled nodes, and verified GPUs appeared in node allocatable resources.",
+    "ground_truth": "The agent first ran the CLI control-plane install and required its generated control-plane-profile.yaml. It then showed complete register and install commands, each including --config, --control-plane-stack, --compute-plane-stack, --env, and --plain before the compute-plane subcommand. Registration consumed the profile and produced the values file consumed by install. It did not switch to the Helmfile values handoff.",
     "expected_behavior": [
       "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
-      "The agent installed KWOK from the documented URL as the first step",
-      "The agent installed fake-gpu-operator using helm with map syntax (topology.nodePools.default.gpuCount)",
-      "The agent labeled nodes with 'run.ai/simulated-gpu-node-pool=default'",
-      "The agent verified fake GPUs appeared with 'kubectl get nodes' showing nvidia.com/gpu in allocatable",
-      "The agent mentioned that FlowSchema errors during KWOK install are non-critical"
+      "The agent ran nvcf-cli self-hosted install --control-plane and verified deploy/stacks/self-managed/out/control-plane-profile.yaml exists",
+      "The register command included --config, --control-plane-stack, --compute-plane-stack, --env, and --plain",
+      "The register command included --control-plane-profile, --cluster-name, --kube-context, --region, and --output",
+      "The install command repeated --config, --control-plane-stack, --compute-plane-stack, --env, and --plain",
+      "The install command included --values, --kube-context, and --cluster-name",
+      "The agent kept the generated profile as the endpoint source and did not mix in Helmfile values registration"
     ]
   },
   {
@@ -145,16 +152,41 @@
     ]
   },
   {
-    "id": "S9-debug-nvca-crashloop-no-gpus",
-    "question": "NVCA operator pod keeps crashing with 'no backend GPUs were found. Ensure gpu-operator is installed'",
+    "id": "S9-remote-eks-routing-and-secrets",
+    "question": "Configure a remote EKS compute cluster to reach my NVCF control plane through its Envoy Gateway, including NATS and private-registry pull secrets.",
     "expected_skill": "nvcf-self-managed-installation",
-    "ground_truth": "The agent identified the cause as no GPU operator or fake GPUs on the cluster, directed the user to install fake-gpu-operator (KWOK then fake-gpu-operator then label then verify), and included the re-registration and restart steps since the stack was already deployed.",
+    "ground_truth": "The agent configured the control plane to use the Envoy Gateway controller in envoy-gateway-system and Gateway/nvcf-gateway in envoy-gateway, set all six remote worker endpoints and the grpc-proxy local override, enabled NVCF and NVCT gRPC routes plus NATS, and enabled OpenBao issuer discovery. It configured the bare-Gateway CLI URL and Host fields including icms_host, plus the compute-plane ICMS, ReVal, and NATS external URLs and host overrides. It created the pull secret in all control-plane namespaces including cert-manager, but only in nvca-operator on the compute cluster; the chart and operator mirror it to nvca-system.",
     "expected_behavior": [
       "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
-      "The agent identified the cause: no GPU operator or fake GPUs on the cluster",
-      "The agent directed user to install fake-gpu-operator (KWOK, then fake-gpu-operator, then label nodes)",
-      "The agent included the NVCA re-registration step using 'kubectl exec ... nvca-self-managed bootstrap'",
-      "The agent included 'kubectl rollout restart deployment nvca-operator' since the operator caches cluster IDs at startup"
+      "The agent set ingress.gatewayApi.controllerNamespace to envoy-gateway-system",
+      "The agent set shared, grpc, and nats Gateway references to name nvcf-gateway and namespace envoy-gateway",
+      "The agent set global.workerEndpoints.nvcfServiceURL, nvcfGrpcServiceURL, nvcfNatsServiceURL, nvctServiceURL, nvctGrpcServiceURL, and invocationServiceURL",
+      "The agent set grpcproxy.nvcfGrpcServiceURL to the control-plane-local API gRPC service",
+      "The agent enabled both ingress.gatewayApi.routes.nvcfApi.grpc and nvctApi.grpc with worker-api and worker-tasks hostnames",
+      "The agent explicitly set ingress.gatewayApi.routes.nats.enabled to true",
+      "The agent set openbao.migrations.issuerDiscovery.enabled to true",
+      "The agent configured the bare-Gateway CLI URL and Host fields, including scheme-less icms_host",
+      "The agent configured compute-plane icmsServiceURL, icmsServiceHostHeaderOverride, revalServiceURL, revalServiceHostHeaderOverride, natsURL, and natsHostOverride",
+      "The control-plane pull-secret namespace list included cert-manager",
+      "The compute-plane secret was created only in nvca-operator and mirrored by the chart and operator to nvca-system"
+    ]
+  },
+  {
+    "id": "G11-split-teardown",
+    "question": "Tear down my split control-plane and compute-plane deployment safely. Show both the Helmfile values and CLI profile variants.",
+    "expected_skill": "nvcf-self-managed-installation",
+    "ground_truth": "The Helmfile flow destroyed and confirmed deregistration of every compute cluster before destroying the control plane and passed both control-plane kubeconfig forms. Before either handoff could destroy the control plane, both teardown flows warned that namespace preservation does not preserve the Helm release, required effective certManager.enabled: false for an external installation and aborted if true, and verified matching release ownership for an intended stack-managed release, aborting on missing or mismatched evidence. They preserved the namespace by default and did not delete it without namespace provenance and explicit confirmation. The CLI flow retained the generated registration values, used the full-prefix status command to inspect live registrations, stated that named-cluster plan-only does not query ICMS and cannot predict conditional control-plane removal, and got explicit confirmation when the target was the last registered cluster. It then previewed and ran down with the full persistent prefix, removing the control plane only after the last registration was gone.",
+    "expected_behavior": [
+      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
+      "For every compute cluster, the Helmfile flow ran the compute-plane Makefile destroy target with its compute kubeconfig",
+      "After confirmation, the Helmfile flow ran cluster delete with clusterID and ncaID before control-plane destruction",
+      "Before either handoff could destroy the control plane, both teardown flows warned that namespace preservation does not preserve the Helm release, required effective certManager.enabled: false for an external installation and aborted if true, and verified intended stack ownership when enabled, aborting on missing or mismatched evidence",
+      "Both teardown flows preserved the cert-manager namespace by default and did not delete it without namespace provenance and explicit confirmation",
+      "The Helmfile flow ran control-plane Makefile destroy with both KUBECONFIG and KUBECONFIG_FILE",
+      "The CLI flow retained out/<cluster-name>-register-values.yaml until teardown completed",
+      "Before real down, the CLI flow used the full-prefix status command to inspect live registrations, stated that named-cluster plan-only does not query ICMS and cannot predict conditional control-plane removal, warned when the target was the last registered cluster, and got explicit confirmation",
+      "The CLI flow used --config, both stack paths, --env, --plain, both contexts, and --icms-url for down --plan-only and then down",
+      "The agent stated that down unregisters each compute cluster and removes the control plane only after no registrations remain"
     ]
   },
   {
@@ -164,52 +196,23 @@
     "ground_truth": "The agent explained the values precedence chain (base.yaml, env YAML, global.yaml.gotmpl, secrets, inline values), identified that global.yaml.gotmpl only passes through specific keys, and explained that arbitrary chart values must use release inline values blocks.",
     "expected_behavior": [
       "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
-      "The agent explained the values precedence chain: base.yaml → env YAML → global.yaml.gotmpl → secrets → inline values",
+      "The agent explained the values precedence chain: base.yaml -> env YAML -> global.yaml.gotmpl -> secrets -> inline values",
       "The agent identified that global.yaml.gotmpl only passes through specific keys (cassandra.replicaCount, global.storageClass, global.image, etc.)",
       "The agent explained that arbitrary chart values must be set via release inline values: blocks",
-      "The agent listed examples of what IS propagated vs what is NOT (e.g., resources and imagePullSecrets are not propagated)"
-    ]
-  },
-  {
-    "id": "G11-enable-nvca-operator",
-    "question": "I need the NVCA operator installed as part of my NVCF self-managed stack deployment",
-    "expected_skill": "nvcf-self-managed-installation",
-    "ground_truth": "The agent identified that nvca-operator is opt-in, gated by the `nvcaOperator.enabled` condition, and disabled by default in the helmfile environment. It instructed the user to set `nvcaOperator.enabled: true` in their environment YAML and to run helmfile sync scoped to the nvca-operator release.",
-    "expected_behavior": [
-      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
-      "The agent identified that nvca-operator is opt-in and disabled by default (condition: nvcaOperator.enabled)",
-      "The agent instructed the user to set 'nvcaOperator.enabled: true' in environments/<env>.yaml",
-      "The agent used 'helmfile --selector name=nvca-operator template' before sync, then 'helmfile --selector name=nvca-operator sync'",
-      "The agent did not suggest editing helmfile.d/ files to remove the condition"
-    ]
-  },
-  {
-    "id": "G12-validate-nvca-operator-install",
-    "question": "How do I verify the nvca-operator installed successfully after helmfile sync?",
-    "expected_skill": "nvcf-self-managed-installation",
-    "ground_truth": "The agent validated the nvca-operator Deployment (rollout status, pod running, clean logs, auto-created nvca-system and nvcf-backend namespaces), then explicitly flagged that the install is not complete until the post-helmfile-sync namespace remediation has run: pull secrets created in 'nvca-system' and 'nvcf-backend' and the Kyverno ClusterPolicy updated to include those namespaces. It verified pods in 'nvca-system' and 'nvcf-backend' reach Running before declaring the operator end-to-end healthy.",
-    "expected_behavior": [
-      "The agent read the nvcf-self-managed-installation SKILL.md before taking action",
-      "The agent ran 'kubectl rollout status deployment/nvca-operator -n nvca-operator'",
-      "The agent checked pod status in the nvca-operator namespace",
-      "The agent tailed the operator logs for bootstrap or error signals",
-      "The agent verified that 'nvca-system' and 'nvcf-backend' namespaces were auto-created by the operator",
-      "The agent did NOT declare the install successful based only on the operator Deployment being Ready",
-      "The agent identified the post-sync remediation as a required follow-up step (create pull secrets in 'nvca-system' and 'nvcf-backend', update the Kyverno ClusterPolicy to include those namespaces)",
-      "The agent verified pods in 'nvca-system' and 'nvcf-backend' reach Running before treating the install as end-to-end healthy"
+      "The agent listed examples of values that are propagated and arbitrary chart values that require a release values block"
     ]
   },
   {
     "id": "S14-enable-llm-functions",
     "question": "I need to deploy functionType: LLM functions on a self-managed, single-node isolated test cluster. What Helmfile configuration and verification steps do I need?",
     "expected_skill": "nvcf-self-managed-installation",
-    "ground_truth": "The agent enabled the LLM addon with addons.llm.enabled, configured single replicas for the LLM API Gateway and request router, and included the documented request-router load-balancer configuration. For the isolated plaintext cluster, it included both addons.llm.gateway.auth.grpcInsecure and agentConfig.mergeConfig.workload.stargateQUICInsecure, with a warning that those settings are not for production. It refreshed the compute-plane stack after applying the control plane, redeployed existing LLM functions, and verified the LLM deployments, route, and llm-worker sidecar.",
+    "ground_truth": "The agent enabled the LLM addon with addons.llm.enabled, configured single replicas for the LLM API Gateway and request router, and included the documented request-router load-balancer configuration. For the isolated plaintext cluster, it included both addons.llm.gateway.auth.grpcInsecure and agentConfig.mergeConfig.workload.stargateQUICInsecure, with a warning that those settings are not for production. It refreshed the compute plane using the same handoff used during installation, redeployed existing LLM functions, and verified the LLM deployments, route, and llm-worker sidecar.",
     "expected_behavior": [
       "The agent used addons.llm.enabled, not the obsolete llm.enabled path",
       "The agent set gateway and requestRouter replicaCount to 1 for the single-node test cluster",
-        "The agent included addons.llm.requestRouter.loadBalancer.config with the documented default and request algorithms",
+      "The agent included addons.llm.requestRouter.loadBalancer.config with the documented default and request algorithms",
       "The agent included addons.llm.gateway.auth.grpcInsecure and workload.stargateQUICInsecure for the isolated plaintext cluster, and warned against using them in production",
-      "The agent applied the control-plane Helmfile environment, refreshed the compute-plane stack, and recreated or redeployed existing LLM functions",
+      "The agent applied the control-plane Helmfile environment, refreshed the compute plane with the same selected handoff, and recreated or redeployed existing LLM functions",
       "The agent verified llm-api-gateway, llm-request-router, the LLM HTTPRoute, and the llm-worker sidecar including --quic-insecure"
     ]
   },

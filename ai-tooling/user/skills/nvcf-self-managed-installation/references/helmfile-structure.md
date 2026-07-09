@@ -4,27 +4,32 @@
 
 ```
 nvcf-self-managed-stack/
-├── helmfile.d/
-│   ├── 000-prepare.yaml.gotmpl      # Validation hooks
-│   ├── 01-dependencies.yaml.gotmpl  # NATS, Cassandra, OpenBao
-│   ├── 02-core.yaml.gotmpl          # NVCF services + ingress
-│   └── 03-observability.yaml.gotmpl # Observability stack (optional)
-├── environments/
-│   ├── base.yaml                    # Default values (all environments)
-│   └── <env-name>.yaml              # Per-environment overrides
-├── secrets/
-│   └── <env-name>-secrets.yaml      # Sensitive values (registry creds, passwords)
-└── global.yaml.gotmpl               # Go template that constructs per-chart values
+|-- helmfile.d/
+|   |-- 000-prepare.yaml.gotmpl      # Validation hooks
+|   |-- 01-dependencies.yaml.gotmpl  # NATS, Cassandra, OpenBao
+|   |-- 02-core.yaml.gotmpl          # NVCF services + ingress
+|   `-- 03-observability.yaml.gotmpl # Observability stack (optional)
+|-- environments/
+|   |-- base.yaml                    # Default values (all environments)
+|   `-- <env-name>.yaml              # Per-environment overrides
+|-- secrets/
+|   `-- <env-name>-secrets.yaml      # Sensitive values (registry creds, passwords)
+`-- global.yaml.gotmpl               # Go template that constructs per-chart values
 
 nvcf-compute-plane-stack/
-├── helmfile.d/
-│   ├── 01-dependencies.yaml.gotmpl  # Compute plane dependency components
-│   └── 02-nvca.yaml.gotmpl          # nvca-operator chart and nvca configuration
-├── environments/
-│   ├── base.yaml                    # Default values (all environments)
-│   └── <env-name>.yaml              # Per-environment overrides
-└── global.yaml.gotmpl               # Go template that constructs per-chart values
+|-- helmfile.d/
+|   |-- 01-dependencies.yaml.gotmpl  # Compute plane dependency components
+|   `-- 02-nvca.yaml.gotmpl          # nvca-operator chart and nvca configuration
+|-- environments/
+|   |-- base.yaml                    # Default values (all environments)
+|   `-- <env-name>.yaml              # Per-environment overrides
+`-- global.yaml.gotmpl               # Go template that constructs per-chart values
 ```
+
+These stacks have separate environments and cluster contexts. The Helmfile
+values flow authors both environment files. The CLI profile flow instead uses
+the CLI-generated control-plane profile as its endpoint source. Do not mix the
+handoffs. See [Split Compute-Plane Installation](compute-plane-installation.md).
 
 ## Gotmpl Files and Their Releases
 
@@ -219,18 +224,19 @@ api:
     NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/pylon:0.2.1
 ```
 
-Render and apply the updated control-plane environment, then refresh the
-compute-plane stack for every registered GPU cluster so NVCA receives
-`agentConfig.mergeConfig`:
+Render and apply the updated control-plane environment, then refresh every
+registered compute plane using the same handoff used for its installation so
+NVCA receives `agentConfig.mergeConfig`:
 
 ```bash
 HELMFILE_ENV=<env> helmfile template
 HELMFILE_ENV=<env> helmfile sync
-nvcf-cli self-hosted compute-plane install \
-  --cluster-name <cluster-name> \
-  --kube-context <compute-kube-context> \
-  --values deploy/stacks/nvcf-compute-plane/out/<cluster-name>-register-values.yaml
 ```
+
+Use the complete compute-plane install command from
+[Split Compute-Plane Installation](compute-plane-installation.md). A
+CLI-profile installation must remain profile-driven; a Helmfile installation
+must remain values-driven.
 
 Existing LLM function pods keep their existing sidecar arguments. Recreate or
 redeploy those functions after the compute-plane refresh. Verify the control

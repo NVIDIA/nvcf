@@ -74,6 +74,7 @@ global:
 
 ```bash
 docker login nvcr.io -u '$oauthtoken' -p "$NGC_API_KEY"
+helm registry login nvcr.io -u '$oauthtoken' -p "$NGC_API_KEY"
 ```
 
 ### Step 3: Create namespaces and pull secrets
@@ -81,17 +82,18 @@ docker login nvcr.io -u '$oauthtoken' -p "$NGC_API_KEY"
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
-  kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system cert-manager; do
+  kubectl --context <control-plane-context> create namespace "$ns" \
+    --dry-run=client -o yaml | kubectl --context <control-plane-context> apply -f -
 done
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
-  kubectl create secret docker-registry nvcr-creds \
+for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system cert-manager; do
+  kubectl --context <control-plane-context> create secret docker-registry nvcr-creds \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
     --docker-password="$NGC_API_KEY" \
     --namespace="$ns" \
-    --dry-run=client -o yaml | kubectl apply -f -
+    --dry-run=client -o yaml | kubectl --context <control-plane-context> apply -f -
 done
 ```
 
@@ -116,10 +118,14 @@ Add the chart-specific `imagePullSecrets` key to each release. Example for cassa
 
 See [references/pull-secrets.md](references/pull-secrets.md) for the key for every chart.
 
+These are control-plane namespaces. For a separate compute cluster, create the
+secret only in `nvca-operator`; the chart and operator mirror it to
+`nvca-system`. See [Split Compute-Plane Installation](references/compute-plane-installation.md#pull-secrets).
+
 ### Step 5: Deploy
 
 ```bash
-HELMFILE_ENV=<env> helmfile sync
+HELMFILE_ENV=<env> helmfile --kube-context <control-plane-context> sync
 ```
 
 ### Step 6: Patch ServiceAccounts for charts without native support
@@ -128,18 +134,20 @@ After Phase 1 (dependencies) completes, OpenBao pods will be in `ImagePullBackOf
 
 ```bash
 for ns in vault-system nvcf ess; do
-  for sa in $(kubectl get sa -n "$ns" --no-headers -o custom-columns=":metadata.name"); do
-    kubectl patch serviceaccount -n "$ns" "$sa" \
+  for sa in $(kubectl --context <control-plane-context> get sa -n "$ns" \
+    --no-headers -o custom-columns=":metadata.name"); do
+    kubectl --context <control-plane-context> patch serviceaccount -n "$ns" "$sa" \
       -p '{"imagePullSecrets": [{"name": "nvcr-creds"}]}'
   done
 done
-kubectl delete pods -n vault-system --all
+kubectl --context <control-plane-context> delete pods -n vault-system --all
 ```
 
 Verify:
 
 ```bash
-kubectl get events -n vault-system --sort-by='.lastTimestamp' | grep -i pull
+kubectl --context <control-plane-context> get events -n vault-system \
+  --sort-by='.lastTimestamp' | grep -i pull
 # Should show "Successfully pulled image" from nvcr.io
 ```
 
@@ -149,48 +157,68 @@ kubectl get events -n vault-system --sort-by='.lastTimestamp' | grep -i pull
 
 When a deployment is broken and you need a clean slate.
 
-### Step 1: Destroy helmfile releases
+### Step 1: Destroy the compute-plane stack
 
 ```bash
-HELMFILE_ENV=<env> helmfile destroy
+make -C deploy/stacks/nvcf-compute-plane destroy \
+  CLUSTER_NAME=<cluster-name> \
+  HELMFILE_ENV=<env> \
+  KUBECONFIG_FILE=<compute-plane-kubeconfig>
 ```
 
-### Step 2: Force cleanup stuck NVCA resources
+If compute cleanup is stuck on finalizers, use the compute-context procedure in
+[debugging.md](references/debugging.md#failure-nvca-cleanup-stuck-finalizers).
 
-If `helmfile destroy` hangs or `nvca-operator`/`nvcf-backend` namespaces are stuck in `Terminating`:
+### Step 2: Deregister the compute cluster
+
+Read `clusterID` and `ncaID` from
+`deploy/stacks/nvcf-compute-plane/registration/<cluster-name>-register-values.yaml`.
+Show the ID and get confirmation before deleting the ICMS row:
 
 ```bash
-# Remove finalizers from NVCFBackend custom resources
-kubectl get nvcfbackends -A -o json | \
-  jq '.items[] | .metadata.namespace + "/" + .metadata.name' -r | \
-  xargs -I{} sh -c 'ns="${1%%/*}"; name="${1##*/}"; kubectl patch nvcfbackend "$name" -n "$ns" --type=merge -p "{\"metadata\":{\"finalizers\":[]}}"' _ {}
-
-# Force-delete stuck namespaces by clearing their finalizers
-for ns in nvca-operator nvcf-backend; do
-  kubectl get namespace "$ns" -o json 2>/dev/null | \
-    jq '.spec.finalizers = []' | \
-    kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f - 2>/dev/null
-done
+<nvcf-cli> --config <config> cluster delete \
+  --cluster-id <cluster-id-from-registration-values> \
+  --nca-id <nca-id> \
+  --ignore-missing
 ```
 
-### Step 3: Delete all namespaces
+Repeat steps 1 and 2 for every compute cluster.
+
+### Step 3: Destroy the control-plane stack
+
+Preserve the `cert-manager` namespace by default. Namespace preservation does
+not preserve the Helm release. Before running destroy, identify whether
+cert-manager is external. For an external installation, require effective
+`certManager.enabled: false` and abort if it is true. For an intended
+stack-managed release with effective `certManager.enabled: true`, verify
+matching stack Helm release metadata and abort on missing or mismatched
+evidence. Only plan namespace removal after verifying namespace provenance and
+getting explicit confirmation; otherwise do not delete it.
 
 ```bash
-for ns in cassandra-system nats-system nvcf api-keys ess sis nvca-operator vault-system cert-manager; do
-  kubectl delete namespace "$ns" --ignore-not-found
-done
+KUBECONFIG=<control-plane-kubeconfig> \
+make -C deploy/stacks/self-managed destroy \
+  HELMFILE_ENV=<env> \
+  KUBECONFIG_FILE=<control-plane-kubeconfig>
 ```
+
+Pass both kubeconfig forms because control-plane namespace cleanup uses
+ambient `kubectl`.
 
 ### Step 4: Verify clean
 
 ```bash
-kubectl get ns | grep -E '(cassandra|nats|vault|nvcf|api-keys|ess|sis|nvca)'
-# Should be empty (nvca-modelcache-init is unrelated)
+kubectl --context <compute-plane-context> get ns | \
+  grep -E '(nvca|nvcf-backend|grove|dynamo)'
+kubectl --context <control-plane-context> get ns | \
+  grep -E '(cassandra|nats|vault|nvcf|api-keys|ess|sis)'
+# Both commands should return empty.
 ```
 
-### Step 5: Reinstall from Step 1
+### Step 5: Reinstall in split order
 
-Follow the [Clean Installation](#) steps in SKILL.md.
+Follow [Clean Installation](SKILL.md#clean-installation), then return to the
+same handoff in [Split Compute-Plane Installation](references/compute-plane-installation.md).
 
 ---
 
@@ -201,23 +229,42 @@ The separately provisioned Gateway or its load balancer was recreated and got a 
 ### Step 1: Get the new endpoint
 
 ```bash
-GATEWAY_ADDR=$(kubectl get gateway <gateway-name> -n <gateway-namespace> \
+GATEWAY_ADDR=$(kubectl --context <control-plane-context> get gateway \
+  nvcf-gateway -n envoy-gateway \
   -o jsonpath='{.status.addresses[0].value}')
 test -n "$GATEWAY_ADDR"
 ```
 
-### Step 2: Update DNS
+### Step 2: Update DNS and direct address fields
 
-Keep `global.domain` unchanged. Point the DNS records for the rendered route hostnames, such as `api.<domain>` and `*.invocation.<domain>`, to `GATEWAY_ADDR`. No stack sync is required when only the Gateway endpoint changes.
+Keep `global.domain`, route hostnames, and CLI Host fields unchanged. Point the
+DNS records for rendered route hostnames, such as `api.<domain>` and
+`*.invocation.<domain>`, to `GATEWAY_ADDR`. For a temporary environment without
+DNS, keep its reserved route suffix and connect to `GATEWAY_ADDR` with the
+matching `Host` header.
 
-For a temporary test environment without DNS, keep its reserved route suffix unchanged and connect directly to `GATEWAY_ADDR` with the matching `Host` header.
+For a split deployment configured with direct Gateway addresses, replace only
+the address-bearing values: control-plane `nvcfNatsServiceURL`, compute-plane
+ICMS, ReVal, and NATS URLs, and CLI URL fields. Keep their domain and Host
+overrides unchanged. Refresh registration and installation through the same
+handoff used originally. See
+[Split Compute-Plane Installation](references/compute-plane-installation.md)
+for the fields and complete commands.
 
-### Step 3: Verify DNS and routing
+### Step 3: Verify both contexts
 
 ```bash
 dig +short "api.<domain>"
-kubectl get httproutes -A
 curl -H "Host: api.<domain>" "http://$GATEWAY_ADDR/health"
+kubectl --context <control-plane-context> get gateway nvcf-gateway \
+  -n envoy-gateway -o wide
+kubectl --context <control-plane-context> get httproutes -A
+kubectl --context <control-plane-context> get tcproutes -A
+kubectl --context <compute-plane-context> rollout status \
+  deployment/nvca-operator -n nvca-operator --timeout=10m
+kubectl --context <compute-plane-context> wait \
+  nvcfbackend/<compute-plane-cluster-name> -n nvca-operator \
+  --for=jsonpath='{.status.agentStatus}'=healthy --timeout=10m
 ```
 
 ---

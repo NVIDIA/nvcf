@@ -142,8 +142,7 @@ kubectl logs -n <namespace> <pod-name> -c vault-agent-init
    .../.well-known/openid-configuration` and `Final OpenBao JWT JWKS URL set to:
    .../openid/v1/jwks`, and the service pods authenticate and reach Ready within ~1 min.
    AKS clusters with the cluster OIDC issuer enabled (the `aks-cluster` default) always need
-   this — the static-pubkey fallback cannot match the issuer's rotating signing keys.
-   (Ref: NVBug 6371575.)
+   this because the static-pubkey fallback cannot match the issuer's rotating signing keys.
 
 ## Failure: OOMKilled on Cassandra
 
@@ -162,7 +161,8 @@ kubectl describe pod -n cassandra-system cassandra-0 | grep -A3 "Last State"
 
 ### Fix
 
-Override Cassandra resources via helmfile values. See Example 1 in [examples.md](/ai-tooling/user/skills/nvcf-self-managed-installation/examples.md).
+Override Cassandra resources via helmfile values. See Example 1 in
+[examples.md](../examples.md).
 
 ```yaml
 - cassandra:
@@ -292,7 +292,7 @@ HELMFILE_ENV=<env> helmfile --selector release-group=services sync
 
 ### Symptoms
 
-`compute-plane uninstall` or compute-stack `helmfile destroy` hangs. Namespaces
+Compute-plane cleanup hangs. Namespaces
 stuck in `Terminating`:
 
 ```bash
@@ -303,19 +303,24 @@ kubectl get ns
 
 ### Fix
 
-Remove finalizers from NVCFBackend custom resources and force-delete stuck namespaces:
+Run this only against the compute context, after the normal compute-plane
+teardown has failed. Remove finalizers from NVCFBackend custom resources and
+force-delete stuck namespaces:
 
 ```bash
+export COMPUTE_CONTEXT=<compute-plane-context>
+
 # Remove finalizers from NVCFBackend resources
-kubectl get nvcfbackends -A -o json | \
+kubectl --context "$COMPUTE_CONTEXT" get nvcfbackends -A -o json | \
   jq '.items[] | .metadata.namespace + "/" + .metadata.name' -r | \
-  xargs -I{} sh -c 'ns="${1%%/*}"; name="${1##*/}"; kubectl patch nvcfbackend "$name" -n "$ns" --type=merge -p "{\"metadata\":{\"finalizers\":[]}}"' _ {}
+  xargs -I{} sh -c 'context="$1"; ns="${2%%/*}"; name="${2##*/}"; kubectl --context "$context" patch nvcfbackend "$name" -n "$ns" --type=merge -p "{\"metadata\":{\"finalizers\":[]}}"' _ "$COMPUTE_CONTEXT" {}
 
 # Force-delete stuck namespaces by clearing their finalizers
 for ns in nvca-operator nvcf-backend; do
-  kubectl get namespace "$ns" -o json 2>/dev/null | \
+  kubectl --context "$COMPUTE_CONTEXT" get namespace "$ns" -o json 2>/dev/null | \
     jq '.spec.finalizers = []' | \
-    kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f - 2>/dev/null
+    kubectl --context "$COMPUTE_CONTEXT" replace \
+      --raw "/api/v1/namespaces/$ns/finalize" -f - 2>/dev/null
 done
 ```
 
@@ -327,24 +332,32 @@ After compute-plane install completes, no `nvca-operator` Deployment exists, or
 it exists but pods are not ready:
 
 ```bash
-kubectl get deployment nvca-operator -n nvca-operator
-kubectl get pods -n nvca-operator
+kubectl --context <compute-plane-context> get deployment nvca-operator \
+  -n nvca-operator
+kubectl --context <compute-plane-context> get pods -n nvca-operator
 ```
 
 ### Diagnosis and Fixes
 
-Use the split compute-plane workflow:
+First identify whether the installation used the Helmfile values flow or the
+CLI profile flow. Re-run only that flow's registration and installation steps
+from [Split Compute-Plane Installation](compute-plane-installation.md). Do not
+substitute one handoff for the other.
 
-1. Re-run `nvcf-cli self-hosted compute-plane register` and confirm the
-   values file under `deploy/stacks/nvcf-compute-plane/out/`.
-2. Re-run `nvcf-cli self-hosted compute-plane install --values <file>`.
-3. If pods still fail, inspect operator and agent logs:
-   ```bash
-   kubectl describe deploy nvca-operator -n nvca-operator
-   kubectl logs deployment/nvca-operator -n nvca-operator --tail=200
-   ```
-4. For fake GPU and cluster prerequisite issues, follow the
-   `nvcf-self-managed-cli` skill's compute-plane troubleshooting workflow.
+If installation succeeds but pods still fail, inspect the compute context:
+
+```bash
+kubectl --context <compute-plane-context> describe deploy nvca-operator \
+  -n nvca-operator
+kubectl --context <compute-plane-context> logs deployment/nvca-operator \
+  -n nvca-operator --tail=200
+kubectl --context <compute-plane-context> get nvcfbackend -n nvca-operator
+```
+
+For private registry failures, verify that the pull secret exists in
+`nvca-operator`. The chart and operator mirror it to `nvca-system`; do not use a
+broader manual namespace loop. See
+[pull-secrets.md](pull-secrets.md#compute-plane-secret).
 
 ## Failure: Gateway Endpoint Changed
 
@@ -355,16 +368,26 @@ Requests through the configured route domain fail after the Gateway or its load 
 ### Diagnosis
 
 ```bash
-GATEWAY_ADDR=$(kubectl get gateway <gateway-name> -n <gateway-namespace> \
+GATEWAY_ADDR=$(kubectl --context <control-plane-context> get gateway \
+  nvcf-gateway -n envoy-gateway \
   -o jsonpath='{.status.addresses[0].value}')
 test -n "$GATEWAY_ADDR"
 dig +short "api.<domain>"
 curl -H "Host: api.<domain>" "http://$GATEWAY_ADDR/health"
+
+# Check direct address fields used by a split deployment
+grep nvcfNatsServiceURL deploy/stacks/self-managed/environments/<env>.yaml
+grep -E 'icmsService|revalService|nats' \
+  deploy/stacks/nvcf-compute-plane/environments/<env>.yaml
 ```
 
 ### Fix
 
-Update DNS records under `global.domain` to target `GATEWAY_ADDR`, or update the direct client destination in a no-DNS test environment. Keep `global.domain` unchanged. See [Example 4](../examples.md#example-4-recover-from-a-gateway-endpoint-change).
+Keep `global.domain`, route hostnames, and Host overrides unchanged. Update DNS
+or the direct client destination. For split deployments, update only direct
+Gateway-address fields and refresh registration and installation through the
+same selected handoff. See
+[Example 4](../examples.md#example-4-recover-from-a-gateway-endpoint-change).
 
 ## Useful Namespace-to-Service Mapping
 
