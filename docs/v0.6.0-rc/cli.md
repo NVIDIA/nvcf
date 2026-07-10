@@ -997,6 +997,10 @@ Manage container registry credentials for function images and Helm charts. For c
 ./nvcf-cli registry-credential list-recognized
 ```
 
+<Note>
+Registry credential changes take up to about 5 minutes to take effect for task creation. `nvcf-cli registry-credential list` and `get` show the new value immediately, but task processing caches account credentials for about 5 minutes (`nvct.nvcf.cache-ttl`), so a task can keep using the previous value until the cache refreshes. After rotating or deleting a credential, allow up to about 5 minutes, or restart the task service to apply it immediately. See [Credential Propagation Delay](./third-party-registries.md).
+</Note>
+
 ## Troubleshooting
 
 ### Authentication Errors

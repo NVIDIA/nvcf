@@ -92,6 +92,19 @@ After initial deployment, registry credentials can be managed dynamically using 
 
 This is the recommended approach for credential rotation and adding or modifying registries post-deployment of the control plane.
 
+### Credential Propagation Delay
+
+Registry credential changes do not take effect for task creation immediately. Task processing caches each account's registry credentials with a time-to-live of about 5 minutes (`nvct.nvcf.cache-ttl`, default `PT5M` in the self-managed stack). After you add, update, or delete a credential, allow up to about 5 minutes for the change to apply to new tasks. The API and `nvcf-cli registry-credential list` and `get` reflect the change immediately, but task validation can keep using the previous value until the cached entry expires.
+
+<Warning>
+After you rotate or delete a credential, allow up to the cache TTL (about 5 minutes) for task creation to start using the new value. To apply the change immediately, restart the task service:
+
+```bash
+kubectl -n nvcf rollout restart deployment/nvct-api
+```
+
+</Warning>
+
 ## Adding AWS ECR Registry Credentials
 
 AWS ECR requires **permanent IAM credentials** (Access Key ID + Secret Access Key). Temporary SSO/STS credentials will not work.

@@ -71,6 +71,19 @@ echo -n '$oauthtoken:nvapi-1234567890abcdef' | base64
    docker login nvcr.io -u "$username" -p "$password"
    ```
 
+### Registry Credential Change Not Taking Effect
+
+Task creation fails with a `Missing <TYPE> registry credential for hostname` error, or keeps using a previous value, shortly after you add, update, or delete a registry credential, even though `nvcf-cli registry-credential list` and `get` already show the new value.
+
+This is expected propagation delay, not a failure. Task processing caches each account's registry credentials for about 5 minutes (`nvct.nvcf.cache-ttl`, default `PT5M`), and picks up the change once that cached copy refreshes.
+
+- Wait up to about 5 minutes and retry the task.
+- To apply the change immediately, restart the task service:
+
+   ```bash
+   kubectl -n nvcf rollout restart deployment/nvct-api
+   ```
+
 ## Identifying Deployment Issues
 
 Use these commands to diagnose deployment problems. For phase-by-phase monitoring during installation, see the Deployment Progression section in [helmfile-installation](./helmfile-installation.md).
