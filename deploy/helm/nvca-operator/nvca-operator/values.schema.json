@@ -353,6 +353,16 @@
                     "description": "Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {\"LOG_LEVEL\": \"debug\", \"CUSTOM_FLAG\": \"enabled\"}",
                     "default": {}
                 },
+                "llm": {
+                    "type": "object",
+                    "properties": {
+                        "requestRouterAddress": {
+                            "type": "string",
+                            "description": "Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers",
+                            "default": ""
+                        }
+                    }
+                },
                 "serviceOAuth": {
                     "type": "object",
                     "description": "OAuth token and JWKS endpoints used by dependent services",
@@ -716,6 +726,45 @@
                     "type": "string",
                     "description": "Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.",
                     "default": ""
+                },
+                "transportTls": {
+                    "type": "object",
+                    "properties": {
+                        "trustMode": {
+                            "type": "string",
+                            "description": "Worker transport TLS trust mode. Use \"system\" for system roots or \"bundle\" for a pinned trust bundle.",
+                            "default": "system",
+                            "enum": [
+                                "system",
+                                "bundle"
+                            ]
+                        },
+                        "trustBundleConfigMapName": {
+                            "type": "string",
+                            "description": "ConfigMap name created in each worker namespace for bundle mode.",
+                            "default": "nvcf-transport-trust-bundle"
+                        },
+                        "trustBundleKey": {
+                            "type": "string",
+                            "description": "ConfigMap data key containing the PEM trust bundle.",
+                            "default": "nvcf-ca-bundle.pem"
+                        },
+                        "trustBundleFingerprint": {
+                            "type": "string",
+                            "description": "Canonical nvcf-trust-bundle-v1 fingerprint of trustBundlePem.",
+                            "default": ""
+                        },
+                        "trustBundlePem": {
+                            "type": "string",
+                            "description": "PEM trust bundle used when trustMode is \"bundle\".",
+                            "default": ""
+                        },
+                        "installerImage": {
+                            "type": "string",
+                            "description": "Optional NVCA-owned trust-bundle installer image override. Leave empty to use the resolved nvca image for the cluster.",
+                            "default": ""
+                        }
+                    }
                 }
             }
         },

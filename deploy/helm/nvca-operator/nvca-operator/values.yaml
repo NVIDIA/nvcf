@@ -131,6 +131,7 @@ resources:
 ## @param agent.taskEnvOverrides Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})
 ## @param agent.overrideEnvironmentVariables Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"}
 ## @param agent.tolerations K8s tolerations for the NVCA agent pod
+## @param agent.llm.requestRouterAddress Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers
 ## @param agent.serviceOAuth OAuth token and JWKS endpoints used by dependent services
 agent:
   cacheMountOptionsEnabled: true
@@ -147,6 +148,8 @@ agent:
     labelKey: ""
     labelValue: ""
   tolerations: []
+  llm:
+    requestRouterAddress: ""
   workload:
     tolerations: []
   ## Environment variable overrides for function workloads.
@@ -299,6 +302,19 @@ selfManaged:
   natsURL: "nats://nats.example.invalid:4222"
   ## @param selfManaged.natsHostOverride Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.
   natsHostOverride: ""
+  ## @param selfManaged.transportTls.trustMode Worker transport TLS trust mode. Use "system" for system roots or "bundle" for a pinned trust bundle.
+  ## @param selfManaged.transportTls.trustBundleConfigMapName ConfigMap name created in each worker namespace for bundle mode.
+  ## @param selfManaged.transportTls.trustBundleKey ConfigMap data key containing the PEM trust bundle.
+  ## @param selfManaged.transportTls.trustBundleFingerprint Canonical nvcf-trust-bundle-v1 fingerprint of trustBundlePem.
+  ## @param selfManaged.transportTls.trustBundlePem PEM trust bundle used when trustMode is "bundle".
+  ## @param selfManaged.transportTls.installerImage Optional NVCA-owned trust-bundle installer image override. Leave empty to use the resolved nvca image for the cluster.
+  transportTls:
+    trustMode: "system"
+    trustBundleConfigMapName: "nvcf-transport-trust-bundle"
+    trustBundleKey: "nvcf-ca-bundle.pem"
+    trustBundleFingerprint: ""
+    trustBundlePem: ""
+    installerImage: ""
   sharedStorage:
     imageTag: 1.0.5
 ## @section Node Selector Configuration

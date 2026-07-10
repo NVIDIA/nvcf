@@ -145,6 +145,12 @@ jobs:
     needs: detect
     if: needs.detect.outputs.any == 'true'
     runs-on: ubuntu-latest
+    # Public EC2 Buildbarn cache (grpcs, bearer-token gated). The token is a
+    # repo secret, so fork PRs (which never receive secrets) fall back to a
+    # cacheless build automatically. The CA cert is a repo variable (public).
+    env:
+      CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
+      CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
       image: ghcr.io/nvidia/nvcf/bazel-ci:0.8.0
       credentials:
@@ -187,19 +193,44 @@ jobs:
           restore-keys: |
             bazel-${{ matrix.subtree.id }}-
 
-      # Disable the internal nvcfbarn Buildbarn remote cache for GHA.
-      # The umbrella's root .bazelrc sets `build --config=remote` by
-      # default, which on GitLab CDS runners routes through the
-      # nvcfbarn.nvidia.com:8980 cache. GHA's GitHub-hosted runners
-      # have no DNS path to that host, so leaving the default in place
-      # produces:
-      #   UNAVAILABLE: Unable to resolve host nvcfbarn.nvidia.com
-      # Passing `--remote_cache=` overrides the .bazelrc default with
-      # an empty value, falling back to local action/repo caches only.
+      # Decide the remote cache to use. The internal nvcfbarn Buildbarn
+      # (the .bazelrc `--config=remote` default) is unreachable from
+      # GitHub-hosted runners; the public EC2 Buildbarn is reachable over
+      # grpcs with a bearer token. When the token secret is present
+      # (same-repo PRs and main pushes; never fork PRs), materialize the
+      # CA cert and enable the cache; otherwise build cacheless.
+      - name: Prepare remote cache
+        if: steps.precheck.outputs.skip == 'false'
+        run: |
+          if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
+            printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
+            echo "CACHE_READY=1" >> "$GITHUB_ENV"
+            # Upload results only from main pushes; every other trigger
+            # (PRs) is read-only so it can never poison the cache.
+            if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+              echo "CACHE_UPLOAD=true" >> "$GITHUB_ENV"
+            else
+              echo "CACHE_UPLOAD=false" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "CACHE_READY=0" >> "$GITHUB_ENV"
+          fi
+
       - name: bazel build //...
         if: steps.precheck.outputs.skip == 'false'
         working-directory: ${{ matrix.subtree.path }}
-        run: bazel build --remote_cache= //...
+        run: |
+          FLAGS=(--remote_cache=)
+          if [ "${CACHE_READY:-0}" = "1" ]; then
+            FLAGS=(--remote_cache="$CACHE_ENDPOINT"
+                   --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+                   --remote_header="authorization=Bearer $CACHE_TOKEN"
+                   --remote_cache_compression
+                   --remote_download_minimal
+                   --remote_timeout=120 --remote_retries=2)
+            [ "$CACHE_UPLOAD" = "true" ] || FLAGS+=(--remote_upload_local_results=false)
+          fi
+          bazel build "${FLAGS[@]}" //...
 
       - name: bazel test //...
         # `tests_skip: true` on the matrix row keeps the subtree in the matrix
@@ -208,4 +239,15 @@ jobs:
         # documented build-only policy). Default is to run tests.
         if: steps.precheck.outputs.skip == 'false' && !matrix.subtree.tests_skip
         working-directory: ${{ matrix.subtree.path }}
-        run: bazel test --remote_cache= --flaky_test_attempts=3 //...
+        run: |
+          FLAGS=(--remote_cache=)
+          if [ "${CACHE_READY:-0}" = "1" ]; then
+            FLAGS=(--remote_cache="$CACHE_ENDPOINT"
+                   --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+                   --remote_header="authorization=Bearer $CACHE_TOKEN"
+                   --remote_cache_compression
+                   --remote_download_minimal
+                   --remote_timeout=120 --remote_retries=2)
+            [ "$CACHE_UPLOAD" = "true" ] || FLAGS+=(--remote_upload_local_results=false)
+          fi
+          bazel test "${FLAGS[@]}" --flaky_test_attempts=3 //...

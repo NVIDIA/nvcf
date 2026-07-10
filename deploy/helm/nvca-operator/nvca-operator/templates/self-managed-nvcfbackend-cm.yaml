@@ -65,6 +65,18 @@ data:
       {{- with .Values.selfManaged.revalServiceHostHeaderOverride }}
       helmReValServiceHostHeaderOverride: {{ . | quote }}
       {{- end }}
+    {{- with .Values.selfManaged.transportTls }}
+    transportTls:
+      trustMode: {{ .trustMode | default "system" | quote }}
+      trustBundleConfigMapName: {{ .trustBundleConfigMapName | default "nvcf-transport-trust-bundle" | quote }}
+      trustBundleKey: {{ .trustBundleKey | default "nvcf-ca-bundle.pem" | quote }}
+      trustBundleFingerprint: {{ .trustBundleFingerprint | default "" | quote }}
+      {{- if .trustBundlePem }}
+      trustBundlePem: |
+{{ .trustBundlePem | indent 8 }}
+      {{- end }}
+      installerImage: {{ .installerImage | default "" | quote }}
+    {{- end }}
     {{- with .Values.selfManaged.imageCredHelper }}
     imageCredentialHelper:
       imageConfig:
@@ -94,6 +106,9 @@ data:
       natsURL: {{ .Values.selfManaged.natsURL | quote }}
       {{- with .Values.selfManaged.natsHostOverride }}
       natsHostOverride: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.agent.llm.requestRouterAddress }}
+      llmRequestRouterAddress: {{ . | quote }}
       {{- end }}
       helmReValStageOAuthTokenURL: {{ $helmReValStage.tokenURL | default "" | quote }}
       helmReValStageOAuthPublicKeysetEndpoint: {{ $helmReValStage.publicKeysetEndpoint | default "" | quote }}

@@ -74,6 +74,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `agent.functionEnvOverrides`         | Map of environment variable overrides for function workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "UTILS_CONTAINER": "nvcr.io/custom/utils:v1.0"})        | `{}`                   |
 | `agent.taskEnvOverrides`             | Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})          | `{}`                   |
 | `agent.overrideEnvironmentVariables` | Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"} | `{}`                   |
+| `agent.llm.requestRouterAddress`     | Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers                                                                                      | `""`                   |
 | `agent.serviceOAuth`                 | OAuth token and JWKS endpoints used by dependent services                                                                                                                   | See `values.yaml`      |
 
 ### Webhook Container Resource configuration
@@ -143,6 +144,12 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `selfManaged.revalServiceHostHeaderOverride`                | Optional Host header override for selfManaged.revalServiceURL.                                                                                                                      | `""`                                      |
 | `selfManaged.natsURL`                         | URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                 | `nats://nats.example.invalid:4222`        |
 | `selfManaged.natsHostOverride`                        | Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.                                                                                            | `""`                                      |
+| `selfManaged.transportTls.trustMode`          | Worker transport TLS trust mode. Use "system" for system roots or "bundle" for a pinned trust bundle.                                                                               | `system`                                  |
+| `selfManaged.transportTls.trustBundleConfigMapName` | ConfigMap name created in each worker namespace for bundle mode.                                                                                                             | `nvcf-transport-trust-bundle`             |
+| `selfManaged.transportTls.trustBundleKey`     | ConfigMap data key containing the PEM trust bundle.                                                                                                                               | `nvcf-ca-bundle.pem`                      |
+| `selfManaged.transportTls.trustBundleFingerprint` | Canonical nvcf-trust-bundle-v1 fingerprint of trustBundlePem.                                                                                                             | `""`                                      |
+| `selfManaged.transportTls.trustBundlePem`     | PEM trust bundle used when trustMode is "bundle".                                                                                                                                | `""`                                      |
+| `selfManaged.transportTls.installerImage`     | Optional NVCA-owned trust-bundle installer image override. Leave empty to use the resolved nvca image for the cluster.                                                           | `""`                                      |
 
 ### Node Selector Configuration
 
