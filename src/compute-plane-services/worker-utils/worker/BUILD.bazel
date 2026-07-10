@@ -10,7 +10,6 @@ go_library(
         "work.go",
         "worker.go",
         "worker_unix.go",
-        "worker_windows.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker",
     visibility = ["//visibility:public"],
