@@ -2,10 +2,10 @@ cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMT
 cloud.google.com/go/compute/metadata v0.9.0 h1:pDUj4QMoPejqq20dK0Pg2N4yG9zIkYGdBtwLoEkH9Zs=
 cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCBSM6qQI1yTBdEb3C10=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260709144535-101417ace355 h1:xDoLJmxoiNX8nNyD4TTLt8OJ8b8vNqxC9WyArf/WkEc=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260709144535-101417ace355/go.mod h1:nj3yBW2weO0qzi1ML45tBqviLa2Y/KG9qCalxQuJVB8=
-github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260709144535-101417ace355 h1:V1unrvmOLG5vtTw5knOigu4CYXeRFvcDsGqZm7oQX8Y=
-github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260709144535-101417ace355/go.mod h1:LYrJLNwPMTruA5cu+9GuMhNvji24ErB1UwcaaB/yooE=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3 h1:pBymv2IQia2bswak0wHracVj2kdDXB5xcCgm3BVxfmg=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3/go.mod h1:nj3yBW2weO0qzi1ML45tBqviLa2Y/KG9qCalxQuJVB8=
+github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260710034659-973443ac16c3 h1:3a00OqSlHTn3BQnzNEQXqY8x0j25tgLDztNepZsDkgg=
+github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260710034659-973443ac16c3/go.mod h1:LYrJLNwPMTruA5cu+9GuMhNvji24ErB1UwcaaB/yooE=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=

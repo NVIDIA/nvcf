@@ -16,10 +16,10 @@ github.com/MadAppGang/httplog v1.3.0 h1:1XU54TO8kiqTeO+7oZLKAM3RP/cJ7SadzslRcKsp
 github.com/MadAppGang/httplog v1.3.0/go.mod h1:gpYEdkjh/Cda6YxtDy4AB7KY+fR7mb3SqBZw74A5hJ4=
 github.com/MadAppGang/httplog/zap v1.2.1 h1:8sxJ82E3vQhIBu7IlfVUKIk1Vf4g82UB6aPtqaHMxno=
 github.com/MadAppGang/httplog/zap v1.2.1/go.mod h1:vZZ0MO9h5ANSi5iIUFV/Iq3Kn6qD/UqZ7hJu4f7AF50=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260709144535-101417ace355 h1:xDoLJmxoiNX8nNyD4TTLt8OJ8b8vNqxC9WyArf/WkEc=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260709144535-101417ace355/go.mod h1:nj3yBW2weO0qzi1ML45tBqviLa2Y/KG9qCalxQuJVB8=
-github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260709144535-101417ace355 h1:V1unrvmOLG5vtTw5knOigu4CYXeRFvcDsGqZm7oQX8Y=
-github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260709144535-101417ace355/go.mod h1:LYrJLNwPMTruA5cu+9GuMhNvji24ErB1UwcaaB/yooE=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3 h1:pBymv2IQia2bswak0wHracVj2kdDXB5xcCgm3BVxfmg=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3/go.mod h1:nj3yBW2weO0qzi1ML45tBqviLa2Y/KG9qCalxQuJVB8=
+github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260710034659-973443ac16c3 h1:3a00OqSlHTn3BQnzNEQXqY8x0j25tgLDztNepZsDkgg=
+github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260710034659-973443ac16c3/go.mod h1:LYrJLNwPMTruA5cu+9GuMhNvji24ErB1UwcaaB/yooE=
 github.com/TylerBrock/colorjson v0.0.0-20200706003622-8a50f05110d2 h1:ZBbLwSJqkHBuFDA6DUhhse0IGJ7T5bemHyNILUjvOq4=
 github.com/TylerBrock/colorjson v0.0.0-20200706003622-8a50f05110d2/go.mod h1:VSw57q4QFiWDbRnjdX8Cb3Ow0SFncRw+bA/ofY6Q83w=
 github.com/anmitsu/go-shlex v0.0.0-20161002113705-648efa622239/go.mod h1:2FmKhYUyUczH0OGQWaF5ceTx0UBShxjsH6f8oGKYe2c=
