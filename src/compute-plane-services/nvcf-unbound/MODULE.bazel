@@ -63,11 +63,9 @@ register_toolchains(
 )
 
 # ============================================================================
-# OCI base image. urm.nvidia.com is JFrog Artifactory; its
-# WWW-Authenticate response advertises a realm URL that does not match
-# the scope the token is later checked against. rules_oci's downloader
-# can't sniff WWW-Authenticate at runtime, so we hand-write the
-# working challenge here. Reused verbatim from nvcf-grpc-proxy.
+# OCI base image: the public canonical NVIDIA hardened Go distroless
+# (nvcr.io/nvidia/distroless/go), reachable from both GitLab CI and the
+# public GitHub Actions mirror. Same pin as grpc-proxy and nvca.
 # ============================================================================
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 oci.pull(

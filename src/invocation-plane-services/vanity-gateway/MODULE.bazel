@@ -142,15 +142,12 @@ register_toolchains(
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 oci.pull(
     name = "distroless_go",
-    digest = "sha256:6be4473eca4e8a5fdf8d7103a4d35708f5538bb5f7a58f0d12a257bdf362334f",
-    image = "urm.nvidia.com/sw-gpu-ucs-hardened-docker/distroless/go",
+    digest = "sha256:2ae1c3f90de1735fefb2a951977b7e78aa1c691f345d58c87b0d6bb7eff4f4d5",
+    image = "nvcr.io/nvidia/distroless/go",
     platforms = [
         "linux/amd64",
         "linux/arm64/v8",
     ],
-    www_authenticate_challenges = {
-        "urm.nvidia.com": "Bearer realm=\"https://urm.nvidia.com/artifactory/api/docker/null/v2/token\",service=\"urm.nvidia.com\",scope=\"repository:{repository}:pull\"",
-    },
 )
 use_repo(
     oci,

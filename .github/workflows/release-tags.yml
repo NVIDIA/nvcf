@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  packages: read
 
 concurrency:
   group: release-tags-${{ github.ref }}
@@ -25,12 +26,14 @@ concurrency:
 
 env:
   # Keep GitHub release automation inert until the migration cutover is ready.
-  # Set the repository variable NVCF_GITHUB_RELEASE_DRY_RUN=false to allow
-  # branch pushes to create service tags and tag pushes to create GitHub releases.
+  # Set the repository variable NVCF_GITHUB_AUTO_TAGGING_ENABLED=true after
+  # GitHub has the required path-format release anchors.
+  NVCF_GITHUB_AUTO_TAGGING_ENABLED: ${{ vars.NVCF_GITHUB_AUTO_TAGGING_ENABLED || 'false' }}
   NVCF_GITHUB_RELEASE_DRY_RUN: ${{ vars.NVCF_GITHUB_RELEASE_DRY_RUN || 'true' }}
   NVCF_GITHUB_RELEASE_DRAFT: ${{ vars.NVCF_GITHUB_RELEASE_DRAFT || 'false' }}
-  GH_TOKEN: ${{ github.token }}
-  GITHUB_TOKEN: ${{ github.token }}
+  NVCF_GITHUB_RELEASE_TOKEN_CONFIGURED: ${{ secrets.NVCF_GITHUB_RELEASE_TOKEN != '' }}
+  GH_TOKEN: ${{ secrets.NVCF_GITHUB_RELEASE_TOKEN || github.token }}
+  GITHUB_TOKEN: ${{ secrets.NVCF_GITHUB_RELEASE_TOKEN || github.token }}
 
 jobs:
   service-release:
@@ -42,6 +45,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          token: ${{ secrets.NVCF_GITHUB_RELEASE_TOKEN || github.token }}
 
       - uses: actions/setup-node@v4
         with:
@@ -53,7 +57,16 @@ jobs:
       - name: Run service release automation
         env:
           NVCF_GITHUB_RELEASE_SERVICE: ${{ github.event_name == 'workflow_dispatch' && inputs.service || '' }}
-        run: ./tools/ci/github-release auto
+        run: |
+          set -euo pipefail
+          if [ "${NVCF_GITHUB_AUTO_TAGGING_ENABLED}" = "true" ] && \
+             [ "${NVCF_GITHUB_RELEASE_DRY_RUN}" = "false" ] && \
+             [ "${NVCF_GITHUB_RELEASE_TOKEN_CONFIGURED}" != "true" ]; then
+            echo "ERROR: set secret NVCF_GITHUB_RELEASE_TOKEN before enabling GitHub auto-tag publish mode." >&2
+            echo "The default GITHUB_TOKEN cannot trigger the follow-up tag workflow that publishes release artifacts." >&2
+            exit 1
+          fi
+          ./tools/ci/github-release auto
 
   tag-release-notes:
     name: tag release notes

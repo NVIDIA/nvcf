@@ -106,36 +106,19 @@ register_toolchains(
 )
 
 # ============================================================================
-# OCI base image. Matches the existing Dockerfile contract
-# (urm.nvidia.com/sw-gpu-ucs-hardened-docker/distroless/go:v3.1.10).
-#
-# urm.nvidia.com is JFrog Artifactory; its WWW-Authenticate response
-# advertises a realm URL that does not match the scope the token is
-# later checked against. The skopeo / docker-cli flow works around
-# this by using `/artifactory/api/docker/null/v2/token` as the realm
-# and the full repository path as the scope. rules_oci's downloader
-# can't sniff WWW-Authenticate at runtime, so we hand-write the
-# working challenge here. Reused verbatim from nvcf-grpc-proxy.
+# OCI base image: the public canonical NVIDIA hardened Go distroless
+# (nvcr.io/nvidia/distroless/go), reachable from both GitLab CI and the
+# public GitHub Actions mirror. Same pin as grpc-proxy and nvca.
 # ============================================================================
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 oci.pull(
     name = "distroless_go",
-    digest = "sha256:6be4473eca4e8a5fdf8d7103a4d35708f5538bb5f7a58f0d12a257bdf362334f",
-    # NVIDIA-internal Artifactory mirror of the upstream distroless/go
-    # image. OSS contributors building from the GitHub mirror without
-    # urm.nvidia.com access can swap this for a public distroless base
-    # such as `gcr.io/distroless/static-debian12` and re-run
-    # `bazel mod tidy` to refresh the lockfile. `bazel build //...` and
-    # `bazel test //...` work without the swap once a public base is
-    # in place.
-    image = "urm.nvidia.com/sw-gpu-ucs-hardened-docker/distroless/go",
+    digest = "sha256:2ae1c3f90de1735fefb2a951977b7e78aa1c691f345d58c87b0d6bb7eff4f4d5",
+    image = "nvcr.io/nvidia/distroless/go",
     platforms = [
         "linux/amd64",
         "linux/arm64/v8",
     ],
-    www_authenticate_challenges = {
-        "urm.nvidia.com": "Bearer realm=\"https://urm.nvidia.com/artifactory/api/docker/null/v2/token\",service=\"urm.nvidia.com\",scope=\"repository:{repository}:pull\"",
-    },
 )
 use_repo(
     oci,
