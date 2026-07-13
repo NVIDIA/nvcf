@@ -55,12 +55,12 @@ Uses `<<: *dependency` template inheritance with `release-group: dependencies` l
 | ess-api | helm-nvcf-ess-api | ess | services |
 | notary-service | helm-nvcf-notary-service | nvcf | services |
 | reval | helm-reval | nvcf | services |
-| llm-request-router | ../../llm-request-router-colocated-deploy/chart | nvcf | services |
-| llm-api-gateway | ../../llm-api-gateway-colocated-deploy/chart | nvcf | services |
+| llm-request-router | nvcf/helm-nvcf-llm-request-router | nvcf | services |
+| llm-api-gateway | nvcf/helm-nvcf-llm-api-gateway | nvcf | services |
 | admin-issuer-proxy | helm-admin-token-issuer-proxy | api-keys | (no release-group label) |
 | ingress | nvcf-gateway-routes | envoy-gateway-system | ingress |
 
-Most services use `inherit: [{template: service}]`. In MR !183 the LLM releases use explicit sibling chart paths and `values: [../global.yaml.gotmpl]` until OCI chart releases are pinned in a follow-up. `admin-issuer-proxy` and `ingress` have standalone `values:` blocks.
+Most services use `inherit: [{template: service}]`. LLM releases use OCI charts from the `nvcf` repository with standalone `values: [../global.yaml.gotmpl]` blocks; they are gated on `addons.llm.enabled`. `admin-issuer-proxy` and `ingress` have standalone `values:` blocks.
 
 ### 03-observability.yaml.gotmpl
 
