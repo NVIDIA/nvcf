@@ -49,7 +49,7 @@ cassandra:
     image:
       registry: ""
       repository: ""
-      tag: 0.10.1
+      tag: 0.11.0
       pullPolicy: Always
 
   image:
