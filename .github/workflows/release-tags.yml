@@ -31,9 +31,9 @@ env:
   NVCF_GITHUB_AUTO_TAGGING_ENABLED: ${{ vars.NVCF_GITHUB_AUTO_TAGGING_ENABLED || 'false' }}
   NVCF_GITHUB_RELEASE_DRY_RUN: ${{ vars.NVCF_GITHUB_RELEASE_DRY_RUN || 'true' }}
   NVCF_GITHUB_RELEASE_DRAFT: ${{ vars.NVCF_GITHUB_RELEASE_DRAFT || 'false' }}
-  NVCF_GITHUB_RELEASE_TOKEN_CONFIGURED: ${{ secrets.NVCF_GITHUB_RELEASE_TOKEN != '' }}
-  GH_TOKEN: ${{ secrets.NVCF_GITHUB_RELEASE_TOKEN || github.token }}
-  GITHUB_TOKEN: ${{ secrets.NVCF_GITHUB_RELEASE_TOKEN || github.token }}
+  NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
+  GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+  GITHUB_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
 
 jobs:
   service-release:
@@ -45,7 +45,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-          token: ${{ secrets.NVCF_GITHUB_RELEASE_TOKEN || github.token }}
+          token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
 
       - uses: actions/setup-node@v4
         with:
@@ -61,8 +61,8 @@ jobs:
           set -euo pipefail
           if [ "${NVCF_GITHUB_AUTO_TAGGING_ENABLED}" = "true" ] && \
              [ "${NVCF_GITHUB_RELEASE_DRY_RUN}" = "false" ] && \
-             [ "${NVCF_GITHUB_RELEASE_TOKEN_CONFIGURED}" != "true" ]; then
-            echo "ERROR: set secret NVCF_GITHUB_RELEASE_TOKEN before enabling GitHub auto-tag publish mode." >&2
+             [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
+            echo "ERROR: set secret NV_GITHUB_TOKEN before enabling GitHub auto-tag publish mode." >&2
             echo "The default GITHUB_TOKEN cannot trigger the follow-up tag workflow that publishes release artifacts." >&2
             exit 1
           fi

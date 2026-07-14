@@ -23,7 +23,7 @@ Do not set `NVCF_GITHUB_AUTO_TAGGING_ENABLED=true` or
 `NVCF_GITHUB_RELEASE_DRY_RUN=false` until the GitHub commit graph has
 release anchors for each service being cut over.
 
-Publish mode also requires the `NVCF_GITHUB_RELEASE_TOKEN` repository
+Publish mode also requires the `NV_GITHUB_TOKEN` repository
 secret. It must be a GitHub token that can push tags and create
 releases. Tags pushed with the default `GITHUB_TOKEN` do not start the
 follow-up tag workflow, so the workflow fails publish mode when this
