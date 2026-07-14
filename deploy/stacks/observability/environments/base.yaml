@@ -1,0 +1,130 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+global:
+  helm:
+    sources:
+      registry: nvcr.io
+      repository: YOUR_ORG/YOUR_TEAM
+
+  imagePullSecrets: []
+
+observability:
+  mode: disabled
+  namespace: monitoring
+
+prometheusOperatorCrds:
+  enabled: false
+  version: "30.0.0"
+  values:
+    crds:
+      alertmanagerconfigs:
+        enabled: false
+      alertmanagers:
+        enabled: false
+      podmonitors:
+        enabled: true
+      probes:
+        enabled: false
+      prometheusagents:
+        enabled: false
+      prometheuses:
+        enabled: false
+      prometheusrules:
+        enabled: false
+      scrapeconfigs:
+        enabled: false
+      servicemonitors:
+        enabled: true
+      thanosrulers:
+        enabled: false
+
+opentelemetryOperator:
+  enabled: false
+  version: "0.114.1"
+  admissionWebhooks:
+    certManager:
+      enabled: false
+    autoGenerateCert:
+      recreate: false
+  manager:
+    collectorImage:
+      repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
+      tag: "0.129.1"
+
+controlPlaneCollector:
+  enabled: false
+  collectorName: nvcf-control-plane
+  image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.129.1
+  targetAllocatorRbac:
+    create: true
+  targetAllocator:
+    enabled: true
+    allocationStrategy: consistent-hashing
+    prometheusCR:
+      enabled: true
+      serviceMonitorSelector:
+        matchLabels:
+          nvcf.nvidia.com/observability-target: "true"
+      podMonitorSelector:
+        matchLabels:
+          nvcf.nvidia.com/observability-target: "true"
+      serviceMonitorNamespaceSelector: {}
+      podMonitorNamespaceSelector: {}
+  config:
+    receivers:
+      prometheus:
+        config:
+          scrape_configs: []
+    processors:
+      batch: {}
+    exporters:
+      prometheusremotewrite:
+        endpoint: http://vmsingle.monitoring.svc.cluster.local:8428/api/v1/write
+    service:
+      pipelines:
+        metrics:
+          receivers:
+            - prometheus
+          processors:
+            - batch
+          exporters:
+            - prometheusremotewrite
+
+victoriaMetrics:
+  enabled: false
+  version: "0.38.0"
+  server:
+    retentionPeriod: "1"
+    persistentVolume:
+      enabled: true
+      size: 16Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+  serviceMonitor:
+    enabled: false
+
+defaultMonitors:
+  enabled: false
+  commonLabels:
+    nvcf.nvidia.com/observability-target: "true"
+  dcgm:
+    enabled: false
+    namespaceSelector:
+      any: true
+    interval: 30s
+    path: /metrics
+    port: dcgm-metrics
+    labels: {}
+
+byooCollector:
+  enabled: false
+
+nvcaCollector:
+  enabled: false

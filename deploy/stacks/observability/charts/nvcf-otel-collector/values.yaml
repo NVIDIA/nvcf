@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+collectorName: nvcf-control-plane
+image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.129.1
+imagePullSecrets: []
+
+targetAllocatorRbac:
+  create: true
+
+targetAllocator:
+  enabled: true
+  allocationStrategy: consistent-hashing
+  prometheusCR:
+    enabled: true
+    serviceMonitorSelector:
+      matchLabels:
+        nvcf.nvidia.com/observability-target: "true"
+    podMonitorSelector:
+      matchLabels:
+        nvcf.nvidia.com/observability-target: "true"
+    serviceMonitorNamespaceSelector: {}
+    podMonitorNamespaceSelector: {}
+
+config:
+  receivers:
+    prometheus:
+      config:
+        scrape_configs: []
+  processors:
+    batch: {}
+  exporters:
+      prometheusremotewrite:
+        endpoint: http://vmsingle.monitoring.svc.cluster.local:8428/api/v1/write
+  service:
+    pipelines:
+      metrics:
+        receivers:
+          - prometheus
+        processors:
+          - batch
+        exporters:
+          - prometheusremotewrite

@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Local example. Runtime components remain off until explicitly enabled.
+observability:
+  mode: disabled
+
+prometheusOperatorCrds:
+  enabled: false
+
+opentelemetryOperator:
+  enabled: false
+
+controlPlaneCollector:
+  enabled: false
+
+victoriaMetrics:
+  enabled: false
+
+defaultMonitors:
+  enabled: false

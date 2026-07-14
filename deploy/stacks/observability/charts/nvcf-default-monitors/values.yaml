@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+commonLabels:
+  nvcf.nvidia.com/observability-target: "true"
+
+dcgm:
+  enabled: false
+  namespace: ""
+  namespaceSelector:
+    any: true
+  interval: 30s
+  path: /metrics
+  # NVCA currently uses this name for the injected DCGM metrics port; keep the
+  # monitor disabled until the consuming stack owns that chart contract.
+  port: dcgm-metrics
+  labels: {}
+
+# Control-plane ServiceMonitors, owned by the obs stack. Each renders one
+# ServiceMonitor that picks up the observability-target label via commonLabels.
+controlPlane:
+  enabled: false
+  interval: 30s
+  path: /metrics
+  port: metrics
+  # Default namespace the services run in (ServiceMonitor namespaceSelector).
+  # Per-service `namespaces` overrides this to keep each monitor scoped tightly.
+  namespaces:
+    - nvcf
+  services:
+    - name: state-metrics
+      enabled: true
+      selector:
+        app.kubernetes.io/instance: state-metrics
+        app.kubernetes.io/name: helm-nvcf-state-metrics
+    - name: grpc-proxy
+      enabled: true
+      selector:
+        app.kubernetes.io/instance: grpc-proxy
+    - name: api
+      enabled: true
+      selector:
+        app.kubernetes.io/name: helm-nvcf-api
+    - name: sis
+      enabled: true
+      namespaces:
+        - sis
+      selector:
+        app.kubernetes.io/name: helm-nvcf-sis
+    - name: llm-api-gateway
+      enabled: true
+      selector:
+        app.kubernetes.io/instance: llm-api-gateway
+    # Off until the Invocation Service exporter is enabled.
+    - name: invocation-service
+      enabled: false
+      selector:
+        app.kubernetes.io/instance: invocation-service

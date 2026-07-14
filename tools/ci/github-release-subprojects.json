@@ -47,6 +47,14 @@
       "dev_prerelease": true
     },
     {
+      "id": "nvcf-observability-stack",
+      "path": "deploy/stacks/observability",
+      "service_name": "nvcf-observability-stack",
+      "tag_format": "deploy/stacks/observability/v${version}",
+      "version_file": "VERSION",
+      "dev_prerelease": true
+    },
+    {
       "id": "grpc-proxy",
       "path": "src/invocation-plane-services/grpc-proxy",
       "service_name": "nvcf-grpc-proxy",
