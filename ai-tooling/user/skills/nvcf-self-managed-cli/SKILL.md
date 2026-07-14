@@ -9,7 +9,9 @@ description: |
   nvcf, nvcf-cli, self-hosted nvcf, self-managed nvcf, NVCFBackend, NVCA, NCP,
   ICMS, helmfile, control plane, compute plane, LLM function,
   OpenAI-compatible invocation, Responses API, embeddings, batch task, task
-  monitor, cluster rotate, cluster delete.
+  monitor, cluster rotate, cluster delete, helm task, helm-based task,
+  task secrets, update task secrets, retrieve task results, bulk fetch tasks,
+  task results.
 allowed-tools: Bash, Read, AskUserQuestion
 argument-hint: "[install|status|check|deploy-function|register-cluster|teardown] [args]"
 ---
@@ -35,6 +37,9 @@ Token Budget:
 - "preview what `down` would do" / "dry-run uninstall"
 - "create a task" / "run a task" / "submit a GPU job" / "monitor a task"
 - "cancel a task" / "delete a task" / "list tasks" / "list running tasks"
+- "run a helm-based task" / "helm task" / "submit a helm task"
+- "update secrets on my task" / "replace task secrets" / "task update-secrets"
+- "retrieve task results" / "bulk fetch task details" / "get task results"
 - Any reference to `NVCFBackend`, `NVCA`, ICMS, helm releases like `helm-nvcf-*`, or `icms.<domain>` / `api.<domain>` URLs.
 - Any reference to `nvcf-cli task` or batch tasks.
 

@@ -26,7 +26,31 @@ nvcf-cli api-key generate --description="task smoke test" --expires-in=8h --vali
 # -> task API key validation passed!
 ```
 
-Do not echo keys into chat or logs unless instructed.
+Never echo the key value (nvapi-...) into chat or logs. Report only that the key was minted, its description, and its expiry — never the value itself.
+
+### Fresh session pre-flight
+
+Before running any `task` command in a fresh agent session, verify credentials:
+
+1. Check whether `NVCF_API_KEY` is set:
+   ```sh
+   printenv NVCF_API_KEY > /dev/null 2>&1 && echo set || echo unset
+   ```
+2. If unset, read the stored key expiry without printing the value:
+   ```sh
+   python3 -c "import json,pathlib; s=json.loads(pathlib.Path('~/.nvcf-cli.state').expanduser().read_text()); print(s.get('nvctApiKeyExpiration','missing'))"
+   ```
+3. If the expiry is in the past or missing, regenerate:
+   ```sh
+   nvcf-cli refresh
+   nvcf-cli api-key generate --for task --description="task-key" --expires-in=24h --validate
+   ```
+4. Inject the stored key into the subprocess env without logging the value. Use a shell subshell or env prefix — never print the key into chat.
+
+Error classification:
+- "missing authentication credentials" or exit 2: key not injected; repeat pre-flight.
+- HTTP 403: key expired or wrong audience; regenerate.
+- Empty task list: valid; no tasks exist yet.
 
 ## 2. Task CREATE: container
 
@@ -120,6 +144,14 @@ nvcf-cli task create --input-file=task-helm.json
 
 `helmChart` and `containerImage` are mutually exclusive.
 
+## 3b. Update secrets on a running task
+
+```sh
+nvcf-cli task update-secrets <task_id> --secrets NAME=value
+```
+
+`update-secrets` is a full replacement: it overwrites every existing secret on the task. Re-supply all secrets you want to retain, not only the ones being changed. Do not echo secret values into chat.
+
 ## 4. Monitor
 
 Poll task state:
@@ -184,7 +216,7 @@ Delete the task record after it reaches a terminal state:
 nvcf-cli task delete <task_id>
 ```
 
-Confirm with the user before deleting. Deletion removes the task record permanently.
+Stop and confirm with the user before running task delete. State the task ID and its current status. Do not proceed even when the user's prompt already requested deletion — always get an explicit last-look confirmation. Deletion is permanent and cannot be undone.
 
 To list all tasks for the current owner (useful before bulk cleanup):
 

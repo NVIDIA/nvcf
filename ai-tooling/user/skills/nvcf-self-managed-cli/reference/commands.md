@@ -51,7 +51,7 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 
 ## Tasks
 
-Task commands require a task API key (`NVCF_NVCT_API_KEY`) and `NVCF_BASE_NVCT_URL` set to the NVCT gateway endpoint. Run `api-key generate --for task` after `init` to mint the key.
+Task commands require `NVCF_API_KEY` set to a task-scoped key and `NVCF_BASE_NVCT_URL` set to the NVCT gateway endpoint. In a fresh session, read `nvctApiKey` from `~/.nvcf-cli.state` and inject it as `NVCF_API_KEY` without logging the value; check `nvctApiKeyExpiration` first and regenerate with `api-key generate --for task --validate` if expired. Run `api-key generate --for task` after `init` to mint a new key.
 
 | Command | Purpose | Notes |
 |---|---|---|

@@ -167,6 +167,7 @@ Before committing changes, verify:
 - [ ] File is under 500 lines
 - [ ] All relative links are valid
 - [ ] No `alwaysApply` or `globs` fields present
+- [ ] If editing `nvcf-self-managed-cli` or `nvcf-self-managed-installation` source files: run `go generate ./internal/agentskill/...` in `src/clis/nvcf-cli` and stage `skilldata_generated.go`
 
 ## Skill Inventory
 
