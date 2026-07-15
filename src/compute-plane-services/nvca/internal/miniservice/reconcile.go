@@ -20,7 +20,9 @@ package mscontroller
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -419,9 +421,23 @@ func (r *Reconciler) patchMiniService(ctx context.Context, oldObj, newObj *v1alp
 		return fmt.Errorf("patch miniservice %s status: %w", oldObj.Name, err)
 	}
 
-	newObj.ResourceVersion = newObjWithStatus.ResourceVersion
-	if err := r.Client.Patch(ctx, newObj, client.MergeFrom(newObjWithStatus)); err != nil {
-		return fmt.Errorf("patch miniservice %s: %w", oldObj.Name, err)
+	// Only patch finalizers if they are different. Spec and other metadata must not be modified by the controller.
+	if !slices.Equal(newObj.Finalizers, oldObj.Finalizers) {
+		if err := r.Client.Patch(ctx, &v1alpha1.MiniService{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            newObj.Name,
+				Finalizers:      newObj.Finalizers,
+				ResourceVersion: newObjWithStatus.ResourceVersion,
+			},
+		}, client.MergeFrom(&v1alpha1.MiniService{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            newObjWithStatus.Name,
+				Finalizers:      newObjWithStatus.Finalizers,
+				ResourceVersion: newObjWithStatus.ResourceVersion,
+			},
+		})); err != nil {
+			return fmt.Errorf("patch miniservice %s: %w", oldObj.Name, err)
+		}
 	}
 
 	return nil
@@ -821,8 +837,11 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 	}
 
 	if !isRendered {
-		// To avoid unnecessary re-renders, cache failed render attempts by revision.
-		failedWorkloadUpdateRevisionCacheKey := fmt.Sprintf("%s-%d", ms.Name, ms.Status.Revision)
+		// To avoid unnecessary re-renders, cache failed render attempts by helm values hash.
+		// (which is not prone to races like revision is).
+		helmValuesHash := sha256.Sum256(ms.Spec.HelmChartConfig.Values)
+		helmValuesHashShort := hex.EncodeToString(helmValuesHash[:])[:8]
+		failedWorkloadUpdateRevisionCacheKey := fmt.Sprintf("%s-%s", ms.Name, helmValuesHashShort)
 
 		r.failedWorkloadUpdateRevisionCacheLock.RLock()
 		failed := r.failedWorkloadUpdateRevisionCache[failedWorkloadUpdateRevisionCacheKey]

@@ -27,6 +27,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -37,6 +39,7 @@ import (
 const (
 	revisionConfigMapPrefix = "miniservice-revision-v"
 	revisionLabel           = "nvca.nvcf.nvidia.io/revision"
+	managedByLabel          = "app.kubernetes.io/managed-by"
 	managedByValue          = "miniservice-controller"
 
 	revisionDataKeyValues     = "values"
@@ -70,9 +73,9 @@ func (r *Reconciler) saveRevisionHistory(ctx context.Context, ms *v1alpha1.MiniS
 			Name:      cmName,
 			Namespace: ms.Spec.Namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": managedByValue,
-				miniserviceNameLabel:           ms.Name,
-				revisionLabel:                  strconv.FormatInt(revision, 10),
+				managedByLabel:       managedByValue,
+				miniserviceNameLabel: ms.Name,
+				revisionLabel:        strconv.FormatInt(revision, 10),
 			},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: v1alpha1.SchemeGroupVersion.String(),
@@ -151,15 +154,28 @@ func latestRevisionConfigMap(cms []corev1.ConfigMap) *corev1.ConfigMap {
 	return best
 }
 
+var revisionLabelRequirement labels.Requirement
+
+func init() {
+	req, err := labels.NewRequirement(revisionLabel, selection.Exists, nil)
+	if err != nil {
+		panic(fmt.Errorf("create revision label requirement: %w", err))
+	}
+	revisionLabelRequirement = *req
+}
+
 // listRevisionHistory returns all revision ConfigMaps for a MiniService.
 func (r *Reconciler) listRevisionHistory(ctx context.Context, ms *v1alpha1.MiniService) (*corev1.ConfigMapList, error) {
+	sel := labels.SelectorFromSet(labels.Set{
+		managedByLabel:       managedByValue,
+		miniserviceNameLabel: ms.Name,
+	})
+	sel = sel.Add(revisionLabelRequirement)
+
 	cmList := &corev1.ConfigMapList{}
 	if err := r.Client.List(ctx, cmList,
 		client.InNamespace(ms.Spec.Namespace),
-		client.MatchingLabels{
-			"app.kubernetes.io/managed-by": managedByValue,
-			miniserviceNameLabel:           ms.Name,
-		},
+		client.MatchingLabelsSelector{Selector: sel},
 	); err != nil {
 		return nil, fmt.Errorf("list revision configmaps: %w", err)
 	}

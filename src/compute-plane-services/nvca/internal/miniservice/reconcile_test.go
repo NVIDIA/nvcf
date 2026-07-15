@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -40,6 +41,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/bombsimon/logrusr/v4"
+	"github.com/google/go-cmp/cmp"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -5114,4 +5116,125 @@ func TestReconciler_list(t *testing.T) {
 		_, err := r.list(ctx, ms, configMapGVK)
 		require.ErrorIs(t, err, injectedErr)
 	})
+}
+
+func baseMiniServiceForPatchTest() *v1alpha1.MiniService {
+	return &v1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "patch-test-ms",
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "external-party",
+				"custom-label":                 "keep-me",
+			},
+			Annotations: map[string]string{
+				"external-party/annotation": "do-not-touch",
+			},
+		},
+		Spec: v1alpha1.MiniServiceSpec{
+			Namespace:       "workload-ns",
+			ICMSRequestName: "icms-req-1",
+			HelmChartConfig: testHelmConfig("https://example.com/chart.tgz", `{"replicas": 3}`),
+		},
+	}
+}
+
+func TestPatchMiniService(t *testing.T) {
+	ctx := newTestContext()
+
+	tests := []struct {
+		name            string
+		prepareStored   func(*v1alpha1.MiniService)
+		setupNew        func(*v1alpha1.MiniService)
+		wantFinalizers  []string
+		wantStatusPhase v1alpha1.MiniServicePhase
+	}{
+		{
+			name: "updates status without modifying spec or metadata",
+			setupNew: func(newObj *v1alpha1.MiniService) {
+				newObj.Status.Phase = v1alpha1.MiniServiceInstalling
+				newObj.Status.ObservedGeneration = 1
+			},
+			wantFinalizers:  nil,
+			wantStatusPhase: v1alpha1.MiniServiceInstalling,
+		},
+		{
+			name: "updates finalizers without modifying spec or metadata",
+			setupNew: func(newObj *v1alpha1.MiniService) {
+				newObj.Finalizers = []string{finalizer}
+				newObj.Status.Phase = v1alpha1.MiniServiceInstalled
+			},
+			wantFinalizers:  []string{finalizer},
+			wantStatusPhase: v1alpha1.MiniServiceInstalled,
+		},
+		{
+			name: "removes finalizers without modifying spec or metadata",
+			prepareStored: func(stored *v1alpha1.MiniService) {
+				stored.Finalizers = []string{finalizer}
+			},
+			setupNew: func(newObj *v1alpha1.MiniService) {
+				newObj.Finalizers = nil
+				newObj.Status.Phase = v1alpha1.MiniServiceCompleted
+			},
+			wantFinalizers:  nil,
+			wantStatusPhase: v1alpha1.MiniServiceCompleted,
+		},
+		{
+			name: "does not persist spec changes present in newObj",
+			setupNew: func(newObj *v1alpha1.MiniService) {
+				newObj.Spec.Namespace = "attacker-ns"
+				newObj.Spec.ICMSRequestName = "attacker-req"
+				newObj.Spec.HelmChartConfig = testHelmConfig("https://evil.example/chart.tgz", `{"replicas": 999}`)
+				newObj.Labels["custom-label"] = "changed"
+				newObj.Annotations["external-party/annotation"] = "changed"
+				newObj.Status.Phase = v1alpha1.MiniServiceInstallFailed
+			},
+			wantFinalizers:  nil,
+			wantStatusPhase: v1alpha1.MiniServiceInstallFailed,
+		},
+		{
+			name: "skips finalizer patch when unchanged",
+			prepareStored: func(stored *v1alpha1.MiniService) {
+				stored.Finalizers = []string{finalizer}
+			},
+			setupNew: func(newObj *v1alpha1.MiniService) {
+				newObj.Finalizers = []string{finalizer}
+				newObj.Status.Phase = v1alpha1.MiniServiceRunning
+			},
+			wantFinalizers:  []string{finalizer},
+			wantStatusPhase: v1alpha1.MiniServiceRunning,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stored := baseMiniServiceForPatchTest()
+			if tt.prepareStored != nil {
+				tt.prepareStored(stored)
+			}
+
+			crClient, _ := newFakeClient(mgrScheme, stored)
+			r := &Reconciler{Client: crClient}
+
+			oldObj := &v1alpha1.MiniService{}
+			require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), oldObj))
+
+			wantSpec := oldObj.Spec
+			wantLabels := maps.Clone(oldObj.Labels)
+			wantAnnotations := maps.Clone(oldObj.Annotations)
+
+			newObj := oldObj.DeepCopy()
+			tt.setupNew(newObj)
+
+			require.NoError(t, r.patchMiniService(ctx, oldObj, newObj))
+
+			got := &v1alpha1.MiniService{}
+			require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), got))
+
+			assert.Empty(t, cmp.Diff(wantSpec, got.Spec), "spec must not be modified by patchMiniService")
+			assert.Equal(t, wantLabels, got.Labels, "labels must not be modified by patchMiniService")
+			assert.Equal(t, wantAnnotations, got.Annotations, "annotations must not be modified by patchMiniService")
+			assert.Equal(t, tt.wantStatusPhase, got.Status.Phase)
+			assert.Equal(t, tt.wantFinalizers, got.Finalizers)
+		})
+	}
 }
