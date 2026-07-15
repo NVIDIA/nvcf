@@ -30,6 +30,13 @@ common --enable_bzlmod
 build --incompatible_strict_action_env
 common --enable_platform_specific_config
 
+# Route public Maven Central through the internal Artifactory mirror for every
+# download (coursier, http_file, http_archive). Public Central rate-limits the
+# shared CI runner IP (429), which failed the Bazel validate jobs. This also
+# covers transitive module maven installs (e.g. contrib_rules_jvm_deps) that our
+# own maven.install repositories cannot repoint.
+common --downloader_config=tools/bazel/downloader.cfg
+
 # Remote cache on by default for every developer. Pulls hits from the
 # configured remote cache (read-only), falls back to local execution on any
 # per-action remote failure (--remote_local_fallback below). Caveat:

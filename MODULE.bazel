@@ -170,7 +170,13 @@ maven.install(
     ],
     lock_file = "//:maven_install.json",
     repositories = [
-        "https://repo1.maven.org/maven2",
+        # Resolve through the internal Artifactory mirror, not public
+        # repo1.maven.org: the shared CI runner IP is rate-limited (429) on
+        # public Central, which fails go-lib-bazel-build-test on every MR.
+        # urm/artifactory/maven is the Central proxy + NVIDIA artifacts; the
+        # google mirror is a fallback.
+        "https://urm.nvidia.com/artifactory/maven",
+        "https://maven-central.storage-download.googleapis.com/maven2",
     ],
 )
 use_repo(maven, "maven")
