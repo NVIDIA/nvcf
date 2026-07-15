@@ -23,6 +23,7 @@ pinned version reference is bumped accordingly.
 |-------------------|---------------------------------------------------------------------------|----------------|------------|
 | `api_keys_api`    | [api_keys_api/03_init_tables.up.sql](api_keys_api/03_init_tables.up.sql)       | `main`         | `01eae99b` |
 | `ess_api`         | [ess_api/03_init_tables.up.sql](ess_api/03_init_tables.up.sql)                 | `v0.48.26`     | `200fd74d` |
+| `event_ledger`    | [event_ledger/03_init_tables.up.sql](event_ledger/03_init_tables.up.sql)       | `0.10.0`       | `adc2ff44` |
 | `nvcf_autoscaler` | [nvcf_autoscaler/03_init_tables.up.sql](nvcf_autoscaler/03_init_tables.up.sql) | `v1.15.0`      | `bff903c`  |
 | `nvcf_api`        | [nvcf_api/03_init_tables.up.sql](nvcf_api/03_init_tables.up.sql)               | `v1.5.1`       | `7a422ff1` |
 | `nvct_api`        | [nvct_api/03_init_tables.up.sql](nvct_api/03_init_tables.up.sql)               | `v1.5.2`       | `a0247478` |
