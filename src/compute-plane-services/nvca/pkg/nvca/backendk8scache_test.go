@@ -1822,8 +1822,9 @@ func TestCreateICMSCreationMessageRequestWithEnvOverrides(t *testing.T) {
 		fff.SetFeatureFlags(featureflag.UseFunctionTranslator)
 
 		functionOverrides := map[string]string{
-			"INIT_CONTAINER":  "nvcr.io/custom/init:v1.0",
-			"UTILS_CONTAINER": "nvcr.io/custom/utils:v1.0",
+			"init_container":                "nvcr.io/custom/init:v1.0",
+			"utils_container":               "nvcr.io/custom/utils:v1.0",
+			"byoo_otel_collector_container": "nvcr.io/custom/byoo:v1.0",
 		}
 
 		bc, _, err := NewBackendk8sCacheBuilder().
@@ -1835,8 +1836,9 @@ func TestCreateICMSCreationMessageRequestWithEnvOverrides(t *testing.T) {
 		require.NoError(t, err)
 
 		originalEnv := map[string]string{
-			"EXISTING_VAR":   "existing_value",
-			"INIT_CONTAINER": "nvcr.io/original/init:v0.9",
+			"EXISTING_VAR":                  "existing_value",
+			"INIT_CONTAINER":                "nvcr.io/original/init:v0.9",
+			"BYOO_OTEL_COLLECTOR_CONTAINER": "nvcr.io/original/byoo:v0.9",
 		}
 
 		cmsg := function.CreationQueueMessage{
@@ -1864,6 +1866,7 @@ func TestCreateICMSCreationMessageRequestWithEnvOverrides(t *testing.T) {
 		resultEnv := decodeEnv(sr.Spec.CreationMsgInfo.FunctionLaunchSpecification.EnvironmentB64)
 		assert.Equal(t, "nvcr.io/custom/init:v1.0", resultEnv["INIT_CONTAINER"], "INIT_CONTAINER should be overridden")
 		assert.Equal(t, "nvcr.io/custom/utils:v1.0", resultEnv["UTILS_CONTAINER"], "UTILS_CONTAINER should be added")
+		assert.Equal(t, "nvcr.io/custom/byoo:v1.0", resultEnv["BYOO_OTEL_COLLECTOR_CONTAINER"], "BYOO_OTEL_COLLECTOR_CONTAINER should be overridden")
 		assert.Equal(t, "existing_value", resultEnv["EXISTING_VAR"], "Existing vars should be preserved")
 
 		err = clients.BART.NvcaV2beta1().ICMSRequests(bc.requestsNamespace).Delete(ctx, sr.Name, metav1.DeleteOptions{})
@@ -1874,7 +1877,7 @@ func TestCreateICMSCreationMessageRequestWithEnvOverrides(t *testing.T) {
 		fff := &featureflagmock.Fetcher{}
 
 		taskOverrides := map[string]string{
-			"ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v2.0",
+			"ess_agent_container": "nvcr.io/custom/ess:v2.0",
 		}
 
 		bc, _, err := NewBackendk8sCacheBuilder().

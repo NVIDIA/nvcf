@@ -483,8 +483,8 @@ func (b *BackendK8sCacheBuilder) WithSecretMirrorConfig(namespace, selector stri
 // WithEnvOverrides sets the environment variable overrides for function and task workloads
 func (b *BackendK8sCacheBuilder) WithEnvOverrides(functionOverrides, taskOverrides map[string]string) *BackendK8sCacheBuilder {
 	next := *b
-	next.functionEnvOverrides = functionOverrides
-	next.taskEnvOverrides = taskOverrides
+	next.functionEnvOverrides = envutil.NormalizeEnvOverrides(functionOverrides)
+	next.taskEnvOverrides = envutil.NormalizeEnvOverrides(taskOverrides)
 	return &next
 }
 
