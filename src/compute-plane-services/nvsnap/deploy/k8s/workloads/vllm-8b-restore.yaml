@@ -1,17 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Restore pod for vllm-8b checkpoint
-#
-# This manifest restores a checkpointed vLLM process with:
-# - Patched uvloop + libzmq injected at startup (same as checkpoint pod)
-# - Post-restore mode for ring state healing detection
-# - Same vLLM version and configuration as source pod
-#
-# Usage:
-# 1. Get checkpoint ID: kubectl exec -n nvsnap-system <agent-pod> -- ls /var/lib/nvsnap/checkpoints/
-# 2. Update CHECKPOINT_ID below
-# 3. kubectl apply -f vllm-small-restore.yaml
+# Restore placeholder for a criu-v2 (in-namespace) checkpoint of vllm-8b.
+# Dumb reaper: same image as the source, bash pid1 loop, no hostPID. The agent
+# drives everything on POST /v1/restore. See internal/agent/restore_v2.go and
+# vllm-small-restore.yaml (identical pattern; only the pod name differs).
 apiVersion: v1
 kind: Pod
 metadata:
@@ -21,242 +14,54 @@ metadata:
     app: vllm-8b-restored
     nvsnap.io/demo: "true"
 spec:
-  # IMPORTANT: Deploy on same node as where checkpoint was taken
-  # hostPID required for CRIU mount namespace operations
-  hostPID: true
+  automountServiceAccountToken: false
+  nodeName: __NODE_NAME__
 
   imagePullSecrets:
     - name: nvsnap-pull-secret
 
-  initContainers:
-  # Extract patched uvloop (must match checkpointed version)
-    - name: get-uvloop
-      image: nvcr.io/0651155215864979/ncp-dev/uvloop-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          set -eu
-          for whl in /wheels/uvloop-*.whl; do
-              tag=$(echo "$whl" | grep -oE 'cp3[0-9]+' | head -1)
-              mkdir -p "/nvsnap-lib/site-packages-${tag}"
-              python3 -m zipfile -e "$whl" "/nvsnap-lib/site-packages-${tag}/"
-          done
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-  # Copy patched libuv (must match checkpointed version)
-    - name: get-libuv
-      image: nvcr.io/0651155215864979/ncp-dev/libuv-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp /usr/local/lib/libuv.so* /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-  # Copy patched libzmq (must match checkpointed version)
-    - name: get-libzmq
-      image: nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp /usr/local/lib/libzmq.so* /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-  # Copy CRIU bundle, intercept library, and debug tools from agent image
-    - name: get-criu
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.12
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp -r /criu-bundle/. /nvsnap/
-          if [ -x /usr/local/bin/py-spy ]; then cp /usr/local/bin/py-spy /nvsnap/; fi
-          if [ -x /usr/bin/nsenter ]; then cp /usr/bin/nsenter /nvsnap/; fi
-          cp /criu-bundle/lib/libnvsnap_intercept.so /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-tools
-          mountPath: /nvsnap
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
   containers:
     - name: restore
-      # MUST match source pod vLLM version (stock image - patches injected at startup)
-      image: vllm/vllm-openai:v0.11.2
+      image: vllm/vllm-openai:v0.20.0
       imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-lc"]
+      command: ["/bin/bash", "-lc"]
       args:
         - |
+          set -e
           mkdir -p /var/run/vllm
-          SITE=/usr/local/lib/python3.12/dist-packages
-          # Install pre-extracted patched packages (uvloop)
-          PYTAG=$(python3 -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
-          if [ -d "/nvsnap-lib/site-packages-${PYTAG}" ]; then
-            cp -a /nvsnap-lib/site-packages-${PYTAG}/* "$SITE/"
-          fi
-          # Install patched libzmq + libuv (must match checkpointed version)
-          if [ -f /nvsnap-lib/libzmq.so.5 ]; then
-            cp /nvsnap-lib/libzmq.so* /usr/local/lib/
-          fi
-          if [ -f /nvsnap-lib/libuv.so.1 ]; then
-            cp /nvsnap-lib/libuv.so* /usr/local/lib/
-          fi
-          ldconfig
-
-          # ld.so.preload not needed - restored process has library from checkpoint
-
-          /nvsnap/restore-entrypoint
-          # Keep pod alive for post-mortem log collection
-          sleep 600
+          echo 100000 > /proc/sys/kernel/ns_last_pid || echo "(ns_last_pid bump failed)"
+          touch /vllm.out
+          tail -F /vllm.out &
+          while true; do sleep 30; done
       env:
-      # === CHECKPOINT CONFIG ===
-      # Replace with actual checkpoint ID from agent
         - name: CHECKPOINT_ID
           value: "__CHECKPOINT_ID__"
-        - name: HF_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: hf-token
-              key: token
-        - name: CRIU_BUNDLE_PATH
-          value: "/nvsnap"
-        - name: CHECKPOINT_PATH
-          value: "/checkpoints"
-        
-      # === SECCOMP INTERCEPTION ===
-      # Disabled by default; enable only for diagnostics
-        - { name: NVSNAP_LAZY_PAGES,      value: "0" }   # single-GPU CRIU lazy-pages spike
-        - name: NVSNAP_SECCOMP_ENABLED
-          value: "0"
-        - name: NVSNAP_LOG_LEVEL
-          value: "3"
-        - name: NVSNAP_ZMQ_INTERCEPT
-          value: "0"
-        - name: NVSNAP_ZMQ_TRACE
-          value: "1"
-        - name: NVSNAP_ZMQ_PRE_SHUTDOWN
-          value: "0"
-        - name: NVSNAP_ZMQ_RECOVERY_DELAY_MS
-          value: "200"
-        - name: NVSNAP_ZMQ_GATE_MAX_MS
-          value: "2000"
-        - name: NVSNAP_ZMQ_GATE_SLEEP_MS
-          value: "50"
-        - name: NVSNAP_ZMQ_KILL_BG_THREADS
-          value: "0"
-        - name: NVSNAP_ZMQ_IO_THREADS
-          value: "1"
-        - name: NVSNAP_ZMQ_REBUILD_ON_EINVAL
-          value: "1"
-        - name: NVSNAP_ZMQ_REBUILD_ON_FIRST_SEND
-          value: "1"
-        - name: NVSNAP_ZMQ_EHOSTUNREACH_MAX_MS
-          value: "5000"
-        - name: NVSNAP_ZMQ_EHOSTUNREACH_SLEEP_MS
-          value: "100"
-        - name: NVSNAP_POST_RESTORE_DELAY_SECONDS
-          value: "1"
-        - name: NVSNAP_POST_RESUME_DELAY_SECONDS
-          value: "0"
-        - name: NVSNAP_POST_RESTORE_PID_CHECK_SECONDS
-          value: "0"
-        - name: NVSNAP_ALLOW_MISSING_RESTORE_FILES
-          value: "1"
-        
-      # === LIBRARY PATHS ===
-        - name: LD_LIBRARY_PATH
-          value: "/nvsnap-lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
-        - name: LD_PRELOAD
-          value: "/nvsnap-lib/libnvsnap_intercept.so"
-        - name: PATH
-          value: "/nvsnap:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-        
-      # === PYTHON/VLLM CONFIG ===
-        - name: PYTHONFAULTHANDLER
-          value: "1"
-        - name: PYTHONUNBUFFERED
-          value: "1"
-        - name: VLLM_LOGGING_LEVEL
-          value: "DEBUG"
-        - name: VLLM_ENABLE_V1_MULTIPROCESSING
-          value: "1"
-        - name: VLLM_RPC_BASE_PATH
-          value: "/var/run/vllm"
-        - name: HF_HUB_DISABLE_XET
-          value: "1"
-        - name: HF_HUB_ENABLE_HF_TRANSFER
-          value: "0"
-        - name: HF_HUB_DOWNLOAD_TIMEOUT
-          value: "600"
-        - name: HF_HUB_ETAG_TIMEOUT
-          value: "60"
-        - name: HF_HUB_MAX_RETRIES
-          value: "20"
-        - name: TORCH_CPP_LOG_LEVEL
-          value: "INFO"
-        - name: TORCH_SHOW_CPP_STACKTRACES
-          value: "1"
-        - name: NCCL_DEBUG
-          value: "INFO"
-        - name: NCCL_DEBUG_SUBSYS
-          value: "ALL"
-        - name: NVSNAP_KEEPALIVE_SECONDS
-          value: "1800"
-        - name: CUDA_VISIBLE_DEVICES
-          value: "0"
-        - name: HF_HOME
-          value: "/root/.cache/huggingface"
-      
+        - { name: HF_HOME, value: "/root/.cache/huggingface" }
       readinessProbe:
-        httpGet:
-          path: /v1/models
-          port: 8000
+        httpGet: { path: /v1/models, port: 8000 }
         initialDelaySeconds: 5
         periodSeconds: 5
         timeoutSeconds: 5
-        failureThreshold: 60
+        failureThreshold: 90
       securityContext:
         privileged: true
-
       resources:
         limits:
           nvidia.com/gpu: "1"
         requests:
           nvidia.com/gpu: "1"
-      
       volumeMounts:
-        - name: nvsnap-tools
-          mountPath: /nvsnap
-        - name: checkpoints
-          mountPath: /checkpoints
-        - name: dev-shm
-          mountPath: /dev/shm
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-          readOnly: false
+        - { name: checkpoints, mountPath: /checkpoints }
+        - { name: dev-shm, mountPath: /dev/shm }
 
   volumes:
-    - name: nvsnap-tools
-      emptyDir: {}
     - name: checkpoints
       hostPath:
-        # Must match agent's checkpoint storage path (on 5.9TB /dev/md0)
         path: /var/lib/containerd/nvsnap-checkpoints
         type: Directory
     - name: dev-shm
       emptyDir:
         medium: Memory
         sizeLimit: 16Gi
-    # Library for CRIU restore - must match checkpointed library version
-    - name: nvsnap-lib
-      emptyDir: {}
-  
+
   restartPolicy: Never

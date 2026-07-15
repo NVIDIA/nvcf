@@ -70,16 +70,18 @@ import (
 const CapturePathCRIUV2 = "criu-v2"
 
 func isCRIUV2(capturePath string) bool {
-	// An explicit capturePath always wins — NVSNAP_CRIU_V2 is only a
-	// node-level default for requests that don't specify one. Letting the
-	// env override an explicit "rootfs"/"criu" would route that request
-	// through dumpV2 and stamp CapturePath=criu-v2 in metadata, so restore
-	// would call restoreV2 (which needs a placeholder + /checkpoints mount
-	// that a rootfs capture never has) and fail.
+	// criu-v2 is the only CRIU engine now: the legacy LD_PRELOAD injection
+	// path is gone, so a plain "criu" request uses the in-namespace engine
+	// too. "rootfs" (multi-GPU / arm) stays on the rootfs path — never route
+	// it through dumpV2, which would stamp CapturePath=criu-v2 and make
+	// restore call restoreV2 (needs a placeholder + /checkpoints mount that a
+	// rootfs capture never has).
 	if capturePath != "" {
-		return capturePath == CapturePathCRIUV2
+		return capturePath == CapturePathCRIUV2 || capturePath == "criu"
 	}
-	return os.Getenv("NVSNAP_CRIU_V2") == "1"
+	// Unspecified capture on a CRIU-default node uses v2; a rootfs-default
+	// node redirects to rootfs upstream (RootfsIsDefault) before reaching here.
+	return os.Getenv("NVSNAP_CRIU_V2") != "0" && !RootfsIsDefault()
 }
 
 // v2ImagesDirInContainer is where CRIU writes images inside the container
@@ -221,6 +223,23 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		// misclassified and fails CHECKPOINT_DEVICES ("Failed to track").
 		// Same value the legacy engine uses for vLLM.
 		"--timeout", "1200",
+	}
+	// Optional LZ4 page compression (upstream CRIU #2895), OFF by default.
+	// Measured ~1.0x on the dominant cost — the cuda-checkpoint GPU-memory
+	// image, which the CUDA plugin writes outside CRIU's compressible pagemap,
+	// so --compress only touches sparse CPU-side pages. Not worth the dump-time
+	// CPU by default. Opt in per node via NVSNAP_CRIU_V2_COMPRESS:
+	//   "page"          per-page LZ4
+	//   "region[:SIZE]" region LZ4 (SIZE default 256K, max 4M)
+	//   "" / "off"      no compression (default)
+	switch mode := os.Getenv("NVSNAP_CRIU_V2_COMPRESS"); {
+	case mode == "page":
+		args = append(args, "--compress")
+	case mode == "region" || mode == "region:":
+		args = append(args, "--compress-region", "256K")
+	case strings.HasPrefix(mode, "region:"):
+		args = append(args, "--compress-region", strings.TrimPrefix(mode, "region:"))
+	default: // "" / "off": no compression
 	}
 	if leaveRunning {
 		args = append(args, "--leave-running")

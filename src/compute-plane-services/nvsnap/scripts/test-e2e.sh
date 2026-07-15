@@ -104,6 +104,19 @@ case "$WORKLOAD" in
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-8b.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-8b-restore.yaml"
         ;;
+    vllm-qwen32b)
+        POD_NAME="vllm-qwen32b"
+        CONTAINER_NAME="vllm"
+        RESTORE_POD_NAME="vllm-qwen32b-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        MODEL="Qwen/Qwen2.5-32B-Instruct"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"Qwen/Qwen2.5-32B-Instruct","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"Qwen/Qwen2.5-32B-Instruct","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-qwen32b.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-qwen32b-restore.yaml"
+        ;;
     sglang-small)
         POD_NAME="sglang-small"
         CONTAINER_NAME="sglang"
@@ -227,6 +240,11 @@ elif [[ "$WORKLOAD" == trtllm-* ]]; then
     MODELS_POLL_TIMEOUT=1200    # 20min
     INFERENCE_POLL_TIMEOUT=300
     RESTORE_READY_TIMEOUT=600   # 10min
+elif [[ "$WORKLOAD" == *"qwen32b"* ]]; then
+    POD_READY_TIMEOUT=1800      # 30min: ~64GB fp16 model download + load
+    MODELS_POLL_TIMEOUT=1200    # 20min
+    INFERENCE_POLL_TIMEOUT=300
+    RESTORE_READY_TIMEOUT=1200  # 20min: CRIU restore of ~64GB host-staged GPU memory
 else
     POD_READY_TIMEOUT=600       # 10min
     MODELS_POLL_TIMEOUT=600
@@ -460,7 +478,9 @@ if [ -n "${CAPTURE_PATH:-}" ]; then
 elif [ "$GPU_REQ" -ge 2 ]; then
     CAPTURE_PATH="rootfs"
 else
-    CAPTURE_PATH="criu"
+    # criu-v2 is the default single-GPU engine (the legacy CRIU injection path
+    # is retired). rootfs stays for multi-GPU / arm above.
+    CAPTURE_PATH="criu-v2"
 fi
 log_info "Capture path: $CAPTURE_PATH"
 

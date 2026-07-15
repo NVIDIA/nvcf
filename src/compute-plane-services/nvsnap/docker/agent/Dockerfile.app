@@ -5,7 +5,7 @@
 # Prerequisites: Build base image first with Dockerfile.base
 # Build: docker build -t nvsnap-agent:v0.x.x -f Dockerfile.app .
 
-ARG BASE_IMAGE=nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.6
+ARG BASE_IMAGE=nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.7
 
 # Builder images we fold INTO the agent. Lets the BYOC auto-inject
 # webhook use ONE init container (this image) instead of four —

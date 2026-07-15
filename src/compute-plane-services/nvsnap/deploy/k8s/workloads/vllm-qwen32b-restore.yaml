@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Restore placeholder for a criu-v2 (in-namespace) checkpoint of e5-mistral.
+# Restore placeholder for a criu-v2 (in-namespace) checkpoint of vllm-qwen32b.
 # Dumb reaper: same image as the source, bash pid1 loop, no hostPID. The agent
 # drives everything on POST /v1/restore. See internal/agent/restore_v2.go and
 # vllm-small-restore.yaml (identical pattern; only the pod name differs).
 apiVersion: v1
 kind: Pod
 metadata:
-  name: e5-mistral-restored
+  name: vllm-qwen32b-restored
   namespace: nvsnap-system
   labels:
-    app: e5-mistral-restored
+    app: vllm-qwen32b-restored
     nvsnap.io/demo: "true"
 spec:
   automountServiceAccountToken: false
@@ -42,7 +42,7 @@ spec:
         initialDelaySeconds: 5
         periodSeconds: 5
         timeoutSeconds: 5
-        failureThreshold: 90
+        failureThreshold: 120
       securityContext:
         privileged: true
       resources:

@@ -2617,7 +2617,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	if sourceUpperdir != "" {
 		_, mirrorSpan := tracing.Tracer().Start(ctx, "checkpoint.mirror_rootfs_diff")
 		diffDst := filepath.Join(checkpointDir, "rootfs-diff")
-		if mErr := mirrorOverlayDir(sourceUpperdir, diffDst, sourceMountPoints, log); mErr != nil {
+		if mErr := mirrorOverlayDir(sourceUpperdir, diffDst, sourceMountPoints, rootfsDiffExcludeGlobs(), log); mErr != nil {
 			mirrorSpan.RecordError(mErr)
 			log.WithError(mErr).Warn("Failed to mirror overlay upperdir; restore may fail on missing files")
 		}

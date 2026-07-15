@@ -32,7 +32,7 @@ spec:
 
   containers:
     - name: vllm
-      image: vllm/vllm-openai:v0.11.2
+      image: vllm/vllm-openai:v0.20.0
       imagePullPolicy: IfNotPresent
       # No LD_PRELOAD / nvsnap-lib / ld.so.preload: the rootfs path is a warm
       # cold-boot, not a CRIU process restore.

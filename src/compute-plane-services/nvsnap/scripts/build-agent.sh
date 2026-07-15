@@ -115,9 +115,21 @@ build_base() {
     echo ""
 
     if [ ! -d "${CRIU_SRC}" ]; then
-        echo "ERROR: CRIU source not found at ${CRIU_SRC}"
-        echo "Set CRIU_SRC or NVSNAP_CRIU_SRC to your CRIU checkout"
-        exit 1
+        # OSS clone-and-build path: no local ../criu checkout, so fetch the
+        # public fork at the pinned ref into a repo-local cache.
+        CRIU_SRC="${PROJECT_ROOT}/.criu-src-cache"
+        echo "No local CRIU checkout; using public fork ${NVSNAP_CRIU_REPO} (${NVSNAP_CRIU_REF})"
+        # Shallow-fetch the pinned ref (works for a SHA or a branch/tag name;
+        # a plain `clone -b` would reject a SHA). Init a bare-ish cache repo on
+        # first run, then fetch + detach onto the ref.
+        if [ ! -d "${CRIU_SRC}/.git" ]; then
+            rm -rf "${CRIU_SRC}"; mkdir -p "${CRIU_SRC}"
+            git -C "${CRIU_SRC}" init -q
+            git -C "${CRIU_SRC}" remote add origin "${NVSNAP_CRIU_REPO}"
+        fi
+        git -C "${CRIU_SRC}" fetch --depth 1 origin "${NVSNAP_CRIU_REF}" && \
+            git -C "${CRIU_SRC}" checkout -q FETCH_HEAD || {
+                echo "ERROR: fetch ${NVSNAP_CRIU_REF} from ${NVSNAP_CRIU_REPO} failed"; exit 1; }
     fi
 
     # Smart --no-cache: auto-detect if CRIU source changed

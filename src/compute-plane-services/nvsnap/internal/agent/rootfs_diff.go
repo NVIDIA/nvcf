@@ -74,7 +74,31 @@ func excludeArgsForMountpoints(mps []string) []string {
 // requiring rsync in the agent image (it isn't in our Debian slim base).
 // tar over pipe preserves all the same attributes and is sufficient for
 // the contained data set (overlay diff, not a general filesystem).
-func mirrorOverlayDir(src, dst string, excludeMountpoints []string, log *logrus.Entry) error {
+// rootfsDiffExcludeGlobs returns tar --exclude patterns for large,
+// re-fetchable content that must not be double-shipped in the rootfs-diff.
+// The dominant case: a model cache written to the container's writable layer
+// (e.g. HF_HOME on the rootfs). For GPU workloads the weights are loaded onto
+// the device and the on-disk copy is not referenced by any restored VMA or fd
+// (verified on a Qwen2.5-32B criu-v2 dump: zero references to the hub cache in
+// files.img or the mm images), so shipping it alongside the GPU-memory image
+// is pure waste (~62G doubled on that dump). Restore stays correct because
+// CRIU never recorded those paths.
+//
+// Override or disable via NVSNAP_ROOTFS_DIFF_EXCLUDE (colon-separated tar
+// globs; an empty value disables exclusion). Disable it for any workload that
+// keeps weights mmap'd from the on-disk cache rather than copying to device.
+func rootfsDiffExcludeGlobs() []string {
+	if v, ok := os.LookupEnv("NVSNAP_ROOTFS_DIFF_EXCLUDE"); ok {
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return strings.Split(v, ":")
+	}
+	// Default: the HuggingFace hub cache (content-addressed, re-fetchable).
+	return []string{"*/huggingface/hub", "*/huggingface/hub/*"}
+}
+
+func mirrorOverlayDir(src, dst string, excludeMountpoints, excludeGlobs []string, log *logrus.Entry) error {
 	if src == "" || dst == "" {
 		return fmt.Errorf("mirrorOverlayDir: empty src or dst")
 	}
@@ -108,6 +132,9 @@ func mirrorOverlayDir(src, dst string, excludeMountpoints []string, log *logrus.
 		"--one-file-system",
 	}
 	srcArgs = append(srcArgs, excludeArgsForMountpoints(excludeMountpoints)...)
+	for _, g := range excludeGlobs {
+		srcArgs = append(srcArgs, "--exclude="+g)
+	}
 	srcArgs = append(srcArgs, ".")
 	srcTar := exec.Command("tar", srcArgs...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 

@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     asciidoctor \
     xmlto \
     libbsd-dev \
+    liblz4-dev \
     git \
     patchelf \
     ca-certificates \

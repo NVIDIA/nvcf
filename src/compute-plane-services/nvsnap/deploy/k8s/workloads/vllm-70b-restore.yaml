@@ -36,7 +36,7 @@ spec:
 
   containers:
     - name: vllm
-      image: vllm/vllm-openai:v0.11.2
+      image: vllm/vllm-openai:v0.20.0
       imagePullPolicy: IfNotPresent
       command: ["/bin/bash", "-lc"]
       args:

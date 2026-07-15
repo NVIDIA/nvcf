@@ -10,7 +10,7 @@
 # dumped session. The agent drives everything on
 # POST /v1/restore {checkpointId, placeholderPodName, placeholderNamespace}:
 # shared placeholder prep (rootfs-diff replay delivers /criu-bundle +
-# nvsnap_cr.so + /vllm.out, /dev/shm replay, source pod-IP alias on lo),
+# /vllm.out delivery, /dev/shm replay, source pod-IP alias on lo),
 # then nsenter'd `criu restore -d` reading images from the /checkpoints
 # hostPath mount below. See internal/agent/restore_v2.go.
 apiVersion: v1
@@ -39,12 +39,6 @@ spec:
         - |
           set -e
           mkdir -p /var/run/vllm
-          # The checkpointed process maps /usr/local/lib/nvsnap_cr.so from the
-          # container rootfs; stage the bit-identical binary at the same path
-          # (the rootfs-diff replay also delivers it — this makes it
-          # deterministic).
-          cp /nvsnap-cr/nvsnap_cr.so /usr/local/lib/nvsnap_cr.so
-          chmod 755 /usr/local/lib/nvsnap_cr.so
           # Push this pod's own pid allocations high so the low pid range the
           # dump captured stays free for CRIU's exact-pid forks (fresh pid ns;
           # the dumped session pids are low).
@@ -78,7 +72,6 @@ spec:
       volumeMounts:
         - { name: checkpoints, mountPath: /checkpoints }
         - { name: dev-shm, mountPath: /dev/shm }
-        - { name: nvsnap-cr, mountPath: /nvsnap-cr }
 
   volumes:
     - name: checkpoints
@@ -89,13 +82,5 @@ spec:
       emptyDir:
         medium: Memory
         sizeLimit: 16Gi
-    # nvsnap-cr-so holds nvsnap_cr.so, the stopgap event-loop shim (see
-    # USE_LIBUV/UV_USE_IO_URING notes above). It is provisioned by the
-    # installer, not this manifest, because it is a compiled binary artifact
-    # (built from experiments/v2/criu-integration) and is expected to go away once
-    # io_uring ring-restore lands at the CRIU layer. Create it with:
-    #   kubectl create configmap nvsnap-cr-so -n nvsnap-system     #     --from-file=nvsnap_cr.so=<path-to-built-nvsnap_cr.so>
-    - name: nvsnap-cr
-      configMap: { name: nvsnap-cr-so, defaultMode: 0755 }
 
   restartPolicy: Never

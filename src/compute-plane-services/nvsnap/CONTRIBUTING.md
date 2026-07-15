@@ -1,113 +1,85 @@
 # Contributing to NvSnap
 
-Thanks for your interest in NvSnap — a GPU checkpoint/restore system for Kubernetes.
+NvSnap is a GPU checkpoint/restore system for Kubernetes.
 
 ## Project location
 
-The canonical NvSnap repo lives at `github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap`. Clone with:
+The canonical repo is `github.com/NVIDIA/nvcf`, under
+`src/compute-plane-services/nvsnap`. The CRIU fork NvSnap builds from is public
+at `github.com/balajinvda/criu` (branch `io-uring-cr`).
 
-```bash
-git clone git@github.com/NVIDIA:nvcf/nvcf-cache/nvsnap.git
-```
+## What you need to build
 
-(Pre-OSS the project is hosted on internal GitLab. A public-GitHub mirror will be set up at OSS release time.)
+The criu-v2 engine builds from public inputs only:
 
-## External repositories
+- The CRIU fork (`github.com/balajinvda/criu`, `io-uring-cr`): one `make`
+  produces both the `criu` binary and `cuda_plugin.so`.
+- `cuda-checkpoint`: shipped in-repo at `docker/agent/cuda-checkpoint`. The
+  public NVIDIA release is x86-64 only, so the binary is committed here; an
+  arm64 build needs the arm64 binary committed too.
+- The Go agent and `nvsnap_cr.so`: this repository.
 
-NvSnap depends on several forks of upstream projects, each in its own repository:
-
-| Component | Purpose | Branch |
-|---|---|---|
-| Forked CRIU | Checkpoint/restore patches (io_uring, NCCL, CUDA plugin, chardev) | `criu-dev` |
-| Forked uvloop | CRIU-compatible event loop | `checkpoint-restore-v1` |
-| Forked libuv | io_uring backend reinit after restore | `main` |
-| Forked libzmq | epoll reinitialization after restore | `main` |
-| Forked go-criu | RPC binding fixes | `main` |
-
-Each is maintained as a separate repository with NvSnap-specific patches; see `docs/THIRD-PARTY-FORKS.md` for the fork-maintenance policy. All forks are required to build NvSnap from source. Pre-built images are the fast path for most users; only contributors hacking on the C library or CRIU itself need to build the forks from source.
-
-## Developer setup
-
-The conventional layout puts each fork as a sibling of this repo:
-
-```
-~/work/
-├── nvsnap/                     # this repository
-├── criu/                       # NVIDIA CRIU fork
-├── uvloop/                     # uvloop fork
-├── libuv/                      # libuv fork
-├── libzmq/                     # libzmq fork
-└── go-criu/                    # go-criu fork
-```
-
-With this layout, `scripts/versions.sh` auto-discovers the CRIU fork at `../criu` and you don't need to set any environment variables.
-
-If your forks are elsewhere, override:
-
-```bash
-export NVSNAP_CRIU_SRC=/path/to/your/criu
-```
+The legacy LD_PRELOAD injection stack (patched uvloop/libuv/libzmq) is not used
+by criu-v2 and is not required to build.
 
 ## Build
 
 ```bash
-# Pulls the prebuilt agent base image — fast path.
-make build
+# 1. Clone the CRIU fork as a sibling (scripts auto-discover ../criu).
+git clone -b io-uring-cr https://github.com/balajinvda/criu ../criu
 
-# Rebuild the agent base image from scratch (needed when CRIU source changes).
-./scripts/build-agent.sh base
-./scripts/build-agent.sh push-base
+# 2. Build the base image: CRIU + cuda_plugin on ubuntu:22.04. ~5 min.
+BASE_VERSION=dev ./scripts/build-agent.sh base
 
-# Rebuild the agent app image (Go code, intercept library).
-./scripts/build-agent.sh app
-./scripts/build-agent.sh push-app
-
-# Build a dependency image (one of: libzmq, uvloop, pyzmq, libuv).
-./scripts/build-deps.sh <name>
+# 3. Build the agent image on top of the base (no private inputs).
+docker build -f docker/agent/Dockerfile.app.criuv2 \
+  --build-arg BASE_IMAGE=nvsnap-agent-base:dev -t nvsnap-agent:dev .
 ```
 
-See [`scripts/versions.sh`](scripts/versions.sh) for the canonical version + registry config.
+Glibc: the base is `ubuntu:22.04` (glibc 2.35) and criu carries its own
+`ld-linux` + `libc` in `/criu-bundle/lib`; the Go agent is built with
+`CGO_ENABLED=0` (fully static). Do not bump the base off 22.04 and do not enable
+CGO. A binary linked against a newer glibc aborts inside older workload
+containers, which is the classic failure this layout avoids.
 
-## External builds
+See [`scripts/versions.sh`](scripts/versions.sh) for version and registry config.
 
-nvsnap is not externally buildable at this time. Its OCI base is nvsnap's own
-agent image, which is not publicly pullable, so building the images requires
-NVIDIA-internal registry access. nvsnap is a self-contained Bazel module and is
-intentionally excluded from the public build matrix; it is built only by its own
-internal CI. Tracking a public base in NVIDIA/nvcf#39.
+## Try it
+
+```bash
+# Single-GPU checkpoint/restore against a real GPU node.
+./scripts/test-e2e.sh vllm-small
+```
 
 ## Container registry
 
-Built images go to `nvcr.io/0651155215864979/ncp-dev/<component>:vX.Y.Z`. To push, you need an NGC API key:
-
-```bash
-docker login nvcr.io
-  Username: $oauthtoken
-  Password: <your NGC API key>
-```
+Prebuilt images live in a private NGC org and are entitlement-gated. Build from
+source (above) for a fully public path.
 
 ## Code style
 
-- **Go**: `gofmt`, idiomatic Go. Errors wrapped with `fmt.Errorf("...: %w", err)`. Use the structured logger.
-- **C** (`lib/nvsnap_intercept/`): two-space indent, snake_case for functions, ALLCAPS for macros. Match the existing surrounding style.
-- **Bash**: `set -euo pipefail` at the top of new scripts.
-- **YAML manifests**: kubectl-applyable from `deploy/k8s/`. Run `./scripts/sync-versions.sh` after a version bump.
+- Go: `gofmt`, idiomatic Go. Wrap errors with `fmt.Errorf("...: %w", err)`. Use
+  the structured logger.
+- Bash: `set -euo pipefail` at the top of new scripts.
+- YAML manifests: kubectl-applyable from `deploy/k8s/`. Run
+  `./scripts/sync-versions.sh` after a version bump.
 
 ## Pull requests
 
 1. Branch from `main`.
-2. Per-component image tag bumps follow `CLAUDE.md` rule 19 (never reuse a tag on rebuild — `:v0.0.1` → `:v0.0.2`).
-3. Run `./scripts/test-e2e.sh vllm-small` against a real GPU cluster before merging anything touching `lib/nvsnap_intercept/`, `cmd/restore-entrypoint/`, the patched libraries, or K8s manifests.
-4. Squash commits per logical change. Reference the GitHub/GitLab issue number if one exists.
+2. Bump per-component image tags; never reuse a tag on rebuild
+   (`:v0.0.1` to `:v0.0.2`).
+3. Run `./scripts/test-e2e.sh vllm-small` on a real GPU cluster before merging
+   anything that touches the agent, the CRIU bundle, or K8s manifests.
+4. Reference the issue number if one exists.
 
-## Reporting bugs / requesting features
+## Reporting bugs
 
-File an issue. Include:
-- NvSnap agent image tag (`kubectl -n nvsnap-system get ds nvsnap-agent -o jsonpath='{.spec.template.spec.containers[0].image}'`)
-- Workload (vLLM, SGLang, TRT-LLM, etc.) + model + GPU count
-- Full agent log: `kubectl -n nvsnap-system logs ds/nvsnap-agent`
-- Full restore-entrypoint log if relevant: `kubectl logs <pod> -c restore-entrypoint`
-- CRIU log if relevant: at `/var/log/criu/<checkpoint-id>/dump.log` on the GPU node
+File an issue with:
+- Agent image tag: `kubectl -n nvsnap-system get ds nvsnap-agent -o jsonpath='{.spec.template.spec.containers[0].image}'`
+- Workload (vLLM, SGLang, TRT-LLM, etc.), model, and GPU count
+- Agent log: `kubectl -n nvsnap-system logs ds/nvsnap-agent`
+- CRIU log if relevant: `/var/log/criu/<checkpoint-id>/dump.log` on the GPU node
 
 ## License
 

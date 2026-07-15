@@ -1,0 +1,52 @@
+# NvSnap agent — criu-v2-only image, buildable entirely from PUBLIC inputs.
+#
+# Unlike Dockerfile.app, this pulls no private builder images. criu-v2 dropped
+# the legacy injection stack (patched uvloop/libuv/libzmq + libnvsnap_intercept),
+# so the agent image needs only:
+#   - the CRIU bundle from nvsnap-agent-base (built by Dockerfile.base from the
+#     PUBLIC fork github.com/balajinvda/criu — criu + cuda_plugin.so)
+#   - cuda-checkpoint (shipped in-repo; the public NVIDIA release is x86-64 only,
+#     so we carry the binary — arm64 needs the arm64 binary committed too)
+#   - the Go agent (this repo)
+#
+# glibc: Go binaries are CGO_ENABLED=0 -> fully static, arch/libc-agnostic. The
+# base runtime is ubuntu:22.04 (glibc 2.35, the portability floor) and criu
+# ships its own ld-linux + libc in /criu-bundle/lib. Do NOT bump the base off
+# 22.04 and do NOT enable CGO — that is where the glibc-mismatch failures come
+# from (a binary linked against a newer glibc aborts inside older workload
+# containers).
+
+ARG BASE_IMAGE=nvsnap-agent-base:v0.0.7
+
+# ---------------------------------------------------------------------------
+# Stage 1: build the Go agent (static, no glibc dependency)
+# ---------------------------------------------------------------------------
+FROM golang:1.25-bookworm AS go-builder
+ARG TARGETARCH=amd64
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w" \
+    -o /bin/nvsnap-agent ./cmd/agent
+
+# ---------------------------------------------------------------------------
+# Stage 2: assemble the agent image on top of the CRIU base bundle
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE}
+
+COPY --from=go-builder /bin/nvsnap-agent /criu-bundle/nvsnap-agent
+
+# cuda-checkpoint wrapper: unsets LD_PRELOAD / disables /etc/ld.so.preload
+# before exec'ing cuda-checkpoint.real, so the CUDA plugin can parse its stdout
+# for the restore tid (a stray LD_PRELOAD log line corrupts it -> tid=0 ->
+# GPU resume fails). cuda-checkpoint.real rides in the base bundle.
+COPY docker/agent/cuda-checkpoint-wrapper.sh /criu-bundle/cuda-checkpoint
+RUN chmod +x /criu-bundle/cuda-checkpoint && \
+    ln -sf /criu-bundle/nvsnap-agent /usr/local/bin/nvsnap-agent && \
+    ln -sf /criu-bundle/criu /usr/local/sbin/criu
+
+RUN echo "=== bundle ===" && ls -la /criu-bundle/ && \
+    echo "=== criu ===" && /criu-bundle/criu --version
+
+ENTRYPOINT ["/criu-bundle/nvsnap-agent"]

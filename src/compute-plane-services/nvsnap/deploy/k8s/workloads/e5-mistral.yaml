@@ -1,15 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# vLLM with intfloat/e5-mistral-7b-instruct (single GPU, embedding task)
-# — CRIU checkpoint/restore demo.
+# vLLM with intfloat/e5-mistral-7b-instruct (single GPU, embedding task) —
+# criu-v2 checkpoint/restore.
 #
-# Mirrors vllm-small.yaml's init-container ladder + injection pattern;
-# only the model and vllm serve task differ. e5-mistral-7b is the
-# real NVCA workload that surfaced the TCP_ESTABLISHED restore bug
-# (nvsnap#187) when its pod also held an external utils-container
-# socket. Standalone here (no sidecar) — exercises the PyTorch TCPStore
-# path at restore without the external-peer noise.
+# criu-v2 convention (mirrors vllm-small.yaml): no nvsnap injection stack.
+# via setsid so the agent dumps the GPU leader's session in-namespace and
+# restores it into a dumb placeholder. See checkpoint_v2.go.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -19,13 +16,12 @@ metadata:
     app: e5-mistral
     nvsnap.io/demo: "true"
   annotations:
-    nvsnap.io/demo-name: "vLLM (embed)"
-    nvsnap.io/desc: "intfloat/e5-mistral-7b-instruct on vLLM"
+    nvsnap.io/demo-name: "vLLM (embeddings)"
+    nvsnap.io/desc: "e5-mistral-7b embeddings on vLLM (single GPU)"
     nvsnap.io/model: "intfloat/e5-mistral-7b-instruct"
     nvsnap.io/port: "8000"
     nvsnap.io/gpus: "1"
     nvsnap.io/path: "criu"
-    nvsnap.io/ckpt-size: "~30 GB"
 spec:
   tolerations:
     - key: "nvidia.com/gpu"
@@ -35,53 +31,9 @@ spec:
   imagePullSecrets:
     - name: nvsnap-pull-secret
 
-  initContainers:
-    - name: get-uvloop
-      image: nvcr.io/0651155215864979/ncp-dev/uvloop-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          set -eu
-          for whl in /wheels/uvloop-*.whl; do
-              tag=$(echo "$whl" | grep -oE 'cp3[0-9]+' | head -1)
-              mkdir -p "/nvsnap-lib/site-packages-${tag}"
-              python3 -m zipfile -e "$whl" "/nvsnap-lib/site-packages-${tag}/"
-          done
-      volumeMounts:
-        - { name: nvsnap-lib, mountPath: /nvsnap-lib }
-
-    - name: get-libuv
-      image: nvcr.io/0651155215864979/ncp-dev/libuv-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args: ["cp /usr/local/lib/libuv.so* /nvsnap-lib/"]
-      volumeMounts:
-        - { name: nvsnap-lib, mountPath: /nvsnap-lib }
-
-    - name: get-libzmq
-      image: nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args: ["cp /usr/local/lib/libzmq.so* /nvsnap-lib/"]
-      volumeMounts:
-        - { name: nvsnap-lib, mountPath: /nvsnap-lib }
-
-    - name: get-nvsnap
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.12
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          set -eu
-          cp /criu-bundle/lib/libnvsnap_intercept.so /nvsnap-lib/
-          cp -r /criu-bundle/sitecustomize /nvsnap-lib/
-      volumeMounts:
-        - { name: nvsnap-lib, mountPath: /nvsnap-lib }
-
   containers:
     - name: vllm
-      image: vllm/vllm-openai:v0.11.2
+      image: vllm/vllm-openai:v0.20.0
       imagePullPolicy: IfNotPresent
       command: ["/bin/bash", "-lc"]
       args:
@@ -89,30 +41,28 @@ spec:
           set -e
           ulimit -c unlimited
           mkdir -p /var/run/vllm
-          if [ -f /nvsnap-lib/libnvsnap_intercept.so ]; then
-            echo "/nvsnap-lib/libnvsnap_intercept.so" > /etc/ld.so.preload
-          fi
-          vllm serve \
+          nohup setsid vllm serve \
             --model intfloat/e5-mistral-7b-instruct \
-            --task embed \
+            --runner pooling \
             --host 0.0.0.0 \
             --port 8000 \
             --max-model-len 4096 \
-            --gpu-memory-utilization 0.9
+            --gpu-memory-utilization 0.9 > /vllm.out 2>&1 < /dev/null &
+          tail -F /vllm.out &
+          while true; do sleep 30; done
       env:
-        - { name: PYTHONPATH,      value: "/nvsnap-lib/sitecustomize" }
-        - { name: LD_LIBRARY_PATH, value: "/nvsnap-lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
-        - { name: LD_PRELOAD,      value: "/nvsnap-lib/libnvsnap_intercept.so" }
+        - { name: LD_LIBRARY_PATH, value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
         - { name: PYTHONFAULTHANDLER, value: "1" }
         - { name: PYTHONUNBUFFERED,   value: "1" }
         - { name: NVSNAP_LOG_LEVEL,     value: "3" }
-        - { name: NVSNAP_ZMQ_INTERCEPT, value: "0" }
-        - { name: NVSNAP_QUIESCE_SIGNALS, value: "1" }
-        - { name: NVSNAP_QUIESCE_METADATA_ONLY, value: "1" }
         - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
         - { name: CUDA_VISIBLE_DEVICES, value: "0" }
         - { name: HF_HOME,            value: "/root/.cache/huggingface" }
-        - { name: VLLM_RPC_BASE_PATH, value: "/var/run/vllm" }
+        # In-process v1 engine: no separate EngineCore process => no cross-process
+        # RPC unix socket (what upstream CRIU couldn't restore). Must match restore.
+        - { name: VLLM_ENABLE_V1_MULTIPROCESSING, value: "0" }
+        - { name: USE_LIBUV, value: "1" }
+        - { name: UV_USE_IO_URING, value: "0" }
         - { name: HF_HUB_DISABLE_XET, value: "1" }
         - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
         - { name: VLLM_LOGGING_LEVEL, value: "INFO" }
@@ -121,10 +71,10 @@ spec:
           name: http
       readinessProbe:
         httpGet: { path: /v1/models, port: 8000 }
-        initialDelaySeconds: 60
+        initialDelaySeconds: 30
         periodSeconds: 10
         timeoutSeconds: 5
-        failureThreshold: 60
+        failureThreshold: 90
       resources:
         limits:
           nvidia.com/gpu: "1"
@@ -134,12 +84,9 @@ spec:
         privileged: true
       volumeMounts:
         - { name: shm, mountPath: /dev/shm }
-        - { name: nvsnap-lib, mountPath: /nvsnap-lib }
 
   volumes:
     - name: shm
       emptyDir: { medium: Memory, sizeLimit: 16Gi }
-    - name: nvsnap-lib
-      emptyDir: {}
 
   restartPolicy: Never
