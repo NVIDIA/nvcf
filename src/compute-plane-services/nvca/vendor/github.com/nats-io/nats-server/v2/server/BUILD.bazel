@@ -66,6 +66,8 @@ go_library(
         "sublist.go",
         "util.go",
         "websocket.go",
+        "websocket_go125.go",
+        "websocket_go126.go",
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server",
     importpath = "github.com/nats-io/nats-server/v2/server",

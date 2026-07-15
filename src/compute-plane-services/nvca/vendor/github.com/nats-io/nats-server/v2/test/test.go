@@ -54,7 +54,8 @@ var DefaultTestOptions = server.Options{
 
 // RunDefaultServer starts a new Go routine based server using the default options
 func RunDefaultServer() *server.Server {
-	return RunServer(&DefaultTestOptions)
+	dto := DefaultTestOptions
+	return RunServer(&dto)
 }
 
 func RunRandClientPortServer() *server.Server {
@@ -78,7 +79,8 @@ func RunServer(opts *server.Options) *server.Server {
 
 func RunServerCallback(opts *server.Options, callback func(*server.Server)) *server.Server {
 	if opts == nil {
-		opts = &DefaultTestOptions
+		dto := DefaultTestOptions
+		opts = &dto
 	}
 	// Optionally override for individual debugging of tests
 	opts.NoLog = !doLog
@@ -194,7 +196,7 @@ func createRouteConn(t tLogger, host string, port int) net.Conn {
 }
 
 func createClientConn(t tLogger, host string, port int) net.Conn {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	c, err := net.DialTimeout("tcp", addr, 3*time.Second)
 	if err != nil {
 		stackFatalf(t, "Could not connect to server: %v\n", err)

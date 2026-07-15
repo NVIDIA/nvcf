@@ -12,8 +12,8 @@ go_library(
         "//internal/mock/utils",
         "//pkg/nvca/health",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth",
-        "//vendor/github.com/go-jose/go-jose/v3:go-jose",
-        "//vendor/github.com/go-jose/go-jose/v3/jwt",
+        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//vendor/github.com/go-jose/go-jose/v4/jwt",
     ],
 )
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+go mod tidy
+go mod vendor
 bazel run @rules_go//go -- mod tidy
 bazel run @rules_go//go -- mod vendor
 find vendor -name BUILD.bazel -delete

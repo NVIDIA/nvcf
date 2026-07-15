@@ -30,7 +30,8 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"github.com/go-jose/go-jose/v3/jwt"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
@@ -530,7 +531,7 @@ func (s *icmsService) parseAuth(r *http.Request) (oauthClientID string, valid bo
 
 	tokStr := strings.TrimPrefix(authHdrVal, "Bearer ")
 
-	tok, err := jwt.ParseSigned(tokStr)
+	tok, err := jwt.ParseSigned(tokStr, []jose.SignatureAlgorithm{jose.RS256})
 	if err != nil {
 		return "", false, err
 	}

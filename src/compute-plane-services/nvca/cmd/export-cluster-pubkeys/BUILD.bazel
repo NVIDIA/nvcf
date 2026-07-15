@@ -14,7 +14,7 @@ go_library(
         "//cmd/internal",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
-        "//vendor/github.com/go-jose/go-jose/v3:go-jose",
+        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
         "//vendor/github.com/urfave/cli/v2:cli",
         "//vendor/gopkg.in/yaml.v3:yaml_v3",
         "//vendor/k8s.io/client-go/rest",
@@ -38,7 +38,7 @@ go_test(
     srcs = ["main_test.go"],
     embed = [":export-cluster-pubkeys_lib"],
     deps = [
-        "//vendor/github.com/go-jose/go-jose/v3:go-jose",
+        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
         "//vendor/github.com/stretchr/testify/assert",
         "//vendor/github.com/stretchr/testify/require",
         "//vendor/k8s.io/apimachinery/pkg/runtime/schema",

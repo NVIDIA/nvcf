@@ -10,7 +10,6 @@ go_library(
         "blake2b_generic.go",
         "blake2b_ref.go",
         "blake2x.go",
-        "go125.go",
         "register.go",
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/blake2b",

@@ -57,8 +57,8 @@ github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version
-# github.com/antithesishq/antithesis-sdk-go v0.4.3-default-no-op
-## explicit; go 1.20
+# github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op
+## explicit; go 1.24.0
 github.com/antithesishq/antithesis-sdk-go/assert
 github.com/antithesishq/antithesis-sdk-go/internal
 # github.com/antlr4-go/antlr/v4 v4.13.1
@@ -270,12 +270,6 @@ github.com/fsnotify/fsnotify/internal
 # github.com/fxamacker/cbor/v2 v2.9.0
 ## explicit; go 1.20
 github.com/fxamacker/cbor/v2
-# github.com/go-jose/go-jose/v3 v3.0.5
-## explicit; go 1.12
-github.com/go-jose/go-jose/v3
-github.com/go-jose/go-jose/v3/cipher
-github.com/go-jose/go-jose/v3/json
-github.com/go-jose/go-jose/v3/jwt
 # github.com/go-jose/go-jose/v4 v4.1.4
 ## explicit; go 1.24.0
 github.com/go-jose/go-jose/v4
@@ -390,7 +384,7 @@ github.com/google/go-cmp/cmp/internal/value
 # github.com/google/go-containerregistry v0.21.6
 ## explicit; go 1.25.0
 github.com/google/go-containerregistry/pkg/name
-# github.com/google/go-tpm v0.9.6
+# github.com/google/go-tpm v0.9.8
 ## explicit; go 1.22
 github.com/google/go-tpm/legacy/tpm2
 github.com/google/go-tpm/tpmutil
@@ -451,7 +445,7 @@ github.com/klauspost/compress/s2
 # github.com/kylelemons/godebug v1.1.0
 ## explicit; go 1.11
 github.com/kylelemons/godebug/diff
-# github.com/minio/highwayhash v1.0.4-0.20251030100505-070ab1a87a76
+# github.com/minio/highwayhash v1.0.4
 ## explicit; go 1.15
 github.com/minio/highwayhash
 # github.com/mitchellh/go-homedir v1.1.0
@@ -466,11 +460,11 @@ github.com/modern-go/reflect2
 # github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
 ## explicit
 github.com/munnerz/goautoneg
-# github.com/nats-io/jwt/v2 v2.8.0
-## explicit; go 1.23.0
+# github.com/nats-io/jwt/v2 v2.8.2
+## explicit; go 1.25.0
 github.com/nats-io/jwt/v2
-# github.com/nats-io/nats-server/v2 v2.12.2
-## explicit; go 1.24.0
+# github.com/nats-io/nats-server/v2 v2.12.12
+## explicit; go 1.25.0
 github.com/nats-io/nats-server/v2/conf
 github.com/nats-io/nats-server/v2/internal/fastrand
 github.com/nats-io/nats-server/v2/internal/ldap
@@ -488,16 +482,16 @@ github.com/nats-io/nats-server/v2/server/sysmem
 github.com/nats-io/nats-server/v2/server/thw
 github.com/nats-io/nats-server/v2/server/tpm
 github.com/nats-io/nats-server/v2/test
-# github.com/nats-io/nats.go v1.47.0
-## explicit; go 1.23.0
+# github.com/nats-io/nats.go v1.51.0
+## explicit; go 1.25.0
 github.com/nats-io/nats.go
 github.com/nats-io/nats.go/encoders/builtin
 github.com/nats-io/nats.go/internal/parser
 github.com/nats-io/nats.go/internal/syncx
 github.com/nats-io/nats.go/jetstream
 github.com/nats-io/nats.go/util
-# github.com/nats-io/nkeys v0.4.12
-## explicit; go 1.24.0
+# github.com/nats-io/nkeys v0.4.16
+## explicit; go 1.25.0
 github.com/nats-io/nkeys
 # github.com/nats-io/nuid v1.0.1
 ## explicit
@@ -782,7 +776,7 @@ go.yaml.in/yaml/v2
 # go.yaml.in/yaml/v3 v3.0.4
 ## explicit; go 1.16
 go.yaml.in/yaml/v3
-# golang.org/x/crypto v0.51.0
+# golang.org/x/crypto v0.53.0 => golang.org/x/crypto v0.54.0
 ## explicit; go 1.25.0
 golang.org/x/crypto/bcrypt
 golang.org/x/crypto/blake2b
@@ -797,12 +791,11 @@ golang.org/x/crypto/internal/poly1305
 golang.org/x/crypto/nacl/box
 golang.org/x/crypto/nacl/secretbox
 golang.org/x/crypto/ocsp
-golang.org/x/crypto/pbkdf2
 golang.org/x/crypto/salsa20/salsa
 # golang.org/x/exp v0.0.0-20250305212735-054e65f0b394
 ## explicit; go 1.23.0
 golang.org/x/exp/slices
-# golang.org/x/net v0.55.0
+# golang.org/x/net v0.56.0
 ## explicit; go 1.25.0
 golang.org/x/net/http/httpguts
 golang.org/x/net/http2
@@ -816,11 +809,11 @@ golang.org/x/net/trace
 ## explicit; go 1.25.0
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
-# golang.org/x/sync v0.20.0
+# golang.org/x/sync v0.22.0
 ## explicit; go 1.25.0
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
-# golang.org/x/sys v0.45.0
+# golang.org/x/sys v0.47.0
 ## explicit; go 1.25.0
 golang.org/x/sys/cpu
 golang.org/x/sys/plan9
@@ -830,10 +823,10 @@ golang.org/x/sys/windows/registry
 golang.org/x/sys/windows/svc
 golang.org/x/sys/windows/svc/eventlog
 golang.org/x/sys/windows/svc/mgr
-# golang.org/x/term v0.43.0
+# golang.org/x/term v0.45.0
 ## explicit; go 1.25.0
 golang.org/x/term
-# golang.org/x/text v0.37.0
+# golang.org/x/text v0.40.0
 ## explicit; go 1.25.0
 golang.org/x/text/cases
 golang.org/x/text/encoding
@@ -851,8 +844,8 @@ golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
-# golang.org/x/time v0.14.0
-## explicit; go 1.24.0
+# golang.org/x/time v0.15.0
+## explicit; go 1.25.0
 golang.org/x/time/rate
 # gomodules.xyz/jsonpatch/v2 v2.5.0
 ## explicit; go 1.20
@@ -1615,3 +1608,4 @@ sigs.k8s.io/yaml
 # k8s.io/client-go => k8s.io/client-go v0.35.4
 # k8s.io/component-base => k8s.io/component-base v0.35.4
 # sigs.k8s.io/controller-runtime => sigs.k8s.io/controller-runtime v0.22.5
+# golang.org/x/crypto => golang.org/x/crypto v0.54.0

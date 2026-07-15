@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Copyright 2025 The NATS Authors
+// Copyright 2026 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,27 +14,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build illumos || solaris
+//go:build !go1.26
 
 package server
 
 import (
-	"golang.org/x/sys/unix"
-	"os"
+	"crypto/fips140"
+	"crypto/sha1"
+	"encoding/base64"
 )
 
-func diskAvailable(storeDir string) int64 {
-	var ba int64
-	if _, err := os.Stat(storeDir); os.IsNotExist(err) {
-		os.MkdirAll(storeDir, defaultDirPerms)
-	}
-	var fs unix.Statvfs_t
-	if err := unix.Statvfs(storeDir, &fs); err == nil {
-		// Estimate 75% of available storage.
-		ba = int64(uint64(fs.Frsize) * uint64(fs.Bavail) / 4 * 3)
-	} else {
-		// Used 1TB default as a guess if all else fails.
-		ba = JetStreamMaxStoreDefault
-	}
-	return ba
+func wsAllowedFIPS() bool {
+	// SHA-1 is not permitted on Go 1.25 FIPS builds because we cannot avoid its
+	// enforcement for Sec-WebSocket-Key and Sec-WebSocket-Accept, it will result
+	// in a panic.
+	return !fips140.Enabled()
+}
+
+// Concatenate the key sent by the client with the GUID, then computes the SHA1 hash
+// and returns it as a based64 encoded string.
+func wsAcceptKey(key string) string {
+	h := sha1.New()
+	h.Write([]byte(key))
+	h.Write(wsGUID)
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }

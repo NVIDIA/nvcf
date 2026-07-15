@@ -18,6 +18,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server/stree",
     importpath = "github.com/nats-io/nats-server/v2/server/stree",
     visibility = ["//visibility:public"],
+    deps = ["//vendor/github.com/nats-io/nats-server/v2/server/gsl"],
 )
 
 alias(

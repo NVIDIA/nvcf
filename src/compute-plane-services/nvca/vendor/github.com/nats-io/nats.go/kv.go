@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -71,10 +72,13 @@ type KeyValue interface {
 	// WatchFiltered will watch for any updates to keys that match the keys
 	// argument. It can be configured with the same options as Watch.
 	WatchFiltered(keys []string, opts ...WatchOpt) (KeyWatcher, error)
-	// Keys will return all keys.
-	// Deprecated: Use ListKeys instead to avoid memory issues.
+	// Keys will return all keys, filtering out any duplicates.
+	// For large datasets, this can be memory-heavy as all keys are loaded
+	// into memory. Use ListKeys for a streaming alternative.
 	Keys(opts ...WatchOpt) ([]string, error)
 	// ListKeys will return all keys in a channel.
+	// Note: On buckets with a large number of keys and frequent writes,
+	// duplicate keys may be reported during listing.
 	ListKeys(opts ...WatchOpt) (KeyLister, error)
 	// History will return all historical values for the key.
 	History(key string, opts ...WatchOpt) ([]KeyValueEntry, error)
@@ -108,6 +112,9 @@ type KeyValueStatus interface {
 
 	// IsCompressed indicates if the data is compressed on disk
 	IsCompressed() bool
+
+	// Config returns the original configuration used to create the bucket
+	Config() KeyValueConfig
 }
 
 // KeyWatcher is what is returned when doing a watch.
@@ -357,7 +364,6 @@ const (
 	kvSubjectsTmpl          = "$KV.%s.>"
 	kvSubjectsPreTmpl       = "$KV.%s."
 	kvSubjectsPreDomainTmpl = "%s.$KV.%s."
-	kvNoPending             = "0"
 )
 
 // Regex for valid keys and buckets.
@@ -868,7 +874,7 @@ func (kv *kvs) PurgeDeletes(opts ...PurgeOpt) error {
 	return nil
 }
 
-// Keys() will return all keys.
+// Keys will return all keys, filtering out any duplicates.
 func (kv *kvs) Keys(opts ...WatchOpt) ([]string, error) {
 	opts = append(opts, IgnoreDeletes(), MetaOnly())
 	watcher, err := kv.WatchAll(opts...)
@@ -887,7 +893,8 @@ func (kv *kvs) Keys(opts ...WatchOpt) ([]string, error) {
 	if len(keys) == 0 {
 		return nil, ErrNoKeysFound
 	}
-	return keys, nil
+	slices.Sort(keys)
+	return slices.Compact(keys), nil
 }
 
 type keyLister struct {
@@ -896,6 +903,8 @@ type keyLister struct {
 }
 
 // ListKeys will return all keys.
+// Note: On buckets with a large number of keys and frequent writes,
+// duplicate keys may be reported during listing.
 func (kv *kvs) ListKeys(opts ...WatchOpt) (KeyLister, error) {
 	opts = append(opts, IgnoreDeletes(), MetaOnly())
 	watcher, err := kv.WatchAll(opts...)
@@ -1211,6 +1220,24 @@ func (s *KeyValueBucketStatus) Bytes() uint64 { return s.nfo.State.Bytes }
 
 // IsCompressed indicates if the data is compressed on disk
 func (s *KeyValueBucketStatus) IsCompressed() bool { return s.nfo.Config.Compression != NoCompression }
+
+func (s *KeyValueBucketStatus) Config() KeyValueConfig {
+	return KeyValueConfig{
+		Bucket:       s.bucket,
+		Description:  s.nfo.Config.Description,
+		MaxValueSize: s.nfo.Config.MaxMsgSize,
+		History:      uint8(s.nfo.Config.MaxMsgsPerSubject),
+		TTL:          s.nfo.Config.MaxAge,
+		MaxBytes:     s.nfo.Config.MaxBytes,
+		Storage:      s.nfo.Config.Storage,
+		Replicas:     s.nfo.Config.Replicas,
+		Placement:    s.nfo.Config.Placement,
+		RePublish:    s.nfo.Config.RePublish,
+		Mirror:       s.nfo.Config.Mirror,
+		Sources:      s.nfo.Config.Sources,
+		Compression:  s.nfo.Config.Compression != NoCompression,
+	}
+}
 
 // Status retrieves the status and configuration of a bucket
 func (kv *kvs) Status() (KeyValueStatus, error) {
