@@ -1,6 +1,6 @@
 # Multi-Backend Cluster Routing
 
-> Type: Reference. Source: implemented Stargate and pylon cluster routing behavior.
+Source: implemented Stargate and pylon cluster routing behavior.
 
 Stargate routes at cluster level and executes at backend level.
 

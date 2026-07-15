@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,10 +28,11 @@ use crate::common::{
 };
 use prometheus::{Encoder, TextEncoder};
 use pylon_lib::{
-    AuthTokenProvider, BringupConfig, BringupHandle, CurrentModelStats,
-    InferenceServerRegistrationClient, PylonRuntimeState, QuicHttpTunnelConfig,
-    QuicHttpTunnelHandle, ReverseQuicTunnelConfig, ReverseQuicTunnelHandle,
-    TunnelTransportProtocol, start_bringup, start_quic_http_tunnel, start_reverse_quic_tunnel,
+    AuthTokenProvider, BringupConfig, CurrentModelStats, InferenceServerRegistrationClient,
+    ModelInitialization, ModelLifecycleConfig, ModelLifecycleHandle, ModelSource,
+    PylonRuntimeState, QuicHttpTunnelConfig, QuicHttpTunnelHandle, ReverseQuicTunnelConfig,
+    ReverseQuicTunnelHandle, StatsCollectorConfig, TunnelTransportProtocol, start_model_lifecycle,
+    start_quic_http_tunnel, start_reverse_quic_tunnel,
 };
 use reqwest::StatusCode;
 use stargate::auth::WorkerAuthenticator;
@@ -116,7 +117,7 @@ struct LifecycleRegistration {
     backend: LifecycleDummyBackend,
     reg_client: InferenceServerRegistrationClient,
     runtime_state: PylonRuntimeState,
-    _bringup: Option<BringupHandle>,
+    _model_lifecycle: ModelLifecycleHandle,
     tunnel: Option<QuicHttpTunnelHandle>,
 }
 
@@ -1246,15 +1247,36 @@ impl LifecycleBackendOptions<'_> {
             (format!("quic://{}", tunnel.listen_addr()), Some(tunnel))
         };
 
-        let mut reg_client = InferenceServerRegistrationClient::default();
         let model_ids = models
             .iter()
             .map(|model| (*model).to_string())
             .collect::<Vec<_>>();
-        let runtime_state = PylonRuntimeState::new(ACTIVE, &model_ids);
-        let bringup_handle = start_bringup(&upstream_http_base_url, bringup, runtime_state.clone())
-            .await
-            .expect("initial bringup failed");
+        let stats_config = StatsCollectorConfig::default();
+        let (runtime_state, observations) = PylonRuntimeState::observed(
+            ACTIVE,
+            &[],
+            stats_config.observation_channel_capacity,
+            None,
+        );
+        let stats_collector =
+            pylon_lib::start_stats_collector(stats_config, observations, runtime_state.clone());
+        let model_lifecycle = start_model_lifecycle(
+            ModelLifecycleConfig {
+                upstream_http_base_url: upstream_http_base_url.clone(),
+                source: ModelSource::Static(model_ids.into_iter().collect::<BTreeSet<_>>()),
+                initialization: ModelInitialization::ConfiguredInputTps {
+                    input_tps: 1.0,
+                    pin: true,
+                },
+                bringup,
+            },
+            runtime_state.clone(),
+            &stats_collector,
+            None,
+        )
+        .await
+        .expect("initial model lifecycle failed");
+        let mut reg_client = InferenceServerRegistrationClient::default();
         let seeds = vec![topology.grpc_addrs[0].to_string()];
         let mut config = if case.reverse_tunnel() {
             reverse_registration_config(
@@ -1281,7 +1303,7 @@ impl LifecycleBackendOptions<'_> {
             backend,
             reg_client,
             runtime_state,
-            _bringup: bringup_handle,
+            _model_lifecycle: model_lifecycle,
             tunnel,
         }
     }

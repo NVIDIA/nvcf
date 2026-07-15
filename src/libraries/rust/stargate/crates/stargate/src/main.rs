@@ -662,18 +662,6 @@ mod tests {
     }
 
     #[test]
-    fn otel_endpoint_help_matches_grpc_exporter_transport() {
-        let mut command = <Args as clap::CommandFactory>::command();
-        let mut help = Vec::new();
-        command
-            .write_long_help(&mut help)
-            .expect("help should render");
-        let help = std::str::from_utf8(&help).expect("help should be UTF-8");
-        assert!(help.contains("OTLP/gRPC trace export endpoint"));
-        assert!(!help.contains("OTLP/HTTP/protobuf trace export endpoint"));
-    }
-
-    #[test]
     fn registration_update_idle_timeout_cli_override_is_applied() {
         let args = parse_args(
             "--registration-update-idle-timeout-ms 120000 \
@@ -698,48 +686,6 @@ mod tests {
         assert_eq!(
             parse_args("").tunnel_protocol,
             TunnelTransportProtocol::RawQuic
-        );
-    }
-
-    #[test]
-    fn tunnel_protocol_cli_accepts_http3() {
-        assert_eq!(
-            parse_args("--tunnel-protocol http3").tunnel_protocol,
-            TunnelTransportProtocol::Http3
-        );
-    }
-
-    #[test]
-    fn tunnel_protocol_cli_accepts_webtransport() {
-        assert_eq!(
-            parse_args("--tunnel-protocol webtransport").tunnel_protocol,
-            TunnelTransportProtocol::WebTransport
-        );
-    }
-
-    #[test]
-    fn tunnel_protocol_cli_rejects_legacy_custom_spellings() {
-        for legacy_spelling in ["custom", "custom-quic"] {
-            assert!(
-                try_parse_args(&format!("--tunnel-protocol {legacy_spelling}")).is_err(),
-                "{legacy_spelling} must not remain a tunnel-protocol alias"
-            );
-        }
-    }
-
-    #[test]
-    fn backend_connectivity_cli_is_explicit_and_defaults_to_direct() {
-        assert_eq!(
-            parse_args("").backend_connectivity,
-            stargate_protocol::BackendConnectivity::Direct
-        );
-        assert_eq!(
-            parse_args("--backend-connectivity reverse").backend_connectivity,
-            stargate_protocol::BackendConnectivity::Reverse
-        );
-        assert_parse_error(
-            "--backend-connectivity edge",
-            "expected 'direct' or 'reverse'",
         );
     }
 

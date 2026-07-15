@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use anyhow::Result;
-use pylon_lib::{EngineStatsStreamMode, TunnelTransportProtocol};
+use pylon_lib::{EngineStatsStreamMode, ModelDiscoveryProvider, TunnelTransportProtocol};
 use stargate_protocol::BackendConnectivity;
 use stargate_protocol::tunnel_contract::HEADER_STARGATE_UPSTREAM_RETRYABLE;
 
@@ -34,8 +34,17 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:0", value_name = "ADDR")]
     quic_listen_addr: String,
     /// Model IDs to register (repeatable, e.g. --model-name a --model-name b)
-    #[arg(long, default_value = "dummy-model", value_name = "MODEL")]
+    #[arg(long, value_name = "MODEL")]
     model_name: Vec<String>,
+    /// Runtime API used to discover model IDs when --model-name is omitted
+    #[arg(long, default_value_t = ModelDiscoveryProvider::Dynamo, value_name = "PROVIDER")]
+    model_discovery_provider: ModelDiscoveryProvider,
+    /// Interval between model-discovery polls in milliseconds
+    #[arg(long, default_value_t = 5000, value_name = "MS")]
+    model_discovery_poll_interval_ms: u64,
+    /// Timeout for one model-discovery request in milliseconds
+    #[arg(long, default_value_t = 5000, value_name = "MS")]
+    model_discovery_request_timeout_ms: u64,
     /// Stargate gRPC address for registration
     #[arg(long, default_value = "127.0.0.1:50071", value_name = "ADDR")]
     stargate_address: String,
@@ -75,10 +84,10 @@ struct Args {
     /// Treat canary responses that generate this many tokens as runaway generation
     #[arg(long, default_value_t = 237, value_name = "TOKENS")]
     canary_max_generation_threshold: u32,
-    /// Number of local calibration requests per model before contacting Stargate
+    /// Initial calibration request count; doubles after each completed load step
     #[arg(long, default_value_t = 5, value_name = "N")]
     calibration_requests: usize,
-    /// Approximate prompt units used for calibration requests
+    /// Maximum approximate prompt units used by the calibration load ramp
     #[arg(long, default_value_t = 4096, value_name = "N")]
     calibration_prompt_units: usize,
     /// Maximum concurrent requests used during calibration
@@ -233,8 +242,8 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use pylon_lib::{
-        EngineStatsStreamMode, PylonQueueMismatchRetryConfig, PylonRetryConfig,
-        TunnelTransportProtocol,
+        EngineStatsStreamMode, ModelDiscoveryProvider, PylonQueueMismatchRetryConfig,
+        PylonRetryConfig, TunnelTransportProtocol,
     };
     use reqwest::header::HeaderName;
 
@@ -272,23 +281,76 @@ mod tests {
     }
 
     #[test]
-    fn otel_endpoint_help_matches_grpc_exporter_transport() {
-        let mut command = <Args as clap::CommandFactory>::command();
-        let mut help = Vec::new();
-        command
-            .write_long_help(&mut help)
-            .expect("help should render");
-        let help = std::str::from_utf8(&help).expect("help should be UTF-8");
-
-        assert!(help.contains("OTLP/gRPC endpoint for trace export"));
-        assert!(!help.contains("OTLP/HTTP/protobuf endpoint for trace export"));
-    }
-
-    #[test]
     fn inference_server_id_defaults_to_pylon() {
         let args = parse_args("");
 
         assert_eq!(args.inference_server_id, "pylon");
+    }
+
+    #[test]
+    fn model_names_default_to_discovery_mode() {
+        let args = parse_args("");
+
+        assert!(args.model_name.is_empty());
+    }
+
+    #[test]
+    fn model_discovery_defaults_to_dynamo_with_five_second_intervals() {
+        let args = parse_args("");
+
+        assert_eq!(
+            args.model_discovery_provider,
+            ModelDiscoveryProvider::Dynamo
+        );
+        assert_eq!(args.model_discovery_poll_interval_ms, 5_000);
+        assert_eq!(args.model_discovery_request_timeout_ms, 5_000);
+    }
+
+    #[test]
+    fn invalid_model_discovery_provider_is_rejected_by_cli() {
+        let error = try_parse_argv(&["--model-discovery-provider", "unknown"])
+            .expect_err("unknown provider must be rejected");
+
+        assert!(error.to_string().contains("dynamo"));
+    }
+
+    #[test]
+    fn startup_model_source_is_either_static_or_discovered() {
+        let static_plan = startup::PylonStartupPlan::from_args(&parse_args(
+            "--initial-input-tps 100 --model-name model-b --model-name model-a --model-name model-b",
+        ))
+        .expect("static startup plan should build");
+        let discovered_plan = startup::PylonStartupPlan::from_args(&parse_args(
+            "--initial-input-tps 100 --model-discovery-provider dynamo",
+        ))
+        .expect("discovered startup plan should build");
+
+        assert_eq!(
+            static_plan.static_model_ids(),
+            Some(&std::collections::BTreeSet::from([
+                "model-a".to_string(),
+                "model-b".to_string(),
+            ]))
+        );
+        assert!(discovered_plan.static_model_ids().is_none());
+    }
+
+    #[test]
+    fn empty_static_model_id_is_rejected() {
+        let args = parse_argv(&["--initial-input-tps", "100", "--model-name", "   "]);
+
+        assert!(startup::PylonStartupPlan::from_args(&args).is_err());
+    }
+
+    #[test]
+    fn zero_model_discovery_intervals_are_rejected() {
+        for option in [
+            "--model-discovery-poll-interval-ms 0",
+            "--model-discovery-request-timeout-ms 0",
+        ] {
+            let args = parse_args(&format!("--initial-input-tps 100 {option}"));
+            assert!(startup::PylonStartupPlan::from_args(&args).is_err());
+        }
     }
 
     #[test]
@@ -413,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn calibration_bootstrap_requires_at_least_one_request() {
+    fn calibration_ramp_requires_a_positive_request_increment() {
         let args = parse_args("--do-calibration --calibration-requests 0");
 
         assert!(startup::PylonStartupPlan::from_args(&args).is_err());
@@ -432,8 +494,7 @@ mod tests {
     fn engine_stats_stream_defaults_to_auto_mode_and_v1_path() {
         let args = parse_args("");
         let upstream = normalize_base_url(&args.upstream_http_base_url);
-        let metrics_config =
-            stats_collector_config_from_args(&args, &upstream, Default::default(), false);
+        let metrics_config = stats_collector_config_from_args(&args, &upstream);
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Auto);
         assert_eq!(args.engine_stats_stream_path, "/pylon/v1/stats/stream");
@@ -448,8 +509,7 @@ mod tests {
     fn engine_stats_stream_can_be_disabled() {
         let args = parse_args("--engine-stats-stream off");
         let upstream = normalize_base_url(&args.upstream_http_base_url);
-        let metrics_config =
-            stats_collector_config_from_args(&args, &upstream, Default::default(), false);
+        let metrics_config = stats_collector_config_from_args(&args, &upstream);
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Off);
         assert!(metrics_config.kv_cache_stats_url.is_none());
@@ -460,8 +520,7 @@ mod tests {
     fn kv_cache_stats_path_enables_explicit_kv_cache_polling() {
         let args = parse_args("--kv-cache-stats-path /kv-cache/stats");
         let upstream = normalize_base_url(&args.upstream_http_base_url);
-        let metrics_config =
-            stats_collector_config_from_args(&args, &upstream, Default::default(), false);
+        let metrics_config = stats_collector_config_from_args(&args, &upstream);
 
         assert_eq!(
             metrics_config.kv_cache_stats_url,
@@ -473,8 +532,7 @@ mod tests {
     fn required_engine_stats_stream_disables_openai_fallback_stats() {
         let args = parse_args("--engine-stats-stream required");
         let upstream = normalize_base_url(&args.upstream_http_base_url);
-        let metrics_config =
-            stats_collector_config_from_args(&args, &upstream, Default::default(), false);
+        let metrics_config = stats_collector_config_from_args(&args, &upstream);
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Required);
         assert!(!metrics_config.openai_fallback_stats_enabled);
@@ -509,30 +567,6 @@ mod tests {
     }
 
     #[test]
-    fn tunnel_protocol_cli_accepts_http3() {
-        let args = parse_args("--tunnel-protocol http3");
-
-        assert_eq!(args.tunnel_protocol, TunnelTransportProtocol::Http3);
-    }
-
-    #[test]
-    fn tunnel_protocol_cli_accepts_webtransport() {
-        let args = parse_args("--tunnel-protocol webtransport");
-
-        assert_eq!(args.tunnel_protocol, TunnelTransportProtocol::WebTransport);
-    }
-
-    #[test]
-    fn tunnel_protocol_cli_rejects_legacy_custom_spellings() {
-        for legacy_spelling in ["custom", "custom-quic"] {
-            assert!(
-                try_parse_argv(&["--tunnel-protocol", legacy_spelling]).is_err(),
-                "{legacy_spelling} must not remain a tunnel-protocol alias"
-            );
-        }
-    }
-
-    #[test]
     fn backend_connectivity_cli_is_explicit_and_defaults_to_direct() {
         assert_eq!(
             parse_args("").backend_connectivity,
@@ -543,7 +577,6 @@ mod tests {
             stargate_protocol::BackendConnectivity::Reverse
         );
         assert!(try_parse_argv(&["--backend-connectivity", "edge"]).is_err());
-        assert!(try_parse_argv(&["--reverse-tunnel"]).is_err());
     }
 
     #[test]

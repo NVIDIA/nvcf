@@ -884,22 +884,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn route_for_sni_rejects_missing_unknown_and_removed_targets() {
-        let matcher = HostnameMatcher::new("{pod_name}.stargate.external", "");
-        let snapshot = snapshot_with_target("stargate-1", "10.0.0.1:50072");
-
-        for (sni, expected) in [
-            (None, "missing_sni"),
-            (Some("stargate-1.other.example"), "unknown_sni"),
-            (Some("stargate-2.stargate.external"), "target_unavailable"),
-        ] {
-            let rejection = owned_target_for_sni(sni, &snapshot, matcher.as_ref())
-                .expect_err("route should be rejected");
-            assert_eq!(rejection.metric_and_reason().0, expected);
-        }
-    }
-
     #[tokio::test]
     async fn webtransport_server_config_negotiates_h3_alpn() -> Result<()> {
         let pair = connect_quic_pair().await?;

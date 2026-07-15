@@ -315,18 +315,6 @@ mod tests {
         format!("http://{addr}")
     }
 
-    #[test]
-    fn endpoint_from_addr_normalizes_only_missing_schemes() {
-        assert_eq!(
-            endpoint_from_addr("https://stargate.example:50071"),
-            "https://stargate.example:50071"
-        );
-        assert_eq!(
-            endpoint_from_addr("127.0.0.1:50071"),
-            "http://127.0.0.1:50071"
-        );
-    }
-
     #[tokio::test]
     async fn probe_loop_accepts_valid_snapshot() {
         let mut args = args();

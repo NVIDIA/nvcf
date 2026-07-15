@@ -490,10 +490,6 @@ async fn http_model_discovery_and_debug_state_follow_live_registration() {
     let debug_config = &debug_body["config"];
     assert_eq!(debug_config["stargate_id"], "test-sg-http-inspection");
     assert_eq!(debug_config["backend_connectivity"], "direct");
-    assert!(
-        debug_config.get("reverse_tunnel_enabled").is_none(),
-        "debug config must expose the connectivity mode once, not a derived reverse-listener flag"
-    );
     assert_eq!(
         debug_config["http_listen_addr"],
         fixture.http_addr.to_string()

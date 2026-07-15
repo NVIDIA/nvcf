@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use crate::common::{
     direct_registration_config, init_crypto, make_stargate_runtime, start_dummy_inst,
-    wait_for_routing, with_proxy_headers,
+    start_dummy_inst_with_models, wait_for_routing, with_proxy_headers,
 };
 use pylon_lib::{InferenceServerRegistrationClient, PylonRuntimeState};
 use stargate_proto::pb::InferenceServerStatus;
@@ -29,7 +29,9 @@ async fn multi_model_single_instance() {
     let (grpc_addr, http_addr, runtime) = make_stargate_runtime("test-sg-multimodel");
     let handle = runtime.start().await.expect("stargate failed to start");
 
-    let (inst_addr, quic_url, _tunnel) = start_dummy_inst("model-alpha").await;
+    let model_ids = ["model-alpha".to_string(), "model-beta".to_string()];
+    let (inst_addr, quic_url, _tunnel) =
+        start_dummy_inst_with_models("model-alpha", &model_ids).await;
 
     let mut reg_client = InferenceServerRegistrationClient::default();
     reg_client
@@ -38,10 +40,7 @@ async fn multi_model_single_instance() {
             "mm-inst",
             quic_url,
             format!("http://{inst_addr}"),
-            PylonRuntimeState::new(
-                InferenceServerStatus::Active,
-                &["model-alpha".to_string(), "model-beta".to_string()],
-            ),
+            PylonRuntimeState::new(InferenceServerStatus::Active, &model_ids),
         ))
         .expect("registration failed");
 

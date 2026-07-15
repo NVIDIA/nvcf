@@ -225,6 +225,19 @@ fn router_advertisement_metrics_are_cleared_when_tracker_drops() {
 }
 
 #[test]
+fn router_advertisement_metrics_remove_models_omitted_from_next_snapshot() {
+    let metrics = PylonMetrics::new().expect("metrics should initialize");
+    let update = registration_with_active_model(false, false);
+    let mut tracker = RouterAdvertisedStatusTracker::new(Some(metrics.as_ref()), "router-a");
+
+    tracker.record_successful_advertisement(advertised_model_statuses(&update));
+    tracker.record_successful_advertisement(Vec::new());
+
+    let body = metrics.gather_text().expect("metrics should encode");
+    assert!(!body.contains(r#"pylon_model_advertised_status{model="model-a""#));
+}
+
+#[test]
 fn registration_session_config_normalizes_reverse_url_and_cluster_id() {
     let mut config = test_registration_config();
     config.cluster_id.clear();
@@ -241,9 +254,6 @@ fn registration_session_config_normalizes_reverse_url_and_cluster_id() {
 #[test]
 fn registration_session_config_rejects_invalid_public_config() {
     assert_invalid_registration_config("stargate seeds are empty", |config| config.seeds.clear());
-    assert_invalid_registration_config("pylon runtime state has no configured models", |config| {
-        config.forwarding.runtime_state = PylonRuntimeState::default();
-    });
     assert_invalid_registration_config(
         "direct registration inference_server_url must be quic://",
         |config| config.inference_server_url = "http://127.0.0.1:8090".to_string(),
@@ -254,6 +264,23 @@ fn registration_session_config_rejects_invalid_public_config() {
             config.reverse_tunnel = true;
             config.inference_server_url = "quic://127.0.0.1:8090".to_string();
         },
+    );
+}
+
+#[test]
+fn registration_session_config_accepts_empty_runtime_membership() {
+    let mut config = test_registration_config();
+    config.forwarding.runtime_state = PylonRuntimeState::default();
+
+    let session = RegistrationSessionConfig::try_from(config)
+        .expect("an authoritative empty model snapshot should register");
+
+    assert!(
+        session
+            .forwarding
+            .runtime_state
+            .advertised_model_ids()
+            .is_empty()
     );
 }
 

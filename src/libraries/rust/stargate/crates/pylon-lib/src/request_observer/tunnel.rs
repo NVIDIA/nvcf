@@ -15,7 +15,7 @@
 
 use reqwest::header::HeaderMap;
 
-use crate::runtime_state::PylonRuntimeState;
+use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
 
 use super::embeddings::embedding_items_from_request_body;
 use super::{RequestObservationEndpoint, RequestObserver, RequiredTunnelHeaders};
@@ -28,10 +28,11 @@ impl TunnelRequestObserver {
     pub(crate) fn accepted(
         endpoint: RequestObservationEndpoint,
         required: RequiredTunnelHeaders,
+        generation: Option<ModelGeneration>,
         runtime_state: PylonRuntimeState,
     ) -> Self {
         Self {
-            observer: RequestObserver::from_required(endpoint, required, runtime_state),
+            observer: RequestObserver::from_required(endpoint, required, generation, runtime_state),
         }
     }
 

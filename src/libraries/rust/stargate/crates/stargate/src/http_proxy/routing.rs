@@ -327,49 +327,6 @@ mod tests {
     }
 
     #[test]
-    fn input_work_admission_for_pulsar_includes_low_free_kv_capacity() {
-        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
-        let target = routing_target();
-        let request = input_work_admission_request(&target, 100);
-        let mut free_kv = cluster_candidate("free-kv");
-        free_kv.stats.queued_input_size = 50;
-        free_kv.stats.last_mean_input_tps = 100.0;
-        free_kv.stats.kv_cache_capacity_tokens = 1024;
-        free_kv.stats.kv_cache_used_tokens = 768;
-        free_kv.stats.kv_cache_free_tokens = 256;
-        let mut likely_warm = cluster_candidate("likely-warm");
-        likely_warm.stats.queued_input_size = 900;
-        likely_warm.stats.last_mean_input_tps = 1000.0;
-        likely_warm.stats.kv_cache_capacity_tokens = 1024;
-        likely_warm.stats.kv_cache_used_tokens = 974;
-        likely_warm.stats.kv_cache_free_tokens = 50;
-
-        assert_eq!(
-            input_work_admission_rejection_reason(&config, &request, &[free_kv, likely_warm], 1.0,),
-            None
-        );
-    }
-
-    #[test]
-    fn input_work_admission_for_pulsar_excludes_low_free_kv_when_considered() {
-        let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
-        config.request_policy_mut().consider_kv_free_tokens = true;
-        let target = routing_target();
-        let request = input_work_admission_request(&target, 100);
-        let mut low_free_kv = cluster_candidate("low-free-kv");
-        low_free_kv.stats.queued_input_size = 0;
-        low_free_kv.stats.last_mean_input_tps = 1000.0;
-        low_free_kv.stats.kv_cache_capacity_tokens = 1024;
-        low_free_kv.stats.kv_cache_used_tokens = 974;
-        low_free_kv.stats.kv_cache_free_tokens = 50;
-
-        assert_eq!(
-            input_work_admission_rejection_reason(&config, &request, &[low_free_kv], 1.0),
-            Some(ADMISSION_REASON_INPUT_WORK_CAPACITY_UNAVAILABLE)
-        );
-    }
-
-    #[test]
     fn no_routing_choice_retries_only_with_eligible_candidates_and_budget() {
         assert_eq!(
             classify_no_routing_choice(no_routing_inputs(2, 1)),

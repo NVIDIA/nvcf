@@ -408,14 +408,11 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{tunnel_protocol} should parse: {error}"));
         }
 
-        for unsupported_protocol in ["custom", "custom-quic", "http3"] {
-            let result =
-                Args::try_parse_from(router_argv(&["--tunnel-protocol", unsupported_protocol]));
-            assert!(
-                result.is_err(),
-                "{unsupported_protocol} must not select a router UDP listener"
-            );
-        }
+        let result = Args::try_parse_from(router_argv(&["--tunnel-protocol", "http3"]));
+        assert!(
+            result.is_err(),
+            "http3 must not select a router UDP listener"
+        );
     }
 
     #[test]

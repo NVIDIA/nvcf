@@ -68,11 +68,6 @@ impl TryFrom<InferenceServerRegistrationConfig> for RegistrationSessionConfig {
         if config.seeds.is_empty() {
             return Err(ClientError::Config("stargate seeds are empty".to_string()));
         }
-        if config.forwarding.runtime_state.model_ids().is_empty() {
-            return Err(ClientError::Config(
-                "pylon runtime state has no configured models".to_string(),
-            ));
-        }
         if !config.reverse_tunnel && !is_direct_inference_server_url(&config.inference_server_url) {
             return Err(ClientError::Config(
                 "direct registration inference_server_url must be quic://".to_string(),

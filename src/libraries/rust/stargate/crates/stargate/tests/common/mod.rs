@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -29,9 +29,10 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use pylon_lib::{
-    BringupConfig, BringupHandle, InferenceServerRegistrationClient,
-    InferenceServerRegistrationConfig, PylonRuntimeState, QuicHttpTunnelConfig,
-    QuicHttpTunnelHandle, TunnelTransportProtocol, start_bringup, start_quic_http_tunnel,
+    BringupConfig, InferenceServerRegistrationClient, InferenceServerRegistrationConfig,
+    ModelInitialization, ModelLifecycleConfig, ModelLifecycleHandle, ModelSource,
+    PylonRuntimeState, QuicHttpTunnelConfig, QuicHttpTunnelHandle, StatsCollectorConfig,
+    TunnelTransportProtocol, start_model_lifecycle, start_quic_http_tunnel, start_stats_collector,
 };
 use serde::{Deserialize, Serialize};
 use stargate::auth::{AuthResult, WorkerAuthenticator};
@@ -901,14 +902,22 @@ pub async fn start_lifecycle_dummy_backend(model: &str) -> LifecycleDummyBackend
 /// Returns `(http_addr, quic_url, tunnel_handle)`. Callers must hold the
 /// tunnel handle for the test's lifetime; dropping it shuts down the tunnel.
 pub async fn start_dummy_inst(model: &str) -> (SocketAddr, String, QuicHttpTunnelHandle) {
+    start_dummy_inst_with_models(model, &[model.to_string()]).await
+}
+
+pub async fn start_dummy_inst_with_models(
+    model: &str,
+    model_ids: &[String],
+) -> (SocketAddr, String, QuicHttpTunnelHandle) {
     let addr = start_dummy_backend(model).await;
 
-    let tunnel = start_quic_http_tunnel(QuicHttpTunnelConfig::new(
-        "127.0.0.1:0".parse().unwrap(),
-        format!("http://{addr}"),
-    ))
-    .await
-    .expect("tunnel failed to start");
+    let mut config =
+        QuicHttpTunnelConfig::new("127.0.0.1:0".parse().unwrap(), format!("http://{addr}"));
+    config.forwarding.runtime_state =
+        PylonRuntimeState::new(InferenceServerStatus::Active, model_ids);
+    let tunnel = start_quic_http_tunnel(config)
+        .await
+        .expect("tunnel failed to start");
     let tunnel_addr = tunnel.listen_addr();
     let quic_url = format!("quic://{tunnel_addr}");
     (addr, quic_url, tunnel)
@@ -1189,7 +1198,7 @@ pub fn init_crypto() {
 
 pub struct BackendHandle {
     reg_client: InferenceServerRegistrationClient,
-    _bringup: Option<BringupHandle>,
+    _model_lifecycle: ModelLifecycleHandle,
     _runtime_state: PylonRuntimeState,
     _tunnel: Option<QuicHttpTunnelHandle>,
 }
@@ -1231,26 +1240,48 @@ pub async fn start_and_register_backend_with_bringup(
     bringup: BringupConfig,
 ) -> BackendHandle {
     let backend_addr = start_dummy_backend(model).await;
+    let stats_config = StatsCollectorConfig::default();
+    let (runtime_state, observations) = PylonRuntimeState::observed(
+        InferenceServerStatus::Active,
+        &[],
+        stats_config.observation_channel_capacity,
+        None,
+    );
 
     let (inference_server_url, upstream_http_base_url, tunnel) = if reverse_tunnel {
         let url = format!("http://{backend_addr}");
         (url.clone(), url, None)
     } else {
-        let tunnel = start_quic_http_tunnel(QuicHttpTunnelConfig::new(
+        let mut config = QuicHttpTunnelConfig::new(
             "127.0.0.1:0".parse().unwrap(),
             format!("http://{backend_addr}"),
-        ))
-        .await
-        .expect("tunnel failed to start");
+        );
+        config.forwarding.runtime_state = runtime_state.clone();
+        let tunnel = start_quic_http_tunnel(config)
+            .await
+            .expect("tunnel failed to start");
         let quic_url = format!("quic://{}", tunnel.listen_addr());
         (quic_url, format!("http://{backend_addr}"), Some(tunnel))
     };
 
+    let stats_collector = start_stats_collector(stats_config, observations, runtime_state.clone());
+    let model_lifecycle = start_model_lifecycle(
+        ModelLifecycleConfig {
+            upstream_http_base_url: upstream_http_base_url.clone(),
+            source: ModelSource::Static(BTreeSet::from([model.to_string()])),
+            initialization: ModelInitialization::ConfiguredInputTps {
+                input_tps: 1.0,
+                pin: true,
+            },
+            bringup,
+        },
+        runtime_state.clone(),
+        &stats_collector,
+        None,
+    )
+    .await
+    .expect("model lifecycle failed to start");
     let mut reg_client = InferenceServerRegistrationClient::default();
-    let runtime_state = PylonRuntimeState::new(InferenceServerStatus::Active, &[model.to_string()]);
-    let bringup = start_bringup(&upstream_http_base_url, bringup, runtime_state.clone())
-        .await
-        .expect("bringup failed to start");
     reg_client
         .start(test_registration_config(
             seeds.to_vec(),
@@ -1264,7 +1295,7 @@ pub async fn start_and_register_backend_with_bringup(
 
     BackendHandle {
         reg_client,
-        _bringup: bringup,
+        _model_lifecycle: model_lifecycle,
         _runtime_state: runtime_state,
         _tunnel: tunnel,
     }
@@ -1311,7 +1342,6 @@ fn test_registration_config(
     runtime_state: PylonRuntimeState,
     reverse_tunnel: bool,
 ) -> InferenceServerRegistrationConfig {
-    runtime_state.mark_initial_bringup_complete();
     InferenceServerRegistrationConfig {
         seeds,
         inference_server_id: inference_server_id.to_string(),

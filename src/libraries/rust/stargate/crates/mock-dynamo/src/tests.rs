@@ -53,7 +53,7 @@ fn test_state() -> AppState {
         health_delay: Duration::ZERO,
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(0))),
         stats_events: test_stats_events(),
-        test_control: TestControlState::default(),
+        test_control: TestControlState::with_discovered_models(["dummy-model".to_string()]),
     }
 }
 
@@ -304,6 +304,48 @@ async fn test_control_http_api_updates_one_model_and_reports_request_counters() 
         ),
         1
     );
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn model_discovery_http_api_returns_and_replaces_authoritative_models() {
+    let state = test_state();
+    state
+        .test_control
+        .replace_discovered_models(vec!["model-b".to_string(), "model-a".to_string()])
+        .await
+        .expect("valid model IDs should be accepted");
+    let test_control = state.test_control.clone();
+    let app = Router::new()
+        .route("/v1/models", get(list_models))
+        .route(
+            "/test-control/discovery-models",
+            put(replace_discovery_models),
+        )
+        .with_state(state);
+    let (addr, server) = spawn_test_app(app).await;
+
+    let initial = json_response(addr, "GET", "/v1/models", "connection: close", "").await;
+    assert!(initial.contains(
+        r#"{"object":"list","data":[{"id":"model-a","object":"model"},{"id":"model-b","object":"model"}]}"#
+    ));
+    assert_eq!(test_control.snapshot().await.model_discovery_requests, 1);
+
+    let replaced = json_response(
+        addr,
+        "PUT",
+        "/test-control/discovery-models",
+        "connection: close",
+        r#"{"models":[]}"#,
+    )
+    .await;
+    assert!(replaced.starts_with("HTTP/1.1 200 OK"));
+    assert!(replaced.contains(r#""discovered_models":[]"#));
+
+    let empty = json_response(addr, "GET", "/v1/models", "connection: close", "").await;
+    assert!(empty.contains(r#"{"object":"list","data":[]}"#));
+    assert_eq!(test_control.snapshot().await.model_discovery_requests, 2);
 
     server.abort();
 }

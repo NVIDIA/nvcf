@@ -118,19 +118,19 @@ metrics! {
         gauge reverse_tunnel_connected("reverse_tunnel_connected", "Binary gauge: 1 when a reverse QUIC tunnel is connected to a stargate router", ["router"]);
     }
     request {
-        gauge inflight("requests_inflight", "Current number of proxied requests in flight", ["model"]);
-        gauge state("requests_state", "Current number of proxied requests by client-side lifecycle state", ["model", "state"]);
-        gauge state_input_tokens("requests_state_input_tokens", "Current input tokens for proxied requests by client-side lifecycle state", ["model", "state"]);
-        counter total("requests_total", "Total number of terminal proxied requests observed by pylon", ["model", "routing_key", "status"]);
+        gauge inflight("requests_inflight", "Current number of observed requests in flight", ["model"]);
+        gauge state("requests_state", "Current number of observed requests by client-side lifecycle state", ["model", "state"]);
+        gauge state_input_tokens("requests_state_input_tokens", "Current input tokens for observed requests by client-side lifecycle state", ["model", "state"]);
+        counter total("requests_total", "Total number of terminal requests observed by pylon", ["model", "routing_key", "status"]);
         histogram time_to_response_headers_seconds("request_time_to_response_headers_seconds", "Time from request start to upstream response headers", ["model", "routing_key"], DURATION_BUCKETS);
         histogram time_to_first_output_seconds("request_time_to_first_output_seconds", "Time from request start to first observed output message", ["model", "routing_key"], DURATION_BUCKETS);
         histogram time_to_first_token_seconds("request_time_to_first_token_seconds", "Time from request start to first observed output token", ["model", "routing_key"], DURATION_BUCKETS);
-        histogram duration_seconds("request_duration_seconds", "Total observed duration for terminal proxied requests", ["model", "routing_key", "status"], REQUEST_DURATION_BUCKETS);
-        counter input_tokens("request_input_tokens_total", "Total input tokens observed on terminal proxied requests", ["model", "routing_key", "status"]);
-        counter output_tokens("request_output_tokens_total", "Total output tokens observed on terminal proxied requests", ["model", "routing_key", "status"]);
-        counter stats_sources_total("request_stats_sources_total", "Total terminal proxied requests by stats source observed by pylon", ["model", "routing_key", "status", "source"]);
-        histogram input_tokens_histogram("request_input_tokens", "Input tokens per terminal proxied request", ["model", "routing_key", "status"], TOKEN_BUCKETS);
-        histogram output_tokens_histogram("request_output_tokens", "Output tokens per terminal proxied request", ["model", "routing_key", "status"], TOKEN_BUCKETS);
+        histogram duration_seconds("request_duration_seconds", "Total observed duration for terminal requests", ["model", "routing_key", "status"], REQUEST_DURATION_BUCKETS);
+        counter input_tokens("request_input_tokens_total", "Total input tokens observed on terminal requests", ["model", "routing_key", "status"]);
+        counter output_tokens("request_output_tokens_total", "Total output tokens observed on terminal requests", ["model", "routing_key", "status"]);
+        counter stats_sources_total("request_stats_sources_total", "Total terminal requests by stats source observed by pylon", ["model", "routing_key", "status", "source"]);
+        histogram input_tokens_histogram("request_input_tokens", "Input tokens per terminal request", ["model", "routing_key", "status"], TOKEN_BUCKETS);
+        histogram output_tokens_histogram("request_output_tokens", "Output tokens per terminal request", ["model", "routing_key", "status"], TOKEN_BUCKETS);
     }
     engine_stats {
         counter stream_events_total("engine_stats_stream_events_total", "Total engine stats stream events ingested by type", ["type"]);
@@ -142,6 +142,10 @@ metrics! {
         counter stale_cleanups_total("engine_stats_stale_cleanups_total", "Total stale engine stats cleanups by kind and source", ["kind", "source"]);
         counter dirty_snapshots_total("engine_stats_dirty_snapshots_total", "Total engine stats model snapshots marked dirty by source and reason", ["source", "reason"]);
         counter source_transitions_total("engine_stats_source_transitions_total", "Total engine stats source-selection transitions", ["from", "to", "reason"]);
+    }
+    discovery {
+        counter discovery_polls_total("model_discovery_polls_total", "Total model-discovery polls by provider and outcome", ["provider", "outcome"]);
+        gauge discovered_models("model_discovery_models", "Model count from the last valid discovery response", ["provider"]);
     }
     model {
         float_gauge output_tps("model_output_tps", "Current output TPS by model", ["model"]);
@@ -157,7 +161,7 @@ metrics! {
         gauge stats_capability("model_stats_capability", "Binary gauge for observed stats capability labels by model", ["model", "capability"]);
         gauge stats_source("model_stats_source", "Binary gauge for observed stats source labels by model", ["model", "source"]);
         gauge advertised_status("model_advertised_status", "Current model status advertised to each stargate router; the active status label is 1 and other status labels are 0", ["router", "model", "status"]);
-        histogram calibration_duration_ms("model_calibration_duration_ms", "Local startup calibration duration in milliseconds by model and outcome", ["model", "outcome"], CALIBRATION_BUCKETS);
+        histogram calibration_duration_ms("model_calibration_duration_ms", "Per-generation calibration traffic-ramp duration in milliseconds by model and outcome", ["model", "outcome"], CALIBRATION_BUCKETS);
     }
     retry {
         counter retryable_responses_total("retryable_responses_total", "Total number of retryable responses emitted or relayed by pylon", ["inference_server_id", "reason", "status"]);
@@ -231,7 +235,10 @@ impl PylonMetrics {
         }
         for total in &transition.input_token_totals {
             self.state_input_tokens
-                .with_label_values(&[&total.model_id, request_state_label(total.state)])
+                .with_label_values(&[
+                    total.generation.model_id(),
+                    request_state_label(total.state),
+                ])
                 .set(saturating_i64(total.input_tokens));
         }
     }
@@ -263,6 +270,22 @@ impl PylonMetrics {
     metric_observer!(counter observe_engine_stats_source_transition(
         from: &'static str, to: &'static str, reason: &'static str
     ) => source_transitions_total[from, to, reason]);
+
+    pub(crate) fn observe_model_discovery_poll(
+        &self,
+        provider: &str,
+        outcome: &'static str,
+        model_count: Option<usize>,
+    ) {
+        self.discovery_polls_total
+            .with_label_values(&[provider, outcome])
+            .inc();
+        if let Some(model_count) = model_count {
+            self.discovered_models
+                .with_label_values(&[provider])
+                .set(saturating_i64(model_count));
+        }
+    }
 
     pub fn observe_model_stats(&self, model_id: &str, stats: &CurrentModelStats) {
         for (gauge, value) in [
@@ -316,15 +339,64 @@ impl PylonMetrics {
         }
     }
 
-    pub fn observe_model_calibration_duration(
+    pub(crate) fn remove_model_advertised_status(&self, router_addr: &str, model_id: &str) {
+        for status in ["active", "inactive", "unknown"] {
+            let _ = self
+                .advertised_status
+                .remove_label_values(&[router_addr, model_id, status]);
+        }
+    }
+
+    pub(crate) fn remove_model_gauges(&self, model_id: &str, stats: Option<&CurrentModelStats>) {
+        for gauge in [
+            &self.output_tps,
+            &self.embedding_item_tps,
+            &self.last_mean_input_tps,
+            &self.max_output_tps,
+            &self.max_embedding_item_tps,
+            &self.queue_size,
+            &self.queued_input_tokens,
+            &self.kv_cache_capacity_tokens,
+            &self.kv_cache_used_tokens,
+            &self.kv_cache_free_tokens,
+        ] {
+            let _ = gauge.remove_label_values(&[model_id]);
+        }
+        let _ = self.inflight.remove_label_values(&[model_id]);
+        for state in [
+            "queued",
+            "upstream_connecting",
+            "input_processing",
+            "output_generation",
+            "complete",
+            "failed",
+            "cancelled",
+        ] {
+            let _ = self.state.remove_label_values(&[model_id, state]);
+            let _ = self
+                .state_input_tokens
+                .remove_label_values(&[model_id, state]);
+        }
+        if let Some(stats) = stats {
+            for capability in &stats.stats_capabilities {
+                let _ = self
+                    .stats_capability
+                    .remove_label_values(&[model_id, capability]);
+            }
+            for source in &stats.stats_sources {
+                let _ = self.stats_source.remove_label_values(&[model_id, source]);
+            }
+        }
+    }
+
+    pub(crate) fn observe_model_calibration_duration(
         &self,
         model_id: &str,
         duration: Duration,
-        success: bool,
+        outcome: CalibrationOutcome,
     ) {
-        let outcome = if success { "success" } else { "failure" };
         self.calibration_duration_ms
-            .with_label_values(&[model_id, outcome])
+            .with_label_values(&[model_id, outcome.as_str()])
             .observe(duration.as_secs_f64() * 1_000.0);
     }
 
@@ -387,13 +459,10 @@ impl PylonMetrics {
     ) => threshold_matches_total[model_id, reason]);
 
     fn adjust_observed_request(&self, request: &ObservedRequestState, delta: i64) {
+        let model_id = request.generation.model_id();
         let state = request_state_label(request.state);
-        self.inflight
-            .with_label_values(&[&request.model_id])
-            .add(delta);
-        self.state
-            .with_label_values(&[&request.model_id, state])
-            .add(delta);
+        self.inflight.with_label_values(&[model_id]).add(delta);
+        self.state.with_label_values(&[model_id, state]).add(delta);
     }
 
     fn record_terminal_observation(&self, observation: &RequestObservation, state: &'static str) {
@@ -465,6 +534,23 @@ const CALIBRATION_BUCKETS: &[f64] = &[
     10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0, 30_000.0, 60_000.0,
     120_000.0, 300_000.0, 600_000.0,
 ];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CalibrationOutcome {
+    Completed,
+    Error,
+    Cancelled,
+}
+
+impl CalibrationOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Error => "error",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
 const QUEUE_ADMISSION_BUCKETS: &[f64] = &[
     0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0,
     30_000.0, 60_000.0,
@@ -535,6 +621,8 @@ mod tests {
 
     use stargate_proto::pb::InferenceServerStatus;
 
+    use super::CalibrationOutcome;
+
     use crate::{
         CurrentModelStats, PylonMetrics, PylonRuntimeState, RequestObservation,
         RequestObservationEndpoint, RequestObservationState,
@@ -569,7 +657,13 @@ mod tests {
     }
 
     fn metrics_runtime(metrics: Arc<PylonMetrics>) -> PylonRuntimeState {
-        PylonRuntimeState::observed(InferenceServerStatus::Unknown, &[], 4, Some(metrics)).0
+        PylonRuntimeState::observed(
+            InferenceServerStatus::Unknown,
+            &["model-a".to_string()],
+            4,
+            Some(metrics),
+        )
+        .0
     }
 
     fn assert_metrics(metrics: &PylonMetrics, expected: &[&str]) -> String {
@@ -630,6 +724,40 @@ mod tests {
                 r#"pylon_engine_stats_source_transitions_total{from="openai_fallback",reason="fresh_stream",to="engine_stats_stream"} 1"#,
             ],
         );
+    }
+
+    #[test]
+    fn model_discovery_metrics_record_outcomes_and_last_valid_count() {
+        let metrics = PylonMetrics::new().expect("metrics should initialize");
+
+        metrics.observe_model_discovery_poll("dynamo", "success", Some(2));
+        metrics.observe_model_discovery_poll("dynamo", "error", None);
+
+        assert_metrics(
+            &metrics,
+            &[
+                r#"pylon_model_discovery_polls_total{outcome="success",provider="dynamo"} 1"#,
+                r#"pylon_model_discovery_polls_total{outcome="error",provider="dynamo"} 1"#,
+                r#"pylon_model_discovery_models{provider="dynamo"} 2"#,
+            ],
+        );
+    }
+
+    #[test]
+    fn retiring_model_removes_current_model_gauges() {
+        let metrics = PylonMetrics::new().expect("metrics should initialize");
+        let stats = CurrentModelStats {
+            last_mean_input_tps: 12.0,
+            stats_capabilities: vec!["input_tps".to_string()],
+            stats_sources: vec!["engine_stats_stream".to_string()],
+            ..CurrentModelStats::default()
+        };
+        metrics.observe_model_stats("model-a", &stats);
+
+        metrics.remove_model_gauges("model-a", Some(&stats));
+
+        let body = metrics.gather_text().expect("metrics should encode");
+        assert!(!body.contains(r#"model="model-a""#));
     }
 
     #[test]
@@ -839,16 +967,31 @@ mod tests {
     fn calibration_duration_histogram_is_recorded_by_model_and_outcome() {
         let metrics = PylonMetrics::new().expect("metrics should initialize");
 
-        metrics.observe_model_calibration_duration("model-a", Duration::from_millis(42), true);
-        metrics.observe_model_calibration_duration("model-a", Duration::from_millis(7), false);
+        metrics.observe_model_calibration_duration(
+            "model-a",
+            Duration::from_millis(42),
+            CalibrationOutcome::Completed,
+        );
+        metrics.observe_model_calibration_duration(
+            "model-a",
+            Duration::from_millis(7),
+            CalibrationOutcome::Error,
+        );
+        metrics.observe_model_calibration_duration(
+            "model-a",
+            Duration::from_millis(3),
+            CalibrationOutcome::Cancelled,
+        );
 
         assert_metrics(
             &metrics,
             &[
-                r#"pylon_model_calibration_duration_ms_count{model="model-a",outcome="success"} 1"#,
-                r#"pylon_model_calibration_duration_ms_sum{model="model-a",outcome="success"} 42"#,
-                r#"pylon_model_calibration_duration_ms_count{model="model-a",outcome="failure"} 1"#,
-                r#"pylon_model_calibration_duration_ms_sum{model="model-a",outcome="failure"} 7"#,
+                r#"pylon_model_calibration_duration_ms_count{model="model-a",outcome="completed"} 1"#,
+                r#"pylon_model_calibration_duration_ms_sum{model="model-a",outcome="completed"} 42"#,
+                r#"pylon_model_calibration_duration_ms_count{model="model-a",outcome="error"} 1"#,
+                r#"pylon_model_calibration_duration_ms_sum{model="model-a",outcome="error"} 7"#,
+                r#"pylon_model_calibration_duration_ms_count{model="model-a",outcome="cancelled"} 1"#,
+                r#"pylon_model_calibration_duration_ms_sum{model="model-a",outcome="cancelled"} 3"#,
             ],
         );
     }

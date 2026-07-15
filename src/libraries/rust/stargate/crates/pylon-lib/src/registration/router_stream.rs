@@ -207,6 +207,14 @@ impl<'a> RouterAdvertisedStatusTracker<'a> {
     ) {
         if let Some(metrics) = self.metrics {
             metrics.observe_registration_stream_connected(self.router_addr, true);
+            for previous in &self.last_advertised {
+                if !advertised
+                    .iter()
+                    .any(|current| current.model_id == previous.model_id)
+                {
+                    metrics.remove_model_advertised_status(self.router_addr, &previous.model_id);
+                }
+            }
         }
         observe_advertised_statuses(self.metrics, self.router_addr, &advertised);
         self.last_advertised = advertised;

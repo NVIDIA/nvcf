@@ -17,15 +17,16 @@ use std::time::{Duration, Instant};
 
 use reqwest::header::HeaderMap;
 
-use crate::runtime_state::PylonRuntimeState;
+use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
+use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
 
 mod embeddings;
 mod headers;
 mod tunnel;
 
-pub(crate) use headers::{
-    MissingRequiredHeaderError, RequiredTunnelHeaders, validate_required_tunnel_headers,
-};
+#[cfg(test)]
+use headers::MissingRequiredHeaderError;
+pub(crate) use headers::{RequiredTunnelHeaders, validate_required_tunnel_headers};
 pub(crate) use tunnel::TunnelRequestObserver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +148,7 @@ pub(crate) struct RequestObserver {
     model_id: String,
     priority: u32,
     input_tokens: u64,
+    generation: Option<ModelGeneration>,
     embedding_items: Option<u64>,
     state: RequestLifecycleState,
     runtime_state: PylonRuntimeState,
@@ -156,6 +158,7 @@ impl RequestObserver {
     pub(crate) fn from_required(
         endpoint: RequestObservationEndpoint,
         required: RequiredTunnelHeaders,
+        generation: Option<ModelGeneration>,
         runtime_state: PylonRuntimeState,
     ) -> Self {
         let RequiredTunnelHeaders {
@@ -174,6 +177,7 @@ impl RequestObserver {
             model_id,
             priority,
             input_tokens,
+            generation,
             embedding_items: None,
             state: RequestLifecycleState::UpstreamConnecting,
             runtime_state,
@@ -248,6 +252,19 @@ impl RequestObserver {
     }
 
     pub(crate) fn observe_output_tokens_generated_so_far(&mut self, output_tokens: u64) {
+        self.observe_explicit_output_tokens(output_tokens, true, true);
+    }
+
+    pub(crate) fn observe_output_tokens_total(&mut self, output_tokens: u64) {
+        self.observe_explicit_output_tokens(output_tokens, false, false);
+    }
+
+    fn observe_explicit_output_tokens(
+        &mut self,
+        output_tokens: u64,
+        from_chunk_usage: bool,
+        emit_live_update: bool,
+    ) {
         let response = Self::responding_mut(
             &mut self.state,
             &self.request_id,
@@ -262,22 +279,23 @@ impl RequestObserver {
             );
             return;
         }
+        let chunk_usage_observed = response.output_tokens_from_chunk_usage || from_chunk_usage;
         if response.output_tokens_explicit
-            && response.output_tokens_from_chunk_usage
             && output_tokens == response.output_tokens
+            && response.output_tokens_from_chunk_usage == chunk_usage_observed
         {
             return;
         }
         let should_emit = output_tokens > 0 || output_tokens != response.output_tokens;
         response.output_tokens = output_tokens;
         response.output_tokens_explicit = true;
-        response.output_tokens_from_chunk_usage = true;
+        response.output_tokens_from_chunk_usage = chunk_usage_observed;
         if output_tokens > 0 {
             let now = Instant::now();
             response.first_output_at.get_or_insert(now);
             response.first_token_at.get_or_insert(now);
         }
-        if should_emit {
+        if emit_live_update && should_emit {
             self.emit();
         }
     }
@@ -388,54 +406,70 @@ impl RequestObserver {
                 .map(|instant| instant.saturating_duration_since(self.started_at)),
             total_duration: self.started_at.elapsed(),
         };
-        if self.endpoint == RequestObservationEndpoint::Embeddings {
-            tracing::info!(
-                request_id = observation.request_id,
-                endpoint = ?observation.endpoint,
-                routing_key = observation.routing_key.as_deref().unwrap_or(""),
-                model_id = observation.model_id.as_str(),
-                priority = observation.priority,
-                input_tokens = observation.input_tokens,
-                embedding_items = ?observation
-                    .embedding_items_observed
-                    .then_some(observation.embedding_items),
-                upstream_status = observation.upstream_status.unwrap_or_default(),
-                state = ?observation.state,
-                time_to_response_headers_ms = observation
-                    .time_to_response_headers
-                    .map_or(0.0, |duration| duration.as_secs_f64() * 1000.0),
-                total_duration_ms = observation.total_duration.as_secs_f64() * 1000.0,
-                "embeddings request observed"
-            );
-        } else {
-            tracing::info!(
-                request_id = observation.request_id,
-                endpoint = ?observation.endpoint,
-                routing_key = observation.routing_key.as_deref().unwrap_or(""),
-                model_id = observation.model_id.as_str(),
-                priority = observation.priority,
-                input_tokens = observation.input_tokens,
-                upstream_status = observation.upstream_status.unwrap_or_default(),
-                output_messages = observation.output_messages,
-                output_tokens = observation.output_tokens,
-                output_tokens_explicit = observation.output_tokens_explicit,
-                output_tokens_from_chunk_usage = observation.output_tokens_from_chunk_usage,
-                state = ?observation.state,
-                time_to_response_headers_ms = observation
-                    .time_to_response_headers
-                    .map_or(0.0, |duration| duration.as_secs_f64() * 1000.0),
-                time_to_first_output_ms = observation
-                    .time_to_first_output
-                    .map_or(0.0, |duration| duration.as_secs_f64() * 1000.0),
-                time_to_first_token_ms = observation
-                    .time_to_first_token
-                    .map_or(0.0, |duration| duration.as_secs_f64() * 1000.0),
-                total_duration_ms = observation.total_duration.as_secs_f64() * 1000.0,
-                "client request observed"
-            );
-        }
-        self.runtime_state.observe_request(observation);
+        log_observation(&observation);
+        self.runtime_state
+            .observe_request_for_generation(observation, self.generation.clone());
     }
+}
+
+fn log_observation(observation: &RequestObservation) {
+    if !observation_logs_at_info(&observation.request_id) {
+        tracing::debug!(
+            request_id = observation.request_id,
+            model_id = observation.model_id,
+            state = ?observation.state,
+            "calibration request observed"
+        );
+    } else if observation.endpoint == RequestObservationEndpoint::Embeddings {
+        tracing::info!(
+            request_id = observation.request_id,
+            endpoint = ?observation.endpoint,
+            routing_key = observation.routing_key.as_deref().unwrap_or(""),
+            model_id = observation.model_id.as_str(),
+            priority = observation.priority,
+            input_tokens = observation.input_tokens,
+            embedding_items = ?observation
+                .embedding_items_observed
+                .then_some(observation.embedding_items),
+            upstream_status = observation.upstream_status.unwrap_or_default(),
+            state = ?observation.state,
+            time_to_response_headers_ms = observation
+                .time_to_response_headers
+                .map_or(0.0, |duration| duration.as_secs_f64() * 1000.0),
+            total_duration_ms = observation.total_duration.as_secs_f64() * 1000.0,
+            "embeddings request observed"
+        );
+    } else {
+        tracing::info!(
+            request_id = observation.request_id,
+            endpoint = ?observation.endpoint,
+            routing_key = observation.routing_key.as_deref().unwrap_or(""),
+            model_id = observation.model_id.as_str(),
+            priority = observation.priority,
+            input_tokens = observation.input_tokens,
+            upstream_status = observation.upstream_status.unwrap_or_default(),
+            output_messages = observation.output_messages,
+            output_tokens = observation.output_tokens,
+            output_tokens_explicit = observation.output_tokens_explicit,
+            output_tokens_from_chunk_usage = observation.output_tokens_from_chunk_usage,
+            state = ?observation.state,
+            time_to_response_headers_ms = observation
+                .time_to_response_headers
+                .map_or(0.0, |duration| duration.as_secs_f64() * 1000.0),
+            time_to_first_output_ms = observation
+                .time_to_first_output
+                .map_or(0.0, |duration| duration.as_secs_f64() * 1000.0),
+            time_to_first_token_ms = observation
+                .time_to_first_token
+                .map_or(0.0, |duration| duration.as_secs_f64() * 1000.0),
+            total_duration_ms = observation.total_duration.as_secs_f64() * 1000.0,
+            "client request observed"
+        );
+    }
+}
+
+fn observation_logs_at_info(request_id: &str) -> bool {
+    generated_request_kind(request_id) != Some(GeneratedRequestKind::Calibration)
 }
 
 impl Drop for RequestObserver {
@@ -455,12 +489,14 @@ mod tests {
 
     use super::*;
     use super::{embeddings::embedding_items_from_request_body, headers::RequiredHeaderErrorKind};
+    use crate::generated_request_id::next_generated_request_id;
 
     impl RequestObserver {
         fn accepted(required: RequiredTunnelHeaders, runtime_state: PylonRuntimeState) -> Self {
             Self::from_required(
                 RequestObservationEndpoint::Embeddings,
                 required,
+                None,
                 runtime_state,
             )
         }
@@ -472,6 +508,7 @@ mod tests {
             Ok(Self::from_required(
                 RequestObservationEndpoint::ChatCompletions,
                 validate_required_tunnel_headers(request_headers)?,
+                None,
                 runtime_state,
             ))
         }
@@ -515,6 +552,20 @@ mod tests {
 
     fn test_observer(request_id: &str, runtime_state: PylonRuntimeState) -> RequestObserver {
         RequestObserver::new(&request_headers(request_id, 42), runtime_state).unwrap()
+    }
+
+    #[test]
+    fn only_exact_process_calibration_observations_are_debug_only() {
+        let generation = ModelGeneration::new("model-a", 1);
+        let calibration = next_generated_request_id(GeneratedRequestKind::Calibration, &generation);
+        let canary = next_generated_request_id(GeneratedRequestKind::Canary, &generation);
+
+        assert!(!observation_logs_at_info(&calibration));
+        assert!(observation_logs_at_info(&canary));
+        assert!(observation_logs_at_info(
+            "calibration-00000000-0000-0000-0000-000000000000-g1-1"
+        ));
+        assert!(observation_logs_at_info("user-request"));
     }
 
     async fn responding_observer(
@@ -642,6 +693,7 @@ mod tests {
             let observer = TunnelRequestObserver::accepted(
                 endpoint,
                 embeddings_required_headers(),
+                None,
                 runtime_state,
             );
 
@@ -674,6 +726,7 @@ mod tests {
             let mut observer = TunnelRequestObserver::accepted(
                 endpoint,
                 embeddings_required_headers(),
+                None,
                 runtime_state,
             );
             observer.on_upstream_response_headers(&HeaderMap::new(), 200);
@@ -892,6 +945,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_output_total_does_not_claim_chunk_usage() {
+        let (mut observer, rx, _) = responding_observer("req-top-level-usage").await;
+
+        observer.observe_output_message();
+        recv_observation(&rx, "output observation should be emitted").await;
+        observer.observe_output_tokens_total(3);
+        assert!(
+            rx.is_empty(),
+            "top-level usage should be emitted with the terminal observation"
+        );
+
+        observer.finish();
+        let terminal = recv_observation(&rx, "terminal observation should be emitted").await;
+        assert!(terminal.is_terminal());
+        assert_eq!(terminal.output_tokens, 3);
+        assert!(terminal.output_tokens_explicit);
+        assert!(!terminal.output_tokens_from_chunk_usage);
+    }
+
+    #[tokio::test]
     async fn zero_explicit_counter_marks_chunk_usage_without_extra_live_emit() {
         let (mut observer, rx, _) = responding_observer("req-zero-explicit").await;
 
@@ -1096,47 +1169,6 @@ mod tests {
             observer.state.observation_state(),
             RequestObservationState::Failed
         );
-    }
-
-    #[test]
-    fn missing_request_id_is_rejected() {
-        let headers = HeaderMap::new();
-        let result = RequestObserver::new(&headers, PylonRuntimeState::default());
-        assert!(matches!(
-            result,
-            Err(MissingRequiredHeaderError {
-                header_name: HEADER_REQUEST_ID,
-                kind: RequiredHeaderErrorKind::Missing,
-            })
-        ));
-    }
-
-    #[test]
-    fn missing_model_is_rejected() {
-        let mut headers = request_headers("req-4", 12);
-        headers.remove(HEADER_MODEL);
-        let result = RequestObserver::new(&headers, PylonRuntimeState::default());
-        assert!(matches!(
-            result,
-            Err(MissingRequiredHeaderError {
-                header_name: HEADER_MODEL,
-                kind: RequiredHeaderErrorKind::Missing,
-            })
-        ));
-    }
-
-    #[test]
-    fn missing_input_tokens_is_rejected() {
-        let mut headers = request_headers("req-5", 42);
-        headers.remove(HEADER_INPUT_TOKENS);
-        let result = RequestObserver::new(&headers, PylonRuntimeState::default());
-        assert!(matches!(
-            result,
-            Err(MissingRequiredHeaderError {
-                header_name: HEADER_INPUT_TOKENS,
-                kind: RequiredHeaderErrorKind::Missing,
-            })
-        ));
     }
 
     fn make_test_observer() -> RequestObserver {

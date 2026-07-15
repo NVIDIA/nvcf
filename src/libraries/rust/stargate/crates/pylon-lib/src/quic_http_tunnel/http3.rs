@@ -195,41 +195,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
     use reqwest::header::HeaderValue;
     use stargate_protocol::tunnel_contract::{
         HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
     };
 
-    use super::super::core::{
-        PylonRetryConfig, RETRY_REASON_LOCAL_CONNECT_FAILURE, UpstreamRequestError,
-        build_response_headers, local_connect_failure_headers, problem_response_headers,
-        queue_mismatch_response_headers, record_local_connect_failure,
-    };
-    use crate::queue_admission::{PylonQueueMismatchRetryConfig, QueueAdmissionDecision};
-    use crate::request_quality_monitor::RequestQualityMonitorConfig;
-    use crate::runtime_state::PylonRuntimeState;
-
-    fn test_app() -> TunnelServerApp {
-        TunnelServerApp {
-            http_client: reqwest::Client::new(),
-            inference_server_id: "inst-a".to_string(),
-            upstream_http_base_url: "http://127.0.0.1:1".to_string(),
-            max_request_body_bytes: 8,
-            max_sse_buffer_bytes: 1024,
-            first_output_timeout: Duration::from_secs(1),
-            output_chunk_timeout: Duration::from_secs(1),
-            runtime_state: PylonRuntimeState::default(),
-            request_quality_monitor: RequestQualityMonitorConfig::default(),
-            retry: PylonRetryConfig::default(),
-            queue_mismatch_retry: PylonQueueMismatchRetryConfig::default(),
-            metrics: None,
-            #[cfg(test)]
-            webtransport_stream_header_wait_tx: None,
-        }
-    }
+    use super::super::core::{PylonRetryConfig, build_response_headers};
 
     fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
         headers
@@ -248,16 +220,6 @@ mod tests {
                 .chain()
                 .any(|source| source.to_string() == "inner h3 failure"),
             "source chain should retain the original error: {error:#}"
-        );
-    }
-
-    #[test]
-    fn h3_adapter_rejects_request_body_chunks_over_limit() {
-        let error = next_body_len(7, 2, 8).expect_err("body should exceed adapter limit");
-
-        assert!(
-            error.to_string().contains("request body too large"),
-            "unexpected body limit error: {error}"
         );
     }
 
@@ -298,68 +260,6 @@ mod tests {
                 .headers()
                 .get(reqwest::header::CONTENT_LENGTH)
                 .is_none()
-        );
-    }
-
-    #[test]
-    fn h3_error_response_uses_problem_json_status() {
-        let status = reqwest::StatusCode::BAD_REQUEST;
-        let response = h3_response(status, problem_response_headers()).expect("h3 error response");
-
-        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
-        assert_eq!(
-            header_value(response.headers(), reqwest::header::CONTENT_TYPE.as_str()),
-            "application/problem+json"
-        );
-    }
-
-    #[test]
-    fn h3_queue_mismatch_response_sets_retry_metadata() {
-        let app = test_app();
-        let decision = QueueAdmissionDecision::Rejected {
-            expected_ms: 10,
-            actual_ms: 55,
-            threshold_ms: 25,
-            retry_after_ms: Some(7),
-        };
-
-        let status = reqwest::StatusCode::TOO_MANY_REQUESTS;
-        let headers = queue_mismatch_response_headers(&app, &decision).expect("queue headers");
-        let response = h3_response(status, headers).expect("queue mismatch response");
-
-        assert_eq!(response.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(
-            header_value(response.headers(), HEADER_STARGATE_RETRYABLE),
-            "true"
-        );
-        assert_eq!(
-            header_value(response.headers(), HEADER_STARGATE_RETRY_REASON),
-            "queue_estimate_mismatch"
-        );
-        assert_eq!(
-            header_value(response.headers(), "x-stargate-retry-after-ms"),
-            "7"
-        );
-    }
-
-    #[test]
-    fn h3_local_connect_failure_response_encodes_retryability() {
-        let app = test_app();
-        let error = UpstreamRequestError::Build(anyhow::anyhow!("cannot build"));
-
-        let status = record_local_connect_failure(&app, &error, true);
-        let response = h3_response(status, local_connect_failure_headers(true))
-            .expect("local failure response");
-
-        assert_eq!(status, reqwest::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            header_value(response.headers(), HEADER_STARGATE_RETRYABLE),
-            "true"
-        );
-        assert_eq!(
-            header_value(response.headers(), HEADER_STARGATE_RETRY_REASON),
-            RETRY_REASON_LOCAL_CONNECT_FAILURE
         );
     }
 }

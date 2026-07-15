@@ -93,8 +93,9 @@ Quic --> NVCF : reverse tunnel handshake auth\n(verify routing_key matches)
 
 ' client-internal
 Bringup --> Upstream : health + canary\n(local HTTP)
-Bootstrap --> Upstream : optional startup calibration\n(local HTTP, before Stargate RPC)
-Bootstrap --> Stats : initialize estimator +\nruntime publication
+Bootstrap --> Upstream : generation-owned calibration ramp\n(local HTTP; expected timeout completes)
+Upstream --> Stats : exact-generation calibration observations\npopulate runtime windows once
+Bootstrap --> Stats : snapshot current stats for logging\n(no reinjection)
 Stats --> RegCli : start registration only\nafter local startup
 Stats --> Upstream : engine stats side channel
 

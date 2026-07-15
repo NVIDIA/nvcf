@@ -20,6 +20,14 @@ Set the same `--backend-connectivity=direct|reverse` topology on Stargate and
 pylon. The [local quickstart](docs/getting-started/local-quickstart.md) uses the
 Edge/direct path.
 
+Pylon model membership is either an explicit repeatable `--model-name` set or,
+when that flag is omitted, a continuously discovered Dynamo `GET /v1/models`
+set. Every Pylon must also select exactly one local stats initialization source:
+`--do-calibration` for a sole Pylon in its cluster or a per-Pylon
+`--initial-input-tps` value for shared-hardware clusters. See
+[Pylon onboarding](docs/operations/pylon-onboarding.md) for the complete
+lifecycle and calibration contract.
+
 Use [docs/README.md](docs/README.md) as the docs entrypoint.
 Use [local quickstart](docs/getting-started/local-quickstart.md) to run the local stack.
 
@@ -60,7 +68,7 @@ load-balancer topology for production backend traffic.
 | Kubernetes shape | [Deployment shape](docs/operations/deployment-shape.md) |
 | CLI flags and config | [CLI reference](docs/reference/cli.md), [Config and environment](docs/reference/config-and-env.md) |
 | Metrics and troubleshooting | [Observability](docs/operations/observability.md), [Troubleshooting](docs/operations/troubleshooting.md) |
-| Architecture invariants | [Architecture docs](docs/architecture/README.md) |
+| Routing and tunnel contracts | [Multi-backend clusters](docs/multi-backend-clusters.md), [Tunnel transports](docs/tunnel-transports.md) |
 
 ## Main Crates
 
@@ -86,7 +94,6 @@ Read [docs/local-benchmark-runner.md](docs/local-benchmark-runner.md).
 ## Checks
 
 ```bash
-scripts/check_docs.sh
 cargo fmt --all
 cargo test -p stargate
 cargo test -p pylon-lib

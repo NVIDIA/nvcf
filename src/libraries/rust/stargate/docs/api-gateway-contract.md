@@ -1,6 +1,6 @@
 # API Gateway Contract
 
-> Type: Reference. Canonical source for frontend model discovery and HTTP proxy contracts.
+Canonical source for frontend model discovery and HTTP proxy contracts.
 
 The gateway is the public API boundary. Stargate is the local backend router.
 

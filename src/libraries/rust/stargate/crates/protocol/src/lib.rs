@@ -224,8 +224,6 @@ mod tests {
             TunnelTransportProtocol::RawQuic.alpn_protocols(),
             Vec::<Vec<u8>>::new()
         );
-        assert!("custom".parse::<TunnelTransportProtocol>().is_err());
-        assert!("custom-quic".parse::<TunnelTransportProtocol>().is_err());
     }
 
     #[test]
@@ -246,8 +244,6 @@ mod tests {
                 protocol
             );
         }
-        assert!(serde_json::from_str::<TunnelTransportProtocol>("\"custom\"").is_err());
-        assert!(serde_json::from_str::<TunnelTransportProtocol>("\"custom-quic\"").is_err());
     }
 
     #[test]

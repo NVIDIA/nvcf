@@ -58,6 +58,7 @@ use crate::request_observer::{
     RequestObservationEndpoint, RequestObservationState, RequiredTunnelHeaders,
 };
 use crate::request_quality_monitor::RequestQualityMonitorConfig;
+use crate::runtime_state::ModelGeneration;
 use crate::stats::PylonMetrics;
 use crate::{PylonRuntimeState, StatsCollectorConfig, start_stats_collector};
 
@@ -221,7 +222,12 @@ fn observed_runtime(
     PylonRuntimeState,
     flume::Receiver<crate::RequestObservationEvent>,
 ) {
-    PylonRuntimeState::observed(InferenceServerStatus::Unknown, &[], capacity, None)
+    PylonRuntimeState::observed(
+        InferenceServerStatus::Unknown,
+        &test_admitted_models(),
+        capacity,
+        None,
+    )
 }
 
 async fn recv_terminal_observation(
@@ -259,6 +265,19 @@ const RETRY_CONTROL_REQUEST_HEADERS: [&str; 5] = [
     "x-stargate-retry-reason",
     "x-stargate-retry-after-ms",
     "x-vendor-retryable",
+];
+const TEST_ADMITTED_MODELS: [&str; 11] = [
+    "model-a",
+    "model-buffer-limit",
+    "model-embed",
+    "model-fallback",
+    "model-h3",
+    "model-progress-quality",
+    "model-quality",
+    "model-responses",
+    "model-stream",
+    "model-terminal-usage",
+    "model-webtransport",
 ];
 
 struct RawTunnelTest {
@@ -616,6 +635,18 @@ fn assert_no_metric(metrics: &str, sample: &str) {
     );
 }
 
+fn test_admitted_models() -> Vec<String> {
+    TEST_ADMITTED_MODELS
+        .iter()
+        .map(|model| (*model).to_string())
+        .collect()
+}
+
+fn admit_test_models(config: &mut QuicHttpTunnelConfig) {
+    config.forwarding.runtime_state =
+        PylonRuntimeState::new(InferenceServerStatus::Unknown, &test_admitted_models());
+}
+
 fn test_tunnel_config(upstream_http_base_url: impl Into<String>) -> QuicHttpTunnelConfig {
     QuicHttpTunnelConfig::new(
         "127.0.0.1:0".parse().unwrap(),
@@ -643,11 +674,16 @@ async fn spawn_test_http_server(app: Router) -> SocketAddr {
 }
 
 async fn test_tunnel_config_for(app: Router) -> QuicHttpTunnelConfig {
-    test_tunnel_config(format!("http://{}", spawn_test_http_server(app).await))
+    let mut config = test_tunnel_config(format!("http://{}", spawn_test_http_server(app).await));
+    admit_test_models(&mut config);
+    config
 }
 
 async fn metered_test_tunnel_config_for(app: Router) -> (QuicHttpTunnelConfig, Arc<PylonMetrics>) {
-    metered_test_tunnel_config(format!("http://{}", spawn_test_http_server(app).await))
+    let (mut config, metrics) =
+        metered_test_tunnel_config(format!("http://{}", spawn_test_http_server(app).await));
+    admit_test_models(&mut config);
+    (config, metrics)
 }
 
 async fn read_response_bytes(recv: &mut stargate_protocol::RecvStream) -> Vec<u8> {
@@ -705,6 +741,18 @@ async fn start_queue_mismatch_test_tunnel(
     config.forwarding.metrics = Some(metrics.clone());
     config.forwarding.queue_mismatch_retry.enabled = enabled;
     config.forwarding.queue_mismatch_retry.retry_after_ms = Some(125);
+    assert!(
+        config
+            .forwarding
+            .runtime_state
+            .begin_generation(ModelGeneration::new("model-a", 0))
+    );
+    assert!(
+        config
+            .forwarding
+            .runtime_state
+            .publish_generation(&ModelGeneration::new("model-a", 0))
+    );
     config
         .forwarding
         .runtime_state
@@ -1236,6 +1284,7 @@ async fn direct_webtransport_stalled_stream_header_does_not_block_later_response
     let upstream_addr = spawn_test_http_server(app).await;
 
     let mut config = test_tunnel_config(format!("http://{upstream_addr}"));
+    admit_test_models(&mut config);
     config.tunnel_protocol = TunnelTransportProtocol::WebTransport;
     let (header_wait_tx, header_wait_rx) = flume::bounded(1);
     config.forwarding.webtransport_stream_header_wait_tx = Some(header_wait_tx);
@@ -1473,6 +1522,7 @@ async fn assert_local_connect_failure(
     metric: &str,
 ) {
     let (mut config, metrics) = metered_test_tunnel_config("http://127.0.0.1:0");
+    admit_test_models(&mut config);
     if let Some(retryable) = retryable {
         config.forwarding.retry.local_connect_failures_retryable = retryable;
     }
@@ -1581,6 +1631,49 @@ async fn quic_tunnel_forwards_to_http_backend() {
     assert_eq!(payloads[0]["choices"][0]["delta"]["content"], "ok");
 
     tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_rejects_pending_generation_before_upstream() {
+    let upstream_hits = Arc::new(AtomicUsize::new(0));
+    let app = counting_app("/v1/chat/completions", upstream_hits.clone());
+    let (config, metrics) =
+        metered_test_tunnel_config(format!("http://{}", spawn_test_http_server(app).await));
+    let pending = ModelGeneration::new("model-a", 1);
+    assert!(config.forwarding.runtime_state.begin_generation(pending));
+
+    let mut tunnel = RawTunnelTest::start(config).await;
+    tunnel
+        .send_json(
+            "/v1/chat/completions",
+            "model-a",
+            "req-pending-generation",
+            br#"{"messages":[],"stream":true}"#,
+        )
+        .await;
+
+    let response = tunnel.response(StatusCode::SERVICE_UNAVAILABLE).await;
+    assert_retry_metadata(
+        &response.headers,
+        true,
+        "model_generation_unavailable",
+        None,
+    );
+    assert_problem_response(
+        &response,
+        503,
+        "Service Unavailable",
+        "model generation is not admitted for request routing",
+    );
+    assert_eq!(
+        upstream_hits.load(Ordering::SeqCst),
+        0,
+        "pending generations must not receive stale routed traffic"
+    );
+    assert_metric(
+        &metrics_text(&metrics),
+        r#"pylon_retryable_responses_total{inference_server_id="inst-a",reason="model_generation_unavailable",status="503"} 1"#,
+    );
 }
 
 #[tokio::test]
@@ -1961,7 +2054,7 @@ async fn quic_tunnel_feeds_chunk_usage_stats_into_stats_collector() {
     };
     let (runtime_state, observation_rx) = PylonRuntimeState::observed(
         InferenceServerStatus::Unknown,
-        &[],
+        &["model-stream".to_string()],
         stats_config.observation_channel_capacity,
         None,
     );
@@ -2319,43 +2412,6 @@ async fn embeddings_tunnel_forwards_json_without_stream() {
 }
 
 #[tokio::test]
-async fn embeddings_tunnel_rejects_missing_request_id_model_or_input_tokens() {
-    let hits = Arc::new(AtomicUsize::new(0));
-    let app = counting_app("/v1/embeddings", hits.clone());
-    let http_addr = spawn_test_http_server(app).await;
-
-    for (missing_header, expected_message) in [
-        ("x-request-id", "missing required x-request-id header"),
-        ("x-model", "missing required x-model header"),
-        ("x-input-tokens", "missing required x-input-tokens header"),
-    ] {
-        let tunnel = start_quic_http_tunnel(test_tunnel_config(format!("http://{http_addr}")))
-            .await
-            .unwrap();
-        let mut headers = embeddings_tunnel_headers("req-embed-missing");
-        headers.remove(missing_header);
-        let response = send_raw_quic_quic_json_request(
-            tunnel.listen_addr(),
-            headers,
-            br#"{"model":"model-embed","input":"hello"}"#,
-        )
-        .await;
-        assert_eq!(response.status, StatusCode::BAD_REQUEST);
-        let body = String::from_utf8(response.body).unwrap();
-        assert!(
-            body.contains(expected_message),
-            "expected body to contain {expected_message:?}, got {body:?}"
-        );
-        assert_eq!(
-            hits.load(Ordering::SeqCst),
-            0,
-            "upstream must not be called when {missing_header} is missing"
-        );
-        tunnel.shutdown().await;
-    }
-}
-
-#[tokio::test]
 async fn embeddings_tunnel_rejects_malformed_json_before_upstream() {
     let hits = Arc::new(AtomicUsize::new(0));
     let app = counting_app("/v1/embeddings", hits.clone());
@@ -2599,29 +2655,6 @@ async fn quic_tunnel_records_one_quality_check_for_multi_chunk_stream() {
     .await;
     assert_quality_result(&metrics, "model-quality", "matched");
     assert_no_quality_result(&metrics, "model-quality", "clean");
-}
-
-#[tokio::test]
-async fn quic_tunnel_rejects_missing_request_id() {
-    let app = Router::new().route(
-        "/v1/chat/completions",
-        post(|_req: Request| async move { Response::new(Body::from("{\"ok\":true}")) }),
-    );
-    let mut tunnel = RawTunnelTest::start(test_tunnel_config_for(app).await).await;
-    let mut headers = HeaderMap::new();
-    headers.insert("x-method", "POST".parse().unwrap());
-    headers.insert("x-path", "/v1/chat/completions".parse().unwrap());
-    headers.insert("x-routing-key", "rk-1".parse().unwrap());
-    headers.insert("x-model", "model-a".parse().unwrap());
-    headers.insert("content-type", "application/json".parse().unwrap());
-    tunnel.send(headers, br#"{"messages":[]}"#).await;
-    let response = tunnel.response(StatusCode::BAD_REQUEST).await;
-    assert_problem_response(
-        &response,
-        400,
-        "Bad Request",
-        "missing required x-request-id header",
-    );
 }
 
 #[tokio::test]

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -22,13 +22,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use pylon_lib::{
-    AuthTokenProvider, BringupConfig, BringupHandle, CalibrationConfig, EngineStatsStreamConfig,
+    AuthTokenProvider, BringupConfig, CalibrationConfig, EngineStatsStreamConfig,
     EngineStatsStreamHandle, EngineStatsStreamMode, InferenceServerRegistrationClient,
-    InferenceServerRegistrationConfig, MetricsServerHandle, PylonMetrics,
+    InferenceServerRegistrationConfig, MetricsServerHandle, ModelDiscoveryConfig,
+    ModelInitialization, ModelLifecycleConfig, ModelLifecycleHandle, ModelSource, PylonMetrics,
     PylonQueueMismatchRetryConfig, PylonRetryConfig, PylonRuntimeState, QuicHttpTunnelConfig,
     QuicHttpTunnelHandle, RequestQualityMonitorConfig, StatsCollectorConfig, StatsCollectorHandle,
-    TunnelForwardingConfig, run_startup_calibration, start_bringup, start_engine_stats_stream,
-    start_metrics_server, start_quic_http_tunnel, start_stats_collector_with_engine_stats,
+    TunnelForwardingConfig, start_engine_stats_stream, start_metrics_server, start_model_lifecycle,
+    start_quic_http_tunnel, start_stats_collector_with_engine_stats,
     stats_aggregator_update_channel,
 };
 use reqwest::header::HeaderName;
@@ -57,6 +58,7 @@ pub(super) async fn run(args: Args) -> Result<()> {
         &args.inference_server_id,
         &plan,
         &runtime.registration_inference_server_url,
+        &runtime.initial_model_ids,
     );
     info!("pylon running");
     runtime
@@ -69,6 +71,7 @@ fn log_startup_complete(
     inference_server_id: &str,
     plan: &PylonStartupPlan,
     registration_inference_server_url: &str,
+    model_ids: &[String],
 ) {
     if plan.backend_tunnel.is_reverse() {
         info!(
@@ -76,7 +79,7 @@ fn log_startup_complete(
             inference_server_id,
             cluster_id = %plan.cluster_id,
             upstream = %plan.upstream,
-            model_ids = ?plan.model_ids,
+            model_ids = ?model_ids,
             "pylon startup complete; stargate registration started (reverse tunnel mode)"
         );
     } else {
@@ -86,7 +89,7 @@ fn log_startup_complete(
             cluster_id = %plan.cluster_id,
             inference_server_url = registration_inference_server_url,
             upstream = %plan.upstream,
-            model_ids = ?plan.model_ids,
+            model_ids = ?model_ids,
             "pylon startup complete; stargate registration started (direct tunnel mode)"
         );
     }
@@ -95,10 +98,10 @@ fn log_startup_complete(
 pub(crate) struct PylonStartupPlan {
     upstream: String,
     cluster_id: String,
-    model_ids: Vec<String>,
+    model_source: ModelSource,
     pylon_retry: PylonRetryConfig,
     queue_mismatch_retry: PylonQueueMismatchRetryConfig,
-    input_tps_bootstrap: InputTpsBootstrap,
+    model_initialization: ModelInitialization,
     bringup: BringupConfig,
     request_quality_monitor: RequestQualityMonitorConfig,
     metrics_addr: SocketAddr,
@@ -133,24 +136,17 @@ impl BackendTunnelStartup {
     }
 }
 
-enum InputTpsBootstrap {
-    Calibration(CalibrationConfig),
-    Initial { input_tps: f64, pin: bool },
-}
-
 impl PylonStartupPlan {
     pub(crate) fn from_args(args: &Args) -> Result<Self> {
-        let input_tps_bootstrap = input_tps_bootstrap_from_args(args)?;
-        let mut model_ids = args.model_name.clone();
-        model_ids.sort_unstable();
-        model_ids.dedup();
+        let model_initialization = model_initialization_from_args(args)?;
+        let model_source = model_source_from_args(args)?;
         Ok(Self {
             upstream: normalize_base_url(&args.upstream_http_base_url),
             cluster_id: effective_cluster_id(args),
-            model_ids,
+            model_source,
             pylon_retry: pylon_retry_config_from_args(args)?,
             queue_mismatch_retry: pylon_queue_mismatch_retry_config_from_args(args)?,
-            input_tps_bootstrap,
+            model_initialization,
             bringup: BringupConfig {
                 enabled: !args.disable_bringup,
                 active_canary_interval: Duration::from_millis(args.active_canary_interval_ms),
@@ -159,11 +155,7 @@ impl PylonStartupPlan {
             },
             request_quality_monitor: request_quality_monitor_config_from_args(args),
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
-            auth_token_provider: match (&args.auth_token, &args.auth_token_file) {
-                (Some(token), _) => Some(Arc::new(AuthTokenProvider::Static(token.clone()))),
-                (None, Some(path)) => Some(Arc::new(AuthTokenProvider::File(path.clone().into()))),
-                (None, None) => None,
-            },
+            auth_token_provider: auth_token_provider_from_args(args),
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
         })
     }
@@ -171,16 +163,60 @@ impl PylonStartupPlan {
     pub(crate) fn direct_tunnel_listen_addr(&self) -> Option<SocketAddr> {
         self.backend_tunnel.direct_listen_addr()
     }
+
+    #[cfg(test)]
+    pub(crate) fn static_model_ids(&self) -> Option<&BTreeSet<String>> {
+        match &self.model_source {
+            ModelSource::Static(model_ids) => Some(model_ids),
+            ModelSource::Discovered(_) => None,
+        }
+    }
+}
+
+fn auth_token_provider_from_args(args: &Args) -> Option<Arc<AuthTokenProvider>> {
+    match (&args.auth_token, &args.auth_token_file) {
+        (Some(token), _) => Some(Arc::new(AuthTokenProvider::Static(token.clone()))),
+        (None, Some(path)) => Some(Arc::new(AuthTokenProvider::File(path.clone().into()))),
+        (None, None) => None,
+    }
+}
+
+fn model_source_from_args(args: &Args) -> Result<ModelSource> {
+    ensure!(
+        args.model_name
+            .iter()
+            .all(|model_id| !model_id.trim().is_empty()),
+        "model names must be non-empty"
+    );
+    ensure!(
+        args.model_discovery_poll_interval_ms > 0,
+        "model discovery poll interval must be greater than zero"
+    );
+    ensure!(
+        args.model_discovery_request_timeout_ms > 0,
+        "model discovery request timeout must be greater than zero"
+    );
+    let model_ids = args.model_name.iter().cloned().collect::<BTreeSet<_>>();
+    Ok(if model_ids.is_empty() {
+        ModelSource::Discovered(ModelDiscoveryConfig {
+            provider: args.model_discovery_provider,
+            poll_interval: Duration::from_millis(args.model_discovery_poll_interval_ms),
+            request_timeout: Duration::from_millis(args.model_discovery_request_timeout_ms),
+        })
+    } else {
+        ModelSource::Static(model_ids)
+    })
 }
 
 struct RunningPylon {
     registration_client: InferenceServerRegistrationClient,
     engine_stats_stream: Option<RunningEngineStatsStream>,
     stats_collector: StatsCollectorHandle,
-    bringup: Option<BringupHandle>,
+    model_lifecycle: ModelLifecycleHandle,
     metrics_server: MetricsServerHandle,
     tunnel: Option<QuicHttpTunnelHandle>,
     registration_inference_server_url: String,
+    initial_model_ids: Vec<String>,
 }
 
 struct RunningEngineStatsStream {
@@ -223,11 +259,8 @@ impl RunningPylon {
                 }
                 result = self.stats_collector.wait_for_exit() => critical_task_exit_error("stats collector", result),
                 result = async {
-                    match self.bringup.as_mut() {
-                        Some(bringup) => bringup.wait_for_exit().await,
-                        None => std::future::pending().await,
-                    }
-                } => critical_task_exit_error("bringup supervisor", result),
+                    self.model_lifecycle.wait_for_exit().await
+                } => critical_task_exit_error("model lifecycle supervisor", result),
                 result = self.metrics_server.wait_for_exit() => critical_task_exit_error("metrics server", result),
                 result = async {
                     match self.tunnel.as_mut() {
@@ -249,7 +282,7 @@ impl RunningPylon {
             mut registration_client,
             engine_stats_stream,
             stats_collector,
-            bringup,
+            model_lifecycle,
             metrics_server,
             tunnel,
             ..
@@ -262,11 +295,7 @@ impl RunningPylon {
                 }
             },
             stats_collector.shutdown(),
-            async move {
-                if let Some(bringup) = bringup {
-                    bringup.shutdown().await;
-                }
-            },
+            model_lifecycle.shutdown(),
             metrics_server.shutdown(),
             async move {
                 if let Some(tunnel) = tunnel {
@@ -298,22 +327,21 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
             .unwrap_or(""),
     );
     let metrics_server = start_metrics_server(plan.metrics_addr, metrics.registry()).await?;
-    let (bootstrap_input_tps, pin_bootstrap_input_tps) =
-        bootstrap_input_tps(plan, metrics.clone()).await?;
-    let stats_config = stats_collector_config_from_args(
-        args,
-        &plan.upstream,
-        bootstrap_input_tps,
-        pin_bootstrap_input_tps,
-    );
+    let stats_config = stats_collector_config_from_args(args, &plan.upstream);
     let (runtime_state, request_observation_rx) = PylonRuntimeState::observed(
         InferenceServerStatus::Active,
-        &plan.model_ids,
+        &[],
         stats_config.observation_channel_capacity,
         Some(metrics.clone()),
     );
-    let (engine_stats_stream, stats_update_rx) =
-        start_engine_stats_runtime(args, plan, metrics.clone(), &stats_config).unzip();
+    let (engine_stats_stream, stats_update_rx) = start_engine_stats_runtime(
+        args,
+        plan,
+        metrics.clone(),
+        &stats_config,
+        runtime_state.clone(),
+    )
+    .unzip();
     let stats_collector = start_stats_collector_with_engine_stats(
         stats_config,
         request_observation_rx,
@@ -332,9 +360,29 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         tls_key_pem,
     )
     .await?;
-    let bringup = start_bringup(&plan.upstream, plan.bringup.clone(), runtime_state)
-        .await
-        .context("pylon initial bringup failed")?;
+    if matches!(
+        &plan.model_initialization,
+        ModelInitialization::Calibration(_)
+    ) {
+        warn!(
+            cluster_id = %plan.cluster_id,
+            "running local calibration; --do-calibration is valid only for a cluster with one pylon"
+        );
+    }
+    let model_lifecycle = start_model_lifecycle(
+        ModelLifecycleConfig {
+            upstream_http_base_url: plan.upstream.clone(),
+            source: plan.model_source.clone(),
+            initialization: plan.model_initialization.clone(),
+            bringup: plan.bringup.clone(),
+        },
+        runtime_state.clone(),
+        &stats_collector,
+        Some(metrics),
+    )
+    .await
+    .context("pylon initial model initialization failed")?;
+    let initial_model_ids = runtime_state.advertised_model_ids();
     let registration_inference_server_url = registration_url(plan, tunnel.as_ref());
     let registration_config = registration_config_from_plan(
         args,
@@ -350,38 +398,12 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         registration_client,
         engine_stats_stream,
         stats_collector,
-        bringup,
+        model_lifecycle,
         metrics_server,
         tunnel,
         registration_inference_server_url,
+        initial_model_ids,
     })
-}
-
-async fn bootstrap_input_tps(
-    plan: &PylonStartupPlan,
-    metrics: Arc<PylonMetrics>,
-) -> Result<(HashMap<String, f64>, bool)> {
-    match &plan.input_tps_bootstrap {
-        InputTpsBootstrap::Calibration(config) => {
-            warn!(
-                cluster_id = %plan.cluster_id,
-                "running local calibration; --do-calibration is valid only for a cluster with one pylon"
-            );
-            let input_tps =
-                run_startup_calibration(&plan.upstream, &plan.model_ids, config, Some(metrics))
-                    .await
-                    .context("local input-TPS calibration failed")?;
-            Ok((input_tps, false))
-        }
-        InputTpsBootstrap::Initial { input_tps, pin } => Ok((
-            plan.model_ids
-                .iter()
-                .cloned()
-                .map(|model_id| (model_id, *input_tps))
-                .collect(),
-            *pin,
-        )),
-    }
 }
 
 fn start_engine_stats_runtime(
@@ -389,6 +411,7 @@ fn start_engine_stats_runtime(
     plan: &PylonStartupPlan,
     metrics: Arc<PylonMetrics>,
     stats_config: &StatsCollectorConfig,
+    runtime_state: PylonRuntimeState,
 ) -> Option<(
     RunningEngineStatsStream,
     flume::Receiver<pylon_lib::StatsAggregatorUpdate>,
@@ -400,6 +423,7 @@ fn start_engine_stats_runtime(
         args.engine_stats_stream,
     );
     config.metrics = Some(metrics);
+    config.runtime_state = Some(runtime_state);
     let mode = config.mode;
     start_engine_stats_stream(config, stats_update_tx)
         .map(|handle| (RunningEngineStatsStream { mode, handle }, stats_update_rx))
@@ -487,12 +511,8 @@ fn tunnel_forwarding_config_from_plan(
 pub(crate) fn stats_collector_config_from_args(
     args: &Args,
     upstream: &str,
-    bootstrap_input_tps: HashMap<String, f64>,
-    pin_bootstrap_input_tps: bool,
 ) -> StatsCollectorConfig {
     StatsCollectorConfig {
-        bootstrap_input_tps,
-        pin_bootstrap_input_tps,
         openai_fallback_stats_enabled: args.engine_stats_stream == EngineStatsStreamMode::Off,
         // Mock benchmark backends can expose live KV-cache occupancy over HTTP;
         // real upstreams usually do not, so polling is explicit.
@@ -551,7 +571,7 @@ pub(crate) fn pylon_queue_mismatch_retry_config_from_args(
     })
 }
 
-fn input_tps_bootstrap_from_args(args: &Args) -> Result<InputTpsBootstrap> {
+fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
     ensure!(
         args.do_calibration ^ args.initial_input_tps.is_some(),
         "exactly one of --do-calibration or --initial-input-tps is required"
@@ -570,7 +590,7 @@ fn input_tps_bootstrap_from_args(args: &Args) -> Result<InputTpsBootstrap> {
             !args.benchmark_pin_input_tps,
             "--benchmark-pin-input-tps requires --initial-input-tps"
         );
-        return Ok(InputTpsBootstrap::Calibration(CalibrationConfig {
+        return Ok(ModelInitialization::Calibration(CalibrationConfig {
             health_timeout: Duration::from_millis(args.bringup_canary_timeout_ms),
             calibration_requests: args.calibration_requests,
             calibration_prompt_units: args.calibration_prompt_units,
@@ -579,7 +599,7 @@ fn input_tps_bootstrap_from_args(args: &Args) -> Result<InputTpsBootstrap> {
         }));
     }
 
-    Ok(InputTpsBootstrap::Initial {
+    Ok(ModelInitialization::ConfiguredInputTps {
         input_tps: args
             .initial_input_tps
             .expect("exactly one bootstrap source was validated"),
@@ -618,13 +638,15 @@ pub(crate) fn request_quality_monitor_config_from_args(args: &Args) -> RequestQu
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::pin::Pin;
     use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use axum::extract::State;
-    use axum::http::StatusCode;
+    use axum::http::{HeaderMap, StatusCode};
     use axum::response::{IntoResponse, Response as AxumResponse};
     use axum::routing::{get, post};
     use axum::{Json, Router};
@@ -640,6 +662,7 @@ mod tests {
         InferenceServerAck, InferenceServerRegistration, InferenceServerStatus, StargateInfo,
         WatchStargatesRequest, WatchStargatesResponse,
     };
+    use stargate_protocol::tunnel_contract::HEADER_REQUEST_ID;
     use tokio::net::TcpListener;
     use tokio::sync::{Semaphore, mpsc};
     use tokio_stream::wrappers::TcpListenerStream;
@@ -705,36 +728,46 @@ mod tests {
     #[derive(Clone)]
     struct TestUpstreamState {
         calibration_requests: Arc<AtomicUsize>,
+        calibration_generations: Arc<StdMutex<HashSet<String>>>,
+        calibration_plans: Arc<AtomicUsize>,
         calibration_started: mpsc::UnboundedSender<String>,
         calibration_release: Arc<Semaphore>,
-        fail_calibration: bool,
+        calibration_request_errors: bool,
     }
 
     struct TestUpstream {
         base_url: String,
         calibration_requests: Arc<AtomicUsize>,
+        calibration_plans: Arc<AtomicUsize>,
         calibration_started: mpsc::UnboundedReceiver<String>,
         calibration_release: Arc<Semaphore>,
         task: tokio::task::JoinHandle<()>,
     }
 
     impl TestUpstream {
-        async fn spawn(fail_calibration: bool) -> Self {
+        async fn spawn(calibration_request_errors: bool) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("test upstream should bind");
             let addr = listener.local_addr().expect("test upstream address");
             let calibration_requests = Arc::new(AtomicUsize::new(0));
+            let calibration_plans = Arc::new(AtomicUsize::new(0));
             let (calibration_started, calibration_started_rx) = mpsc::unbounded_channel();
             let calibration_release = Arc::new(Semaphore::new(0));
             let state = TestUpstreamState {
                 calibration_requests: calibration_requests.clone(),
+                calibration_generations: Arc::new(StdMutex::new(HashSet::new())),
+                calibration_plans: calibration_plans.clone(),
                 calibration_started,
                 calibration_release: calibration_release.clone(),
-                fail_calibration,
+                calibration_request_errors,
             };
             let app = Router::new()
                 .route("/health", get(|| async { "ok" }))
+                .route(
+                    "/v1/models",
+                    get(|| async { Json(serde_json::json!({"data": []})) }),
+                )
                 .route("/v1/chat/completions", post(test_calibration_completion))
                 .with_state(state);
             let task = tokio::spawn(async move {
@@ -745,6 +778,7 @@ mod tests {
             Self {
                 base_url: format!("http://{addr}"),
                 calibration_requests,
+                calibration_plans,
                 calibration_started: calibration_started_rx,
                 calibration_release,
                 task,
@@ -759,21 +793,35 @@ mod tests {
 
     async fn test_calibration_completion(
         State(state): State<TestUpstreamState>,
+        headers: HeaderMap,
         Json(request): Json<serde_json::Value>,
     ) -> AxumResponse {
         state.calibration_requests.fetch_add(1, Ordering::SeqCst);
         let model_id = request["model"].as_str().unwrap_or_default().to_string();
-        state
-            .calibration_started
-            .send(model_id)
-            .expect("test should still observe calibration");
+        let generation = headers
+            .get(HEADER_REQUEST_ID)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|request_id| request_id.rsplit_once('-').map(|(prefix, _)| prefix))
+            .expect("calibration request should carry an exact-generation request ID");
+        let first_request = state
+            .calibration_generations
+            .lock()
+            .expect("calibration generation set should not be poisoned")
+            .insert(generation.to_string());
+        if first_request {
+            state.calibration_plans.fetch_add(1, Ordering::SeqCst);
+            state
+                .calibration_started
+                .send(model_id)
+                .expect("test should still observe calibration");
+        }
         let permit = state
             .calibration_release
             .acquire()
             .await
             .expect("test calibration gate should remain open");
         permit.forget();
-        if state.fail_calibration {
+        if state.calibration_request_errors {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
         Json(serde_json::json!({"usage": {"completion_tokens": 1}})).into_response()
@@ -945,11 +993,30 @@ mod tests {
 
     async fn test_running_pylon(stats_collector: StatsCollectorHandle) -> RunningPylon {
         let metrics = PylonMetrics::new().expect("metrics should initialize");
+        let model_lifecycle = start_model_lifecycle(
+            ModelLifecycleConfig {
+                upstream_http_base_url: "http://127.0.0.1:1".to_string(),
+                source: ModelSource::Static(BTreeSet::new()),
+                initialization: ModelInitialization::ConfiguredInputTps {
+                    input_tps: 1.0,
+                    pin: false,
+                },
+                bringup: BringupConfig {
+                    enabled: false,
+                    ..BringupConfig::default()
+                },
+            },
+            PylonRuntimeState::default(),
+            &stats_collector,
+            None,
+        )
+        .await
+        .expect("test model lifecycle should start");
         RunningPylon {
             registration_client: InferenceServerRegistrationClient::default(),
             engine_stats_stream: None,
             stats_collector,
-            bringup: None,
+            model_lifecycle,
             metrics_server: start_metrics_server(
                 "127.0.0.1:0".parse().expect("metrics address should parse"),
                 metrics.registry(),
@@ -958,6 +1025,7 @@ mod tests {
             .expect("metrics server should start"),
             tunnel: None,
             registration_inference_server_url: "quic://127.0.0.1:4567".to_string(),
+            initial_model_ids: Vec::new(),
         }
     }
 
@@ -977,7 +1045,16 @@ mod tests {
         let (args, plan) = startup(&["--engine-stats-stream", "off"]);
         let metrics = PylonMetrics::new().expect("metrics should initialize");
         let config = StatsCollectorConfig::default();
-        assert!(start_engine_stats_runtime(&args, &plan, metrics, &config).is_none());
+        assert!(
+            start_engine_stats_runtime(
+                &args,
+                &plan,
+                metrics,
+                &config,
+                PylonRuntimeState::default(),
+            )
+            .is_none()
+        );
     }
 
     #[tokio::test]
@@ -985,9 +1062,14 @@ mod tests {
         let (args, plan) = startup(&["--engine-stats-stream", "required"]);
         let metrics = PylonMetrics::new().expect("metrics should initialize");
         let config = StatsCollectorConfig::default();
-        let (engine_stats_stream, _stats_update_rx) =
-            start_engine_stats_runtime(&args, &plan, metrics, &config)
-                .expect("required engine stats should start a stream task");
+        let (engine_stats_stream, _stats_update_rx) = start_engine_stats_runtime(
+            &args,
+            &plan,
+            metrics,
+            &config,
+            PylonRuntimeState::default(),
+        )
+        .expect("required engine stats should start a stream task");
         engine_stats_stream.handle.shutdown().await;
     }
 
@@ -1182,27 +1264,15 @@ mod tests {
     }
 
     #[test]
-    fn stats_config_uses_normalized_upstream_and_bootstrap_rate() {
+    fn stats_config_uses_normalized_upstream() {
         let (args, plan) = startup(&[
             "--engine-stats-stream",
             "required",
             "--kv-cache-stats-path",
             "kv/live",
-            "--benchmark-pin-input-tps",
         ]);
-        let stats = stats_collector_config_from_args(
-            &args,
-            &plan.upstream,
-            HashMap::from([
-                ("model-a".to_string(), 100.0),
-                ("model-b".to_string(), 100.0),
-            ]),
-            true,
-        );
+        let stats = stats_collector_config_from_args(&args, &plan.upstream);
 
-        assert_eq!(stats.bootstrap_input_tps.len(), 2);
-        assert_eq!(stats.bootstrap_input_tps["model-a"], 100.0);
-        assert!(stats.pin_bootstrap_input_tps);
         assert_eq!(
             stats.kv_cache_stats_url.as_deref(),
             Some("http://127.0.0.1:8090/kv/live")
@@ -1211,22 +1281,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bootstrap_input_tps_seeds_queue_estimates_before_engine_stats() {
+    async fn configured_input_tps_seeds_queue_estimates_before_engine_stats() {
         let (args, plan) = startup(&[]);
         let metrics = PylonMetrics::new().expect("metrics should initialize");
-        let mut config = stats_collector_config_from_args(
-            &args,
-            &plan.upstream,
-            HashMap::from([
-                ("model-a".to_string(), 1000.0),
-                ("model-b".to_string(), 1000.0),
-            ]),
-            false,
-        );
+        let mut config = stats_collector_config_from_args(&args, &plan.upstream);
         config.openai_fallback_stats_enabled = true;
         let (runtime_state, request_observation_rx) = PylonRuntimeState::observed(
             InferenceServerStatus::Unknown,
-            &args.model_name,
+            &[],
             config.observation_channel_capacity,
             Some(metrics),
         );
@@ -1236,6 +1298,25 @@ mod tests {
             None,
             runtime_state.clone(),
         );
+        let model_lifecycle = start_model_lifecycle(
+            ModelLifecycleConfig {
+                upstream_http_base_url: plan.upstream.clone(),
+                source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
+                initialization: ModelInitialization::ConfiguredInputTps {
+                    input_tps: 1_000.0,
+                    pin: false,
+                },
+                bringup: BringupConfig {
+                    enabled: false,
+                    ..BringupConfig::default()
+                },
+            },
+            runtime_state.clone(),
+            &stats_collector,
+            None,
+        )
+        .await
+        .expect("configured generation should initialize");
         let mut observation = test_observation();
         observation.input_tokens = 1000;
 
@@ -1250,6 +1331,7 @@ mod tests {
                 .and_then(|estimates| estimates.get(&0)),
             Some(&1000)
         );
+        model_lifecycle.shutdown().await;
         stats_collector.shutdown().await;
     }
 
@@ -1317,6 +1399,8 @@ mod tests {
                 "256",
                 "--calibration-max-concurrency",
                 "1",
+                "--bringup-calibration-timeout-ms",
+                "20",
             ],
         );
         let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
@@ -1336,7 +1420,8 @@ mod tests {
         upstream.calibration_release.add_permits(1);
 
         let registration = control_plane.first_registration().await;
-        assert_eq!(upstream.calibration_requests.load(Ordering::SeqCst), 2);
+        assert_eq!(upstream.calibration_plans.load(Ordering::SeqCst), 2);
+        assert!(upstream.calibration_requests.load(Ordering::SeqCst) >= 4);
         assert_eq!(control_plane.watch_calls.load(Ordering::SeqCst), 1);
         assert_eq!(control_plane.register_calls.load(Ordering::SeqCst), 1);
         assert_eq!(registration.models.len(), 2);
@@ -1346,7 +1431,7 @@ mod tests {
                 .as_ref()
                 .expect("first heartbeat should contain stats")
                 .last_mean_input_tps;
-            assert!(input_tps.is_finite() && input_tps > 0.0);
+            assert!(input_tps.is_finite());
         }
 
         startup
@@ -1373,6 +1458,8 @@ mod tests {
                 "1",
                 "--calibration-prompt-units",
                 "256",
+                "--bringup-calibration-timeout-ms",
+                "20",
             ],
         );
         let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
@@ -1389,7 +1476,8 @@ mod tests {
             .expect("pylon startup should succeed");
         let registration = control_plane.first_registration().await;
 
-        assert_eq!(upstream.calibration_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(upstream.calibration_plans.load(Ordering::SeqCst), 1);
+        assert!(upstream.calibration_requests.load(Ordering::SeqCst) >= 2);
         assert_eq!(registration.models.len(), 1);
         assert!(registration.models.contains_key("model-a"));
 
@@ -1422,7 +1510,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn calibration_failure_returns_before_any_stargate_rpc() {
+    async fn initial_calibration_request_error_returns_before_any_stargate_rpc() {
         let mut upstream = TestUpstream::spawn(true).await;
         let control_plane = TestControlPlane::spawn().await;
         let args = runtime_args(
@@ -1449,7 +1537,7 @@ mod tests {
         let error = match startup.await.expect("pylon startup task should not panic") {
             Ok(runtime) => {
                 runtime.shutdown().await;
-                panic!("calibration failure must fail startup");
+                panic!("calibration request error must fail startup");
             }
             Err(error) => error,
         };
@@ -1457,9 +1545,60 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("local input-TPS calibration failed")
+                .contains("pylon initial model initialization failed")
         );
         control_plane.assert_no_calls();
+        upstream.shutdown().await;
+        control_plane.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn initial_discovery_failure_returns_before_any_stargate_rpc() {
+        let control_plane = TestControlPlane::spawn().await;
+        let args = runtime_args(
+            "http://127.0.0.1:1",
+            control_plane.addr,
+            &[],
+            &["--initial-input-tps", "100"],
+        );
+        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+
+        let error = match start_pylon_runtime(&args, &plan).await {
+            Ok(runtime) => {
+                runtime.shutdown().await;
+                panic!("initial discovery failure must fail startup");
+            }
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("initial model initialization failed")
+        );
+        control_plane.assert_no_calls();
+        control_plane.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn valid_empty_initial_discovery_registers_an_empty_snapshot() {
+        let upstream = TestUpstream::spawn(false).await;
+        let mut control_plane = TestControlPlane::spawn().await;
+        let args = runtime_args(
+            &upstream.base_url,
+            control_plane.addr,
+            &[],
+            &["--initial-input-tps", "100"],
+        );
+        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+
+        let runtime = start_pylon_runtime(&args, &plan)
+            .await
+            .expect("valid empty discovery should start pylon");
+        let registration = control_plane.first_registration().await;
+
+        assert!(registration.models.is_empty());
+        runtime.shutdown().await;
         upstream.shutdown().await;
         control_plane.shutdown().await;
     }

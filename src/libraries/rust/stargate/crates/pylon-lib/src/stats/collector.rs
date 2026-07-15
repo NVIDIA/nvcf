@@ -13,17 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use indexmap::IndexMap;
+use tokio::sync::oneshot;
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 
+use crate::runtime_state::ModelGeneration;
 use crate::{CurrentModelStats, PylonRuntimeState, RequestObservationEvent};
 use stargate_runtime::OwnedTask;
 
-use super::aggregator::{KvCacheStatsSnapshot, StatsAggregator};
+use super::aggregator::{ENGINE_STATS_SOURCE, KvCacheStatsSnapshot, StatsAggregator};
 
 const DEFAULT_OBSERVATION_CHANNEL_CAPACITY: usize = 1024;
 const DEFAULT_SMOOTHING_WINDOW_SIZE: usize = 8;
@@ -43,10 +44,6 @@ pub struct StatsCollectorConfig {
     pub min_input_tokens: u64,
     pub min_output_tokens: u64,
     pub duration_floor: Duration,
-    /// Per-model input throughput used to initialize the estimator before registration.
-    pub bootstrap_input_tps: HashMap<String, f64>,
-    /// Keeps configured bootstrap values fixed for deterministic benchmark experiments.
-    pub pin_bootstrap_input_tps: bool,
     pub kv_cache_stats_url: Option<String>,
     pub kv_cache_poll_interval: Duration,
     pub kv_cache_request_timeout: Duration,
@@ -64,8 +61,6 @@ impl Default for StatsCollectorConfig {
             min_input_tokens: DEFAULT_MIN_INPUT_TOKENS,
             min_output_tokens: DEFAULT_MIN_OUTPUT_TOKENS,
             duration_floor: DEFAULT_DURATION_FLOOR,
-            bootstrap_input_tps: HashMap::new(),
-            pin_bootstrap_input_tps: false,
             kv_cache_stats_url: None,
             kv_cache_poll_interval: DEFAULT_KV_CACHE_POLL_INTERVAL,
             kv_cache_request_timeout: DEFAULT_KV_CACHE_REQUEST_TIMEOUT,
@@ -86,7 +81,110 @@ pub fn stats_aggregator_update_channel(
     flume::bounded(config.observation_channel_capacity)
 }
 
-owned_task_handle!(StatsCollectorHandle);
+#[derive(Clone)]
+pub(crate) struct StatsCollectorControl {
+    tx: flume::Sender<StatsCollectorCommand>,
+}
+
+pub struct StatsCollectorHandle {
+    task: OwnedTask,
+    control: StatsCollectorControl,
+}
+
+impl StatsCollectorHandle {
+    pub(crate) fn control(&self) -> StatsCollectorControl {
+        self.control.clone()
+    }
+
+    pub async fn wait_for_exit(&mut self) -> Result<(), tokio::task::JoinError> {
+        self.task.wait_for_exit().await
+    }
+
+    pub async fn shutdown(self) {
+        self.task
+            .shutdown(stargate_runtime::TASK_SHUTDOWN_TIMEOUT)
+            .await;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ModelStatsInitialization {
+    Empty,
+    ConfiguredInputTps { input_tps: f64, pin: bool },
+}
+
+enum StatsCollectorCommand {
+    Begin {
+        generation: ModelGeneration,
+        initialization: ModelStatsInitialization,
+        reply: oneshot::Sender<bool>,
+    },
+    Snapshot {
+        generation: ModelGeneration,
+        reply: oneshot::Sender<Option<CurrentModelStats>>,
+    },
+    Retire {
+        generation: ModelGeneration,
+        reply: oneshot::Sender<bool>,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("stats collector stopped before acknowledging model generation command")]
+pub(crate) struct StatsCollectorStopped;
+
+impl StatsCollectorControl {
+    pub(crate) async fn begin_generation(
+        &self,
+        generation: ModelGeneration,
+        initialization: ModelStatsInitialization,
+    ) -> Result<bool, StatsCollectorStopped> {
+        let (reply, acknowledged) = oneshot::channel();
+        self.send(StatsCollectorCommand::Begin {
+            generation,
+            initialization,
+            reply,
+        })
+        .await?;
+        acknowledged.await.map_err(|_| StatsCollectorStopped)
+    }
+
+    /// Flushes queued observation and engine-stats events into the aggregator,
+    /// publishes resulting runtime-state updates, then snapshots this exact
+    /// generation. Returns `None` if the generation is no longer owned.
+    pub(crate) async fn flush_and_snapshot(
+        &self,
+        generation: &ModelGeneration,
+    ) -> Result<Option<CurrentModelStats>, StatsCollectorStopped> {
+        let (reply, acknowledged) = oneshot::channel();
+        self.send(StatsCollectorCommand::Snapshot {
+            generation: generation.clone(),
+            reply,
+        })
+        .await?;
+        acknowledged.await.map_err(|_| StatsCollectorStopped)
+    }
+
+    pub(crate) async fn retire_generation(
+        &self,
+        generation: &ModelGeneration,
+    ) -> Result<bool, StatsCollectorStopped> {
+        let (reply, acknowledged) = oneshot::channel();
+        self.send(StatsCollectorCommand::Retire {
+            generation: generation.clone(),
+            reply,
+        })
+        .await?;
+        acknowledged.await.map_err(|_| StatsCollectorStopped)
+    }
+
+    async fn send(&self, command: StatsCollectorCommand) -> Result<(), StatsCollectorStopped> {
+        self.tx
+            .send_async(command)
+            .await
+            .map_err(|_| StatsCollectorStopped)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatsUpdateSource {
@@ -106,6 +204,7 @@ pub struct RequestCounterUpdate {
     pub(crate) source: StatsUpdateSource,
     pub(crate) request_id: String,
     pub(crate) model_id: String,
+    pub(crate) generation: Option<ModelGeneration>,
     pub(crate) tokens_processed: Option<u64>,
     pub(crate) tokens_generated: Option<u64>,
     pub(crate) finished: bool,
@@ -129,6 +228,7 @@ impl RequestCounterUpdate {
             source: input.source,
             request_id: input.request_id,
             model_id: input.model_id,
+            generation: None,
             tokens_processed: input.tokens_processed,
             tokens_generated: input.tokens_generated,
             finished: input.finished,
@@ -141,6 +241,7 @@ impl RequestCounterUpdate {
 pub struct FinalizeRequestUpdate {
     pub(crate) source: StatsUpdateSource,
     pub(crate) request_id: String,
+    pub(crate) generation: Option<ModelGeneration>,
     pub(crate) observed_at: TokioInstant,
 }
 
@@ -153,6 +254,7 @@ impl FinalizeRequestUpdate {
         Self {
             source,
             request_id: request_id.into(),
+            generation: None,
             observed_at,
         }
     }
@@ -172,52 +274,49 @@ pub fn start_stats_collector_with_engine_stats(
     stats_update_rx: Option<flume::Receiver<StatsAggregatorUpdate>>,
     runtime_state: PylonRuntimeState,
 ) -> StatsCollectorHandle {
-    assert!(
-        !config.pin_bootstrap_input_tps || !config.bootstrap_input_tps.is_empty(),
-        "pinned bootstrap input TPS requires at least one model"
-    );
-    if !config.bootstrap_input_tps.is_empty() {
-        let mut bootstrap_model_ids = config
-            .bootstrap_input_tps
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        bootstrap_model_ids.sort_unstable();
-        assert_eq!(
-            bootstrap_model_ids,
-            runtime_state.model_ids(),
-            "bootstrap input TPS models must match runtime state models"
-        );
-    }
-
     // A wired engine stats stream is the throughput source of truth. Auto mode
     // falls back only after the stream task sends EnableOpenAiFallback.
     config.openai_fallback_stats_enabled &= stats_update_rx.is_none();
-    let aggregator = StatsAggregator::new(config, runtime_state.clone());
-    publish_model_stats_updates(&runtime_state, aggregator.bootstrap_updates());
+    let mut aggregator = StatsAggregator::new(config, runtime_state.clone());
+    for model_id in runtime_state.model_ids() {
+        let generation = runtime_state
+            .current_generation(&model_id)
+            .expect("runtime model generation should remain present during startup");
+        aggregator
+            .begin_generation(generation, ModelStatsInitialization::Empty)
+            .expect("distinct runtime models should initialize once");
+    }
+    let (control_tx, control_rx) = flume::bounded(aggregator.config.observation_channel_capacity);
     let task = OwnedTask::spawn("stats collector", move |stop| async move {
-        run_stats_collector(aggregator, observation_rx, stats_update_rx, stop).await;
+        run_stats_collector(
+            aggregator,
+            observation_rx,
+            stats_update_rx,
+            control_rx,
+            stop,
+        )
+        .await;
     });
-    StatsCollectorHandle { task }
+    StatsCollectorHandle {
+        task,
+        control: StatsCollectorControl { tx: control_tx },
+    }
 }
 
 fn publish_model_stats_update(
     runtime_state: &PylonRuntimeState,
-    model_id: String,
+    generation: ModelGeneration,
     stats: CurrentModelStats,
 ) {
-    if let Some(metrics) = runtime_state.metrics() {
-        metrics.observe_model_stats(&model_id, &stats);
-    }
-    runtime_state.set_model_stats(model_id, stats);
+    runtime_state.set_generation_stats(&generation, stats);
 }
 
 fn publish_model_stats_updates(
     runtime_state: &PylonRuntimeState,
-    updates: Vec<(String, CurrentModelStats)>,
+    updates: Vec<(ModelGeneration, CurrentModelStats)>,
 ) {
-    for (model_id, stats) in updates {
-        publish_model_stats_update(runtime_state, model_id, stats);
+    for (generation, stats) in updates {
+        publish_model_stats_update(runtime_state, generation, stats);
     }
 }
 
@@ -225,6 +324,7 @@ async fn run_stats_collector(
     mut aggregator: StatsAggregator,
     observation_rx: flume::Receiver<RequestObservationEvent>,
     mut stats_update_rx: Option<flume::Receiver<StatsAggregatorUpdate>>,
+    control_rx: flume::Receiver<StatsCollectorCommand>,
     stop: CancellationToken,
 ) {
     let config = aggregator.config.clone();
@@ -239,17 +339,36 @@ async fn run_stats_collector(
 
     'collector: loop {
         tokio::select! {
+            biased;
             _ = stop.cancelled() => break 'collector,
+            command = control_rx.recv_async() => {
+                let Ok(command) = command else {
+                    break 'collector;
+                };
+                if matches!(command, StatsCollectorCommand::Snapshot { .. }) {
+                    if let Some(rx) = &stats_update_rx {
+                        drain_stats_updates(
+                            &mut aggregator,
+                            rx,
+                            &mut stats_aggregator_updated_models,
+                            &mut stats_aggregator_latest_models,
+                        );
+                        publish_model_stats_updates(
+                            &runtime_state,
+                            std::mem::take(&mut stats_aggregator_updated_models),
+                        );
+                    }
+                    drain_ready(&observation_rx, |event| {
+                        publish_observation_event(&mut aggregator, &runtime_state, event);
+                    });
+                }
+                apply_collector_command(&mut aggregator, &runtime_state, command);
+            }
             event = observation_rx.recv_async() => {
                 let Ok(event) = event else {
                     break 'collector;
                 };
-                let updated_models = if aggregator.openai_fallback_stats_enabled() {
-                    aggregator.apply_fallback_observation(&event)
-                } else {
-                    aggregator.apply_stream_observation(&event)
-                };
-                publish_model_stats_updates(&runtime_state, updated_models);
+                publish_observation_event(&mut aggregator, &runtime_state, event);
             }
             update = async {
                 match &stats_update_rx {
@@ -267,17 +386,13 @@ async fn run_stats_collector(
                 stats_aggregator_updated_models.clear();
                 aggregator.apply_update_into(update, &mut stats_aggregator_updated_models);
                 if let Some(rx) = &stats_update_rx {
-                    drain_ready(rx, |update| {
-                        if aggregator.apply_control_update(&update) {
-                            return;
-                        }
-                        aggregator.apply_update_into(update, &mut stats_aggregator_updated_models);
-                    });
+                    drain_stats_updates(
+                        &mut aggregator,
+                        rx,
+                        &mut stats_aggregator_updated_models,
+                        &mut stats_aggregator_latest_models,
+                    );
                 }
-                retain_latest_model_updates(
-                    &mut stats_aggregator_updated_models,
-                    &mut stats_aggregator_latest_models,
-                );
                 if let Some(metrics) = runtime_state.metrics() {
                     metrics.observe_engine_stats_live_requests(
                         "engine_stats_stream",
@@ -322,14 +437,82 @@ async fn run_stats_collector(
                 else {
                     tracing::warn!(
                         model_id,
-                        configured_models = ?config.bootstrap_input_tps.keys(),
-                        "dropping KV-cache stats for unconfigured model"
+                        configured_models = ?aggregator.per_model.keys(),
+                        "dropping KV-cache stats for a model with no live generation"
                     );
                     continue;
                 };
                 publish_model_stats_update(&runtime_state, model_id, updated_stats);
             }
         }
+    }
+}
+
+fn publish_observation_event(
+    aggregator: &mut StatsAggregator,
+    runtime_state: &PylonRuntimeState,
+    event: RequestObservationEvent,
+) {
+    let updated_models = if aggregator.openai_fallback_stats_enabled() {
+        aggregator.apply_fallback_observation(&event)
+    } else {
+        aggregator.apply_stream_observation(&event)
+    };
+    publish_model_stats_updates(runtime_state, updated_models);
+}
+
+fn drain_stats_updates(
+    aggregator: &mut StatsAggregator,
+    updates: &flume::Receiver<StatsAggregatorUpdate>,
+    updated_models: &mut Vec<(ModelGeneration, CurrentModelStats)>,
+    latest_by_model: &mut IndexMap<ModelGeneration, CurrentModelStats>,
+) {
+    drain_ready(updates, |update| {
+        if !aggregator.apply_control_update(&update) {
+            aggregator.apply_update_into(update, updated_models);
+        }
+    });
+    retain_latest_model_updates(updated_models, latest_by_model);
+}
+
+fn apply_collector_command(
+    aggregator: &mut StatsAggregator,
+    runtime_state: &PylonRuntimeState,
+    command: StatsCollectorCommand,
+) {
+    match command {
+        StatsCollectorCommand::Begin {
+            generation,
+            initialization,
+            reply,
+        } => {
+            let update = aggregator.begin_generation(generation, initialization);
+            let applied = update.is_some();
+            if let Some((generation, stats)) = update {
+                publish_model_stats_update(runtime_state, generation, stats);
+            }
+            observe_aggregate_counts(aggregator, runtime_state);
+            let _ = reply.send(applied);
+        }
+        StatsCollectorCommand::Snapshot { generation, reply } => {
+            let _ = reply.send(aggregator.snapshot_generation(&generation));
+        }
+        StatsCollectorCommand::Retire { generation, reply } => {
+            let retired = aggregator.retire_generation(&generation);
+            observe_aggregate_counts(aggregator, runtime_state);
+            let _ = reply.send(retired);
+        }
+    }
+}
+
+fn observe_aggregate_counts(aggregator: &StatsAggregator, runtime_state: &PylonRuntimeState) {
+    if let Some(metrics) = runtime_state.metrics() {
+        metrics.observe_engine_stats_live_requests(
+            ENGINE_STATS_SOURCE,
+            aggregator.live_request_count(),
+        );
+        metrics
+            .observe_engine_stats_model_states(ENGINE_STATS_SOURCE, aggregator.model_state_count());
     }
 }
 
@@ -368,12 +551,12 @@ fn drain_ready<T>(rx: &flume::Receiver<T>, mut consume: impl FnMut(T)) {
 }
 
 fn retain_latest_model_updates(
-    updates: &mut Vec<(String, CurrentModelStats)>,
-    latest_by_model: &mut IndexMap<String, CurrentModelStats>,
+    updates: &mut Vec<(ModelGeneration, CurrentModelStats)>,
+    latest_by_model: &mut IndexMap<ModelGeneration, CurrentModelStats>,
 ) {
     latest_by_model.clear();
-    for (model_id, stats) in updates.drain(..).rev() {
-        latest_by_model.entry(model_id).or_insert(stats);
+    for (generation, stats) in updates.drain(..).rev() {
+        latest_by_model.entry(generation).or_insert(stats);
     }
     updates.extend(latest_by_model.drain(..).rev());
 }
@@ -387,6 +570,7 @@ mod tests {
     use super::super::projection::fallback_update_from_observation;
     use super::*;
     use crate::RequestObservation;
+    use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
     use crate::request_observer::RequestObservationEndpoint;
     use crate::request_observer::RequestObservationState;
     use axum::{Json, Router, routing::get};
@@ -407,14 +591,31 @@ mod tests {
             metrics: Option<Arc<PylonMetrics>>,
             with_stats_updates: bool,
         ) -> Self {
-            let model_ids = config
-                .bootstrap_input_tps
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
+            Self::spawn_with_models(
+                config,
+                metrics,
+                with_stats_updates,
+                &["model-a".to_string()],
+            )
+        }
+
+        fn spawn_empty(
+            config: StatsCollectorConfig,
+            metrics: Option<Arc<PylonMetrics>>,
+            with_stats_updates: bool,
+        ) -> Self {
+            Self::spawn_with_models(config, metrics, with_stats_updates, &[])
+        }
+
+        fn spawn_with_models(
+            config: StatsCollectorConfig,
+            metrics: Option<Arc<PylonMetrics>>,
+            with_stats_updates: bool,
+            model_ids: &[String],
+        ) -> Self {
             let (runtime_state, observation_rx) = PylonRuntimeState::observed(
                 stargate_proto::pb::InferenceServerStatus::Unknown,
-                &model_ids,
+                model_ids,
                 config.observation_channel_capacity,
                 metrics,
             );
@@ -435,6 +636,22 @@ mod tests {
                 started_at,
             }
         }
+
+        async fn begin_configured_model(&self, model_id: &str, input_tps: f64, pin: bool) {
+            let generation = ModelGeneration::new(model_id, 0);
+            assert!(self.runtime_state.begin_generation(generation.clone()));
+            assert!(
+                self.handle
+                    .control()
+                    .begin_generation(
+                        generation,
+                        ModelStatsInitialization::ConfiguredInputTps { input_tps, pin }
+                    )
+                    .await
+                    .expect("collector should acknowledge configured generation")
+            );
+        }
+
         async fn send_update(&self, update: StatsAggregatorUpdate) {
             self.stats_update_tx
                 .as_ref()
@@ -453,6 +670,7 @@ mod tests {
         ) {
             self.send_update(stream_counter_update(
                 request_id,
+                self.runtime_state.current_generation("model-a"),
                 tokens_processed,
                 tokens_generated,
                 finished,
@@ -513,7 +731,7 @@ mod tests {
     fn apply_fallback_observation(
         aggregator: &mut StatsAggregator,
         observation: &RequestObservation,
-    ) -> Vec<(String, CurrentModelStats)> {
+    ) -> Vec<super::super::aggregator::ModelStatsUpdate> {
         let event = aggregator
             .runtime_state
             .transition_request_observation(observation.clone());
@@ -523,7 +741,7 @@ mod tests {
     fn apply_stream_observation(
         aggregator: &mut StatsAggregator,
         observation: &RequestObservation,
-    ) -> Vec<(String, CurrentModelStats)> {
+    ) -> Vec<super::super::aggregator::ModelStatsUpdate> {
         let event = aggregator
             .runtime_state
             .transition_request_observation(observation.clone());
@@ -654,7 +872,7 @@ mod tests {
                 tokens: ($token, $token),
                 finished: bool,
                 elapsed: Duration,
-            ) -> Vec<(String, CurrentModelStats)> {
+            ) -> Vec<super::super::aggregator::ModelStatsUpdate> {
                 let wrap = $wrap;
                 self.counter(
                     StatsUpdateSource::$source,
@@ -677,13 +895,14 @@ mod tests {
             tokens: (Option<u64>, Option<u64>),
             finished: bool,
             elapsed: Duration,
-        ) -> Vec<(String, CurrentModelStats)> {
+        ) -> Vec<super::super::aggregator::ModelStatsUpdate> {
             self.inner
                 .apply_update(StatsAggregatorUpdate::RequestCounters(
                     RequestCounterUpdate {
                         source,
                         request_id: request_id.to_string(),
                         model_id: model_id.to_string(),
+                        generation: self.inner.current_generation(model_id).cloned(),
                         tokens_processed: tokens.0,
                         tokens_generated: tokens.1,
                         finished,
@@ -691,15 +910,17 @@ mod tests {
                     },
                 ))
         }
-        fn sweep(&mut self, elapsed: Duration) -> Vec<(String, CurrentModelStats)> {
+        fn sweep(&mut self, elapsed: Duration) -> Vec<super::super::aggregator::ModelStatsUpdate> {
             self.inner.sweep_stale(self.start + elapsed)
         }
         fn finalize(&mut self, request_id: &str, elapsed: Duration) {
-            self.inner.finalize_request(FinalizeRequestUpdate::new(
+            let mut update = FinalizeRequestUpdate::new(
                 StatsUpdateSource::OpenAiFallback,
                 request_id,
                 self.start + elapsed,
-            ));
+            );
+            update.generation = self.inner.current_generation("model-a").cloned();
+            self.inner.finalize_request(update);
         }
         counter_method!(stream, EngineStatsStream, u64, Some);
         counter_method!(fallback, OpenAiFallback, u64, Some);
@@ -749,7 +970,7 @@ mod tests {
             tokens: (u64, u64),
             finished: bool,
             elapsed: Duration,
-        ) -> Vec<(String, CurrentModelStats)> {
+        ) -> Vec<super::super::aggregator::ModelStatsUpdate> {
             self.counter(
                 source,
                 request_id,
@@ -774,11 +995,30 @@ mod tests {
         }
     }
 
-    fn test_aggregator(config: StatsCollectorConfig) -> TestAggregator {
+    fn test_aggregator_with_initialization(
+        config: StatsCollectorConfig,
+        initialization: ModelStatsInitialization,
+    ) -> TestAggregator {
+        let model_ids = vec!["model-a".to_string()];
+        let runtime_state = PylonRuntimeState::new(
+            stargate_proto::pb::InferenceServerStatus::Unknown,
+            &model_ids,
+        );
+        let mut inner = StatsAggregator::new(config, runtime_state.clone());
+        let generation = runtime_state
+            .current_generation("model-a")
+            .expect("test model generation should exist");
+        inner
+            .begin_generation(generation, initialization)
+            .expect("test model generation should initialize");
         TestAggregator {
-            inner: StatsAggregator::new(config, PylonRuntimeState::default()),
+            inner,
             start: TokioInstant::now(),
         }
+    }
+
+    fn test_aggregator(config: StatsCollectorConfig) -> TestAggregator {
+        test_aggregator_with_initialization(config, ModelStatsInitialization::Empty)
     }
 
     fn kv_cache_stats(model: &str) -> KvCacheStatsSnapshot {
@@ -790,10 +1030,12 @@ mod tests {
         }
     }
 
-    fn published_stats(updates: Vec<(String, CurrentModelStats)>) -> CurrentModelStats {
+    fn published_stats(
+        updates: Vec<super::super::aggregator::ModelStatsUpdate>,
+    ) -> CurrentModelStats {
         updates
             .into_iter()
-            .find(|(model_id, _)| model_id == "model-a")
+            .find(|(generation, _)| generation.model_id() == "model-a")
             .expect("model-a stats should publish")
             .1
     }
@@ -812,7 +1054,10 @@ mod tests {
         template: &RequestObservation,
         request_prefix: &str,
         count: usize,
-        apply: fn(&mut StatsAggregator, &RequestObservation) -> Vec<(String, CurrentModelStats)>,
+        apply: fn(
+            &mut StatsAggregator,
+            &RequestObservation,
+        ) -> Vec<super::super::aggregator::ModelStatsUpdate>,
     ) -> CurrentModelStats {
         let mut latest = None;
         for index in 0..count {
@@ -854,7 +1099,9 @@ mod tests {
                     aggregator.snapshot("model-a").last_mean_input_tps,
                     $expected
                 );
-                let distribution = &aggregator.per_model["model-a"].input_tps_distribution;
+                let distribution = &aggregator.per_model["model-a"]
+                    .metrics
+                    .input_tps_distribution;
                 assert_eq!(distribution.count, 5);
                 assert_eq!(distribution.mean, $expected);
             }
@@ -884,7 +1131,7 @@ mod tests {
         .into_iter()
         .map(|(model, output_tps)| {
             (
-                model.to_string(),
+                ModelGeneration::new(model, 1),
                 CurrentModelStats {
                     output_tps,
                     ..Default::default()
@@ -897,7 +1144,7 @@ mod tests {
         assert_eq!(
             updates
                 .iter()
-                .map(|(model, stats)| (model.as_str(), stats.output_tps))
+                .map(|(generation, stats)| (generation.model_id(), stats.output_tps))
                 .collect::<Vec<_>>(),
             [("model-a", 3.0), ("model-c", 4.0), ("model-b", 5.0)]
         );
@@ -920,6 +1167,7 @@ mod tests {
 
     fn stream_counter_update(
         request_id: &str,
+        generation: Option<ModelGeneration>,
         tokens_processed: u64,
         tokens_generated: u64,
         finished: bool,
@@ -929,6 +1177,7 @@ mod tests {
             source: StatsUpdateSource::EngineStatsStream,
             request_id: request_id.to_string(),
             model_id: "model-a".to_string(),
+            generation,
             tokens_processed: Some(tokens_processed),
             tokens_generated: Some(tokens_generated),
             finished,
@@ -1003,11 +1252,14 @@ mod tests {
     }
 
     #[test]
-    fn pinned_bootstrap_input_tps_is_preserved_across_engine_stats_updates() {
-        let mut aggregator = test_aggregator(config!(
-            bootstrap_input_tps: HashMap::from([("model-a".to_string(), 2_200.0)]),
-            pin_bootstrap_input_tps: true,
-        ));
+    fn pinned_configured_input_tps_is_preserved_across_engine_stats_updates() {
+        let mut aggregator = test_aggregator_with_initialization(
+            StatsCollectorConfig::default(),
+            ModelStatsInitialization::ConfiguredInputTps {
+                input_tps: 2_200.0,
+                pin: true,
+            },
+        );
         let stats = aggregator.stream_stats("req-a", (0, 0), false, Duration::ZERO);
         assert_eq!(stats.last_mean_input_tps, 2_200.0);
         for tick in 1..=5 {
@@ -1017,10 +1269,14 @@ mod tests {
     }
 
     #[test]
-    fn unpinned_bootstrap_input_tps_moves_with_the_first_real_sample() {
-        let mut aggregator = test_aggregator(config!(
-            bootstrap_input_tps: HashMap::from([("model-a".to_string(), 100.0)]),
-        ));
+    fn unpinned_configured_input_tps_moves_with_the_first_real_sample() {
+        let mut aggregator = test_aggregator_with_initialization(
+            StatsCollectorConfig::default(),
+            ModelStatsInitialization::ConfiguredInputTps {
+                input_tps: 100.0,
+                pin: false,
+            },
+        );
         assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 100.0);
         aggregator.stream("req-a", (0, 0), false, Duration::ZERO);
 
@@ -1146,6 +1402,12 @@ mod tests {
     #[test]
     fn request_counter_model_reset_finalizes_without_late_replay() {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        aggregator
+            .begin_generation(
+                ModelGeneration::new("model-b", 2),
+                ModelStatsInitialization::Empty,
+            )
+            .expect("second test model should initialize");
         let original_model = aggregator
             .model_counter(
                 StatsUpdateSource::EngineStatsStream,
@@ -1158,7 +1420,7 @@ mod tests {
             .pop()
             .expect("first stream event should publish model-a source labels");
         assert_eq!(
-            (original_model.0.as_str(), original_model.1.output_tps),
+            (original_model.0.model_id(), original_model.1.output_tps),
             ("model-a", 0.0)
         );
         assert_eq!(aggregator.live_request_count(), 1);
@@ -1174,7 +1436,10 @@ mod tests {
             .pop()
             .expect("model change should reset request state and publish model-b source labels");
         assert_eq!(
-            (replacement_model.0.as_str(), replacement_model.1.output_tps),
+            (
+                replacement_model.0.model_id(),
+                replacement_model.1.output_tps
+            ),
             ("model-b", 0.0)
         );
         assert_eq!(aggregator.live_request_count(), 1);
@@ -1189,7 +1454,7 @@ mod tests {
             )
             .pop()
             .expect("fallback finalization should publish the replacement model snapshot");
-        assert_eq!(finalized.0, "model-b");
+        assert_eq!(finalized.0.model_id(), "model-b");
         assert_stats!(finalized.1; output_tps: 40.0, max_output_tps: 40.0, stats_sources: ["engine_stats_stream"]);
         assert_eq!(aggregator.live_request_count(), 0);
         let late_replay = aggregator.model_counter(
@@ -1401,6 +1666,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_observation_owns_a_first_late_engine_event() {
+        let config = config!(collector; openai_fallback_stats_enabled: false);
+        let collector = RunningCollector::spawn(config, None, true);
+        collector
+            .observe_until(
+                identified(
+                    completed_observation(32, 1, 10, milliseconds(50), seconds(1)),
+                    "req-first-late-stream-event",
+                ),
+                "terminal observation should record exact request ownership",
+                |stats| stats.stats_observed_at_unix_ms > 0,
+            )
+            .await;
+
+        collector
+            .send_update(stream_counter_update(
+                "req-first-late-stream-event",
+                None,
+                32,
+                10,
+                true,
+                collector.started_at + seconds(1),
+            ))
+            .await;
+        collector
+            .wait_for_stats(
+                "late first engine event should claim its generation",
+                |stats| stats.stats_sources == ["engine_stats_stream"],
+            )
+            .await;
+
+        collector.handle.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn stats_collector_helper_defaults_stats_stream_to_authoritative() {
         let collector =
             RunningCollector::spawn(config!(observation_channel_capacity: 16), None, true);
@@ -1535,10 +1835,7 @@ mod tests {
 
     #[test]
     fn stats_aggregator_rejects_unconfigured_counter_models() {
-        let config = config!(
-            bootstrap_input_tps: HashMap::from([("model-a".to_string(), 100.0)])
-        );
-        let mut aggregator = test_aggregator(config);
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
         let updates = aggregator.model_counter(
             StatsUpdateSource::EngineStatsStream,
             "req-unconfigured",
@@ -1563,8 +1860,8 @@ mod tests {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
         aggregator.stream("req-stream-race", (5, 3), false, Duration::ZERO);
         assert_eq!(aggregator.live_request_count(), 1);
-        let fallback_update =
-            fallback_update_from_observation(&observation).expect("terminal update should exist");
+        let fallback_update = fallback_update_from_observation(&observation, None)
+            .expect("terminal update should exist");
         let stats = aggregator
             .apply_update(fallback_update)
             .pop()
@@ -1616,7 +1913,7 @@ mod tests {
         assert!(
             stale_updates
                 .iter()
-                .any(|(model_id, _)| model_id == "model-a"),
+                .any(|(generation, _)| generation.model_id() == "model-a"),
             "stale cleanup should publish a dirty model snapshot"
         );
         let late_updates =
@@ -1656,6 +1953,21 @@ mod tests {
         assert!(late_updates.is_empty());
         assert_eq!(aggregator.request_counter_identity_count(), 1);
         aggregator.sweep(seconds(2));
+        assert_eq!(aggregator.request_counter_identity_count(), 0);
+    }
+
+    #[test]
+    fn ownerless_request_finalization_creates_no_tombstone() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+
+        aggregator
+            .inner
+            .finalize_request(FinalizeRequestUpdate::new(
+                StatsUpdateSource::OpenAiFallback,
+                "ownerless",
+                aggregator.start,
+            ));
+
         assert_eq!(aggregator.request_counter_identity_count(), 0);
     }
 
@@ -1708,8 +2020,8 @@ mod tests {
     #[test]
     fn fallback_input_throughput_is_owned_by_stats_aggregator() {
         let config = StatsCollectorConfig::default();
-        let runtime_state = PylonRuntimeState::default();
-        let mut aggregator = StatsAggregator::new(config, runtime_state.clone());
+        let mut aggregator = test_aggregator(config);
+        let runtime_state = aggregator.runtime_state.clone();
         for request_index in 0..5 {
             let updates = apply_fallback_observation(
                 &mut aggregator,
@@ -1719,13 +2031,16 @@ mod tests {
                 ),
             );
             assert_eq!(updates.len(), 1, "each observation should publish once");
+            publish_model_stats_updates(&runtime_state, updates.clone());
             let stats = published_stats(updates);
             assert_eq!(
                 stats.last_mean_input_tps,
                 if request_index < 4 { 0.0 } else { 100.0 }
             );
         }
-        let distribution = &aggregator.per_model["model-a"].input_tps_distribution;
+        let distribution = &aggregator.per_model["model-a"]
+            .metrics
+            .input_tps_distribution;
         assert_eq!(distribution.count, 5);
         assert_eq!(distribution.mean, 100.0);
         let _queued =
@@ -1769,7 +2084,10 @@ mod tests {
             assert_eq!(updates[0].1.last_mean_input_tps, 0.0);
         }
         assert_eq!(
-            aggregator.per_model["model-a"].input_tps_distribution.count,
+            aggregator.per_model["model-a"]
+                .metrics
+                .input_tps_distribution
+                .count,
             0
         );
     }
@@ -1912,9 +2230,9 @@ mod tests {
     #[test]
     fn publishes_live_queue_and_active_stats() {
         let config = StatsCollectorConfig::default();
-        let runtime_state = PylonRuntimeState::default();
+        let mut aggregator = test_aggregator(config);
+        let runtime_state = aggregator.runtime_state.clone();
         runtime_state.update_model_throughput("model-a", 100.0);
-        let mut aggregator = StatsAggregator::new(config, runtime_state);
         let queued = RequestObservation {
             priority: 2,
             input_tokens: 24,
@@ -2089,11 +2407,13 @@ mod tests {
             .expect("collector should have a stats update channel")
             .clone();
         let started_at = collector.started_at;
+        let generation = collector.runtime_state.current_generation("model-a");
         let producer = tokio::spawn(async move {
             for sequence in 1.. {
                 if tx
                     .send_async(stream_counter_update(
                         "continuous",
+                        generation.clone(),
                         sequence,
                         sequence,
                         false,
@@ -2144,10 +2464,10 @@ mod tests {
     }
     #[tokio::test]
     async fn stats_collector_bootstraps_input_tps_for_queue_admission() {
-        let config = config!(
-            bootstrap_input_tps: HashMap::from([("model-a".to_string(), 2_200.0)]),
-        );
-        let collector = RunningCollector::spawn(config, None, false);
+        let collector = RunningCollector::spawn_empty(StatsCollectorConfig::default(), None, false);
+        collector
+            .begin_configured_model("model-a", 2_200.0, false)
+            .await;
         let stats = collector
             .wait_for_stats("bootstrap TPS stats should be published", |stats| {
                 stats.last_mean_input_tps == 2_200.0
@@ -2181,33 +2501,24 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "bootstrap input TPS models must match runtime state models")]
-    fn stats_collector_rejects_bootstrap_for_an_unconfigured_runtime_model() {
-        let config = config!(
-            bootstrap_input_tps: HashMap::from([("model-b".to_string(), 2_200.0)]),
-        );
-        let (runtime_state, observation_rx) = PylonRuntimeState::observed(
-            stargate_proto::pb::InferenceServerStatus::Active,
-            &["model-a".to_string()],
-            config.observation_channel_capacity,
-            None,
-        );
-
-        let _collector =
-            start_stats_collector_with_engine_stats(config, observation_rx, None, runtime_state);
-    }
-
-    #[test]
     fn records_metrics_when_configured() {
         let metrics = PylonMetrics::new().expect("metrics should initialize");
         let config = StatsCollectorConfig::default();
         let (runtime_state, _observation_rx) = PylonRuntimeState::observed(
             stargate_proto::pb::InferenceServerStatus::Unknown,
-            &[],
+            &["model-a".to_string()],
             config.observation_channel_capacity,
             Some(metrics.clone()),
         );
         let mut aggregator = StatsAggregator::new(config, runtime_state.clone());
+        aggregator
+            .begin_generation(
+                runtime_state
+                    .current_generation("model-a")
+                    .expect("test model should exist"),
+                ModelStatsInitialization::Empty,
+            )
+            .expect("test model stats should initialize");
         let observation = completed_observation(20, 2, 10, seconds(2), seconds(4));
         for _ in 0..5 {
             let updated_stats = apply_fallback_observation(&mut aggregator, &observation);
@@ -2225,13 +2536,282 @@ mod tests {
 
     #[test]
     fn rejects_kv_cache_stats_for_unconfigured_models() {
-        let config = config!(
-            bootstrap_input_tps: HashMap::from([("model-a".to_string(), 100.0)])
+        let runtime_state = PylonRuntimeState::new(
+            stargate_proto::pb::InferenceServerStatus::Unknown,
+            &["model-a".to_string()],
         );
         assert!(
-            StatsAggregator::new(config, PylonRuntimeState::default())
+            StatsAggregator::new(StatsCollectorConfig::default(), runtime_state)
                 .apply_kv_cache_stats(kv_cache_stats("model-b"))
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn stats_collector_owns_exact_generation_initialization_and_retirement() {
+        let config = config!(observation_channel_capacity: 16);
+        let (runtime_state, observation_rx) = PylonRuntimeState::observed(
+            stargate_proto::pb::InferenceServerStatus::Active,
+            &[],
+            config.observation_channel_capacity,
+            None,
+        );
+        let collector = start_stats_collector(config, observation_rx, runtime_state.clone());
+        let control = collector.control();
+        let first = crate::runtime_state::ModelGeneration::new("model-a", 1);
+        let replacement = crate::runtime_state::ModelGeneration::new("model-a", 2);
+
+        assert!(runtime_state.begin_generation(first.clone()));
+        assert!(
+            control
+                .begin_generation(
+                    first.clone(),
+                    ModelStatsInitialization::ConfiguredInputTps {
+                        input_tps: 100.0,
+                        pin: false,
+                    },
+                )
+                .await
+                .expect("stats collector should acknowledge initialization")
+        );
+        assert_eq!(
+            control
+                .flush_and_snapshot(&first)
+                .await
+                .expect("snapshot request should complete")
+                .expect("current generation should have stats")
+                .last_mean_input_tps,
+            100.0
+        );
+        assert!(
+            control
+                .retire_generation(&first)
+                .await
+                .expect("retirement should be acknowledged")
+        );
+        assert!(runtime_state.retire_generation(&first).is_some());
+        assert!(runtime_state.begin_generation(replacement.clone()));
+        assert!(
+            control
+                .begin_generation(replacement.clone(), ModelStatsInitialization::Empty)
+                .await
+                .expect("replacement initialization should be acknowledged")
+        );
+
+        assert!(
+            control
+                .flush_and_snapshot(&first)
+                .await
+                .expect("stale snapshot request should complete")
+                .is_none()
+        );
+        assert_eq!(
+            control
+                .flush_and_snapshot(&replacement)
+                .await
+                .expect("replacement snapshot request should complete"),
+            Some(CurrentModelStats::default())
+        );
+        collector.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn exact_generation_snapshot_drains_already_observed_calibration_traffic() {
+        let config = StatsCollectorConfig {
+            duration_floor: Duration::ZERO,
+            openai_fallback_stats_enabled: true,
+            ..StatsCollectorConfig::default()
+        };
+        let (runtime_state, observation_rx) = PylonRuntimeState::observed(
+            stargate_proto::pb::InferenceServerStatus::Active,
+            &["model-a".to_string()],
+            config.observation_channel_capacity,
+            None,
+        );
+        let generation = runtime_state
+            .current_generation("model-a")
+            .expect("test generation should exist");
+        for index in 0..5 {
+            runtime_state.observe_request(identified(
+                completed_observation(100, 1, 1, seconds(1), seconds(2)),
+                format!("calibration-{index}"),
+            ));
+        }
+        let collector = start_stats_collector(config, observation_rx, runtime_state);
+
+        let snapshot = collector
+            .control()
+            .flush_and_snapshot(&generation)
+            .await
+            .expect("snapshot request should complete")
+            .expect("current generation should have stats");
+
+        assert!(snapshot.last_mean_input_tps > 0.0);
+        collector.shutdown().await;
+    }
+
+    #[test]
+    fn exact_generation_engine_events_seed_once_and_never_cross_retirement() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let retired = aggregator
+            .current_generation("model-a")
+            .cloned()
+            .expect("initial generation should exist");
+        let calibration_request =
+            next_generated_request_id(GeneratedRequestKind::Calibration, &retired);
+
+        apply_stream_observation(
+            &mut aggregator,
+            &identified(
+                completed_observation(100, 1, 1, seconds(1), seconds(2)),
+                calibration_request.clone(),
+            ),
+        );
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .input_tps_distribution
+                .count,
+            1,
+            "the calibration observer must record the request before duplicate engine events arrive"
+        );
+
+        aggregator.stream(&calibration_request, (0, 0), false, Duration::ZERO);
+        aggregator.stream(&calibration_request, (100, 0), false, seconds(1));
+        aggregator.stream(&calibration_request, (100, 0), false, seconds(1));
+
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .input_tps_distribution
+                .count,
+            1,
+            "repeated cumulative engine events must not double-count calibration traffic"
+        );
+
+        aggregator.stream("finished-calibration", (0, 0), false, Duration::ZERO);
+        aggregator.stream("finished-calibration", (100, 0), true, seconds(1));
+        assert_eq!(aggregator.inner.request_counter_identity_count(), 2);
+        assert_eq!(aggregator.inner.live_request_count(), 0);
+
+        assert!(
+            aggregator
+                .runtime_state
+                .retire_generation(&retired)
+                .is_some()
+        );
+        aggregator.sample_first_stream_counters("retirement-race", 5, (100, 0));
+        assert!(
+            aggregator
+                .runtime_state
+                .current_generation("model-a")
+                .is_none(),
+            "an old stats sample must not recreate a model after runtime retirement"
+        );
+        assert!(aggregator.retire_generation(&retired));
+        assert_eq!(
+            aggregator.inner.request_counter_identity_count(),
+            0,
+            "retirement must purge live and finalized exact-generation request identities"
+        );
+        assert_eq!(aggregator.inner.live_request_count(), 0);
+        let replacement = crate::runtime_state::ModelGeneration::new("model-a", 99);
+        assert!(
+            aggregator
+                .runtime_state
+                .begin_generation(replacement.clone())
+        );
+        aggregator
+            .begin_generation(replacement.clone(), ModelStatsInitialization::Empty)
+            .expect("replacement stats generation should initialize");
+        let late_observed_at = aggregator.start + seconds(2);
+        aggregator.apply_update(StatsAggregatorUpdate::RequestCounters(
+            RequestCounterUpdate {
+                source: StatsUpdateSource::EngineStatsStream,
+                request_id: "late-calibration-request".to_string(),
+                model_id: "model-a".to_string(),
+                generation: Some(retired),
+                tokens_processed: Some(1_000),
+                tokens_generated: Some(0),
+                finished: true,
+                observed_at: late_observed_at,
+            },
+        ));
+
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .input_tps_distribution
+                .count,
+            0,
+            "late retired-generation events must not seed a replacement"
+        );
+        assert_eq!(aggregator.current_generation("model-a"), Some(&replacement));
+    }
+
+    #[test]
+    fn foreign_scope_calibration_like_engine_id_is_not_deduplicated() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let request_id = format!(
+            "calibration-{}-g1-1",
+            uuid::Uuid::from_u128(0x12345678123456781234567812345678)
+        );
+
+        aggregator.stream(&request_id, (0, 0), false, Duration::ZERO);
+        aggregator.stream(&request_id, (100, 0), true, seconds(1));
+
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .input_tps_distribution
+                .count,
+            1,
+            "only calibration IDs owned by this process may bypass engine counters"
+        );
+    }
+
+    #[test]
+    fn stale_generation_publish_cannot_recreate_replacement_metrics() {
+        let metrics = PylonMetrics::new().expect("metrics should initialize");
+        let runtime_state = PylonRuntimeState::observed(
+            stargate_proto::pb::InferenceServerStatus::Active,
+            &[],
+            4,
+            Some(metrics.clone()),
+        )
+        .0;
+        let retired = crate::runtime_state::ModelGeneration::new("model-a", 1);
+        let replacement = crate::runtime_state::ModelGeneration::new("model-a", 2);
+        assert!(runtime_state.begin_generation(retired.clone()));
+        assert!(runtime_state.retire_generation(&retired).is_some());
+        assert!(runtime_state.begin_generation(replacement.clone()));
+        publish_model_stats_update(
+            &runtime_state,
+            replacement,
+            CurrentModelStats {
+                last_mean_input_tps: 10.0,
+                ..CurrentModelStats::default()
+            },
+        );
+
+        publish_model_stats_update(
+            &runtime_state,
+            retired,
+            CurrentModelStats {
+                last_mean_input_tps: 999.0,
+                ..CurrentModelStats::default()
+            },
+        );
+
+        assert_eq!(
+            runtime_state
+                .model_stats("model-a")
+                .expect("replacement stats should remain present")
+                .last_mean_input_tps,
+            10.0
+        );
+        let body = metrics.gather_text().expect("metrics should encode");
+        assert!(body.contains(r#"pylon_model_last_mean_input_tps{model="model-a"} 10"#));
+        assert!(!body.contains(r#"pylon_model_last_mean_input_tps{model="model-a"} 999"#));
     }
 }

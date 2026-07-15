@@ -711,23 +711,6 @@ mod tests {
     }
 
     #[test]
-    fn yaml_config_rejects_legacy_custom_tunnel_protocol_spellings() {
-        let mut config = benchmark_config();
-        config.tunnel_protocol = TunnelTransportProtocol::WebTransport;
-        let yaml = serde_yaml_ng::to_string(&config).expect("config should serialize");
-        for legacy_spelling in ["custom", "custom-quic"] {
-            let yaml = yaml.replace(
-                "tunnel_protocol: webtransport",
-                &format!("tunnel_protocol: {legacy_spelling}"),
-            );
-            assert!(
-                serde_yaml_ng::from_str::<BenchmarkConfig>(&yaml).is_err(),
-                "{legacy_spelling} must not remain a YAML tunnel protocol alias"
-            );
-        }
-    }
-
-    #[test]
     fn parses_degradation_actions_from_yaml() {
         let mut yaml = serde_yaml_ng::to_value(benchmark_config()).unwrap();
         yaml["degradation"] = serde_yaml_ng::from_str(

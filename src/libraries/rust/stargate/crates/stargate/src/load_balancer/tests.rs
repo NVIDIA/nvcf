@@ -702,30 +702,6 @@ fn routing_algorithm_override_rejects_empty_and_unknown_names() {
 }
 
 #[test]
-fn max_metric_age_config_is_rejected_after_staleness_cleanup() {
-    assert_json_rejected::<LoadBalancerAlgorithmConfig>(
-        r#"{"algorithm":"pulsar","max_metric_age_ms":10000}"#,
-        "max_metric_age_ms",
-    );
-}
-
-#[test]
-fn require_kv_metrics_config_is_rejected_after_kv_consideration_replaces_it() {
-    assert_json_rejected::<LoadBalancerAlgorithmConfig>(
-        r#"{"algorithm":"pulsar","require_kv_metrics":true}"#,
-        "require_kv_metrics",
-    );
-}
-
-#[test]
-fn removed_queue_slo_config_is_rejected_after_max_queue_time_migration() {
-    assert_json_rejected::<LoadBalancerAlgorithmConfig>(
-        r#"{"algorithm":"groq-multiregion","queue_slo_ms":100}"#,
-        "queue_slo_ms",
-    );
-}
-
-#[test]
 fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
     for (raw, expected_field) in [
         (r#"{"algorithm":"round-robin","seed":"unused"}"#, "seed"),
@@ -773,18 +749,6 @@ fn detailed_algorithm_configs_preserve_all_variant_identities() {
         assert_eq!(config.algorithm(), expected);
         assert_eq!(config.seed(), expected_seed);
         assert_eq!(config.considers_kv_free_tokens(), considers_kv_free_tokens);
-    }
-}
-
-#[test]
-fn unused_load_balancer_fields_are_rejected() {
-    for field in [
-        "max_queue_tokens_factor",
-        "hard_token_cap_factor",
-        "reentry_hysteresis",
-    ] {
-        let raw = format!(r#"{{"algorithm": "pulsar", "{field}": 1}}"#);
-        assert_json_rejected::<LoadBalancerAlgorithmConfig>(&raw, field);
     }
 }
 

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use axum::Json;
@@ -58,6 +58,8 @@ type TestCounterKey = (TestEndpoint, String, TestRequestClass);
 
 #[derive(Debug, Default)]
 struct TestControlInner {
+    discovered_models: BTreeSet<String>,
+    model_discovery_requests: u64,
     models: BTreeMap<String, ModelTestControl>,
     counters: BTreeMap<TestCounterKey, u64>,
 }
@@ -78,11 +80,48 @@ pub(crate) struct TestCounterSnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct TestControlSnapshot {
+    pub(crate) discovered_models: Vec<String>,
+    pub(crate) model_discovery_requests: u64,
     pub(crate) models: BTreeMap<String, ModelTestControl>,
     pub(crate) counters: Vec<TestCounterSnapshot>,
 }
 
 impl TestControlState {
+    pub(crate) fn with_discovered_models(model_ids: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(TestControlInner {
+                discovered_models: model_ids.into_iter().collect(),
+                ..TestControlInner::default()
+            })),
+            bringup_released: Arc::new(Notify::new()),
+        }
+    }
+
+    pub(crate) async fn replace_discovered_models(
+        &self,
+        model_ids: Vec<String>,
+    ) -> Result<(), &'static str> {
+        let model_ids = model_ids
+            .into_iter()
+            .map(|model_id| {
+                let model_id = model_id.trim();
+                if model_id.is_empty() {
+                    Err("model IDs must be non-empty")
+                } else {
+                    Ok(model_id.to_string())
+                }
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        self.inner.lock().await.discovered_models = model_ids;
+        Ok(())
+    }
+
+    pub(crate) async fn record_model_discovery_request(&self) -> Vec<String> {
+        let mut inner = self.inner.lock().await;
+        inner.model_discovery_requests = inner.model_discovery_requests.saturating_add(1);
+        inner.discovered_models.iter().cloned().collect()
+    }
+
     pub(crate) async fn update_model(&self, model: &str, update: ModelTestControlUpdate) {
         let released = {
             let mut inner = self.inner.lock().await;
@@ -143,6 +182,8 @@ impl TestControlState {
     pub(crate) async fn snapshot(&self) -> TestControlSnapshot {
         let inner = self.inner.lock().await;
         TestControlSnapshot {
+            discovered_models: inner.discovered_models.iter().cloned().collect(),
+            model_discovery_requests: inner.model_discovery_requests,
             models: inner.models.clone(),
             counters: inner
                 .counters
@@ -158,6 +199,23 @@ impl TestControlState {
                 .collect(),
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct DiscoveryModelsUpdate {
+    models: Vec<String>,
+}
+
+pub(crate) async fn replace_discovery_models(
+    State(state): State<AppState>,
+    Json(update): Json<DiscoveryModelsUpdate>,
+) -> Result<Json<TestControlSnapshot>, (axum::http::StatusCode, String)> {
+    state
+        .test_control
+        .replace_discovered_models(update.models)
+        .await
+        .map_err(|message| (axum::http::StatusCode::BAD_REQUEST, message.to_string()))?;
+    Ok(Json(state.test_control.snapshot().await))
 }
 
 impl TestControlSnapshot {

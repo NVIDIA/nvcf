@@ -13,24 +13,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::LazyLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
+use crate::request_observer::{
+    RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
+};
+use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
+use crate::upstream_url::upstream_endpoint;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use stargate_protocol::tunnel_contract::{HEADER_INPUT_TOKENS, HEADER_MODEL, HEADER_REQUEST_ID};
-use uuid::Uuid;
 
-static PYLON_GENERATED_REQUEST_SCOPE: LazyLock<Uuid> = LazyLock::new(Uuid::new_v4);
-static PYLON_GENERATED_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-pub(super) async fn check_upstream_health(
+pub(crate) async fn check_upstream_health(
     http_client: &reqwest::Client,
     upstream_http_base_url: &str,
     timeout: Duration,
 ) -> bool {
-    let health_url = format!("{}/health", upstream_http_base_url.trim_end_matches('/'));
+    let health_url = upstream_endpoint(upstream_http_base_url, "/health");
     matches!(
         http_client.get(health_url).timeout(timeout).send().await,
         Ok(response) if response.status().is_success()
@@ -40,12 +40,12 @@ pub(super) async fn check_upstream_health(
 pub(super) async fn send_canary_request(
     http_client: &reqwest::Client,
     upstream_http_base_url: &str,
-    model_id: &str,
+    generation: &ModelGeneration,
     timeout: Duration,
     canary_max_generation_threshold: u32,
 ) -> Result<(), BringupError> {
     let request = serde_json::json!({
-        "model": model_id,
+        "model": generation.model_id(),
         "messages": [{"role": "user", "content": "1+1="}],
         "max_tokens": canary_max_generation_threshold,
         "seed": 33,
@@ -57,9 +57,11 @@ pub(super) async fn send_canary_request(
     let completion = send_completion_request(
         http_client,
         upstream_http_base_url,
-        timeout,
-        request,
-        "canary",
+        Some(timeout),
+        &request,
+        GeneratedRequestKind::Canary,
+        generation,
+        None,
     )
     .await?;
     if completion.usage.completion_tokens == canary_max_generation_threshold {
@@ -73,36 +75,57 @@ pub(super) async fn send_canary_request(
 pub(super) async fn send_completion_request(
     http_client: &reqwest::Client,
     upstream_http_base_url: &str,
-    timeout: Duration,
-    request: serde_json::Value,
-    request_id_prefix: &str,
+    timeout: Option<Duration>,
+    request: &serde_json::Value,
+    request_kind: GeneratedRequestKind,
+    generation: &ModelGeneration,
+    runtime_state: Option<&PylonRuntimeState>,
 ) -> Result<ChatCompletionResponse, BringupError> {
-    let request_id = next_pylon_generated_request_id(request_id_prefix);
-    let response = http_client
-        .post(format!(
-            "{}/v1/chat/completions",
-            upstream_http_base_url.trim_end_matches('/')
-        ))
-        .timeout(timeout)
-        .header(HEADER_REQUEST_ID, request_id)
-        .header(HEADER_MODEL, request["model"].as_str().unwrap_or_default())
-        .header(
-            HEADER_INPUT_TOKENS,
-            request
-                .pointer("/messages/0/content")
-                .and_then(serde_json::Value::as_str)
-                .map(|text| text.len().to_string())
-                .unwrap_or_else(|| "1".to_string()),
+    let request_id = next_generated_request_id(request_kind, generation);
+    let model_id = generation.model_id();
+    let input_tokens = request
+        .pointer("/messages/0/content")
+        .and_then(serde_json::Value::as_str)
+        .map_or(1, str::len);
+    let mut observer = runtime_state.map(|runtime_state| {
+        TunnelRequestObserver::accepted(
+            RequestObservationEndpoint::ChatCompletions,
+            RequiredTunnelHeaders {
+                request_id: request_id.clone(),
+                routing_key: None,
+                model_id: model_id.to_string(),
+                priority: 0,
+                input_tokens: u64::try_from(input_tokens).unwrap_or(u64::MAX),
+                accepted_at: std::time::Instant::now(),
+            },
+            Some(generation.clone()),
+            runtime_state.clone(),
         )
-        .json(&request)
-        .send()
-        .await?;
+    });
+    let request = http_client
+        .post(upstream_endpoint(
+            upstream_http_base_url,
+            "/v1/chat/completions",
+        ))
+        .header(HEADER_REQUEST_ID, &request_id)
+        .header(HEADER_MODEL, model_id)
+        .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
+        .json(request);
+    let response = match timeout {
+        Some(timeout) => request.timeout(timeout),
+        None => request,
+    }
+    .send()
+    .await?;
 
     let status = response.status();
+    observe_response_headers(&mut observer, &response, status);
     let body = response.bytes().await?;
     if status.is_success() {
-        serde_json::from_slice(&body)
-            .map_err(|error| BringupError::InvalidResponse(error.to_string()))
+        let completion = serde_json::from_slice::<ChatCompletionResponse>(&body)
+            .map_err(|error| BringupError::InvalidResponse(error.to_string()))?;
+        finish_observation(&mut observer, &completion);
+        Ok(completion)
     } else {
         let message = extract_error_message(&body);
         if is_prompt_too_long(status, &message) {
@@ -116,13 +139,28 @@ pub(super) async fn send_completion_request(
     }
 }
 
-fn next_pylon_generated_request_id(prefix: &str) -> String {
-    let counter = PYLON_GENERATED_REQUEST_COUNTER
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |counter| {
-            counter.checked_add(1)
-        })
-        .expect("pylon-generated request id counter exhausted");
-    format!("{prefix}-{}-{counter}", *PYLON_GENERATED_REQUEST_SCOPE)
+fn observe_response_headers(
+    observer: &mut Option<TunnelRequestObserver>,
+    response: &reqwest::Response,
+    status: StatusCode,
+) {
+    if let Some(observer) = observer {
+        observer.on_upstream_response_headers(response.headers(), status.as_u16());
+    }
+}
+
+fn finish_observation(
+    observer: &mut Option<TunnelRequestObserver>,
+    completion: &ChatCompletionResponse,
+) {
+    if let Some(observer) = observer {
+        let generation = observer
+            .generation_mut()
+            .expect("chat completion observer should expose generation progress");
+        generation.observe_output_message();
+        generation.observe_output_tokens_total(u64::from(completion.usage.completion_tokens));
+        observer.finish();
+    }
 }
 
 fn extract_error_message(body: &[u8]) -> Option<String> {
@@ -157,8 +195,10 @@ pub enum BringupError {
     RunawayGeneration { tokens: u32 },
     #[error("invalid completion response: {0}")]
     InvalidResponse(String),
-    #[error("calibration produced only {valid_samples} valid samples")]
-    InsufficientCalibrationSamples { valid_samples: usize },
+    #[error("stats collector stopped during model initialization")]
+    StatsCollectorStopped,
+    #[error("model generation retired during initialization")]
+    RetiredGeneration,
 }
 
 #[derive(Debug, Deserialize)]

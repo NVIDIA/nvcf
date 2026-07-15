@@ -124,11 +124,14 @@ async fn end_to_end_engine_stats_stream_reports_model_stats() {
     let (inst_addr, quic_url, tunnel, stats_stream_connected_rx) =
         start_engine_stats_inst(model, runtime_state.clone()).await;
     let engine_stats_stream = start_engine_stats_stream(
-        EngineStatsStreamConfig::new(
-            &format!("http://{inst_addr}"),
-            "/pylon/v1/stats/stream",
-            EngineStatsStreamMode::Required,
-        ),
+        EngineStatsStreamConfig {
+            runtime_state: Some(runtime_state.clone()),
+            ..EngineStatsStreamConfig::new(
+                &format!("http://{inst_addr}"),
+                "/pylon/v1/stats/stream",
+                EngineStatsStreamMode::Required,
+            )
+        },
         stats_update_tx,
     )
     .expect("engine stats stream should start");

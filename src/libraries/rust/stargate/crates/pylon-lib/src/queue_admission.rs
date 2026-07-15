@@ -22,6 +22,7 @@ use stargate_protocol::common::{queue_time_delta_ms, valid_last_mean_input_tps};
 use stargate_protocol::tunnel_contract::HEADER_STARGATE_EXPECTED_QUEUE_MS;
 
 use crate::request_observer::{RequestObservation, RequestObservationState, RequiredTunnelHeaders};
+use crate::runtime_state::ModelGeneration;
 
 pub(crate) const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
 
@@ -53,7 +54,7 @@ pub(crate) struct LiveRequestState {
 #[derive(Debug, Default)]
 struct QueueAdmissionState {
     requests: HashMap<String, LiveRequest>,
-    models: HashMap<String, QueueModelState>,
+    models: HashMap<ModelGeneration, QueueModelState>,
 }
 
 #[derive(Debug, Default)]
@@ -70,7 +71,7 @@ struct QueueModelState {
 
 #[derive(Clone, Debug)]
 struct TrackedPromptRequest {
-    model_id: String,
+    generation: ModelGeneration,
     priority: u32,
     input_tokens: u64,
     phase: TrackedPromptPhase,
@@ -84,6 +85,13 @@ enum LiveRequest {
 }
 
 impl LiveRequest {
+    fn generation(&self) -> &ModelGeneration {
+        match self {
+            Self::Queue(request, _) => &request.generation,
+            Self::Observed(request) => &request.generation,
+        }
+    }
+
     fn into_observed(self) -> Option<ObservedRequestState> {
         match self {
             Self::Queue(_, observed) => observed,
@@ -96,20 +104,20 @@ impl LiveRequest {
             return None;
         };
         queue.active_chat_output_tps = value.filter(|tps| tps.is_finite() && *tps > 0.0);
-        Some(queue.model_id.clone())
+        Some(queue.generation.model_id().to_string())
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ObservedRequestState {
-    pub(crate) model_id: String,
+    pub(crate) generation: ModelGeneration,
     pub(crate) state: RequestObservationState,
     pub(crate) input_tokens: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RequestObservationTransition {
-    pub(crate) changed_model_ids: Vec<String>,
+    pub(crate) changed_generations: Vec<ModelGeneration>,
     pub(crate) prior: Option<ObservedRequestState>,
     pub(crate) current: Option<ObservedRequestState>,
     pub(crate) input_token_totals: Vec<ObservedInputTokenTotal>,
@@ -117,7 +125,7 @@ pub(crate) struct RequestObservationTransition {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ObservedInputTokenTotal {
-    pub(crate) model_id: String,
+    pub(crate) generation: ModelGeneration,
     pub(crate) state: RequestObservationState,
     pub(crate) input_tokens: u128,
 }
@@ -206,24 +214,71 @@ impl QueueAdmissionDecision {
 }
 
 impl LiveRequestState {
-    pub(crate) fn update_model_throughput(&self, model_id: &str, last_mean_input_tps: f64) {
+    pub(crate) fn request_generation(&self, request_id: &str) -> Option<ModelGeneration> {
+        self.inner
+            .lock()
+            .requests
+            .get(request_id)
+            .map(|request| request.generation().clone())
+    }
+
+    pub(crate) fn update_generation_throughput(
+        &self,
+        generation: &ModelGeneration,
+        last_mean_input_tps: f64,
+    ) {
         let mut state = self.inner.lock();
         if valid_last_mean_input_tps(last_mean_input_tps) {
             state
                 .models
-                .entry(model_id.to_string())
+                .entry(generation.clone())
                 .or_default()
                 .last_mean_input_tps = Some(last_mean_input_tps);
-        } else if let Some(model) = state.models.get_mut(model_id) {
+        } else if let Some(model) = state.models.get_mut(generation) {
             model.last_mean_input_tps = None;
-            state.remove_model_if_unused(model_id);
+            state.remove_model_if_unused(generation);
         }
     }
 
+    pub(crate) fn retire_generation(&self, generation: &ModelGeneration) {
+        let mut state = self.inner.lock();
+        let request_ids = state
+            .requests
+            .iter()
+            .filter(|(_, request)| request.generation() == generation)
+            .map(|(request_id, _)| request_id.clone())
+            .collect::<Vec<_>>();
+        for request_id in request_ids {
+            state.remove_request(&request_id);
+        }
+        state.models.remove(generation);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn update_model_throughput(&self, model_id: &str, last_mean_input_tps: f64) {
+        self.update_generation_throughput(&ModelGeneration::new(model_id, 0), last_mean_input_tps);
+    }
+
+    #[cfg(test)]
     pub(crate) fn evaluate(
         &self,
         config: &PylonQueueMismatchRetryConfig,
         required: &RequiredTunnelHeaders,
+        headers: &HeaderMap,
+    ) -> QueueAdmissionDecision {
+        self.evaluate_generation(
+            config,
+            required,
+            Some(&ModelGeneration::new(required.model_id.clone(), 0)),
+            headers,
+        )
+    }
+
+    pub(crate) fn evaluate_generation(
+        &self,
+        config: &PylonQueueMismatchRetryConfig,
+        required: &RequiredTunnelHeaders,
+        generation: Option<&ModelGeneration>,
         headers: &HeaderMap,
     ) -> QueueAdmissionDecision {
         if !config.enabled {
@@ -238,16 +293,21 @@ impl LiveRequestState {
         };
         let actual_ms = {
             let state = self.inner.lock();
-            state.models.get(&required.model_id).and_then(|model| {
-                let excluded_request = state
-                    .requests
-                    .get(&required.request_id)
-                    .and_then(|request| match request {
-                        LiveRequest::Queue(queue, _) => Some(queue),
-                        LiveRequest::Observed(_) => None,
-                    })
-                    .filter(|request| request.model_id == required.model_id);
-                model.queue_estimate_ms_for_priority_excluding(required.priority, excluded_request)
+            generation.and_then(|generation| {
+                state.models.get(generation).and_then(|model| {
+                    let excluded_request = state
+                        .requests
+                        .get(&required.request_id)
+                        .and_then(|request| match request {
+                            LiveRequest::Queue(queue, _) => Some(queue),
+                            LiveRequest::Observed(_) => None,
+                        })
+                        .filter(|request| request.generation == *generation);
+                    model.queue_estimate_ms_for_priority_excluding(
+                        required.priority,
+                        excluded_request,
+                    )
+                })
             })
         };
         let Some(actual_ms) = actual_ms else {
@@ -270,13 +330,22 @@ impl LiveRequestState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn track_request(
         &self,
         required: &RequiredTunnelHeaders,
     ) -> QueueTrackedRequestGuard {
+        self.track_generation_request(required, ModelGeneration::new(required.model_id.clone(), 0))
+    }
+
+    pub(crate) fn track_generation_request(
+        &self,
+        required: &RequiredTunnelHeaders,
+        generation: ModelGeneration,
+    ) -> QueueTrackedRequestGuard {
         let request_id = required.request_id.clone();
         let request = TrackedPromptRequest {
-            model_id: required.model_id.clone(),
+            generation,
             priority: required.priority,
             input_tokens: required.input_tokens,
             phase: TrackedPromptPhase::Pending,
@@ -296,21 +365,40 @@ impl LiveRequestState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot_model(&self, model_id: &str) -> QueueModelSnapshot {
+        self.snapshot_generation(&ModelGeneration::new(model_id, 0))
+    }
+
+    pub(crate) fn snapshot_generation(&self, generation: &ModelGeneration) -> QueueModelSnapshot {
         self.inner
             .lock()
             .models
-            .get(model_id)
+            .get(generation)
             .map_or_else(QueueModelSnapshot::default, QueueModelState::snapshot)
     }
 
+    #[cfg(test)]
     pub(crate) fn transition_observation_with(
         &self,
         observation: &RequestObservation,
         observe: impl FnOnce(&RequestObservationTransition),
     ) -> RequestObservationTransition {
+        let generation = ModelGeneration::new(observation.model_id.clone(), 0);
+        self.transition_generation_observation_with(observation, Some(&generation), observe)
+    }
+
+    pub(crate) fn transition_generation_observation_with(
+        &self,
+        observation: &RequestObservation,
+        generation: Option<&ModelGeneration>,
+        observe: impl FnOnce(&RequestObservationTransition),
+    ) -> RequestObservationTransition {
         let _order = self.observation_order.lock();
-        let transition = self.inner.lock().transition_observation(observation);
+        let transition = self
+            .inner
+            .lock()
+            .transition_observation(observation, generation);
         observe(&transition);
         transition
     }
@@ -339,6 +427,7 @@ impl QueueAdmissionState {
     fn transition_observation(
         &mut self,
         observation: &RequestObservation,
+        generation: Option<&ModelGeneration>,
     ) -> RequestObservationTransition {
         let (request_id, prior_queue, prior_observed) =
             match self.remove_request(&observation.request_id) {
@@ -350,57 +439,64 @@ impl QueueAdmissionState {
                 }
                 None => (observation.request_id.clone(), None, None),
             };
-        let changed_model_ids = changed_model_ids(
-            &observation.model_id,
+        let generation = generation.cloned().or_else(|| {
+            prior_queue
+                .as_ref()
+                .map(|request| request.generation.clone())
+                .or_else(|| {
+                    prior_observed
+                        .as_ref()
+                        .map(|request| request.generation.clone())
+                })
+        });
+        let changed_generations = changed_generations(
+            generation.as_ref(),
             [
-                prior_queue
-                    .as_ref()
-                    .map(|request| request.model_id.as_str()),
-                prior_observed
-                    .as_ref()
-                    .map(|request| request.model_id.as_str()),
+                prior_queue.as_ref().map(|request| &request.generation),
+                prior_observed.as_ref().map(|request| &request.generation),
             ],
         );
-        let current = if observation.is_terminal() {
-            None
-        } else {
-            let phase = [
-                TrackedPromptPhase::Pending,
-                TrackedPromptPhase::Pending,
-                TrackedPromptPhase::InputProcessing,
-                TrackedPromptPhase::OutputGeneration,
-            ][observation.state as usize];
-            let phase = prior_queue
-                .as_ref()
-                .map_or(phase, |prior| phase.max(prior.phase));
-            let active_chat_output_tps = prior_queue
-                .as_ref()
-                .filter(|_| phase == TrackedPromptPhase::OutputGeneration)
-                .and_then(|request| request.active_chat_output_tps);
-            let current = ObservedRequestState {
-                model_id: observation.model_id.clone(),
-                state: observation.state,
-                input_tokens: observation.input_tokens,
-            };
-            self.insert_request(
-                request_id,
-                LiveRequest::Queue(
-                    TrackedPromptRequest {
-                        model_id: observation.model_id.clone(),
-                        priority: observation.priority,
-                        input_tokens: observation.input_tokens,
-                        phase,
-                        active_chat_output_tps,
-                    },
-                    Some(current.clone()),
-                ),
-            );
-            Some(current)
+        let current = match (observation.is_terminal(), generation) {
+            (false, Some(generation)) => {
+                let phase = [
+                    TrackedPromptPhase::Pending,
+                    TrackedPromptPhase::Pending,
+                    TrackedPromptPhase::InputProcessing,
+                    TrackedPromptPhase::OutputGeneration,
+                ][observation.state as usize];
+                let phase = prior_queue
+                    .as_ref()
+                    .map_or(phase, |prior| phase.max(prior.phase));
+                let active_chat_output_tps = prior_queue
+                    .as_ref()
+                    .filter(|_| phase == TrackedPromptPhase::OutputGeneration)
+                    .and_then(|request| request.active_chat_output_tps);
+                let current = ObservedRequestState {
+                    generation: generation.clone(),
+                    state: observation.state,
+                    input_tokens: observation.input_tokens,
+                };
+                self.insert_request(
+                    request_id,
+                    LiveRequest::Queue(
+                        TrackedPromptRequest {
+                            generation,
+                            priority: observation.priority,
+                            input_tokens: observation.input_tokens,
+                            phase,
+                            active_chat_output_tps,
+                        },
+                        Some(current.clone()),
+                    ),
+                );
+                Some(current)
+            }
+            _ => None,
         };
         let input_token_totals =
             self.input_token_totals([prior_observed.as_ref(), current.as_ref()]);
         RequestObservationTransition {
-            changed_model_ids,
+            changed_generations,
             prior: prior_observed,
             current,
             input_token_totals,
@@ -427,7 +523,7 @@ impl QueueAdmissionState {
         }
         let model = self
             .models
-            .get_mut(&request.model_id)
+            .get_mut(&request.generation)
             .expect("tracked request should have model queue state");
         model.adjust_phase(request.phase, request.priority, request.input_tokens, -1);
         model.adjust_phase(next_phase, request.priority, request.input_tokens, 1);
@@ -451,7 +547,7 @@ impl QueueAdmissionState {
             LiveRequest::Observed(observed) => (None, Some(observed)),
         };
         if let Some(observed) = observed {
-            let model = self.models.entry(observed.model_id.clone()).or_default();
+            let model = self.models.entry(observed.generation.clone()).or_default();
             let total = &mut model.observed_input_tokens[observed.state as usize];
             *total = total
                 .checked_add_signed(i128::from(observed.input_tokens) * i128::from(delta))
@@ -459,24 +555,24 @@ impl QueueAdmissionState {
         }
         if let Some(queue) = queue {
             self.models
-                .entry(queue.model_id.clone())
+                .entry(queue.generation.clone())
                 .or_default()
                 .adjust_request(queue, delta);
         }
         if delta < 0 {
-            let model_ids = [
-                observed.map(|request| request.model_id.as_str()),
-                queue.map(|request| request.model_id.as_str()),
+            let generations = [
+                observed.map(|request| &request.generation),
+                queue.map(|request| &request.generation),
             ];
-            for model_id in model_ids.into_iter().flatten() {
-                self.remove_model_if_unused(model_id);
+            for generation in generations.into_iter().flatten() {
+                self.remove_model_if_unused(generation);
             }
         }
     }
 
-    fn remove_model_if_unused(&mut self, model_id: &str) {
-        if matches!(self.models.get(model_id), Some(model) if model.is_unused()) {
-            self.models.remove(model_id);
+    fn remove_model_if_unused(&mut self, generation: &ModelGeneration) {
+        if matches!(self.models.get(generation), Some(model) if model.is_unused()) {
+            self.models.remove(generation);
         }
     }
 
@@ -487,14 +583,14 @@ impl QueueAdmissionState {
         let mut totals = Vec::with_capacity(2);
         for request in requests.into_iter().flatten() {
             if totals.iter().any(|total: &ObservedInputTokenTotal| {
-                total.model_id == request.model_id && total.state == request.state
+                total.generation == request.generation && total.state == request.state
             }) {
                 continue;
             }
             totals.push(ObservedInputTokenTotal {
-                model_id: request.model_id.clone(),
+                generation: request.generation.clone(),
                 state: request.state,
-                input_tokens: self.models.get(&request.model_id).map_or(0, |model| {
+                input_tokens: self.models.get(&request.generation).map_or(0, |model| {
                     model.observed_input_tokens[request.state as usize]
                 }),
             });
@@ -632,13 +728,16 @@ impl QueueModelState {
     }
 }
 
-fn changed_model_ids(model_id: &str, prior_model_ids: [Option<&str>; 2]) -> Vec<String> {
-    let mut changed: Vec<_> = prior_model_ids
+fn changed_generations(
+    generation: Option<&ModelGeneration>,
+    prior_generations: [Option<&ModelGeneration>; 2],
+) -> Vec<ModelGeneration> {
+    let mut changed: Vec<_> = prior_generations
         .into_iter()
         .flatten()
-        .filter(|prior| *prior != model_id)
-        .chain([model_id])
-        .map(str::to_string)
+        .filter(|prior| Some(*prior) != generation)
+        .chain(generation)
+        .cloned()
         .collect();
     changed.sort();
     changed.dedup();
@@ -1019,8 +1118,11 @@ mod tests {
         assert_eq!(terminal.prior, live.current);
         assert_eq!(terminal.current, None);
         assert_eq!(
-            terminal.changed_model_ids,
-            ["model-a".to_string(), "model-b".to_string()]
+            terminal.changed_generations,
+            [
+                ModelGeneration::new("model-a", 0),
+                ModelGeneration::new("model-b", 0),
+            ]
         );
         assert_eq!(live_requests.tracked_request_count(), 0);
     }
@@ -1115,6 +1217,10 @@ mod tests {
         let incoming = required("req-new", 0, 1);
         let headers = headers_with_expected("0");
 
+        assert_eq!(
+            live_requests.evaluate_generation(&config, &incoming, None, &headers),
+            QueueAdmissionDecision::UnknownLocalEstimate { expected_ms: 0 }
+        );
         assert_eq!(
             live_requests.evaluate(&config, &incoming, &headers),
             QueueAdmissionDecision::UnknownLocalEstimate { expected_ms: 0 }

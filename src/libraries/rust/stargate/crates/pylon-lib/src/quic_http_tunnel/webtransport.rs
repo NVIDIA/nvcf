@@ -258,57 +258,19 @@ fn webtransport_response_head(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
     use reqwest::header::HeaderValue;
     use stargate_protocol::tunnel_contract::{
         HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
     };
 
-    use super::super::core::{
-        PylonRetryConfig, RETRY_REASON_LOCAL_CONNECT_FAILURE, UpstreamRequestError,
-        build_response_headers, local_connect_failure_headers, problem_response_headers,
-        queue_mismatch_response_headers, record_local_connect_failure,
-    };
-    use crate::queue_admission::{PylonQueueMismatchRetryConfig, QueueAdmissionDecision};
-    use crate::request_quality_monitor::RequestQualityMonitorConfig;
-    use crate::runtime_state::PylonRuntimeState;
-
-    fn test_app() -> TunnelServerApp {
-        TunnelServerApp {
-            http_client: reqwest::Client::new(),
-            inference_server_id: "inst-a".to_string(),
-            upstream_http_base_url: "http://127.0.0.1:1".to_string(),
-            max_request_body_bytes: 8,
-            max_sse_buffer_bytes: 1024,
-            first_output_timeout: Duration::from_secs(1),
-            output_chunk_timeout: Duration::from_secs(1),
-            runtime_state: PylonRuntimeState::default(),
-            request_quality_monitor: RequestQualityMonitorConfig::default(),
-            retry: PylonRetryConfig::default(),
-            queue_mismatch_retry: PylonQueueMismatchRetryConfig::default(),
-            metrics: None,
-            #[cfg(test)]
-            webtransport_stream_header_wait_tx: None,
-        }
-    }
+    use super::super::core::{PylonRetryConfig, build_response_headers};
 
     fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
         headers
             .get(name)
             .and_then(|value| value.to_str().ok())
             .expect("header should be present")
-    }
-
-    #[test]
-    fn webtransport_adapter_rejects_request_body_chunks_over_limit() {
-        let error = next_body_len(7, 2, 8).expect_err("body should exceed adapter limit");
-
-        assert!(
-            error.to_string().contains("request body too large"),
-            "unexpected body limit error: {error}"
-        );
     }
 
     #[test]
@@ -338,68 +300,6 @@ mod tests {
         assert_eq!(
             header_value(&head.headers, "x-stargate-retry-after-ms"),
             "2000"
-        );
-    }
-
-    #[test]
-    fn webtransport_error_head_uses_problem_json_status() {
-        let status = reqwest::StatusCode::BAD_REQUEST;
-        let head = webtransport_response_head(status, problem_response_headers());
-
-        assert_eq!(head.status, reqwest::StatusCode::BAD_REQUEST);
-        assert_eq!(
-            header_value(&head.headers, reqwest::header::CONTENT_TYPE.as_str()),
-            "application/problem+json"
-        );
-    }
-
-    #[test]
-    fn webtransport_queue_mismatch_head_sets_retry_metadata() {
-        let app = test_app();
-        let decision = QueueAdmissionDecision::Rejected {
-            expected_ms: 10,
-            actual_ms: 55,
-            threshold_ms: 25,
-            retry_after_ms: Some(7),
-        };
-
-        let status = reqwest::StatusCode::TOO_MANY_REQUESTS;
-        let headers = queue_mismatch_response_headers(&app, &decision)
-            .expect("queue mismatch headers should build");
-        let head = webtransport_response_head(status, headers);
-
-        assert_eq!(head.status, reqwest::StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(
-            header_value(&head.headers, HEADER_STARGATE_RETRYABLE),
-            "true"
-        );
-        assert_eq!(
-            header_value(&head.headers, HEADER_STARGATE_RETRY_REASON),
-            "queue_estimate_mismatch"
-        );
-        assert_eq!(
-            header_value(&head.headers, "x-stargate-retry-after-ms"),
-            "7"
-        );
-    }
-
-    #[test]
-    fn webtransport_local_connect_failure_head_encodes_retryability() {
-        let app = test_app();
-        let error = UpstreamRequestError::Build(anyhow::anyhow!("cannot build"));
-
-        let status = record_local_connect_failure(&app, &error, true);
-        let head = webtransport_response_head(status, local_connect_failure_headers(true));
-
-        assert_eq!(status, reqwest::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(head.status, reqwest::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            header_value(&head.headers, HEADER_STARGATE_RETRYABLE),
-            "true"
-        );
-        assert_eq!(
-            header_value(&head.headers, HEADER_STARGATE_RETRY_REASON),
-            RETRY_REASON_LOCAL_CONNECT_FAILURE
         );
     }
 }

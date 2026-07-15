@@ -1106,10 +1106,6 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
                     (Some("pulsar-multiregion"), Some(true)),
                     "{scenario}"
                 );
-                assert!(
-                    multiregion.get("queue_slo_ms").is_none(),
-                    "{scenario} should not use the removed queue-SLO alias"
-                );
                 let pulsar = model_config(&config, "pulsar");
                 assert_eq!(
                     multiregion["seed"], pulsar["seed"],

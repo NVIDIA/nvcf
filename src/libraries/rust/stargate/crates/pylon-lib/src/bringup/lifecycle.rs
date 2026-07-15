@@ -18,91 +18,20 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::runtime_state::PylonRuntimeState;
-use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
 use super::upstream::{check_upstream_health, send_canary_request};
-use super::{BringupConfig, BringupError, BringupTaskConfig};
+use super::{BringupConfig, BringupTaskConfig};
 
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
-pub struct BringupHandle {
-    task: OwnedTask,
-}
-
-impl BringupHandle {
-    pub async fn wait_for_exit(&mut self) -> Result<(), tokio::task::JoinError> {
-        self.task.wait_for_exit().await
-    }
-
-    pub async fn shutdown(self) {
-        self.task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
-    }
-}
-
-pub async fn start_bringup(
-    upstream_http_base_url: &str,
-    config: BringupConfig,
-    runtime_state: PylonRuntimeState,
-) -> Result<Option<BringupHandle>, BringupError> {
-    if !config.enabled {
-        runtime_state.mark_initial_bringup_complete();
-        return Ok(None);
-    }
-
-    if !check_upstream_health(
-        &reqwest::Client::new(),
-        upstream_http_base_url,
-        config.canary_timeout,
-    )
-    .await
-    {
-        return Err(BringupError::UnhealthyUpstream);
-    }
-
-    runtime_state.mark_initial_bringup_complete();
-
-    let task_configs = runtime_state
-        .model_ids()
-        .into_iter()
-        .map(|model_id| BringupTaskConfig {
-            upstream_http_base_url: upstream_http_base_url.to_string(),
-            model_id,
-            config: config.clone(),
-        })
-        .collect();
-    let task = OwnedTask::spawn("bringup supervisor", move |stop| async move {
-        run_bringup_supervisor(task_configs, runtime_state, stop).await;
-    });
-    Ok(Some(BringupHandle { task }))
-}
-
-async fn run_bringup_supervisor(
-    task_configs: Vec<BringupTaskConfig>,
-    runtime_state: PylonRuntimeState,
-    stop: CancellationToken,
-) {
-    let mut tasks = Vec::with_capacity(task_configs.len());
-    for task_config in task_configs {
-        let runtime_state = runtime_state.clone();
-        tasks.push(OwnedTask::spawn_child(
-            "model bringup",
-            &stop,
-            move |model_stop| run_bringup_task(task_config, runtime_state, model_stop),
-        ));
-    }
-
-    stop.cancelled().await;
-    OwnedTask::shutdown_all(tasks, TASK_SHUTDOWN_TIMEOUT).await;
-}
-
-pub(super) async fn run_bringup_task(
+pub(crate) async fn run_bringup_task(
     task_config: BringupTaskConfig,
     runtime_state: PylonRuntimeState,
     stop: CancellationToken,
 ) {
     let BringupTaskConfig {
         upstream_http_base_url,
-        model_id,
+        generation,
         config,
     } = task_config;
     let http_client = reqwest::Client::new();
@@ -111,7 +40,7 @@ pub(super) async fn run_bringup_task(
         if !wait_for_active_canary_failure(
             &http_client,
             &upstream_http_base_url,
-            &model_id,
+            &generation,
             &config,
             &stop,
         )
@@ -119,7 +48,9 @@ pub(super) async fn run_bringup_task(
         {
             return;
         }
-        runtime_state.set_model_bringup_ready(&model_id, false);
+        if !runtime_state.set_generation_bringup_ready(&generation, false) {
+            return;
+        }
 
         loop {
             let Some(upstream_healthy) = stop
@@ -143,7 +74,7 @@ pub(super) async fn run_bringup_task(
                 .run_until_cancelled(send_canary_request(
                     &http_client,
                     &upstream_http_base_url,
-                    &model_id,
+                    &generation,
                     config.canary_timeout,
                     config.canary_max_generation_threshold,
                 ))
@@ -152,14 +83,20 @@ pub(super) async fn run_bringup_task(
                 return;
             };
             if let Err(error) = canary_result {
-                tracing::warn!(model_id, error = %error, "bringup recovery canary failed");
+                tracing::warn!(
+                    model_id = generation.model_id(),
+                    error = %error,
+                    "bringup recovery canary failed"
+                );
                 if wait_or_stop(&stop, CONNECT_RETRY_INTERVAL).await {
                     return;
                 }
                 continue;
             }
 
-            runtime_state.set_model_bringup_ready(&model_id, true);
+            if !runtime_state.set_generation_bringup_ready(&generation, true) {
+                return;
+            }
             break;
         }
     }
@@ -168,7 +105,7 @@ pub(super) async fn run_bringup_task(
 async fn wait_for_active_canary_failure(
     http_client: &reqwest::Client,
     upstream_http_base_url: &str,
-    model_id: &str,
+    generation: &crate::runtime_state::ModelGeneration,
     config: &BringupConfig,
     stop: &CancellationToken,
 ) -> bool {
@@ -189,7 +126,7 @@ async fn wait_for_active_canary_failure(
                     .run_until_cancelled(send_canary_request(
                         http_client,
                         upstream_http_base_url,
-                        model_id,
+                        generation,
                         config.canary_timeout,
                         config.canary_max_generation_threshold,
                     ))
@@ -198,7 +135,11 @@ async fn wait_for_active_canary_failure(
                     return false;
                 };
                 if let Err(error) = canary_result {
-                    tracing::warn!(model_id, error = %error, "active canary failed");
+                    tracing::warn!(
+                        model_id = generation.model_id(),
+                        error = %error,
+                        "active canary failed"
+                    );
                     return true;
                 }
             }

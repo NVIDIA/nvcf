@@ -14,5 +14,5 @@
 # limitations under the License.
 
 [toolchain]
-channel = "1.96.0"
+channel = "1.97.0"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]

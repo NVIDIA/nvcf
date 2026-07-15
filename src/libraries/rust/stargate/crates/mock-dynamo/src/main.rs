@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
 
     let (stats_events, _) = broadcast::channel(1024);
     let state = AppState {
-        model_name: args.model_name,
+        model_name: args.model_name.clone(),
         num_tokens: args.num_tokens,
         token_delay: Duration::from_millis(args.token_delay_ms),
         decode_jitter_ms: args.decode_jitter_ms,
@@ -116,11 +116,12 @@ async fn main() -> Result<()> {
             args.kv_cache_capacity_tokens,
         ))),
         stats_events,
-        test_control: test_control::TestControlState::default(),
+        test_control: test_control::TestControlState::with_discovered_models([args.model_name]),
     };
 
     let app = Router::new()
         .route("/v1/chat/completions", post(openai::chat_completions))
+        .route("/v1/models", get(openai::list_models))
         .route("/v1/responses", post(openai::responses))
         .route("/v1/embeddings", post(openai::embeddings))
         .route("/pylon/v1/stats/stream", get(stats_stream::stats_stream))
@@ -130,6 +131,10 @@ async fn main() -> Result<()> {
             put(test_control::update_model_test_control),
         )
         .route("/test-control", get(test_control::test_control_snapshot))
+        .route(
+            "/test-control/discovery-models",
+            put(test_control::replace_discovery_models),
+        )
         .route("/health", get(openai::health))
         .with_state(state);
 

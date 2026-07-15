@@ -33,6 +33,34 @@ use crate::timing::{
     response_output_tokens, token_delay,
 };
 
+#[derive(Serialize)]
+pub(crate) struct ModelList {
+    object: &'static str,
+    data: Vec<ModelListEntry>,
+}
+
+#[derive(Serialize)]
+struct ModelListEntry {
+    id: String,
+    object: &'static str,
+}
+
+pub(crate) async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
+    Json(ModelList {
+        object: "list",
+        data: state
+            .test_control
+            .record_model_discovery_request()
+            .await
+            .into_iter()
+            .map(|id| ModelListEntry {
+                id,
+                object: "model",
+            })
+            .collect(),
+    })
+}
+
 #[rustfmt::skip]
 const DUMMY_TOKENS: &[&str] = &[
     "Hello", ",", " how", " can", " I", " help", " you", " today", "?", " I", " am", " a",

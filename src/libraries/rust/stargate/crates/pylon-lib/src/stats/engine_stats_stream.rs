@@ -29,6 +29,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::collector::{RequestCounterUpdate, StatsAggregatorUpdate, StatsUpdateSource};
 use super::metrics::PylonMetrics;
+use crate::PylonRuntimeState;
+use crate::generated_request_id::generated_request_generation;
 use stargate_runtime::OwnedTask;
 
 const DEFAULT_ENGINE_STATS_STREAM_PATH: &str = "/pylon/v1/stats/stream";
@@ -79,20 +81,18 @@ pub struct EngineStatsStreamConfig {
     pub max_reconnect_backoff: Duration,
     pub max_line_bytes: usize,
     pub metrics: Option<Arc<PylonMetrics>>,
+    pub runtime_state: Option<PylonRuntimeState>,
 }
 impl EngineStatsStreamConfig {
     pub fn new(upstream_base_url: &str, path: &str, mode: EngineStatsStreamMode) -> Self {
         Self {
-            url: format!(
-                "{}/{}",
-                upstream_base_url.trim_end_matches('/'),
-                path.trim_start_matches('/')
-            ),
+            url: crate::upstream_url::upstream_endpoint(upstream_base_url, path),
             mode,
             initial_reconnect_backoff: DEFAULT_INITIAL_RECONNECT_BACKOFF,
             max_reconnect_backoff: DEFAULT_MAX_RECONNECT_BACKOFF,
             max_line_bytes: DEFAULT_MAX_LINE_BYTES,
             metrics: None,
+            runtime_state: None,
         }
     }
 }
@@ -192,6 +192,7 @@ fn parse_stats_event(
         source: StatsUpdateSource::EngineStatsStream,
         request_id,
         model_id,
+        generation: None,
         tokens_processed,
         tokens_generated,
         finished,
@@ -596,7 +597,13 @@ async fn emit_engine_stats_event(
         metrics.observe_engine_stats_stream_event(event_type);
     }
     match update {
-        Some(update) => {
+        Some(mut update) => {
+            update.generation = generated_request_generation(&update.request_id, &update.model_id)
+                .or_else(|| {
+                    config.runtime_state.as_ref().and_then(|runtime_state| {
+                        runtime_state.request_generation(&update.request_id)
+                    })
+                });
             send_stats_update(
                 stats_update_tx,
                 StatsAggregatorUpdate::RequestCounters(update),
@@ -673,6 +680,8 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
     use tokio::net::TcpListener;
+
+    use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
 
     fn parse(line: &[u8]) -> Result<ParsedEngineStatsEvent, EngineStatsParseError> {
         parse_engine_stats_line(line, TokioInstant::now())
@@ -785,6 +794,36 @@ mod tests {
             parse(br#"{"v":1,"type":"ping"}"#).expect("ping should parse"),
             ParsedEngineStatsEvent::Ping
         ));
+    }
+
+    #[tokio::test]
+    async fn calibration_request_ids_route_engine_events_to_their_exact_generation() {
+        let runtime_state = PylonRuntimeState::new(
+            stargate_proto::pb::InferenceServerStatus::Active,
+            &["model-a".to_string()],
+        );
+        let generation = runtime_state
+            .current_generation("model-a")
+            .expect("test generation should exist");
+        let request_id = next_generated_request_id(GeneratedRequestKind::Calibration, &generation);
+        let config = EngineStatsStreamConfig {
+            runtime_state: Some(runtime_state),
+            ..EngineStatsStreamConfig::default()
+        };
+        let line = format!(
+            "{{\"v\":1,\"type\":\"stats\",\"request_id\":\"{request_id}\",\"model\":\"model-a\",\"tokens_processed\":64}}\n"
+        );
+
+        let processed = process_lines(&config, [line]).await;
+        let StatsAggregatorUpdate::RequestCounters(update) = processed
+            .updates
+            .try_recv()
+            .expect("calibration event should enter the ordinary stats pipeline")
+        else {
+            panic!("expected request counters update");
+        };
+
+        assert_eq!(update.generation, Some(generation));
     }
 
     #[test]

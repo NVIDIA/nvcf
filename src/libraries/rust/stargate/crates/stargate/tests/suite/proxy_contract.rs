@@ -2040,7 +2040,6 @@ async fn transport_local_shared_cluster_failover_stays_within_selected_cluster()
         InferenceServerStatus::Active,
         &["shared-failover-model".to_string()],
     );
-    bad_runtime.mark_initial_bringup_complete();
     fixture.register(
         InferenceServerRegistrationConfig {
             seeds: vec![grpc_addr.to_string()],

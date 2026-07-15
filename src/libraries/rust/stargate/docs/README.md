@@ -1,32 +1,39 @@
-# Stargate Docs
+# Stargate Documentation
 
-> Type: Index. Start here, then read only the docs that match the task.
+Use this page to choose the smallest feature-level context for a change. Exact
+external behavior belongs in the linked contract/reference pages, source, and
+tests. This page is navigation, not a second architecture specification.
 
-Use this page as the durable docs entrypoint. The goal is to keep agents and
-humans from ingesting every document when only one topic is relevant.
+## Features
 
-## Start Here By Task
+| Need | Start here | Important code and tests | Detailed contracts |
+| --- | --- | --- | --- |
+| Run the local stack or make a first request | [Local quickstart](getting-started/local-quickstart.md) | `kustomize/`, `crates/mock-dynamo`, `crates/pylon` | [Pylon onboarding](operations/pylon-onboarding.md) |
+| Integrate a gateway or use the HTTP proxy | [API gateway contract](api-gateway-contract.md) | `crates/stargate/src/http_proxy.rs`, `crates/stargate/tests/suite/proxy_contract.rs` | [gRPC API](reference/grpc-api.md), [config and environment](reference/config-and-env.md) |
+| Change registration, routing, retries, or clusters | [Multi-backend cluster routing](multi-backend-clusters.md) | `crates/stargate/src/routing_state/`, `crates/stargate/src/load_balancer/`, lifecycle and proxy tests | [Feature and behavior tests](feature-behavior-test-matrix.md) |
+| Add or onboard a pylon model | [Pylon onboarding](operations/pylon-onboarding.md) | `crates/pylon-lib/src/`, `crates/pylon/src/` | [Runtime stats interface](runtime-stats-interface.md), [CLI reference](reference/cli.md) |
+| Change QUIC, HTTP/3, WebTransport, or backend connectivity | [Tunnel transport selection](tunnel-transports.md) | `crates/protocol/`, `crates/pylon-lib/src/quic_http_tunnel/`, `crates/stargate-k8s-router/` | [Deployment shape](operations/deployment-shape.md) |
+| Deploy or operate Stargate and pylon in Kubernetes | [Deployment shape](operations/deployment-shape.md) | `kustomize/`, `scripts/run_k8s_integ.py`, `scripts/run_tilt.py` | [Pylon onboarding](operations/pylon-onboarding.md), [troubleshooting](operations/troubleshooting.md) |
+| Debug metrics, traces, or request routing | [Observability](operations/observability.md) | `crates/stargate/src/metrics.rs`, `crates/pylon-lib/src/metrics.rs` | [Metrics reference](reference/metrics.md), [API gateway contract](api-gateway-contract.md) |
+| Change tests, coverage, CI, or behavior validation | [Feature and behavior tests](feature-behavior-test-matrix.md) | `scripts/`, focused Rust tests, `scripts/check_pr.sh` | [Coverage and test quality](code-coverage.md), [scripts guide](../scripts/README.md) |
+| Run benchmarks or interpret performance evidence | [Local benchmark runner](local-benchmark-runner.md) | `crates/stargate-bench/`, `scripts/profile_stargate_bench.sh` | [Tunnel transport selection](tunnel-transports.md) |
+| Find exact flags, environment variables, APIs, or metric names | [CLI reference](reference/cli.md) | `crates/stargate/src/main.rs`, `crates/pylon/src/main.rs`, `crates/proto/proto/` | [Config and environment](reference/config-and-env.md), [gRPC API](reference/grpc-api.md), [metrics](reference/metrics.md) |
+| Handle releases or an operational incident | [Release Please layout](release-please.md) | `.release-please-manifest.json`, `.buildkite/`, `scripts/` | [Troubleshooting](operations/troubleshooting.md), [observability](operations/observability.md) |
 
-| Task | Read first | Then read only if needed |
-| --- | --- | --- |
-| Local setup or first request | [Local quickstart](getting-started/local-quickstart.md) | [API gateway contract](api-gateway-contract.md), [Pylon onboarding](operations/pylon-onboarding.md) |
-| Exact public HTTP proxy or gateway behavior | [API gateway contract](api-gateway-contract.md) | [gRPC and protobuf API](reference/grpc-api.md), [Config and environment](reference/config-and-env.md) |
-| Routing, proxying, registration, Kubernetes connectivity, pylon behavior, or observability | [Architecture](architecture/README.md) | [Testing](testing/README.md), [Benchmarks](benchmarks/README.md) |
-| Pylon or inference runtime onboarding | [Pylon onboarding](operations/pylon-onboarding.md) | [Runtime stats interface](runtime-stats-interface.md), [Tunnel transport selection](tunnel-transports.md) |
-| Kubernetes deployment shape | [Deployment shape](operations/deployment-shape.md) | [Operations](operations/README.md), [Testing](testing/README.md) |
-| Metrics, tracing, or on-call debugging | [Observability](operations/observability.md) | [Troubleshooting](operations/troubleshooting.md), [Metrics reference](reference/metrics.md) |
-| CLI flags, env vars, gRPC, or metrics names | [Reference docs](reference/README.md) | [Architecture](architecture/README.md) |
-| Tunnel transport choice or QUIC/HTTP3/WebTransport changes | [Architecture](architecture/README.md) | [Tunnel transport selection](tunnel-transports.md) |
-| Test, coverage, CI, mutation, or behavior-suite work | [Testing](testing/README.md) | [Architecture](architecture/README.md) |
-| Benchmark runner, benchmark scenarios, or performance evidence | [Benchmarks](benchmarks/README.md) | [Testing](testing/README.md) |
-| Release, change-control, or operator runbooks | [Operations](operations/README.md) | [Architecture](architecture/README.md) |
-| Repo documentation organization or agent-readable docs | [Docs best practices](docs-best-practices.md) | [Architecture](architecture/README.md), [Testing](testing/README.md), [Operations](operations/README.md) |
+## Contract Pages
 
-## Current Versus Historical
+Keep these pages detailed and source-backed because other systems, operators,
+or automated checks consume their exact behavior:
 
-Current contracts live in the topic indexes above and in the docs they link as
-current. Historical audits and retired contract notes are retained only when
-they still explain important rationale.
+- [API gateway contract](api-gateway-contract.md)
+- [Runtime stats interface](runtime-stats-interface.md)
+- [Tunnel transport selection](tunnel-transports.md)
+- [Multi-backend cluster routing](multi-backend-clusters.md)
+- [CLI reference](reference/cli.md)
+- [Config and environment](reference/config-and-env.md)
+- [gRPC and protobuf API](reference/grpc-api.md)
+- [Metrics reference](reference/metrics.md)
+- [Feature and behavior tests](feature-behavior-test-matrix.md)
 
 ## Diagrams
 

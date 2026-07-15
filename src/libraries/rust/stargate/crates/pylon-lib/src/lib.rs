@@ -18,6 +18,9 @@ pub use stargate_protocol::TunnelTransportProtocol;
 pub use stargate_tls::ServerTlsIdentity;
 
 mod bringup;
+mod generated_request_id;
+mod model_discovery;
+mod model_lifecycle;
 mod output_token_parser;
 mod queue_admission;
 mod quic_http_tunnel;
@@ -27,10 +30,18 @@ mod request_quality_monitor;
 mod runtime_state;
 mod sse_message_stream;
 mod stats;
+#[cfg(test)]
+mod test_support;
+mod upstream_url;
 
-pub use bringup::{
-    BringupConfig, BringupError, BringupHandle, CalibrationConfig, run_startup_calibration,
-    start_bringup,
+pub use bringup::{BringupConfig, BringupError, CalibrationConfig};
+pub use model_discovery::{
+    ModelDiscoveryConfig, ModelDiscoveryError, ModelDiscoveryProvider,
+    ParseModelDiscoveryProviderError,
+};
+pub use model_lifecycle::{
+    ModelInitialization, ModelLifecycleConfig, ModelLifecycleError, ModelLifecycleHandle,
+    ModelSource, start_model_lifecycle,
 };
 pub use queue_admission::PylonQueueMismatchRetryConfig;
 pub use quic_http_tunnel::{

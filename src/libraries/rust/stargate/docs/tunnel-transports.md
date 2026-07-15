@@ -1,6 +1,6 @@
 # Tunnel Transport Selection
 
-> Type: Reference. Source: Stargate/pylon tunnel protocol implementation and Kubernetes routing constraints.
+Source: Stargate/pylon tunnel protocol implementation and Kubernetes routing constraints.
 
 Stargate proxies supported OpenAI-compatible requests over an established QUIC
 connection. Set the same protocol on Stargate and pylon:

@@ -40,6 +40,7 @@ mod metrics;
 mod projection;
 pub(crate) mod token_metrics;
 
+pub(crate) use collector::{ModelStatsInitialization, StatsCollectorControl};
 pub use collector::{
     RequestCounterUpdate, RequestCounterUpdateInput, StatsAggregatorUpdate, StatsCollectorConfig,
     StatsCollectorHandle, StatsUpdateSource, start_stats_collector,
@@ -49,4 +50,5 @@ pub use engine_stats_stream::{
     EngineStatsStreamConfig, EngineStatsStreamHandle, EngineStatsStreamMode,
     parse_engine_stats_line_for_benchmark, start_engine_stats_stream,
 };
+pub(crate) use metrics::CalibrationOutcome;
 pub use metrics::{MetricsServerHandle, PylonMetrics, start_metrics_server};

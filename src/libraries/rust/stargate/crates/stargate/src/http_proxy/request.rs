@@ -348,36 +348,17 @@ mod tests {
     }
 
     #[test]
-    fn proxy_request_inputs_reject_missing_model() {
-        let mut headers = proxy_headers();
-        headers.remove(HEADER_MODEL);
+    fn proxy_request_inputs_reject_missing_required_headers() {
+        for missing_header in [HEADER_MODEL, HEADER_REQUEST_ID, HEADER_INPUT_TOKENS] {
+            let mut headers = proxy_headers();
+            headers.remove(missing_header);
 
-        assert_eq!(
-            parse_proxy_request_inputs(&headers),
-            Err(StatusCode::BAD_REQUEST)
-        );
-    }
-
-    #[test]
-    fn proxy_request_inputs_reject_missing_request_id() {
-        let mut headers = proxy_headers();
-        headers.remove(HEADER_REQUEST_ID);
-
-        assert_eq!(
-            parse_proxy_request_inputs(&headers),
-            Err(StatusCode::BAD_REQUEST)
-        );
-    }
-
-    #[test]
-    fn proxy_request_inputs_reject_missing_input_tokens() {
-        let mut headers = proxy_headers();
-        headers.remove(HEADER_INPUT_TOKENS);
-
-        assert_eq!(
-            parse_proxy_request_inputs(&headers),
-            Err(StatusCode::BAD_REQUEST)
-        );
+            assert_eq!(
+                parse_proxy_request_inputs(&headers),
+                Err(StatusCode::BAD_REQUEST),
+                "missing {missing_header} should be rejected"
+            );
+        }
     }
 
     #[test]

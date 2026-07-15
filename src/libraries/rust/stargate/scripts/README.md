@@ -13,8 +13,7 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 
 This suite is intentionally manual. Individual repository gates run the focused
 test modules they own, such as the coverage-policy tests in
-`scripts/check_coverage_quality.sh` and the docs/protocol tests referenced from
-`.memory/tools.md`.
+`scripts/check_coverage_quality.sh`.
 
 Use the discovery command after changing Python support scripts, their tests,
 Buildkite quality checks, Kubernetes integration helpers, benchmark profiling
@@ -45,3 +44,14 @@ context, namespace, Tiltfile, and Tiltfile arguments, then removes the matching
 CoreDNS rewrite. This removes the Kubernetes resources and cluster-wide DNS
 side effect owned by that Tilt instance. The selected context is also applied
 to kubectl calls made by the local integration and manifest-rendering helpers.
+
+## PR Checks
+
+The PR gate runs repository header and diff checks, then runs the code-change
+gates only when code-impacting paths changed.
+
+Run the support-script tests after changing repository tooling:
+
+```bash
+python3 -m unittest discover -s scripts -p 'test_*.py'
+```

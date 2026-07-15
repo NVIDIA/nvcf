@@ -1,6 +1,6 @@
 # Runtime Stats Interface
 
-> Type: Reference. Source: pylon stats collector, request observer, and mock backend contracts.
+Source: pylon stats collector, request observer, and mock backend contracts.
 
 Pylon gets request-throughput stats from the inference runtime through:
 
@@ -113,9 +113,13 @@ capacity is:
 sum(active_runtime_reports)
 ```
 
-Before registration, Pylon bootstraps each model's input-TPS distribution from
-exactly one source: local calibration or `--initial-input-tps`. The initialized
-distribution is immediately ready and later valid runtime samples update it.
+Before registration, Pylon initializes each model generation from exactly one
+source. `--initial-input-tps` installs the configured value. Local calibration
+installs nothing: it runs an increasing request ramp until a load-step timeout,
+and those requests' exact-generation observer events build the same distribution
+used at runtime. Duplicate engine events for calibration IDs are ignored. Pylon
+logs the current stats at timeout without reinjecting them.
+Later valid runtime samples continue updating either unpinned distribution.
 
 Labels:
 

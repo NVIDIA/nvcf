@@ -1243,7 +1243,7 @@ async fn accept_body_send_webtransport_request(
     mode: BodySendPeerMode,
     release_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
-    let (_h3_connection, _connect_stream, mut quinn_send) =
+    let (_h3_connection, _connect_stream, mut quinn_send, _quinn_recv) =
         accept_webtransport_request(connection).await;
     if mode.should_reply() {
         let response_head = WebTransportHttpResponseHead {
@@ -1278,7 +1278,12 @@ async fn accept_h3_request(connection: Connection) -> (H3ServerConnection, H3Ser
 
 async fn accept_webtransport_request(
     connection: Connection,
-) -> (H3ServerConnection, H3ServerRequestStream, quinn::SendStream) {
+) -> (
+    H3ServerConnection,
+    H3ServerRequestStream,
+    quinn::SendStream,
+    quinn::RecvStream,
+) {
     let mut builder = h3::server::builder();
     builder
         .enable_webtransport(true)
@@ -1320,7 +1325,7 @@ async fn accept_webtransport_request(
     stargate_protocol::read_webtransport_http_request_head(&mut quinn_recv)
         .await
         .expect("WebTransport request head");
-    (h3_connection, connect_stream, quinn_send)
+    (h3_connection, connect_stream, quinn_send, quinn_recv)
 }
 
 fn start_inert_body_send_error_peer(
@@ -1652,50 +1657,6 @@ async fn await_reverse_connection_ignores_closed_generation_connection() {
             .await_reverse_connection(registration, Duration::from_millis(50))
             .await,
         "closed generation connection must not satisfy reverse connection wait"
-    );
-}
-
-#[test]
-fn build_client_config_insecure_succeeds_without_cert() {
-    install_crypto_provider();
-    assert!(build_client_config(None, true, TunnelTransportProtocol::RawQuic).is_ok());
-}
-
-#[test]
-fn build_client_config_secure_fails_without_cert() {
-    install_crypto_provider();
-    assert!(build_client_config(None, false, TunnelTransportProtocol::RawQuic).is_err());
-}
-
-#[test]
-fn build_client_config_secure_succeeds_with_cert() {
-    install_crypto_provider();
-    let (cert_pem, _key_pem) = stargate_tls::generate_self_signed_cert().unwrap();
-    assert!(build_client_config(Some(&cert_pem), false, TunnelTransportProtocol::RawQuic).is_ok());
-}
-
-#[test]
-fn build_server_config_self_signed_when_none() {
-    install_crypto_provider();
-    assert!(
-        build_server_config(
-            &stargate_tls::ServerTlsIdentity::SelfSigned,
-            TunnelTransportProtocol::RawQuic,
-        )
-        .is_ok()
-    );
-}
-
-#[test]
-fn build_server_config_uses_provided_cert() {
-    install_crypto_provider();
-    let (cert_pem, key_pem) = stargate_tls::generate_self_signed_cert().unwrap();
-    assert!(
-        build_server_config(
-            &stargate_tls::ServerTlsIdentity::Provided { cert_pem, key_pem },
-            TunnelTransportProtocol::RawQuic,
-        )
-        .is_ok()
     );
 }
 

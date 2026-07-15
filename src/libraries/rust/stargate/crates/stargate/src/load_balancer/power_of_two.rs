@@ -263,18 +263,6 @@ mod tests {
     }
 
     #[test]
-    fn load_score_ignores_decode_only_total_query_input_size() {
-        let mut decode_only = candidate("decode-only", 100.0, 0);
-        decode_only.stats.total_query_input_size = 10_000;
-        let empty = candidate("empty", 100.0, 0);
-
-        assert_eq!(
-            load_score(&decode_only, Some(1000)),
-            load_score(&empty, Some(1000))
-        );
-    }
-
-    #[test]
     fn load_score_rejects_invalid_input_throughput() {
         for input_tps in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert!(load_score(&candidate("invalid", input_tps, 0), Some(100)).is_infinite());

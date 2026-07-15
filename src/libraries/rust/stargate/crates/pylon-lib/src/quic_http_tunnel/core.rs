@@ -43,13 +43,13 @@ use crate::queue_admission::{
     RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
 };
 use crate::request_observer::{
-    MissingRequiredHeaderError, RequestObservationEndpoint, RequiredTunnelHeaders,
-    TunnelRequestObserver, validate_required_tunnel_headers,
+    RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
+    validate_required_tunnel_headers,
 };
 use crate::request_quality_monitor::{
     RequestOutputTokenProgress, RequestQualityMonitorConfig, RequestQualityRecorder,
 };
-use crate::runtime_state::PylonRuntimeState;
+use crate::runtime_state::{ModelGeneration, PylonRuntimeState, RequestGenerationAdmission};
 use crate::sse_message_stream::{
     ParsedSseMessage, SseMessage, SseReadTimeoutPhase, UpstreamSseReadError,
     upstream_sse_message_stream,
@@ -67,6 +67,7 @@ pub(super) const DEFAULT_OUTPUT_CHUNK_TIMEOUT: Duration = Duration::from_secs(30
 pub(super) const MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES: usize = 64 * 1024;
 pub(super) const RETRY_REASON_UPSTREAM_ADMISSION_REJECTED: &str = "upstream_admission_rejected";
 pub(super) const RETRY_REASON_LOCAL_CONNECT_FAILURE: &str = "local_connect_failure";
+pub(super) const RETRY_REASON_MODEL_GENERATION_UNAVAILABLE: &str = "model_generation_unavailable";
 pub(super) const WEBTRANSPORT_STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
@@ -245,6 +246,7 @@ fn relay_sse_error(error: UpstreamSseReadError) -> anyhow::Error {
 
 struct TunnelRequestLifecycle {
     required: RequiredTunnelHeaders,
+    generation: Option<ModelGeneration>,
     observer: Option<TunnelRequestObserver>,
     queue_request: Option<QueueTrackedRequestGuard>,
     quality_check: Option<RequestQualityCheck>,
@@ -260,10 +262,16 @@ impl TunnelRequestLifecycle {
         app: &TunnelServerApp,
         observation_endpoint: Option<RequestObservationEndpoint>,
         request_headers: &HeaderMap,
-    ) -> Result<Self, MissingRequiredHeaderError> {
-        let required = validate_required_tunnel_headers(request_headers)?;
+        required: RequiredTunnelHeaders,
+        generation: Option<ModelGeneration>,
+    ) -> Self {
         let observer = observation_endpoint.map(|endpoint| {
-            TunnelRequestObserver::accepted(endpoint, required.clone(), app.runtime_state.clone())
+            TunnelRequestObserver::accepted(
+                endpoint,
+                required.clone(),
+                generation.clone(),
+                app.runtime_state.clone(),
+            )
         });
         let quality_check = (observation_endpoint
             == Some(RequestObservationEndpoint::ChatCompletions)
@@ -275,12 +283,13 @@ impl TunnelRequestLifecycle {
             model_label: request_headers[HEADER_MODEL].clone(),
         });
 
-        Ok(Self {
+        Self {
             required,
+            generation,
             observer,
             queue_request: None,
             quality_check,
-        })
+        }
     }
 
     fn admit_queue(
@@ -289,9 +298,10 @@ impl TunnelRequestLifecycle {
         request_headers: &HeaderMap,
     ) -> Option<QueueAdmissionDecision> {
         let required = &self.required;
-        let decision = app.runtime_state.evaluate_queue_admission(
+        let decision = app.runtime_state.evaluate_generation_queue_admission(
             &app.queue_mismatch_retry,
             required,
+            self.generation.as_ref(),
             request_headers,
         );
         if let Some(metrics) = app.metrics.as_deref() {
@@ -315,7 +325,9 @@ impl TunnelRequestLifecycle {
             "evaluated local queue mismatch admission"
         );
         if !matches!(decision, QueueAdmissionDecision::Rejected { .. }) {
-            self.queue_request = Some(app.runtime_state.track_request(required));
+            self.queue_request = app
+                .runtime_state
+                .track_generation_request(required, self.generation.as_ref());
             return None;
         }
 
@@ -566,8 +578,35 @@ pub(super) async fn forward_tunnel_request(
     let mut lifecycle = if health_request {
         None
     } else {
-        match TunnelRequestLifecycle::new(app, observation_endpoint, &request_headers) {
-            Ok(lifecycle) => Some(lifecycle),
+        match validate_required_tunnel_headers(&request_headers) {
+            Ok(required) => {
+                let generation = match app
+                    .runtime_state
+                    .request_generation_admission(&required.model_id)
+                {
+                    RequestGenerationAdmission::Admitted(generation) => Some(generation),
+                    RequestGenerationAdmission::Ungated => None,
+                    RequestGenerationAdmission::Unavailable => {
+                        return send_complete_response(
+                            transport,
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            model_generation_unavailable_headers(app),
+                            problem_details_body(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "model generation is not admitted for request routing",
+                            ),
+                        )
+                        .await;
+                    }
+                };
+                Some(TunnelRequestLifecycle::new(
+                    app,
+                    observation_endpoint,
+                    &request_headers,
+                    required,
+                    generation,
+                ))
+            }
             Err(error) => {
                 return send_problem_response(transport, StatusCode::BAD_REQUEST, error.message())
                     .await;
@@ -925,6 +964,24 @@ pub(super) fn problem_response_headers() -> HeaderMap {
 pub(super) fn local_connect_failure_headers(retryable: bool) -> HeaderMap {
     let mut headers = problem_response_headers();
     insert_retry_metadata(&mut headers, retryable, RETRY_REASON_LOCAL_CONNECT_FAILURE);
+    headers
+}
+
+pub(super) fn model_generation_unavailable_headers(app: &TunnelServerApp) -> HeaderMap {
+    let status = StatusCode::SERVICE_UNAVAILABLE;
+    record_failure_metric(
+        app.metrics.as_deref(),
+        &app.inference_server_id,
+        status,
+        true,
+        RETRY_REASON_MODEL_GENERATION_UNAVAILABLE,
+    );
+    let mut headers = problem_response_headers();
+    insert_retry_metadata(
+        &mut headers,
+        true,
+        RETRY_REASON_MODEL_GENERATION_UNAVAILABLE,
+    );
     headers
 }
 

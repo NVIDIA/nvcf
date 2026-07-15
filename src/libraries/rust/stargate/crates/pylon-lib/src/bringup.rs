@@ -19,9 +19,10 @@ mod calibration;
 mod lifecycle;
 mod upstream;
 
-pub use calibration::run_startup_calibration;
-pub use lifecycle::{BringupHandle, start_bringup};
+pub(crate) use calibration::run_calibration;
+pub(crate) use lifecycle::run_bringup_task;
 pub use upstream::BringupError;
+pub(crate) use upstream::check_upstream_health;
 
 const DEFAULT_ACTIVE_CANARY_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_CANARY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -74,7 +75,7 @@ impl Default for CalibrationConfig {
 #[derive(Debug, Clone)]
 pub(crate) struct BringupTaskConfig {
     pub upstream_http_base_url: String,
-    pub model_id: String,
+    pub generation: crate::runtime_state::ModelGeneration,
     pub config: BringupConfig,
 }
 
@@ -83,7 +84,7 @@ mod tests {
     use super::*;
     use super::{calibration::*, lifecycle::*, upstream::*};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use axum::Json;
     use axum::Router;
@@ -101,7 +102,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::runtime_state::PylonRuntimeState;
-    use crate::stats::PylonMetrics;
+    use crate::test_support::TestHttpServer;
+    use crate::{StatsCollectorConfig, StatsCollectorHandle, start_stats_collector};
 
     async fn wait_for_bringup_ready(runtime_state: &PylonRuntimeState, expected: bool) {
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -130,13 +132,29 @@ mod tests {
         PylonRuntimeState::new(InferenceServerStatus::Active, &["test-model".into()])
     }
 
+    fn test_generation() -> crate::runtime_state::ModelGeneration {
+        crate::runtime_state::ModelGeneration::new("test-model", 0)
+    }
+
+    fn test_stats_collector() -> (PylonRuntimeState, StatsCollectorHandle) {
+        let config = StatsCollectorConfig::default();
+        let (runtime_state, observations) = PylonRuntimeState::observed(
+            InferenceServerStatus::Active,
+            &["test-model".to_string()],
+            config.observation_channel_capacity,
+            None,
+        );
+        let collector = start_stats_collector(config, observations, runtime_state.clone());
+        (runtime_state, collector)
+    }
+
     fn test_task_config(
         upstream_http_base_url: String,
         config: BringupConfig,
     ) -> BringupTaskConfig {
         BringupTaskConfig {
             upstream_http_base_url,
-            model_id: "test-model".to_string(),
+            generation: crate::runtime_state::ModelGeneration::new("test-model", 0),
             config,
         }
     }
@@ -169,10 +187,15 @@ mod tests {
         })
         .await;
         let client = reqwest::Client::new();
-        let error =
-            send_canary_request(&client, &base_url, "test-model", Duration::from_secs(1), 7)
-                .await
-                .expect_err("expected runaway generation");
+        let error = send_canary_request(
+            &client,
+            &base_url,
+            &test_generation(),
+            Duration::from_secs(1),
+            7,
+        )
+        .await
+        .expect_err("expected runaway generation");
         assert!(matches!(
             error,
             BringupError::RunawayGeneration { tokens: 7 }
@@ -189,16 +212,26 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
 
-        send_canary_request(&client, &base_url, "test-model", Duration::from_secs(1), 7)
-            .await
-            .expect("canary request should succeed");
+        send_canary_request(
+            &client,
+            &base_url,
+            &test_generation(),
+            Duration::from_secs(1),
+            7,
+        )
+        .await
+        .expect("canary request should succeed");
         send_calibration_batch(
             &client,
             &base_url,
-            "test-model",
+            &test_generation(),
             Duration::from_secs(1),
-            CALIBRATION_PROMPT_UNITS_FLOOR,
-            2,
+            CalibrationBatch {
+                prompt_units: CALIBRATION_PROMPT_UNITS_FLOOR,
+                request_count: 2,
+                concurrency: 2,
+            },
+            &test_runtime_state(),
         )
         .await
         .expect("calibration batch should succeed");
@@ -223,6 +256,7 @@ mod tests {
                 .all(|request_id| request_id.uuid == request_scope)
         );
         assert!(parsed.iter().all(|request_id| request_id.counter > 0));
+        assert!(parsed.iter().all(|request_id| request_id.generation == 0));
 
         let canary_counter = parsed[0].counter;
         let mut calibration_counters = parsed[1..]
@@ -240,84 +274,145 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn calibration_reduces_prompt_size_after_prompt_too_long() {
-        let observed = calibrate_after_prompt_backoff(5).await;
-        assert!(observed.is_finite());
-        assert!(observed > 0.0);
-    }
-
-    #[tokio::test]
-    async fn single_request_calibration_completes_after_prompt_backoff() {
-        let observed = calibrate_after_prompt_backoff(1).await;
-        assert!(observed.is_finite());
-        assert!(observed > 0.0);
-    }
-
-    async fn calibrate_after_prompt_backoff(calibration_requests: usize) -> f64 {
+    async fn prompt_too_long_clamps_to_the_last_completed_frontier() {
+        let prompt_lengths = Arc::new(Mutex::new(Vec::new()));
         let base_url = spawn_test_server(TestServerState {
             prompt_too_long_above: Some(700),
+            completions_before_block: Some(Arc::new(AtomicUsize::new(4))),
+            prompt_lengths: Some(prompt_lengths.clone()),
             ..TestServerState::default()
         })
         .await;
         let client = reqwest::Client::new();
         let config = CalibrationConfig {
-            calibration_requests,
+            calibration_requests: 1,
             calibration_prompt_units: 1536,
             calibration_timeout: Duration::from_secs(1),
             ..CalibrationConfig::default()
         };
+        let (runtime_state, stats) = test_stats_collector();
+        let stats_control = stats.control();
 
-        run_calibration(&client, &base_url, "test-model", &config)
-            .await
-            .expect("calibration should back off and succeed")
-    }
+        run_calibration(
+            &client,
+            &base_url,
+            &test_generation(),
+            &config,
+            &stats_control,
+            &runtime_state,
+        )
+        .await
+        .expect("calibration should continue below the rejected prompt frontier");
 
-    #[test]
-    fn calibration_plan_sweeps_tokens_at_increasing_concurrency_levels() {
-        assert_calibration_plan(5, 4, &[(CALIBRATION_PROMPT_UNITS_FLOOR, 1), (1024, 4)]);
-    }
-
-    #[test]
-    fn calibration_plan_preserves_linear_ramp_when_quadrants_cannot_be_sampled() {
-        assert_calibration_plan(3, 4, &[(CALIBRATION_PROMPT_UNITS_FLOOR, 1), (1024, 2)]);
-    }
-
-    #[test]
-    fn serial_calibration_plan_preserves_full_prompt_ramp() {
-        assert_calibration_plan(
-            3,
-            1,
-            &[(CALIBRATION_PROMPT_UNITS_FLOOR, 1), (640, 1), (1024, 1)],
+        let prompt_lengths = prompt_lengths.lock().await;
+        let rejected = prompt_lengths
+            .iter()
+            .rposition(|prompt_units| *prompt_units > 700)
+            .expect("the ramp should probe beyond the model context");
+        assert!(
+            prompt_lengths[rejected + 1..]
+                .iter()
+                .all(|prompt_units| *prompt_units == 512),
+            "after rejection the ramp must remain at the last completed prompt frontier"
         );
+        stats.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn repeated_prompt_rejection_steps_down_to_the_next_completed_frontier() {
+        let prompt_lengths = Arc::new(Mutex::new(Vec::new()));
+        let prompt_rejections = Arc::new(Mutex::new(vec![1024, 512]));
+        let base_url = spawn_test_server(TestServerState {
+            prompt_rejections: Some(prompt_rejections.clone()),
+            completions_before_block: Some(Arc::new(AtomicUsize::new(6))),
+            prompt_lengths: Some(prompt_lengths.clone()),
+            ..TestServerState::default()
+        })
+        .await;
+        let (runtime_state, stats) = test_stats_collector();
+
+        run_calibration(
+            &reqwest::Client::new(),
+            &base_url,
+            &test_generation(),
+            &CalibrationConfig {
+                calibration_requests: 1,
+                calibration_prompt_units: 1024,
+                calibration_max_concurrency: 1,
+                calibration_timeout: Duration::from_secs(1),
+                ..CalibrationConfig::default()
+            },
+            &stats.control(),
+            &runtime_state,
+        )
+        .await
+        .expect("calibration should step down again instead of restarting");
+
+        assert!(prompt_rejections.lock().await.is_empty());
+        let prompt_lengths = prompt_lengths.lock().await;
+        let second_rejection = prompt_lengths
+            .iter()
+            .rposition(|prompt_units| *prompt_units == 512)
+            .expect("the clamped frontier should be rejected once");
+        assert!(
+            prompt_lengths[second_rejection + 1..]
+                .iter()
+                .all(|prompt_units| *prompt_units == CALIBRATION_PROMPT_UNITS_FLOOR),
+            "a repeated rejection must continue from the next lower completed prompt"
+        );
+        stats.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn prompt_too_long_at_the_calibration_floor_is_an_error() {
+        let base_url = spawn_test_server(TestServerState {
+            prompt_too_long_above: Some(CALIBRATION_PROMPT_UNITS_FLOOR - 1),
+            ..TestServerState::default()
+        })
+        .await;
+        let (runtime_state, stats) = test_stats_collector();
+
+        let error = run_calibration(
+            &reqwest::Client::new(),
+            &base_url,
+            &test_generation(),
+            &CalibrationConfig {
+                calibration_requests: 1,
+                calibration_prompt_units: 1024,
+                calibration_timeout: Duration::from_secs(1),
+                ..CalibrationConfig::default()
+            },
+            &stats.control(),
+            &runtime_state,
+        )
+        .await
+        .expect_err("the minimum calibration prompt rejection must fail");
+
+        assert!(matches!(error, BringupError::PromptTooLong));
+        stats.shutdown().await;
     }
 
     #[test]
-    fn single_calibration_request_does_not_expand_to_max_concurrency() {
-        assert_calibration_plan(1, 4, &[(1024, 1)]);
-    }
-
-    fn assert_calibration_plan(
-        calibration_requests: usize,
-        calibration_max_concurrency: usize,
-        expected: &[(usize, usize)],
-    ) {
+    fn calibration_ramp_keeps_increasing_load_after_prompt_and_concurrency_caps() {
         let config = CalibrationConfig {
-            calibration_requests,
+            calibration_requests: 2,
             calibration_prompt_units: 1024,
-            calibration_max_concurrency,
+            calibration_max_concurrency: 3,
             ..CalibrationConfig::default()
         };
-        let plan = calibration_plan(&config);
+        let ramp = calibration_ramp(&config).take(5).collect::<Vec<_>>();
 
         assert_eq!(
-            plan.iter().map(|batch| batch.concurrency).sum::<usize>(),
-            calibration_requests
-        );
-        assert_eq!(
-            plan.iter()
-                .map(|batch| (batch.prompt_units, batch.concurrency))
+            ramp.iter()
+                .map(|step| (step.prompt_units, step.request_count, step.concurrency))
                 .collect::<Vec<_>>(),
-            expected
+            vec![
+                (256, 2, 1),
+                (512, 4, 2),
+                (1024, 8, 3),
+                (1024, 16, 3),
+                (1024, 32, 3),
+            ]
         );
     }
 
@@ -334,120 +429,136 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
 
-        let observed = send_calibration_batch(
+        let outcome = send_calibration_batch(
             &client,
             &base_url,
-            "test-model",
+            &test_generation(),
             Duration::from_secs(1),
-            256,
-            3,
+            CalibrationBatch {
+                prompt_units: 256,
+                request_count: 3,
+                concurrency: 3,
+            },
+            &test_runtime_state(),
         )
         .await
         .expect("calibration batch should succeed");
 
-        assert_eq!(observed.len(), 3);
-        assert!(observed.iter().all(|sample| *sample > 0.0));
+        assert_eq!(outcome, CalibrationStepOutcome::Completed);
         assert_eq!(max_in_flight.load(Ordering::SeqCst), 3);
     }
 
-    #[test]
-    fn calibration_batch_aggregate_capacity_scales_with_concurrency() {
-        let serial = aggregate_input_tps(256, 1, Duration::from_millis(100));
-        let concurrent = aggregate_input_tps(256, 3, Duration::from_millis(100));
-        let immediate = aggregate_input_tps(256, 3, Duration::ZERO);
-
-        assert!((serial - 2_560.0).abs() < f64::EPSILON);
-        assert!((concurrent - 7_680.0).abs() < f64::EPSILON);
-        assert!(immediate.is_finite());
-    }
-
     #[tokio::test]
-    async fn startup_calibration_records_duration_metric() {
-        let metrics = PylonMetrics::new().expect("metrics should initialize");
+    async fn calibration_top_level_usage_does_not_claim_chunk_usage_stats() {
         let base_url = spawn_test_server(TestServerState::default()).await;
-        let model_ids = vec!["test-model".to_string()];
-        let calibration = run_startup_calibration(
-            &base_url,
-            &model_ids,
-            &CalibrationConfig {
-                health_timeout: Duration::from_secs(1),
-                calibration_requests: 5,
-                calibration_timeout: Duration::from_secs(1),
-                ..CalibrationConfig::default()
-            },
-            Some(metrics.clone()),
-        )
-        .await
-        .expect("startup calibration should produce a local measurement");
-        let last_mean_input_tps = calibration["test-model"];
-        assert!(last_mean_input_tps > 0.0);
-
-        let body = metrics.gather_text().expect("metrics should encode");
-        assert!(body.contains(
-            r#"pylon_model_calibration_duration_ms_count{model="test-model",outcome="success"} 1"#
-        ));
-        assert!(!body.contains(
-            r#"pylon_model_calibration_duration_ms_count{model="test-model",outcome="failure"}"#
-        ));
-    }
-
-    #[tokio::test]
-    async fn startup_calibration_rejects_zero_requests() {
-        let base_url = spawn_test_server(TestServerState::default()).await;
-
-        let error = run_startup_calibration(
-            &base_url,
+        let stats_config = StatsCollectorConfig {
+            duration_floor: Duration::ZERO,
+            ..StatsCollectorConfig::default()
+        };
+        let (runtime_state, observations) = PylonRuntimeState::observed(
+            InferenceServerStatus::Active,
             &["test-model".to_string()],
-            &CalibrationConfig {
-                calibration_requests: 0,
-                ..CalibrationConfig::default()
-            },
+            stats_config.observation_channel_capacity,
             None,
+        );
+        let stats = start_stats_collector(stats_config, observations, runtime_state.clone());
+        let generation = test_generation();
+
+        let outcome = send_calibration_batch(
+            &reqwest::Client::new(),
+            &base_url,
+            &generation,
+            Duration::from_secs(1),
+            CalibrationBatch {
+                prompt_units: 256,
+                request_count: 1,
+                concurrency: 1,
+            },
+            &runtime_state,
         )
         .await
-        .expect_err("zero requests cannot produce a valid input-TPS bootstrap");
+        .expect("calibration batch should succeed");
 
-        assert!(matches!(
-            error,
-            BringupError::InvalidCalibrationConfig(
-                "calibration_requests must be greater than zero"
-            )
-        ));
+        assert_eq!(outcome, CalibrationStepOutcome::Completed);
+        let stats_snapshot = stats
+            .control()
+            .flush_and_snapshot(&generation)
+            .await
+            .expect("stats collector should respond")
+            .expect("generation should remain live");
+        assert!(
+            stats_snapshot.output_tps > 0.0,
+            "terminal top-level usage should seed output throughput"
+        );
+        assert!(
+            stats_snapshot.max_output_tps > 0.0,
+            "terminal top-level usage should seed shared output throughput"
+        );
+        assert!(
+            !stats_snapshot
+                .stats_capabilities
+                .contains(&"request.output.chunk_usage".to_string())
+        );
+        assert!(
+            !stats_snapshot
+                .stats_sources
+                .contains(&"chunk_usage".to_string())
+        );
+
+        stats.shutdown().await;
     }
 
     #[tokio::test]
-    async fn startup_calibration_does_not_measure_unhealthy_upstream() {
-        let health_ok = Arc::new(AtomicBool::new(false));
-        let in_flight = Arc::new(AtomicUsize::new(0));
-        let max_in_flight = Arc::new(AtomicUsize::new(0));
+    async fn calibration_keeps_increasing_load_until_a_step_times_out() {
+        let request_ids = Arc::new(Mutex::new(Vec::new()));
+        let calibration_blocked = Arc::new(Notify::new());
         let base_url = spawn_test_server(TestServerState {
-            in_flight: Some(in_flight),
-            max_in_flight: Some(max_in_flight.clone()),
-            health_ok: Some(health_ok),
+            completions_before_block: Some(Arc::new(AtomicUsize::new(3))),
+            calibration_blocked: Some(calibration_blocked.clone()),
+            request_ids: Some(request_ids.clone()),
             ..TestServerState::default()
         })
         .await;
+        let (runtime_state, stats) = test_stats_collector();
+        let stats_control = stats.control();
+        let calibration = tokio::spawn(async move {
+            run_calibration(
+                &reqwest::Client::new(),
+                &base_url,
+                &test_generation(),
+                &CalibrationConfig {
+                    calibration_requests: 1,
+                    calibration_prompt_units: 1024,
+                    calibration_max_concurrency: 1,
+                    calibration_timeout: Duration::from_secs(30),
+                    ..CalibrationConfig::default()
+                },
+                &stats_control,
+                &runtime_state,
+            )
+            .await
+        });
 
-        let error = run_startup_calibration(
-            &base_url,
-            &["test-model".to_string()],
-            &CalibrationConfig {
-                health_timeout: Duration::from_secs(1),
-                calibration_requests: 1,
-                calibration_timeout: Duration::from_secs(1),
-                ..CalibrationConfig::default()
-            },
-            None,
+        wait_for_bringup_notification(
+            &calibration_blocked,
+            "reach the first saturated calibration step",
         )
-        .await
-        .expect_err("unhealthy upstream must not be measured for an assignment");
+        .await;
 
-        assert!(matches!(error, BringupError::UnhealthyUpstream));
-        assert_eq!(
-            max_in_flight.load(Ordering::SeqCst),
-            0,
-            "calibration requests must wait until upstream health succeeds"
+        let request_count = request_ids.lock().await.len();
+        assert!(
+            request_count >= 4,
+            "the ramp must continue beyond its first finite sweep; observed {request_count} requests"
         );
+
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(30)).await;
+        calibration
+            .await
+            .expect("calibration task should not panic")
+            .expect("the first load-step timeout should complete calibration");
+        tokio::time::resume();
+        stats.shutdown().await;
     }
 
     #[tokio::test]
@@ -465,7 +576,7 @@ mod tests {
         let stop = CancellationToken::new();
         let task = tokio::spawn(run_bringup_task(
             test_task_config(
-                base_url,
+                base_url.to_string(),
                 BringupConfig {
                     active_canary_interval: Duration::from_millis(10),
                     canary_timeout: Duration::from_secs(1),
@@ -504,7 +615,7 @@ mod tests {
         let stop = CancellationToken::new();
         let task = tokio::spawn(run_bringup_task(
             test_task_config(
-                base_url,
+                base_url.to_string(),
                 BringupConfig {
                     active_canary_interval: Duration::from_secs(60),
                     canary_timeout: Duration::from_secs(1),
@@ -522,24 +633,6 @@ mod tests {
             .await
             .expect("bringup task should stop when cancelled")
             .expect("bringup task should not panic");
-    }
-
-    #[tokio::test]
-    async fn disabled_bringup_starts_no_supervisor() {
-        let runtime_state = test_runtime_state();
-        let supervisor = start_bringup(
-            "http://127.0.0.1:1",
-            BringupConfig {
-                enabled: false,
-                ..BringupConfig::default()
-            },
-            runtime_state.clone(),
-        )
-        .await
-        .expect("disabled bringup should start");
-
-        wait_for_bringup_ready(&runtime_state, true).await;
-        assert!(supervisor.is_none());
     }
 
     #[tokio::test]
@@ -592,14 +685,16 @@ mod tests {
         completion_tokens: u32,
         prompt_too_long_above: Option<usize>,
         calibration_barrier: Option<Arc<Barrier>>,
-        completion_delay: Option<Duration>,
+        completions_before_block: Option<Arc<AtomicUsize>>,
+        calibration_blocked: Option<Arc<Notify>>,
         in_flight: Option<Arc<AtomicUsize>>,
         max_in_flight: Option<Arc<AtomicUsize>>,
         canary_failures_remaining: Option<Arc<AtomicUsize>>,
         canaries: Option<CanarySequence>,
-        health_ok: Option<Arc<AtomicBool>>,
         health_requests: Option<Arc<AtomicUsize>>,
         request_ids: Option<Arc<Mutex<Vec<String>>>>,
+        prompt_lengths: Option<Arc<Mutex<Vec<usize>>>>,
+        prompt_rejections: Option<Arc<Mutex<Vec<usize>>>>,
     }
 
     impl Default for TestServerState {
@@ -608,14 +703,16 @@ mod tests {
                 completion_tokens: 1,
                 prompt_too_long_above: None,
                 calibration_barrier: None,
-                completion_delay: None,
+                completions_before_block: None,
+                calibration_blocked: None,
                 in_flight: None,
                 max_in_flight: None,
                 canary_failures_remaining: None,
                 canaries: None,
-                health_ok: None,
                 health_requests: None,
                 request_ids: None,
+                prompt_lengths: None,
+                prompt_rejections: None,
             }
         }
     }
@@ -624,6 +721,7 @@ mod tests {
     struct ParsedPylonGeneratedRequestId<'a> {
         kind: &'a str,
         uuid: Uuid,
+        generation: u64,
         counter: u64,
     }
 
@@ -631,12 +729,18 @@ mod tests {
         let (kind, suffix) = request_id
             .split_once('-')
             .expect("request id should include kind prefix");
-        let (uuid, counter) = suffix
+        let (scope_and_generation, counter) = suffix
             .rsplit_once('-')
             .expect("request id should end with a counter suffix");
+        let (uuid, generation) = scope_and_generation
+            .rsplit_once("-g")
+            .expect("request id should include generation suffix");
         ParsedPylonGeneratedRequestId {
             kind,
             uuid: Uuid::parse_str(uuid).expect("request id should include a UUID"),
+            generation: generation
+                .parse()
+                .expect("request id should include a decimal generation"),
             counter: counter
                 .parse()
                 .expect("request id should include a decimal counter"),
@@ -650,18 +754,13 @@ mod tests {
         release: [Arc<Notify>; 2],
     }
 
-    async fn spawn_test_server(state: TestServerState) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
+    async fn spawn_test_server(state: TestServerState) -> TestHttpServer {
         let state = Arc::new(Mutex::new(state));
         let app = Router::new()
             .route("/health", get(test_health))
             .route("/v1/chat/completions", post(test_chat_completion))
             .with_state(state);
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        format!("http://{addr}")
+        TestHttpServer::spawn(app).await
     }
 
     async fn test_health(
@@ -670,13 +769,6 @@ mod tests {
         let state = state.lock().await.clone();
         if let Some(health_requests) = &state.health_requests {
             health_requests.fetch_add(1, Ordering::SeqCst);
-        }
-        if state
-            .health_ok
-            .as_ref()
-            .is_some_and(|health_ok| !health_ok.load(Ordering::SeqCst))
-        {
-            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
         "ok".into_response()
     }
@@ -702,6 +794,20 @@ mod tests {
             .and_then(|value| value.as_str())
             .unwrap_or_default();
         let prompt_len = prompt.len();
+        if let Some(prompt_lengths) = &state.prompt_lengths {
+            prompt_lengths.lock().await.push(prompt_len);
+        }
+        let reject_prompt = if let Some(prompt_rejections) = &state.prompt_rejections {
+            let mut prompt_rejections = prompt_rejections.lock().await;
+            if prompt_rejections.first() == Some(&prompt_len) {
+                prompt_rejections.remove(0);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         if let Some(in_flight) = &state.in_flight {
             let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             if let Some(max_in_flight) = &state.max_in_flight {
@@ -722,14 +828,29 @@ mod tests {
         if let Some(barrier) = &state.calibration_barrier {
             barrier.wait().await;
         }
-        if let Some(delay) = state.completion_delay {
-            tokio::time::sleep(delay).await;
+        let should_block = state
+            .completions_before_block
+            .as_ref()
+            .is_some_and(|remaining| {
+                remaining
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                        value.checked_sub(1)
+                    })
+                    .is_err()
+            });
+        if should_block {
+            if let Some(calibration_blocked) = &state.calibration_blocked {
+                calibration_blocked.notify_one();
+            }
+            std::future::pending::<()>().await;
         }
         if let Some(in_flight) = &state.in_flight {
             in_flight.fetch_sub(1, Ordering::SeqCst);
         }
-        if let Some(limit) = state.prompt_too_long_above
-            && prompt_len > limit
+        if reject_prompt
+            || state
+                .prompt_too_long_above
+                .is_some_and(|limit| prompt_len > limit)
         {
             return (
                 StatusCode::BAD_REQUEST,

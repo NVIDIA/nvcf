@@ -143,21 +143,3 @@ where
 {
     anyhow::Error::new(error)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn h3_error_context_preserves_source_chain() {
-        let error = h3_error(std::io::Error::other("inner h3 failure")).context("outer h3 context");
-
-        assert_eq!(error.to_string(), "outer h3 context");
-        assert!(
-            error
-                .chain()
-                .any(|source| source.to_string() == "inner h3 failure"),
-            "source chain should retain the original error: {error:#}"
-        );
-    }
-}

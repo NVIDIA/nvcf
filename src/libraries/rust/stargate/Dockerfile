@@ -19,7 +19,7 @@ ARG GRPC_HEALTH_PROBE_VERSION=v0.4.53
 ##### COMMON BUILDER STAGE (BUILDPLATFORM)
 ##########################################
 # Pinned alongside rust-toolchain.toml (1.94.0 stable, 2026-03-05).
-FROM --platform=$BUILDPLATFORM rust:1.96-bookworm AS builder-base
+FROM --platform=$BUILDPLATFORM rust:1.97-bookworm AS builder-base
 
 ARG TARGETARCH
 
