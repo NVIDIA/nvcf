@@ -1,0 +1,67 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "reconciler",
+    srcs = [
+        "backoff.go",
+        "health.go",
+        "metrics.go",
+        "reconciler.go",
+        "recover.go",
+        "state.go",
+        "sweep.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap/reconciler",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/otel",
+        "//pkg/apis/nvsnap/v1alpha1",
+        "//pkg/nvca/nvsnap",
+        "//vendor/github.com/prometheus/client_golang/prometheus",
+        "//vendor/github.com/prometheus/client_golang/prometheus/promauto",
+        "//vendor/github.com/sirupsen/logrus",
+        "//vendor/go.opentelemetry.io/otel/attribute",
+        "//vendor/go.opentelemetry.io/otel/trace",
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/apimachinery/pkg/types",
+        "//vendor/k8s.io/client-go/dynamic",
+        "//vendor/k8s.io/client-go/kubernetes",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":reconciler",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "reconciler_test",
+    srcs = [
+        "backoff_test.go",
+        "captureonce_test.go",
+        "coldstart_pioneer_test.go",
+        "reconciler_test.go",
+        "recover_test.go",
+        "sweep_test.go",
+    ],
+    embed = [":reconciler"],
+    deps = [
+        "//pkg/apis/nvsnap/v1alpha1",
+        "//pkg/nvca/nvsnap",
+        "//vendor/github.com/prometheus/client_golang/prometheus/testutil",
+        "//vendor/github.com/sirupsen/logrus",
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//vendor/k8s.io/client-go/dynamic",
+        "//vendor/k8s.io/client-go/dynamic/fake",
+        "//vendor/k8s.io/client-go/kubernetes/fake",
+    ],
+)

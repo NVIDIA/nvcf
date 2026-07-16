@@ -80,6 +80,14 @@ var (
 
 	// FCO operator-specific feature flags. To be removed once Phase 1 of the FCO SDD is in progress.
 	DynamoOperatorSupport = newFeatureFlag("DynamoOperatorSupport", newBool(false))
+
+	// NvSnapCheckpointRestore is the global kill switch for the NvSnap
+	// integration (see docs/users/nvsnap/NVSNAP-INTEGRATION-DESIGN.md).
+	// When false, NVCA pod creation behaves exactly as before — no
+	// nvsnap.io/restore-from stamping on apply, no post-Ready checkpoint
+	// kick-off. Disabled by default. Per-cluster + per-function-version
+	// overrides land in a follow-up CRD update.
+	NvSnapCheckpointRestore = newFeatureFlag("NvSnapCheckpointRestore", newBool(false))
 )
 
 // Feature flags for migrating resource limits.

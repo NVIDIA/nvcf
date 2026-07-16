@@ -340,6 +340,23 @@ gracefulShutdown:
 networkPolicy:
   clusterNetworkCIDRs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/12"]
   customPolicies: []
+  ## @param networkPolicy.operator.enabled Apply a default-deny NetworkPolicy to the operator pod itself, with explicit allows for kube-dns, nvsnap-server, and the kube-apiserver. Opt-in: false by default so existing deployments are unchanged.
+  ## @param networkPolicy.operator.nvsnapServerNamespace Namespace where nvsnap-server runs (egress target for L2 promote-state polls + audit writes)
+  ## @param networkPolicy.operator.nvsnapServerPodLabel app= label value matched against pods in the nvsnap-server namespace
+  ## @param networkPolicy.operator.nvsnapServerPort nvsnap-server REST port
+  ## @param networkPolicy.operator.apiServerCIDRs CIDR list containing the kube-apiserver. Empty = no apiserver allow (operator loses K8s API access). Pin to your cluster's apiserver range.
+  ## @param networkPolicy.operator.apiServerPort kube-apiserver port
+  ## @param networkPolicy.operator.ingressFrom Optional NetworkPolicyPeer list for ingress (Prometheus, kubelet probes). Empty = allow from anywhere.
+  ## @param networkPolicy.operator.extraEgress Additional egress rule entries appended verbatim (private registries, OTLP collector, …)
+  operator:
+    enabled: false
+    nvsnapServerNamespace: "nvsnap-system"
+    nvsnapServerPodLabel: "nvsnap-server"
+    nvsnapServerPort: 8080
+    apiServerCIDRs: []
+    apiServerPort: 443
+    ingressFrom: []
+    extraEgress: []
 ## @section Cluster Validator Configuration
 
 ## @param clusterValidator.enabled Enable the cluster-validator CronJob and init container

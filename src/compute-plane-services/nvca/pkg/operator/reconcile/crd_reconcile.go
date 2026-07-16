@@ -35,13 +35,16 @@ var (
 	storageRequestsCRDData []byte
 	//go:embed manifests/nvcf.nvidia.io_miniservices_crd.yaml
 	miniserviceCRDData []byte
+	//go:embed manifests/nvsnap.nvcf.nvidia.io_nvsnapfunctionstates_crd.yaml
+	nvsnapFunctionStateCRDData []byte
 )
 
 const (
-	StorageRequestCRDName = "storagerequests.nvca.nvcf.nvidia.io"
-	MiniServicesCRDName   = "miniservices.nvca.nvcf.nvidia.io"
-	ICMSRequestCRDName    = "icmsrequests.nvca.nvcf.nvidia.io"
-	NVCFBackendCRDName    = "nvcfbackends.nvcf.nvidia.io"
+	StorageRequestCRDName      = "storagerequests.nvca.nvcf.nvidia.io"
+	MiniServicesCRDName        = "miniservices.nvca.nvcf.nvidia.io"
+	ICMSRequestCRDName         = "icmsrequests.nvca.nvcf.nvidia.io"
+	NVCFBackendCRDName         = "nvcfbackends.nvcf.nvidia.io"
+	NvSnapFunctionStateCRDName = "nvsnapfunctionstates.nvsnap.nvcf.nvidia.io"
 )
 
 func (c *BackendK8sCache) setupCRDs(ctx context.Context) error {
@@ -54,6 +57,10 @@ func (c *BackendK8sCache) setupCRDs(ctx context.Context) error {
 	miniserviceCRD, err := decodeCRD(miniserviceCRDData)
 	if err != nil {
 		return fmt.Errorf("make MiniService CRD: %v", err)
+	}
+	nvsnapFunctionStateCRD, err := decodeCRD(nvsnapFunctionStateCRDData)
+	if err != nil {
+		return fmt.Errorf("make NvSnapFunctionState CRD: %v", err)
 	}
 
 	// Get the NVCFBackend CRD to use as owner reference.
@@ -87,6 +94,7 @@ func (c *BackendK8sCache) setupCRDs(ctx context.Context) error {
 		storageReqCRD,
 		miniserviceCRD,
 		makeICMSRequestCRD(),
+		nvsnapFunctionStateCRD,
 	} {
 		// Set owner reference so CRDs are garbage collected when NVCFBackend CRD is deleted
 		if ownerRef != nil {

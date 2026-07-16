@@ -67,6 +67,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap"
 	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
@@ -90,6 +91,16 @@ type K8sComputeBackend struct {
 	discRestMapper meta.RESTMapper
 	scheme         *runtime.Scheme
 	enabledAttrs   featureflag.Attributes
+
+	// nvsnapClient is the HTTP client to nvsnap-server. Used by Hook A
+	// (stampNvSnapAnnotations) to query the content-addressed lookup
+	// endpoint, so two pods with identical canonical workload
+	// identity but different function-version-IDs share one
+	// checkpoint instead of each cold-starting and re-capturing.
+	// May be nil if construction failed at NewK8sComputeBackend
+	// time — Hook A then falls through to the fvID-keyed path
+	// (fail-open). See nvnvsnap#59.
+	nvsnapClient *nvsnap.Client
 }
 
 // These are mocked in tests.
@@ -127,6 +138,14 @@ func NewK8sComputeBackend(clients *kubeclients.KubeClients, bk8s *BackendK8sCach
 		discRestMapper: restmapper.NewDiscoveryRESTMapper(grs),
 		scheme:         scheme,
 		enabledAttrs:   featureflag.GetEnabledAttributes(),
+		// nvsnap.NewClient with no options points at the in-cluster
+		// Service URL (nvsnap-server.nvsnap-system.svc.cluster.local:8080).
+		// Same defaulting as nvsnap_controller_start.go — the two
+		// callers will diverge when per-cluster ServerURL override
+		// lands. Hook A uses this in stampNvSnapAnnotations; nil-safe
+		// downstream so a NewClient panic (won't happen with no opts,
+		// but defense in depth) leaves Hook A on the fvID-only path.
+		nvsnapClient: nvsnap.NewClient(),
 	}
 	return newK8sBE, newK8sBE
 }
@@ -1018,6 +1037,13 @@ func (c K8sComputeBackend) CreatePodArtifactInstances(ctx context.Context, pod *
 
 		setTerminationGracePeriodIfNotSet(pod)
 		k8sutil.ApplyCustomAnnotations(pod, c.bk8s.customAnnotations)
+
+		// Hook A: stamp nvsnap.io/restore-from + nvsnap.io/checkpoint-on-warm
+		// when the NvSnap integration is enabled and this function-version
+		// has a usable cached checkpoint. Fail-open: any error inside
+		// short-circuits to "no stamping" (pod cold-starts as before).
+		// See pkg/nvca/nvsnap_hook.go.
+		c.stampNvSnapAnnotations(ctx, pod, req, plog)
 
 		if _, err := c.clients.K8s.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 			if !apierrors.IsAlreadyExists(err) {

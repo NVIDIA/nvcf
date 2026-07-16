@@ -34,7 +34,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 	return map[string]common.OpenAPIDefinition{
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.AccountConfig":                              schema_pkg_apis_nvcf_v1_AccountConfig(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.ClusterConfig":                              schema_pkg_apis_nvcf_v1_ClusterConfig(ref),
-		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.CryoConfig":                                 schema_pkg_apis_nvcf_v1_CryoConfig(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.DeploymentConfig":                           schema_pkg_apis_nvcf_v1_DeploymentConfig(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FNDServiceConfig":                           schema_pkg_apis_nvcf_v1_FNDServiceConfig(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FeatureGate":                                schema_pkg_apis_nvcf_v1_FeatureGate(ref),
@@ -48,6 +47,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackend":                                schema_pkg_apis_nvcf_v1_NVCFBackend(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendList":                            schema_pkg_apis_nvcf_v1_NVCFBackendList(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpec":                            schema_pkg_apis_nvcf_v1_NVCFBackendSpec(ref),
+		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NvSnapConfig":                               schema_pkg_apis_nvcf_v1_NvSnapConfig(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OAuthConfig":                                schema_pkg_apis_nvcf_v1_OAuthConfig(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OTELConfig":                                 schema_pkg_apis_nvcf_v1_OTELConfig(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.OTelCollectorConfig":                        schema_pkg_apis_nvcf_v1_OTelCollectorConfig(ref),
@@ -55,55 +55,55 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.SharedStorageSpec":                          schema_pkg_apis_nvcf_v1_SharedStorageSpec(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.VaultConfig":                                schema_pkg_apis_nvcf_v1_VaultConfig(ref),
 		"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.WebhookConfig":                              schema_pkg_apis_nvcf_v1_WebhookConfig(ref),
-		metav1.APIGroup{}.OpenAPIModelName():                                                                                 schema_pkg_apis_meta_v1_APIGroup(ref),
-		metav1.APIGroupList{}.OpenAPIModelName():                                                                             schema_pkg_apis_meta_v1_APIGroupList(ref),
-		metav1.APIResource{}.OpenAPIModelName():                                                                              schema_pkg_apis_meta_v1_APIResource(ref),
-		metav1.APIResourceList{}.OpenAPIModelName():                                                                          schema_pkg_apis_meta_v1_APIResourceList(ref),
-		metav1.APIVersions{}.OpenAPIModelName():                                                                              schema_pkg_apis_meta_v1_APIVersions(ref),
-		metav1.ApplyOptions{}.OpenAPIModelName():                                                                             schema_pkg_apis_meta_v1_ApplyOptions(ref),
-		metav1.Condition{}.OpenAPIModelName():                                                                                schema_pkg_apis_meta_v1_Condition(ref),
-		metav1.CreateOptions{}.OpenAPIModelName():                                                                            schema_pkg_apis_meta_v1_CreateOptions(ref),
-		metav1.DeleteOptions{}.OpenAPIModelName():                                                                            schema_pkg_apis_meta_v1_DeleteOptions(ref),
-		metav1.Duration{}.OpenAPIModelName():                                                                                 schema_pkg_apis_meta_v1_Duration(ref),
-		metav1.FieldSelectorRequirement{}.OpenAPIModelName():                                                                 schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
-		metav1.FieldsV1{}.OpenAPIModelName():                                                                                 schema_pkg_apis_meta_v1_FieldsV1(ref),
-		metav1.GetOptions{}.OpenAPIModelName():                                                                               schema_pkg_apis_meta_v1_GetOptions(ref),
-		metav1.GroupKind{}.OpenAPIModelName():                                                                                schema_pkg_apis_meta_v1_GroupKind(ref),
-		metav1.GroupResource{}.OpenAPIModelName():                                                                            schema_pkg_apis_meta_v1_GroupResource(ref),
-		metav1.GroupVersion{}.OpenAPIModelName():                                                                             schema_pkg_apis_meta_v1_GroupVersion(ref),
-		metav1.GroupVersionForDiscovery{}.OpenAPIModelName():                                                                 schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
-		metav1.GroupVersionKind{}.OpenAPIModelName():                                                                         schema_pkg_apis_meta_v1_GroupVersionKind(ref),
-		metav1.GroupVersionResource{}.OpenAPIModelName():                                                                     schema_pkg_apis_meta_v1_GroupVersionResource(ref),
-		metav1.InternalEvent{}.OpenAPIModelName():                                                                            schema_pkg_apis_meta_v1_InternalEvent(ref),
-		metav1.LabelSelector{}.OpenAPIModelName():                                                                            schema_pkg_apis_meta_v1_LabelSelector(ref),
-		metav1.LabelSelectorRequirement{}.OpenAPIModelName():                                                                 schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
-		metav1.List{}.OpenAPIModelName():                                                                                     schema_pkg_apis_meta_v1_List(ref),
-		metav1.ListMeta{}.OpenAPIModelName():                                                                                 schema_pkg_apis_meta_v1_ListMeta(ref),
-		metav1.ListOptions{}.OpenAPIModelName():                                                                              schema_pkg_apis_meta_v1_ListOptions(ref),
-		metav1.ManagedFieldsEntry{}.OpenAPIModelName():                                                                       schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
-		metav1.MicroTime{}.OpenAPIModelName():                                                                                schema_pkg_apis_meta_v1_MicroTime(ref),
-		metav1.ObjectMeta{}.OpenAPIModelName():                                                                               schema_pkg_apis_meta_v1_ObjectMeta(ref),
-		metav1.OwnerReference{}.OpenAPIModelName():                                                                           schema_pkg_apis_meta_v1_OwnerReference(ref),
-		metav1.PartialObjectMetadata{}.OpenAPIModelName():                                                                    schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
-		metav1.PartialObjectMetadataList{}.OpenAPIModelName():                                                                schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
-		metav1.Patch{}.OpenAPIModelName():                                                                                    schema_pkg_apis_meta_v1_Patch(ref),
-		metav1.PatchOptions{}.OpenAPIModelName():                                                                             schema_pkg_apis_meta_v1_PatchOptions(ref),
-		metav1.Preconditions{}.OpenAPIModelName():                                                                            schema_pkg_apis_meta_v1_Preconditions(ref),
-		metav1.RootPaths{}.OpenAPIModelName():                                                                                schema_pkg_apis_meta_v1_RootPaths(ref),
-		metav1.ServerAddressByClientCIDR{}.OpenAPIModelName():                                                                schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
-		metav1.Status{}.OpenAPIModelName():                                                                                   schema_pkg_apis_meta_v1_Status(ref),
-		metav1.StatusCause{}.OpenAPIModelName():                                                                              schema_pkg_apis_meta_v1_StatusCause(ref),
-		metav1.StatusDetails{}.OpenAPIModelName():                                                                            schema_pkg_apis_meta_v1_StatusDetails(ref),
-		metav1.Table{}.OpenAPIModelName():                                                                                    schema_pkg_apis_meta_v1_Table(ref),
-		metav1.TableColumnDefinition{}.OpenAPIModelName():                                                                    schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
-		metav1.TableOptions{}.OpenAPIModelName():                                                                             schema_pkg_apis_meta_v1_TableOptions(ref),
-		metav1.TableRow{}.OpenAPIModelName():                                                                                 schema_pkg_apis_meta_v1_TableRow(ref),
-		metav1.TableRowCondition{}.OpenAPIModelName():                                                                        schema_pkg_apis_meta_v1_TableRowCondition(ref),
-		metav1.Time{}.OpenAPIModelName():                                                                                     schema_pkg_apis_meta_v1_Time(ref),
-		metav1.Timestamp{}.OpenAPIModelName():                                                                                schema_pkg_apis_meta_v1_Timestamp(ref),
-		metav1.TypeMeta{}.OpenAPIModelName():                                                                                 schema_pkg_apis_meta_v1_TypeMeta(ref),
-		metav1.UpdateOptions{}.OpenAPIModelName():                                                                            schema_pkg_apis_meta_v1_UpdateOptions(ref),
-		metav1.WatchEvent{}.OpenAPIModelName():                                                                               schema_pkg_apis_meta_v1_WatchEvent(ref),
+		metav1.APIGroup{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_APIGroup(ref),
+		metav1.APIGroupList{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_APIGroupList(ref),
+		metav1.APIResource{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_APIResource(ref),
+		metav1.APIResourceList{}.OpenAPIModelName():           schema_pkg_apis_meta_v1_APIResourceList(ref),
+		metav1.APIVersions{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_APIVersions(ref),
+		metav1.ApplyOptions{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_ApplyOptions(ref),
+		metav1.Condition{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_Condition(ref),
+		metav1.CreateOptions{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_CreateOptions(ref),
+		metav1.DeleteOptions{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_DeleteOptions(ref),
+		metav1.Duration{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_Duration(ref),
+		metav1.FieldSelectorRequirement{}.OpenAPIModelName():  schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
+		metav1.FieldsV1{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_FieldsV1(ref),
+		metav1.GetOptions{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_GetOptions(ref),
+		metav1.GroupKind{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_GroupKind(ref),
+		metav1.GroupResource{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_GroupResource(ref),
+		metav1.GroupVersion{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_GroupVersion(ref),
+		metav1.GroupVersionForDiscovery{}.OpenAPIModelName():  schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
+		metav1.GroupVersionKind{}.OpenAPIModelName():          schema_pkg_apis_meta_v1_GroupVersionKind(ref),
+		metav1.GroupVersionResource{}.OpenAPIModelName():      schema_pkg_apis_meta_v1_GroupVersionResource(ref),
+		metav1.InternalEvent{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_InternalEvent(ref),
+		metav1.LabelSelector{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_LabelSelector(ref),
+		metav1.LabelSelectorRequirement{}.OpenAPIModelName():  schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
+		metav1.List{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_List(ref),
+		metav1.ListMeta{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_ListMeta(ref),
+		metav1.ListOptions{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_ListOptions(ref),
+		metav1.ManagedFieldsEntry{}.OpenAPIModelName():        schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
+		metav1.MicroTime{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_MicroTime(ref),
+		metav1.ObjectMeta{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_ObjectMeta(ref),
+		metav1.OwnerReference{}.OpenAPIModelName():            schema_pkg_apis_meta_v1_OwnerReference(ref),
+		metav1.PartialObjectMetadata{}.OpenAPIModelName():     schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
+		metav1.PartialObjectMetadataList{}.OpenAPIModelName(): schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
+		metav1.Patch{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_Patch(ref),
+		metav1.PatchOptions{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_PatchOptions(ref),
+		metav1.Preconditions{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_Preconditions(ref),
+		metav1.RootPaths{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_RootPaths(ref),
+		metav1.ServerAddressByClientCIDR{}.OpenAPIModelName(): schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
+		metav1.Status{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_Status(ref),
+		metav1.StatusCause{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_StatusCause(ref),
+		metav1.StatusDetails{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_StatusDetails(ref),
+		metav1.Table{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_Table(ref),
+		metav1.TableColumnDefinition{}.OpenAPIModelName():     schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
+		metav1.TableOptions{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_TableOptions(ref),
+		metav1.TableRow{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_TableRow(ref),
+		metav1.TableRowCondition{}.OpenAPIModelName():         schema_pkg_apis_meta_v1_TableRowCondition(ref),
+		metav1.Time{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_Time(ref),
+		metav1.Timestamp{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_Timestamp(ref),
+		metav1.TypeMeta{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_TypeMeta(ref),
+		metav1.UpdateOptions{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_UpdateOptions(ref),
+		metav1.WatchEvent{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_WatchEvent(ref),
 	}
 }
 
@@ -267,10 +267,10 @@ func schema_pkg_apis_nvcf_v1_ClusterConfig(ref common.ReferenceCallback) common.
 							},
 						},
 					},
-					"cryo": {
+					"nvsnap": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Cryo configures the per-cluster behavior of the Cryo checkpoint/restore integration. Empty (or unset Enabled flag) → integration disabled on this cluster; pod creation behaves identically to today. The global featureflag.CryoCheckpointRestore short-circuits this field — both must be true for either hook to fire. See docs/users/cryo/CRYO-INTEGRATION-DESIGN.md.",
-							Ref:         ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.CryoConfig"),
+							Description: "NvSnap configures the per-cluster behavior of the NvSnap checkpoint/restore integration. Empty (or unset Enabled flag) → integration disabled on this cluster; pod creation behaves identically to today. The global featureflag.NvSnapCheckpointRestore short-circuits this field — both must be true for either hook to fire. See docs/users/nvsnap/NVSNAP-INTEGRATION-DESIGN.md.",
+							Ref:         ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NvSnapConfig"),
 						},
 					},
 				},
@@ -278,55 +278,7 @@ func schema_pkg_apis_nvcf_v1_ClusterConfig(ref common.ReferenceCallback) common.
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.CryoConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FNDServiceConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.GPUDiscoveryConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.MiniServiceConfig"},
-	}
-}
-
-func schema_pkg_apis_nvcf_v1_CryoConfig(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "CryoConfig is the per-cluster configuration for the Cryo checkpoint/restore integration. All fields default to \"off\" or to the in-cluster Service URL — a default-constructed CryoConfig is a no-op.\n\nLayered disable order (any false short-circuits):\n\n\tfeatureflag.CryoCheckpointRestore  (global kill switch)\n\t→ CryoConfig.IntegrationEnabled    (per-cluster)\n\t→ CryoFunctionState.spec.optOut    (per-function-version)\n\nIntegrationEnabled controls the checkpoint side (Hook B). RestoreEnabled controls the restore side (Hook A) — split so we can roll out checkpoint-only first, then restore once we've gathered timing data.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"integrationEnabled": {
-						SchemaProps: spec.SchemaProps{
-							Description: "IntegrationEnabled turns on the post-Ready checkpoint reconciler (Hook B). When false, no pod is checkpointed on this cluster.",
-							Type:        []string{"boolean"},
-							Format:      "",
-						},
-					},
-					"restoreEnabled": {
-						SchemaProps: spec.SchemaProps{
-							Description: "RestoreEnabled turns on the restore-on-create hook (Hook A). When false, NVCA does not stamp cryo.io/restore-from on new pods even if a checkpoint hash exists in NGC. Lets us validate checkpoint capture independently of restore.",
-							Type:        []string{"boolean"},
-							Format:      "",
-						},
-					},
-					"serverURL": {
-						SchemaProps: spec.SchemaProps{
-							Description: "ServerURL is the cryo-server endpoint NVCA's checkpoint reconciler POSTs to. Empty → DefaultCryoServerURL (in-cluster Service).",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"warmupTimeoutSeconds": {
-						SchemaProps: spec.SchemaProps{
-							Description: "WarmupTimeoutSeconds caps the per-pod health-check polling window before NVCA gives up on triggering a checkpoint. 0 → DefaultCryoWarmupTimeoutSeconds (15 min).",
-							Type:        []string{"integer"},
-							Format:      "int32",
-						},
-					},
-					"warmupBufferSeconds": {
-						SchemaProps: spec.SchemaProps{
-							Description: "WarmupBufferSeconds is the dwell time between first /health 200 and the checkpoint POST. 0 → DefaultCryoWarmupBufferSeconds (10s).",
-							Type:        []string{"integer"},
-							Format:      "int32",
-						},
-					},
-				},
-			},
-		},
+			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.FNDServiceConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.GPUDiscoveryConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.MiniServiceConfig", "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NvSnapConfig"},
 	}
 }
 
@@ -843,6 +795,54 @@ func schema_pkg_apis_nvcf_v1_NVCFBackendSpec(ref common.ReferenceCallback) commo
 		},
 		Dependencies: []string{
 			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1.NVCFBackendSpecT"},
+	}
+}
+
+func schema_pkg_apis_nvcf_v1_NvSnapConfig(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "NvSnapConfig is the per-cluster configuration for the NvSnap checkpoint/restore integration. All fields default to \"off\" or to the in-cluster Service URL — a default-constructed NvSnapConfig is a no-op.\n\nLayered disable order (any false short-circuits):\n\n\tfeatureflag.NvSnapCheckpointRestore  (global kill switch)\n\t→ NvSnapConfig.IntegrationEnabled    (per-cluster)\n\t→ NvSnapFunctionState.spec.optOut    (per-function-version)\n\nIntegrationEnabled controls the checkpoint side (Hook B). RestoreEnabled controls the restore side (Hook A) — split so we can roll out checkpoint-only first, then restore once we've gathered timing data.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"integrationEnabled": {
+						SchemaProps: spec.SchemaProps{
+							Description: "IntegrationEnabled turns on the post-Ready checkpoint reconciler (Hook B). When false, no pod is checkpointed on this cluster.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"restoreEnabled": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RestoreEnabled turns on the restore-on-create hook (Hook A). When false, NVCA does not stamp nvsnap.io/restore-from on new pods even if a checkpoint hash exists in NGC. Lets us validate checkpoint capture independently of restore.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"serverURL": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ServerURL is the nvsnap-server endpoint NVCA's checkpoint reconciler POSTs to. Empty → DefaultNvSnapServerURL (in-cluster Service).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"warmupTimeoutSeconds": {
+						SchemaProps: spec.SchemaProps{
+							Description: "WarmupTimeoutSeconds caps the per-pod health-check polling window before NVCA gives up on triggering a checkpoint. 0 → DefaultNvSnapWarmupTimeoutSeconds (15 min).",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"warmupBufferSeconds": {
+						SchemaProps: spec.SchemaProps{
+							Description: "WarmupBufferSeconds is the dwell time between first /health 200 and the checkpoint POST. Default 0 (no extra dwell — the readiness probe is the contract). Set explicitly to override per-NVCFBackend for workloads that need post-Ready dwell time (e.g., lazy-JIT engines that finish compiling shortly after the first 200). The previous semantics (\"0 means use 10s default\") conflated \"I want zero\" with \"I didn't set this\", so this field no longer treats 0 as a sentinel; the value you set is the value used.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
