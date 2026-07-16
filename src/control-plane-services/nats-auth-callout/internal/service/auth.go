@@ -34,8 +34,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/plugins"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/plugins/types"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
 )
 
 const tracerName = "nvcf-nats-auth-callout-service/auth"

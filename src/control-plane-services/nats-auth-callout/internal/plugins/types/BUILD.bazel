@@ -22,7 +22,7 @@ go_library(
         "interfaces.go",
         "types.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/plugins/types",
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types",
     visibility = ["//:__subpackages__"],
     deps = ["@com_github_nats_io_jwt_v2//:jwt"],
 )

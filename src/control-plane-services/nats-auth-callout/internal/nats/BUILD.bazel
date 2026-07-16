@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "nats",
     srcs = ["auth_types.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/nats",
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/nats",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/config",

@@ -22,7 +22,7 @@ go_library(
         "metrics.go",
         "service.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/service",
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/service",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/config",

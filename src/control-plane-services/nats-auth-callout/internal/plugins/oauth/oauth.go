@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/plugins/types"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
 	"go.uber.org/zap"
 
 	"github.com/MicahParks/keyfunc/v3"

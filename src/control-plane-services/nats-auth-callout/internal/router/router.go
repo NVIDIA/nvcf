@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"time"
 
-	_ "github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/api"
+	_ "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/api"
 
 	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"

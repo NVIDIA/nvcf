@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "api",
     srcs = ["docs.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/api",
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/api",
     visibility = ["//visibility:public"],
     deps = ["@com_github_swaggo_swag//:swag"],
 )

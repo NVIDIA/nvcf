@@ -24,8 +24,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/plugins/nkey"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/nkey"
 )
 
 func TestNKeyPluginE2E(t *testing.T) {
