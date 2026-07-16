@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration for NVIDIA/nvcf.
+# Docs: https://docs.coderabbit.ai/reference/configuration
+language: en-US
+early_access: false
+reviews:
+  # "chill" keeps the reviewer focused on substantive issues over nits.
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  # Skip generated, vendored, and binary-ish files so review focuses on
+  # human-authored source. Mirrors the repo's Sonar exclusions.
+  path_filters:
+    - "!**/vendor/**"
+    - "!**/testdata/**"
+    - "!**/*.pb.go"
+    - "!**/zz_generated.*"
+    - "!**/*_generated.go"
+    - "!**/MODULE.bazel.lock"
+    - "!**/*.tgz"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!tools/ci/generated-release-jobs.yml"
+  path_instructions:
+    - path: "src/**/*.go"
+      instructions: >-
+        Check Go error wrapping (%w), structured logging with required context
+        fields (request/function/cluster/org id), and that request-handling
+        changes add logs, tracing, and RED metrics per AGENTS.md.
+    - path: "src/**/*.rs"
+      instructions: >-
+        Check error handling, tracing spans on cross-service calls, and that
+        no secrets or full request bodies are logged.
+    - path: "**/*.sql"
+      instructions: >-
+        Cassandra DDL migrations are forward-only and one keyspace per
+        subdirectory. Flag destructive statements and missing IF NOT EXISTS.
+  tools:
+    shellcheck:
+      enabled: true
+    yamllint:
+      enabled: true
+    golangci-lint:
+      enabled: true
+chat:
+  auto_reply: true

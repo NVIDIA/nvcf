@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+name: codeql
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly full scan, Monday 03:27 UTC.
+    - cron: "27 3 * * 1"
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Keep one language's failure from cancelling the others.
+      fail-fast: false
+      matrix:
+        include:
+          # Go is a traced language and does not support build-mode none, so it
+          # autobuilds. Rust has no autobuilder and uses buildless extraction.
+          - language: go
+            build-mode: autobuild
+          - language: rust
+            build-mode: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: CodeQL Analysis
+        uses: NVIDIA/dsx-github-actions/.github/actions/codeql-scan@9a9ce3a7770a8b53d2726afa920be3276bc3ddd7
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          upload-sarif: true
+          post-pr-comment: true
+          # Non-blocking during rollout: findings surface in the Security tab and
+          # as a PR comment, but do not gate merges yet. Tighten once triaged.
+          fail-on-findings: false
