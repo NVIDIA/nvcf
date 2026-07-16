@@ -267,7 +267,7 @@ stateMetrics:
     enabled: false
 
 rateLimiter:
-  enabled: false
+  enabled: true
   replicaCount: 1
 
 # Ingress Gateway Configuration
