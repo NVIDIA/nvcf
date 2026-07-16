@@ -72,7 +72,9 @@ func runSecretsCheckLoop(ctx context.Context, otelCollectorProc *os.Process, arg
 			logger.Logger.Info("Received interrupt signal, terminating otelcol-contrib and exiting.")
 			otelcollector.GracefulShutdown(otelCollectorProc)
 			// Wait for the process to actually exit
-			otelCollectorProc.Wait()
+			if _, waitErr := otelCollectorProc.Wait(); waitErr != nil {
+				logger.Logger.Errorf("error waiting for otelcol-contrib to exit: %v", waitErr)
+			}
 			return nil
 		case <-restartCh:
 			logger.Logger.Info("Regenerating the secret files and restarting otelcol-contrib due to the secret file changes.")
@@ -88,7 +90,9 @@ func runSecretsCheckLoop(ctx context.Context, otelCollectorProc *os.Process, arg
 			// shutdown the current otelcol-contrib process
 			otelcollector.GracefulShutdown(otelCollectorProc)
 			// Wait for it to exit
-			otelCollectorProc.Wait()
+			if _, waitErr := otelCollectorProc.Wait(); waitErr != nil {
+				logger.Logger.Errorf("error waiting for otelcol-contrib to exit: %v", waitErr)
+			}
 
 			// run the otelcol-contrib process again
 			if otelCollectorProc, err = otelcollector.RunOtelCollector(args); err != nil {
