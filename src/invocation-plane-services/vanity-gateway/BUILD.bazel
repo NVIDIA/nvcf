@@ -1,3 +1,4 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -22,22 +23,11 @@ gazelle(
 # Multi-arch OCI image. Distroless/go base, single-binary entrypoint.
 # Image push targets (kaze, ncp-dev) live under //nvidia-internal:* so
 # the NGC registry coordinates stay off the OSS mirror.
-# The distroless/go base ships ENTRYPOINT ["/usr/bin/shelless_ulimit"], a shim
-# that raises RLIMIT_NOFILE (soft -> hard) when ULIMIT_FLAG=1 before exec'ing
-# its arguments. The legacy Dockerfile relied on that base entrypoint plus
-# ENV ULIMIT_FLAG=1; go_oci_image otherwise overrides the entrypoint with just
-# [binary_path], bypassing the shim and leaving the default 1024 soft fd limit.
-# Restore the shim + flag so the Bazel image matches the Dockerfile.
 go_oci_image(
     name = "image",
     base = "@distroless_go",
     binary = ":ai-api-gateway-service",
     binary_path = "/usr/bin/nvcf-ai-api-gateway-service",
-    entrypoint = [
-        "/usr/bin/shelless_ulimit",
-        "/usr/bin/nvcf-ai-api-gateway-service",
-    ],
-    env = {"ULIMIT_FLAG": "1"},
     tags = ["nvcf-ai-api-gateway-service"],
     visibility = ["//visibility:public"],
 )
@@ -60,17 +50,9 @@ go_library(
     ],
     importpath = "ai-api-gateway-service",
     visibility = ["//visibility:private"],
-    # Build-time stamping, resolved by tools/workspace_status.sh when bazel
-    # is invoked with --stamp (the CI release jobs pass it). STABLE_VERSION
-    # is the release semver, which is also the primary container tag, so the
-    # reported service.version matches the image tag. gateway.GetVersion()
-    # prefers the APP_VERSION env var, then this stamped value, then the Go
-    # VCS build info (absent under Bazel).
-    x_defs = {
-        "ai-api-gateway-service/gateway.version": "{STABLE_VERSION}",
-    },
     deps = [
         "//gateway",
+        "@com_github_carlmjohnson_versioninfo//:versioninfo",
         "@com_github_go_logr_zapr//:zapr",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/config",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/logs",

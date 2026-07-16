@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//rules/oci:defs.bzl", "go_oci_image")
 
@@ -58,7 +59,7 @@ go_oci_image(
     name = "image",
     base = "@distroless_go",
     binary = ":image-credential-helper",
-    binary_path = "/usr/bin/image-credential-helper",
+    binary_path = "/usr/bin/app",
     tags = ["nvcf-image-credential-helper"],
     visibility = ["//visibility:public"],
 )
@@ -80,7 +81,6 @@ go_test(
     deps = [
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/icms-translate/translate/common",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/imagecredential",
-        "@com_github_sirupsen_logrus//:logrus",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@io_k8s_api//core/v1:core",

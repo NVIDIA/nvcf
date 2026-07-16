@@ -30,19 +30,6 @@ common --enable_bzlmod
 build --incompatible_strict_action_env
 common --enable_platform_specific_config
 
-# Route public Maven Central through the internal Artifactory mirror for every
-# download (coursier, http_file, http_archive). Public Central rate-limits the
-# shared CI runner IP (429), which failed the Bazel validate jobs. This also
-# covers transitive module maven installs (e.g. contrib_rules_jvm_deps) that our
-# own maven.install repositories cannot repoint.
-#
-# The reroute targets an internal Artifactory host, so it lives in an
-# un-mirrored internal bazelrc rather than here: the public GitHub mirror never
-# ships that host, and GitHub-hosted runners cannot reach it (and do not share
-# the rate-limited runner IP). try-import is a no-op when the file is absent, so
-# public builds go straight to Maven Central and internal builds get the mirror.
-try-import %workspace%/tools/bazel/internal.bazelrc
-
 # Remote cache on by default for every developer. Pulls hits from the
 # configured remote cache (read-only), falls back to local execution on any
 # per-action remote failure (--remote_local_fallback below). Caveat:
@@ -67,14 +54,6 @@ common --incompatible_enable_proto_toolchain_resolution
 # Stamping for OCI image tags. Default off; CI opts in with --stamp.
 build --workspace_status_command=./tools/workspace_status.sh
 build --nostamp
-
-# Java: build and run against a hermetic remotejdk 21 regardless of the host
-# JDK, so Java service builds are reproducible on any developer machine and in
-# CI. Language version 21 is the current Spring Boot 3.x baseline.
-build --java_language_version=21
-build --java_runtime_version=remotejdk_21
-build --tool_java_language_version=21
-build --tool_java_runtime_version=remotejdk_21
 
 test --test_output=errors
 # Bazel's sandbox strips HOME, but a lot of Go code (cobra/viper config,
@@ -131,15 +110,8 @@ build:remote --remote_cache_compression
 # server gets dropped in.
 build:remote --experimental_remote_cache_compression_threshold=100
 
-# In-memory Merkle tree cache. Subsequent action lookups for inputs we
-# have already hashed reuse the result instead of recomputing. Pure
-# latency win on warm Bazel servers; no correctness impact.
-build:remote --experimental_remote_merkle_tree_cache
-# Default size is 1000 entries, which we blow through on cold protobuf
-# / cross-compiled-Go builds (~1100 actions per arch). 10000 keeps the
-# whole graph resident; cost is a few MB of JVM heap (well under our
-# -Xmx4g budget).
-build:remote --experimental_remote_merkle_tree_cache_size=10000
+# Bazel 9 removed --experimental_remote_merkle_tree_cache[_size]; the in-memory
+# Merkle tree cache is handled internally now, so no explicit flag is needed.
 
 # Re-lease cache entries Bazel has already seen during a long build.
 # bb-storage evicts blobs by LRU/TTL; without this flag a build that
