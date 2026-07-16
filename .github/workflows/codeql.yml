@@ -3,8 +3,29 @@ name: codeql
 on:
   push:
     branches: [main]
+    # Only run when compiled source or this workflow changes. Docs, charts,
+    # migrations, and other non-code PRs skip the scan (the Go autobuild is
+    # expensive). The weekly schedule still does a full unconditional scan.
+    paths:
+      - "src/**"
+      - "**/*.go"
+      - "**/*.rs"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".github/workflows/codeql.yml"
   pull_request:
     branches: [main]
+    paths:
+      - "src/**"
+      - "**/*.go"
+      - "**/*.rs"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".github/workflows/codeql.yml"
   schedule:
     # Weekly full scan, Monday 03:27 UTC.
     - cron: "27 3 * * 1"
