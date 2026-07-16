@@ -7,7 +7,7 @@ route, and configures worker pods to use the `pylon` sidecar for model-aware
 routing.
 
 For LLM function payload shape and invocation examples, see
-[Function Creation](./function-creation.md#llm-functions) and
+[Function Creation](./function-creation.md) and
 [LLM Gateway](./llm-gateway.md).
 
 ## When to Enable

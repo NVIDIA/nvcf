@@ -260,7 +260,7 @@ global:
   # =============================================================================
   # Observability Configuration
   # =============================================================================
-  # Enable distributed tracing via OTLP (dsiabled by default).
+  # Enable distributed tracing via OTLP (disabled by default).
   # This must point to an OTLP-compatible collector.
   # =============================================================================
   observability:
