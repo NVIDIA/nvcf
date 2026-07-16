@@ -29,7 +29,8 @@ CARGO_BAZEL_REPIN=1 bazel sync --only=nvcf_invocation_crates
 ```
 
 CI subproject id: `http-invocation`. Native Bazel validation and release wiring
-live in `tools/ci/subproject-validations.yaml`.
+live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config
+not present in this public snapshot.
 
 ## Cargo Development
 

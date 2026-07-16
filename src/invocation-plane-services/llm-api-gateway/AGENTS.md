@@ -27,7 +27,8 @@ bazel test //... --flaky_test_attempts=3
 
 CI subproject id: `llm-api-gateway`. Release wiring publishes both the main
 gateway image and the rate-limit sync worker image through
-`tools/ci/subproject-validations.yaml`.
+`tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
+present in this public snapshot.
 
 ## Local Gotchas
 
