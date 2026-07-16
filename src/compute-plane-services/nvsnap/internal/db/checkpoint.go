@@ -414,7 +414,7 @@ func (d *DB) GetCheckpoint(id string) (*Checkpoint, error) {
 //   - EngineFlags: canonicalized server-side (sorted, --model* stripped),
 //     compared as the JSON-array string stored on the row
 //   - DriverMajor: if > 0, exact match; if 0, match any
-//   - Hash: only rows with non-empty Hash are returned (a restoreable
+//   - Hash: only rows with non-empty Hash are returned (a restorable
 //     artifact must have a content hash, otherwise NVCA can't stamp
 //     nvsnap.io/restore-from)
 //

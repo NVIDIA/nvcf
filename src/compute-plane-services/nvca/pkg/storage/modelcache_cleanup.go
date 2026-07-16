@@ -275,7 +275,7 @@ func (r *Reconciler) cleanupIdleModelCaches(ctx context.Context) error { //nolin
 		if pv.Annotations == nil {
 			continue
 		}
-		// Collect existing primaray PV cache handles.
+		// Collect existing primary PV cache handles.
 		if pv.Labels != nil {
 			cacheHandle := pv.Labels[modelCacheHandleLabelKey]
 			if _, ok := r.initStatuses.get(cacheHandle); cacheHandle != "" && ok {

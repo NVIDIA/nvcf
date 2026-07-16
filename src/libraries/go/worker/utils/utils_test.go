@@ -60,7 +60,7 @@ func TestGetDirectorySize(t *testing.T) {
 		}
 	}
 
-	// Get dir size and compare resutls
+	// Get dir size and compare results
 	dirSize, err := GetDirectorySize(testDir)
 	if err != nil {
 		t.Fatal(err)

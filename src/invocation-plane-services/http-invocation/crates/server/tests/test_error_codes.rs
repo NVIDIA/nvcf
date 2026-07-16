@@ -65,7 +65,7 @@ async fn test_request_id_not_found() -> anyhow::Result<()> {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response.headers().get("nvcf-reqid").is_some());
 
-    // Lookup the request id that just finished (and should've been dequed)
+    // Lookup the request id that just finished (and should've been dequeued)
     let request_id: String = response
         .headers()
         .get("nvcf-reqid")

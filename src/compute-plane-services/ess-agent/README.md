@@ -275,7 +275,7 @@ Will occur when a bad/invalid JWT token used (401), token does not have access t
 When encountered the agent will exit with code 1 as there is no recovery without outside changes applied.
 
 #### 3. 429 Rate-limited
-Too many requests to ESS API have occured from the same IP address.
+Too many requests to ESS API have occurred from the same IP address.
  The agent will exponentially retry for up to 10 minutes and exit is time limit is reached.
 
 #### 4. 50x Server Error
@@ -312,9 +312,9 @@ Similar to 40x errors, the agent will stop rendering the template and reset the 
 
 #### 3. 50x Server Errors
 
-50x errors will use an exponential retry policy starting at 500 miliseconds (e.g. 500ms, 1s, 2s, 4s...) with a max retry duration of 1 minute until a total of 10 minutes has passed.
+50x errors will use an exponential retry policy starting at 500 milliseconds (e.g. 500ms, 1s, 2s, 4s...) with a max retry duration of 1 minute until a total of 10 minutes has passed.
 
-If the 10 minute max duration is reached, retries will be stopped and the refresh secret cadence will be restarted. If this event occurs the total duration betwen secret fetches is 25 minutes (10 retry max + 15 minute refresh cadence).
+If the 10 minute max duration is reached, retries will be stopped and the refresh secret cadence will be restarted. If this event occurs the total duration between secret fetches is 25 minutes (10 retry max + 15 minute refresh cadence).
 
 Note: Exponential retries do not increment the `ess_templates_request_total` metric with `status="fail"` only the first API call failure will be tracked.
 

@@ -72,7 +72,7 @@ type miniserviceMutatingWebhook struct {
 	scheme  *runtime.Scheme
 	decoder runtime.Decoder
 
-	// Shim for shared storage mutating webhook that needed object annoations applied by this webhook.
+	// Shim for shared storage mutating webhook that needed object annotations applied by this webhook.
 	// Since NVCA cannot guarantee webhook execution order, its mutate() method is called here.
 	sharedStorageMutator *helmStorageMutatingWebhook
 

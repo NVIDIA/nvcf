@@ -59,7 +59,7 @@ func getAWSRegion(ctx context.Context, queueURL string) string {
 			return id
 		}
 	}
-	log.Warnf("mising AWS region in URL (%v), returning %v", queueURL, defaultAWSRegion)
+	log.Warnf("missing AWS region in URL (%v), returning %v", queueURL, defaultAWSRegion)
 	return defaultAWSRegion
 }
 
