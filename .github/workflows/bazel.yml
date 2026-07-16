@@ -282,3 +282,36 @@ jobs:
             [ "$CACHE_UPLOAD" = "true" ] || FLAGS+=(--remote_upload_local_results=false)
           fi
           bazel test "${FLAGS[@]}" --flaky_test_attempts=3 //...
+
+  bazel-verification:
+    name: bazel verification
+    needs: [detect, bazel]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Bazel workflow result
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          BAZEL_RESULT: ${{ needs.bazel.result }}
+          BAZEL_ANY: ${{ needs.detect.outputs.any }}
+        run: |
+          set -euo pipefail
+
+          echo "detect result: ${DETECT_RESULT}"
+          echo "bazel result: ${BAZEL_RESULT}"
+          echo "bazel selected subtrees: ${BAZEL_ANY}"
+
+          if [ "${DETECT_RESULT}" != "success" ]; then
+            echo "detect changed subtrees did not complete successfully"
+            exit 1
+          fi
+
+          if [ "${BAZEL_ANY}" != "true" ]; then
+            echo "no Bazel-relevant subtrees selected"
+            exit 0
+          fi
+
+          if [ "${BAZEL_RESULT}" != "success" ]; then
+            echo "one or more Bazel matrix rows failed, were cancelled, or were skipped"
+            exit 1
+          fi
