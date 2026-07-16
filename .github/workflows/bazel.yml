@@ -98,7 +98,7 @@ jobs:
           http-invocation|src/invocation-plane-services/http-invocation|false
           llm-api-gateway|src/invocation-plane-services/llm-api-gateway|false
           vanity-gateway|src/invocation-plane-services/vanity-gateway|false
-          nvca|src/compute-plane-services/nvca|false
+          nvca|src/compute-plane-services/nvca|true
           ess-agent|src/compute-plane-services/ess-agent|false
           image-credential-helper|src/compute-plane-services/image-credential-helper|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
