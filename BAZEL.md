@@ -5,20 +5,6 @@ NVCF umbrella repo. Bazel is the build engine for the native subtrees in
 Phase 1; upstream-owned subtrees keep their existing build paths until they go
 native.
 
-For the design rationale (why Bazel and why phased rollout), see the merge
-request that introduced this scaffolding and the Bazel skill set under
-`.claude/skills/bazel-*`. The skills cover the
-patterns this repo already uses and the ones future phases will need:
-
-| Skill | Use it for |
-|---|---|
-| `bazel-monorepo-bootstrap` | Re-bootstrapping or auditing root files (`MODULE.bazel`, `.bazelrc`, `tools/workspace_status.sh`, `ci/Dockerfile.bazel`) |
-| `bazel-go-gazelle` | Adding or maintaining Go subtrees (Phase 2) |
-| `bazel-oci-images` | Adding `rules_oci` images for new services |
-| `bazel-java-maven` | Onboarding Java services (e.g. `llm-api-gateway`) |
-| `bazel-rust-crate-universe` | Onboarding Rust services (e.g. `parsec`) |
-| `bazel-gitlab-child-pipelines` | Wiring a new service into the Bazel CI flow |
-
 ## Phase 1 scope
 
 Bazel currently builds, tests, and packages:
@@ -171,8 +157,7 @@ Do not run `bazel sync --only=...` here. `bazel sync` is a WORKSPACE-mode
 command and Bazel 8 rejects it on bzlmod-only repos with
 `ERROR: WORKSPACE has to be enabled for sync command to work`.
 
-Commit any diffs to `Cargo.lock` and `MODULE.bazel.lock`. See the
-`bazel-rust-crate-universe` skill for the full onboarding flow.
+Commit any diffs to `Cargo.lock` and `MODULE.bazel.lock`.
 
 ### Build graph queries (useful for review)
 
