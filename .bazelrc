@@ -35,7 +35,13 @@ common --enable_platform_specific_config
 # shared CI runner IP (429), which failed the Bazel validate jobs. This also
 # covers transitive module maven installs (e.g. contrib_rules_jvm_deps) that our
 # own maven.install repositories cannot repoint.
-common --downloader_config=tools/bazel/downloader.cfg
+#
+# The reroute targets an internal Artifactory host, so it lives in an
+# un-mirrored internal bazelrc rather than here: the public GitHub mirror never
+# ships that host, and GitHub-hosted runners cannot reach it (and do not share
+# the rate-limited runner IP). try-import is a no-op when the file is absent, so
+# public builds go straight to Maven Central and internal builds get the mirror.
+try-import %workspace%/tools/bazel/internal.bazelrc
 
 # Remote cache on by default for every developer. Pulls hits from the
 # configured remote cache (read-only), falls back to local execution on any
