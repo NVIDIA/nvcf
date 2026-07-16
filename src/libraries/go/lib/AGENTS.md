@@ -66,7 +66,8 @@ module's `.golangci.yml`. `make lint` still runs the same module-scoped
 ## Root CI
 
 Root CI generates the `go-lib` subproject validation pipeline from
-`tools/ci/subproject-validations.yaml`.
+`tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
+present in this public snapshot.
 
 The current subproject checks are:
 

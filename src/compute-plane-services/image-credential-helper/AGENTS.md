@@ -33,7 +33,8 @@ make shellcheck
 ```
 
 CI subproject id: `image-credential-helper`. Native CI and release wiring live
-in `tools/ci/subproject-validations.yaml`.
+in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
+present in this public snapshot.
 
 ## Local Gotchas
 

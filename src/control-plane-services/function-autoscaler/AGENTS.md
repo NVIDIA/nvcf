@@ -47,4 +47,5 @@ cargo deny check advisories
 ```
 
 CI subproject id: `function-autoscaler`. Native Bazel validation and release
-wiring live in `tools/ci/subproject-validations.yaml`.
+wiring live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI
+config not present in this public snapshot.

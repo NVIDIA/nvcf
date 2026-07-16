@@ -24,7 +24,8 @@ Run `make update-config-template` after changing templates under
 template source, generator logic, or supported backend examples.
 
 CI subproject id: `byoo-otel-collector`. The umbrella CI lane is declared in
-`tools/ci/subproject-validations.yaml`; current custom checks include
+`tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
+present in this public snapshot; current custom checks include
 `check-version-modified`, generated example drift, generated config drift, and
 otelconfig validation. Do not add a subtree `.gitlab-ci.yml`.
 
