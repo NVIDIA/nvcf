@@ -259,7 +259,15 @@ jobs:
                    --remote_timeout=120 --remote_retries=5)
             [ "$CACHE_UPLOAD" = "true" ] || FLAGS+=(--remote_upload_local_results=false)
           fi
-          bazel build "${FLAGS[@]}" //...
+          status=0
+          bazel build "${FLAGS[@]}" //... || status=$?
+          if [ "$status" -eq 34 ] && [ "${CACHE_READY:-0}" = "1" ]; then
+            echo "::warning::remote cache unavailable; retrying build without it"
+            echo "CACHE_READY=0" >> "$GITHUB_ENV"
+            bazel build --remote_cache= //...
+          elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
 
       - name: bazel test //...
         # `tests_skip: true` on the matrix row keeps the subtree in the matrix
@@ -279,4 +287,12 @@ jobs:
                    --remote_timeout=120 --remote_retries=5)
             [ "$CACHE_UPLOAD" = "true" ] || FLAGS+=(--remote_upload_local_results=false)
           fi
-          bazel test "${FLAGS[@]}" --flaky_test_attempts=3 //...
+          status=0
+          bazel test "${FLAGS[@]}" --flaky_test_attempts=3 //... || status=$?
+          if [ "$status" -eq 34 ] && [ "${CACHE_READY:-0}" = "1" ]; then
+            echo "::warning::remote cache unavailable; retrying tests without it"
+            echo "CACHE_READY=0" >> "$GITHUB_ENV"
+            bazel test --remote_cache= --flaky_test_attempts=3 //...
+          elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
