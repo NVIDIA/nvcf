@@ -227,7 +227,7 @@ if __name__ == "__main__":
             # update progress file to tell NVCT that file is created
             dummy_percent_complete = int((i+1) / NUM_OF_RESULTS * 100)
             update_task_progress_file(dummy_percent_complete, PROGRESS_FILE, output_folder_name, metadata)
-            print(f"Ouput result: {output_folder_name}, task progress: {dummy_percent_complete}%")
+            print(f"Output result: {output_folder_name}, task progress: {dummy_percent_complete}%")
 
         except Exception as e:
             print(f"Exception occurs: {e}")
