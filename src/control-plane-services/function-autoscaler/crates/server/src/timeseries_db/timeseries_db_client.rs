@@ -21,15 +21,21 @@ use crate::metrics::{
     record_timeseries_db_request,
 };
 use crate::secrets::secrets_file_watcher::SecretFileWatcher;
-use crate::timeseries_db::{errors::TimeseriesDbApiError, TimeseriesDbSettings};
+use crate::timeseries_db::{
+    errors::TimeseriesDbApiError, TimeseriesDbAuthMode, TimeseriesDbSettings,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 use chrono::{DateTime, Duration, Utc};
-use reqwest::ClientBuilder;
+use openssl::asn1::Asn1Time;
+use openssl::pkey::PKey;
+use openssl::x509::X509;
+use reqwest::{ClientBuilder, Identity};
 use reqwest_middleware::ClientWithMiddleware;
 use serde::Deserialize;
 use serde_json;
+use std::cmp::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 use tracing;
@@ -37,6 +43,97 @@ use url::Url;
 
 const TOKEN_REFRESH_THRESHOLD: chrono::Duration = chrono::Duration::minutes(3);
 const DEFAULT_MIN_BACKOFF_DELAY: StdDuration = StdDuration::from_millis(100);
+
+fn query_range_url(mut base_url: Url, auth_mode: TimeseriesDbAuthMode) -> Result<Url> {
+    {
+        let mut segments = base_url
+            .path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("Cannot modify URL"))?;
+        if auth_mode != TimeseriesDbAuthMode::Token {
+            segments.push("api");
+        }
+        segments.push("v1").push("query_range");
+    }
+    Ok(base_url)
+}
+
+fn mtls_identity(config: &TimeseriesDbSettings, base_url: &Url) -> Result<Identity> {
+    if base_url.scheme() != "https" {
+        return Err(anyhow::anyhow!(
+            "TimeseriesDb mTLS authentication requires an https URL"
+        ));
+    }
+    if base_url.path() != "/" || base_url.query().is_some() || base_url.fragment().is_some() {
+        return Err(anyhow::anyhow!(
+            "TimeseriesDb mTLS URL must be an origin without a path, query, or fragment"
+        ));
+    }
+
+    let certificate_path = config.client_certificate_path.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("TimeseriesDb mTLS authentication requires client_certificate_path")
+    })?;
+    let private_key_path = config.client_private_key_path.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("TimeseriesDb mTLS authentication requires client_private_key_path")
+    })?;
+    let certificate_pem = std::fs::read(certificate_path).with_context(|| {
+        format!(
+            "Failed to read TimeseriesDb client certificate from {}",
+            certificate_path.display()
+        )
+    })?;
+    let private_key_pem = std::fs::read(private_key_path).with_context(|| {
+        format!(
+            "Failed to read TimeseriesDb client private key from {}",
+            private_key_path.display()
+        )
+    })?;
+
+    let certificates = X509::stack_from_pem(&certificate_pem)
+        .context("Failed to parse TimeseriesDb client certificate chain")?;
+    let leaf_certificate = certificates
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("TimeseriesDb client certificate chain is empty"))?;
+    let private_key = PKey::private_key_from_pem(&private_key_pem)
+        .context("Failed to parse TimeseriesDb client private key")?;
+    let leaf_public_key = leaf_certificate
+        .public_key()
+        .context("Failed to read TimeseriesDb client certificate public key")?;
+    if !leaf_public_key.public_eq(&private_key) {
+        return Err(anyhow::anyhow!(
+            "TimeseriesDb client certificate does not match the private key"
+        ));
+    }
+
+    let now = Asn1Time::days_from_now(0).context("Failed to get current certificate time")?;
+    if leaf_certificate
+        .not_before()
+        .compare(&now)
+        .context("Failed to compare TimeseriesDb client certificate validity")?
+        == Ordering::Greater
+    {
+        return Err(anyhow::anyhow!(
+            "TimeseriesDb client certificate is not valid yet"
+        ));
+    }
+    if leaf_certificate
+        .not_after()
+        .compare(&now)
+        .context("Failed to compare TimeseriesDb client certificate expiry")?
+        != Ordering::Greater
+    {
+        return Err(anyhow::anyhow!(
+            "TimeseriesDb client certificate has expired"
+        ));
+    }
+
+    // Normalize either PKCS#1 or PKCS#8 input to the PKCS#8 form required by
+    // reqwest's native TLS identity constructor.
+    let private_key_pem = private_key
+        .private_key_to_pem_pkcs8()
+        .context("Failed to encode TimeseriesDb client private key as PKCS#8")?;
+    Identity::from_pkcs8_pem(&certificate_pem, &private_key_pem)
+        .context("Failed to build TimeseriesDb client identity")
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TimeseriesDbResponse {
@@ -81,7 +178,7 @@ pub struct TimeseriesDbClient {
     http_client: ClientWithMiddleware,
     credentials: Arc<Mutex<Option<Credentials>>>,
     credential_provider: Option<Arc<dyn CredentialProvider + Send + Sync>>,
-    disable_auth: bool,
+    auth_mode: TimeseriesDbAuthMode,
     is_healthy: Arc<Mutex<bool>>,
     backoff: Option<ExponentialBuilder>,
 }
@@ -97,22 +194,29 @@ impl TimeseriesDbClient {
         credential_provider: Option<Arc<dyn CredentialProvider + Send + Sync>>,
     ) -> Result<Self> {
         let base_url = Url::parse(&config.timeseries_db_url).context("Failed to parse base URL")?;
+        let auth_mode = config.effective_auth_mode();
+
+        if auth_mode == TimeseriesDbAuthMode::Token && credential_provider.is_none() {
+            return Err(anyhow::anyhow!(
+                "TimeseriesDb token authentication requires a credential provider"
+            ));
+        }
 
         let http_timeout = StdDuration::from_secs(config.http_timeout_seconds);
+        let mut client_builder = ClientBuilder::new().timeout(http_timeout);
+        if auth_mode == TimeseriesDbAuthMode::Mtls {
+            client_builder = client_builder.identity(mtls_identity(config, &base_url)?);
+        }
+
         let http_client = reqwest_middleware::ClientBuilder::new(
-            ClientBuilder::new()
-                .timeout(http_timeout)
+            client_builder
                 .build()
                 .context("Failed to build HTTP client")?,
         )
         .with(reqwest_tracing::TracingMiddleware::default())
         .build();
 
-        if config.disable_auth {
-            tracing::info!("TimeseriesDb authentication is disabled");
-        } else {
-            tracing::info!("TimeseriesDb authentication is enabled");
-        }
+        tracing::info!(auth_mode = ?auth_mode, "Configured TimeseriesDb authentication");
 
         let query_backoff = config.backoff.unwrap_or_else(|| {
             ExponentialBuilder::default()
@@ -129,7 +233,7 @@ impl TimeseriesDbClient {
             http_client,
             credentials: Arc::new(Mutex::new(None)),
             credential_provider,
-            disable_auth: config.disable_auth,
+            auth_mode,
             is_healthy: Arc::new(Mutex::new(true)),
             backoff: Some(query_backoff),
         })
@@ -204,19 +308,7 @@ impl TimeseriesDbClient {
         end: DateTime<Utc>,
         step: StdDuration,
     ) -> Result<TimeseriesDbResponse> {
-        let mut url = self.base_url.clone();
-        if self.disable_auth {
-            url.path_segments_mut()
-                .map_err(|_| anyhow::anyhow!("Cannot modify URL"))?
-                .push("api")
-                .push("v1")
-                .push("query_range");
-        } else {
-            url.path_segments_mut()
-                .map_err(|_| anyhow::anyhow!("Cannot modify URL"))?
-                .push("v1")
-                .push("query_range");
-        }
+        let url = query_range_url(self.base_url.clone(), self.auth_mode)?;
 
         let query_params = [
             ("query", query.to_string()),
@@ -225,7 +317,7 @@ impl TimeseriesDbClient {
             ("step", step.as_secs().to_string()),
         ];
 
-        if self.disable_auth {
+        if self.auth_mode != TimeseriesDbAuthMode::Token {
             self.execute_with_retry_no_auth(url, &query_params).await
         } else {
             self.execute_with_retry(move |token| {
@@ -537,7 +629,13 @@ mod tests {
     use hyper::service::service_fn;
     use hyper::{Request, Response, StatusCode};
     use hyper_util::rt::TokioIo;
+    use openssl::bn::{BigNum, MsbOption};
+    use openssl::hash::MessageDigest;
+    use openssl::rsa::Rsa;
+    use openssl::x509::extension::{BasicConstraints, ExtendedKeyUsage, KeyUsage};
+    use openssl::x509::{X509Builder, X509NameBuilder};
     use std::convert::Infallible;
+    use std::path::Path;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -736,6 +834,191 @@ mod tests {
             .with_max_delay(TEST_MAX_BACKOFF_DELAY)
             .with_min_delay(DEFAULT_MIN_BACKOFF_DELAY)
             .with_factor(1.5)
+    }
+
+    fn generate_client_identity(expired: bool) -> Result<(Vec<u8>, Vec<u8>)> {
+        let intermediate_key = PKey::from_rsa(Rsa::generate(2048)?)?;
+        let mut intermediate_name = X509NameBuilder::new()?;
+        intermediate_name.append_entry_by_text("O", "NVIDIA")?;
+        intermediate_name.append_entry_by_text("CN", "test-intermediate")?;
+        let intermediate_name = intermediate_name.build();
+        let mut intermediate_serial = BigNum::new()?;
+        intermediate_serial.rand(128, MsbOption::MAYBE_ZERO, false)?;
+        let intermediate_serial = intermediate_serial.to_asn1_integer()?;
+        let mut intermediate = X509Builder::new()?;
+        intermediate.set_version(2)?;
+        intermediate.set_serial_number(&intermediate_serial)?;
+        intermediate.set_subject_name(&intermediate_name)?;
+        intermediate.set_issuer_name(&intermediate_name)?;
+        intermediate.set_pubkey(&intermediate_key)?;
+        let intermediate_not_before = Asn1Time::days_from_now(0)?;
+        let intermediate_not_after = Asn1Time::days_from_now(365)?;
+        intermediate.set_not_before(&intermediate_not_before)?;
+        intermediate.set_not_after(&intermediate_not_after)?;
+        intermediate.append_extension(BasicConstraints::new().critical().ca().build()?)?;
+        intermediate.append_extension(KeyUsage::new().key_cert_sign().crl_sign().build()?)?;
+        intermediate.sign(&intermediate_key, MessageDigest::sha256())?;
+        let intermediate = intermediate.build();
+
+        let private_key = PKey::from_rsa(Rsa::generate(2048)?)?;
+        let mut name = X509NameBuilder::new()?;
+        name.append_entry_by_text("O", "NVIDIA")?;
+        name.append_entry_by_text("OU", "NSPECT-TEST")?;
+        name.append_entry_by_text("CN", "test-tenant")?;
+        let name = name.build();
+
+        let mut serial = BigNum::new()?;
+        serial.rand(128, MsbOption::MAYBE_ZERO, false)?;
+        let serial = serial.to_asn1_integer()?;
+        let mut certificate = X509Builder::new()?;
+        certificate.set_version(2)?;
+        certificate.set_serial_number(&serial)?;
+        certificate.set_subject_name(&name)?;
+        certificate.set_issuer_name(intermediate.subject_name())?;
+        certificate.set_pubkey(&private_key)?;
+        let (not_before, not_after) = if expired {
+            (Asn1Time::from_unix(1)?, Asn1Time::from_unix(2)?)
+        } else {
+            (Asn1Time::days_from_now(0)?, Asn1Time::days_from_now(30)?)
+        };
+        certificate.set_not_before(&not_before)?;
+        certificate.set_not_after(&not_after)?;
+        certificate.append_extension(BasicConstraints::new().critical().build()?)?;
+        certificate.append_extension(KeyUsage::new().digital_signature().build()?)?;
+        certificate.append_extension(ExtendedKeyUsage::new().client_auth().build()?)?;
+        certificate.sign(&intermediate_key, MessageDigest::sha256())?;
+
+        let mut certificate_chain = certificate.build().to_pem()?;
+        certificate_chain.extend(intermediate.to_pem()?);
+
+        Ok((certificate_chain, private_key.private_key_to_pem_pkcs8()?))
+    }
+
+    fn write_identity(
+        directory: &Path,
+        certificate: &[u8],
+        private_key: &[u8],
+    ) -> Result<TimeseriesDbSettings> {
+        let certificate_path = directory.join("client_chain.crt");
+        let private_key_path = directory.join("client.key");
+        std::fs::write(&certificate_path, certificate)?;
+        std::fs::write(&private_key_path, private_key)?;
+        Ok(TimeseriesDbSettings {
+            timeseries_db_url: "https://metrics.example.test".to_string(),
+            auth_mode: Some(TimeseriesDbAuthMode::Mtls),
+            disable_auth: false,
+            client_certificate_path: Some(certificate_path),
+            client_private_key_path: Some(private_key_path),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn mtls_requires_both_identity_paths() {
+        let config = TimeseriesDbSettings {
+            timeseries_db_url: "https://metrics.example.test".to_string(),
+            auth_mode: Some(TimeseriesDbAuthMode::Mtls),
+            disable_auth: false,
+            ..Default::default()
+        };
+
+        let error = TimeseriesDbClient::new(&config, None)
+            .err()
+            .expect("mTLS configuration without certificate paths must fail");
+        assert!(error.to_string().contains("client_certificate_path"));
+    }
+
+    #[test]
+    fn mtls_requires_https_origin_without_a_path() {
+        for invalid_url in [
+            "http://metrics.example.test",
+            "https://metrics.example.test/legacy-api",
+            "https://metrics.example.test?tenant=test",
+            "https://metrics.example.test#fragment",
+        ] {
+            let config = TimeseriesDbSettings {
+                timeseries_db_url: invalid_url.to_string(),
+                auth_mode: Some(TimeseriesDbAuthMode::Mtls),
+                ..Default::default()
+            };
+
+            let error = TimeseriesDbClient::new(&config, None)
+                .err()
+                .expect("invalid mTLS endpoint must fail");
+            assert!(
+                error.to_string().contains("https URL")
+                    || error.to_string().contains("must be an origin"),
+                "unexpected error for {invalid_url}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn mtls_accepts_a_valid_guide_style_identity() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let (certificate, private_key) = generate_client_identity(false)?;
+        let config = write_identity(directory.path(), &certificate, &private_key)?;
+
+        let client = TimeseriesDbClient::new(&config, None)?;
+
+        assert_eq!(client.auth_mode, TimeseriesDbAuthMode::Mtls);
+        Ok(())
+    }
+
+    #[test]
+    fn mtls_rejects_a_private_key_for_another_certificate() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let (certificate, _) = generate_client_identity(false)?;
+        let (_, other_private_key) = generate_client_identity(false)?;
+        let config = write_identity(directory.path(), &certificate, &other_private_key)?;
+
+        let error = TimeseriesDbClient::new(&config, None)
+            .err()
+            .expect("mismatched certificate and key must fail");
+
+        assert!(error.to_string().contains("does not match"));
+        Ok(())
+    }
+
+    #[test]
+    fn mtls_rejects_an_expired_certificate() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let (certificate, private_key) = generate_client_identity(true)?;
+        let config = write_identity(directory.path(), &certificate, &private_key)?;
+
+        let error = TimeseriesDbClient::new(&config, None)
+            .err()
+            .expect("expired certificate must fail");
+
+        assert!(error.to_string().contains("expired"));
+        Ok(())
+    }
+
+    #[test]
+    fn mtls_rejects_a_malformed_private_key() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let (certificate, _) = generate_client_identity(false)?;
+        let config = write_identity(directory.path(), &certificate, b"not a private key")?;
+
+        let error = TimeseriesDbClient::new(&config, None)
+            .err()
+            .expect("malformed private key must fail");
+
+        assert!(error.to_string().contains("Failed to parse"));
+        Ok(())
+    }
+
+    #[test]
+    fn mtls_uses_the_prometheus_query_range_path() {
+        let base_url = Url::parse("https://metrics.example.test").unwrap();
+
+        let mtls_url = query_range_url(base_url.clone(), TimeseriesDbAuthMode::Mtls).unwrap();
+        let local_url = query_range_url(base_url.clone(), TimeseriesDbAuthMode::None).unwrap();
+        let token_url = query_range_url(base_url, TimeseriesDbAuthMode::Token).unwrap();
+
+        assert_eq!(mtls_url.path(), "/api/v1/query_range");
+        assert_eq!(local_url.path(), "/api/v1/query_range");
+        assert_eq!(token_url.path(), "/v1/query_range");
     }
 
     #[tokio::test]

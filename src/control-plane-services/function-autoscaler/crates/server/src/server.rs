@@ -130,7 +130,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     health.register_health_checker(cassandra_service_manager.clone());
 
     tracing::info!("Initializing TimeseriesDb client (waiting with exponential backoff until up)");
-    let timeseries_db_credential_provider = if !config.timeseries_db.disable_auth {
+    let timeseries_db_credential_provider = if config.timeseries_db.effective_auth_mode()
+        == timeseries_db::TimeseriesDbAuthMode::Token
+    {
         tracing::info!("Initializing TimeseriesDb credentials provider for token generation");
         Some(Arc::new(
             timeseries_db::timeseries_db_client::AuthnCredentialProvider::new(
