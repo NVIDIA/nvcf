@@ -84,7 +84,7 @@ func NewOperatorCommand() *cli.Command {
 				Name:    "kubeconfig",
 				EnvVars: []string{"KUBECONFIG"},
 				Value:   "",
-				Usage:   "'kubeconfig' is the KUBECONFIG path for bakend K8s cluster",
+				Usage:   "'kubeconfig' is the KUBECONFIG path for backend K8s cluster",
 			},
 			&cli.StringFlag{
 				Name:  "listen",

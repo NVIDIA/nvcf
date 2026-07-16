@@ -2555,7 +2555,7 @@ func completeInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1
 	return dto, nil
 }
 
-// returns a string of the internal persisten storage configuration base64 encoded
+// returns a string of the internal persistent storage configuration base64 encoded
 func getInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {
 	log := core.GetLogger(ctx)
 	dto, err := completeInternalPersistentStorageConfig(ctx, nb)

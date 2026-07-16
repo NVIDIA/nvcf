@@ -199,7 +199,7 @@ type AgentOptions struct {
 	// for third party registry cred updates.
 	ImageCredentialHelperImage string
 
-	// K8sTimeConfig configures intervals, timeouts, thresholds for various K8s occurances.
+	// K8sTimeConfig configures intervals, timeouts, thresholds for various K8s occurrences.
 	K8sTimeConfig *k8sutil.TimeConfig
 
 	// MinHealthcheckRefreshWait forces the NVCA internal healthchecker

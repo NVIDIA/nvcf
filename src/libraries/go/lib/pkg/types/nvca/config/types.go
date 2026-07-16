@@ -291,7 +291,7 @@ type AgentConfig struct {
 	FunctionDeploymentStagesProdOAuthTokenURL              string `yaml:",omitempty"`
 	FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint  string `yaml:",omitempty"`
 
-	// NVCA Operater version
+	// NVCA Operator version
 	OperatorVersion string `yaml:",omitempty"`
 	// Kubernetes version override
 	KubernetesVersionOverride string `yaml:",omitempty"`

@@ -227,7 +227,7 @@ type BackendK8sCache struct {
 	taskEnvOverrides     map[string]string
 }
 
-// BackendK8sCacheBuilder builds Backendk8sCache and start related egde K8s
+// BackendK8sCacheBuilder builds Backendk8sCache and start related edge K8s
 // informers, monitored K8s events are sent to a event channel that is
 // returned by Start()
 type BackendK8sCacheBuilder struct {

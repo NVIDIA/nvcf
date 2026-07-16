@@ -441,7 +441,7 @@ func (w *NVCTWorker) workSession(ctx context.Context) error {
 }
 
 func (w *NVCTWorker) PreStopCheck(ctx context.Context) error {
-	zap.L().Info("Recived termination signal, checking progress file")
+	zap.L().Info("Received termination signal, checking progress file")
 	progressData, err := progress.ParseProgressFile(w.config.ProgressFilePath)
 	if err != nil {
 		w.handleWorkerTermination(ctx)

@@ -17,7 +17,7 @@ server:
     endpoint_ip: http://127.0.0.1
     endpoint_port: 8282
     headers:
-      lightstep-access-token: LIGHTSTEP_ACCESS_TOKEN # this is a standin value only; is set progammatically in server.rs
+      lightstep-access-token: LIGHTSTEP_ACCESS_TOKEN # this is a standin value only; is set programmatically in server.rs
       organization: default
       stream-name: default
     service_name: nvcf_invocation_service
