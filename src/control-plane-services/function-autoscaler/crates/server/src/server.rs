@@ -17,7 +17,6 @@
  * limitations under the License.
  */
 
-use rs_autoscaler::health::HealthStatus;
 use rs_autoscaler::{
     health::Health,
     metrics,
@@ -127,7 +126,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cassandra_service_manager =
         startup::wait_for_cassandra(&config.cassandra, secrets_file_watcher.clone()).await;
 
-    health.register_health_checker(cassandra_service_manager.clone());
+    health
+        .register_health_checker(cassandra_service_manager.clone())
+        .await;
 
     tracing::info!("Initializing TimeseriesDb client (waiting with exponential backoff until up)");
     let timeseries_db_credential_provider = if !config.timeseries_db.disable_auth {
@@ -149,7 +150,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         startup::wait_for_timeseries_db(&config.timeseries_db, timeseries_db_credential_provider)
             .await?;
 
-    health.register_health_checker(timeseries_db_client.clone());
+    health
+        .register_health_checker(timeseries_db_client.clone())
+        .await;
 
     // Start coordinated health monitoring for all registered services
     health
@@ -172,23 +175,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let health_monitor = Arc::clone(&health);
     let node_id_health = node_id.clone();
 
-    tracing::info!(
-        "Creating a new node entry for {} if not exists",
-        node_id_health
-    );
-    // Create a new node entry in Cassandra
+    tracing::info!("Reporting initial node health for {}", node_id_health);
     let current_health = health_monitor.get_health();
-    if current_health.overall_status == HealthStatus::Healthy {
-        work::create_new_node(
-            &node_id_health,
-            &HealthStatus::Healthy,
-            &cassandra_health_manager,
-        )
-        .await?;
-    } else {
-        panic!(
-            "Node is not healthy, cannot start service: {:?}",
-            current_health.overall_status
+    if let Err(e) = work::create_new_node(
+        &node_id_health,
+        &current_health.overall_status,
+        &cassandra_health_manager,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %e,
+            health = ?current_health.overall_status,
+            "Initial node health report failed; background health reporting will retry"
         );
     }
 
