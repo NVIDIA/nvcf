@@ -42,6 +42,7 @@ go_library(
         "manifests/otel_collector_config.yaml",
         "manifests/rbacTemplate.yaml",
         "manifests/vault_config_template.hcl",
+        "manifests/nvsnap.nvcf.nvidia.io_nvsnapfunctionstates_crd.yaml",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile",
     visibility = ["//visibility:public"],

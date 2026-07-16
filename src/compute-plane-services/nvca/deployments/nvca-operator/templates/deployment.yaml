@@ -46,6 +46,17 @@ spec:
         runAsUser: 1000
         runAsGroup: 1010
         fsGroup: 1010
+        # Defense in depth: enforce non-root + seccomp at the pod
+        # level. runAsUser=1000 already guarantees non-root; setting
+        # runAsNonRoot=true makes the constraint explicit (kubelet
+        # will reject the pod if the image's USER somehow goes back
+        # to root). seccompProfile=RuntimeDefault blocks the
+        # ~40 syscalls Docker's default seccomp profile blocks
+        # (clock_settime, modify_ldt, …) — safe for any normal Go
+        # operator.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       {{- if .Values.priorityClassName }}
       priorityClassName: {{ .Values.priorityClassName }}
       {{- end}}
