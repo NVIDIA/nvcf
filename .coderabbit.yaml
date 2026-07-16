@@ -16,7 +16,7 @@ reviews:
     base_branches:
       - main
   # Skip generated, vendored, and binary-ish files so review focuses on
-  # human-authored source. Mirrors the repo's Sonar exclusions.
+  # human-authored source.
   path_filters:
     - "!**/vendor/**"
     - "!**/testdata/**"
