@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -145,6 +146,42 @@ func TestExtractOpenAIJSONBody(t *testing.T) {
 		_, err = extractOpenAIJSONBody(req)
 		require.ErrorIs(t, err, errModelFieldMissing)
 	})
+}
+
+func TestExtractOpenAIJSONBodyDoesNotRetainPayload(t *testing.T) {
+	const (
+		modelName   = "model-retention-probe"
+		payloadSize = 32 << 20
+	)
+
+	runtime.GC()
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	model := func() string {
+		requestBody := append([]byte(`{"model":"`+modelName+`","padding":"`), bytes.Repeat([]byte{'x'}, payloadSize)...)
+		requestBody = append(requestBody, '"', '}')
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(requestBody))
+
+		body, err := extractOpenAIJSONBody(req)
+		require.NoError(t, err)
+		require.NoError(t, req.Body.Close())
+		return body.Model
+	}()
+
+	runtime.GC()
+	runtime.GC()
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+
+	var retained uint64
+	if after.HeapAlloc > before.HeapAlloc {
+		retained = after.HeapAlloc - before.HeapAlloc
+	}
+	require.Less(t, retained, uint64(payloadSize/2))
+	require.Equal(t, modelName, model)
+	runtime.KeepAlive(model)
 }
 
 func TestExtractOpenAIMultipartBody(t *testing.T) {

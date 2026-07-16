@@ -937,6 +937,7 @@ func extractOpenAIJSONBody(request *http.Request) (openAIRequestBody, error) {
 		return openAIRequestBody{}, errModelFieldMissing
 	}
 
+	body.Model = strings.Clone(body.Model)
 	return body, nil
 }
 
