@@ -13,10 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: v2
-name: helm-nvcf-function-autoscaler
-description: A Helm chart for NVCF Function Autoscaler Service
-
-type: application
-version: 0.0.0 # autoversioning enabled via release pipeline
-appVersion: "0.0.0"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "function-autoscaler.fullname" . }}-test-connection"
+  namespace: {{ include "function-autoscaler.namespace" . }}
+  labels:
+    {{- include "function-autoscaler.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['wget']
+      args:
+        - '-qO-'
+        - '{{ include "function-autoscaler.serviceName" . }}.{{ include "function-autoscaler.namespace" . }}.svc.cluster.local:{{ (index .Values.functionautoscaler.service.ports 1).port }}{{ .Values.functionautoscaler.livenessProbe.httpGet.path }}'
+  restartPolicy: Never

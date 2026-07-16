@@ -13,10 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: v2
-name: helm-nvcf-function-autoscaler
-description: A Helm chart for NVCF Function Autoscaler Service
-
-type: application
-version: 0.0.0 # autoversioning enabled via release pipeline
-appVersion: "0.0.0"
+{{ if .Values.functionautoscaler.vault.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "function-autoscaler.fullname" . }}-vault-agent-tpl
+  namespace: {{ include "function-autoscaler.namespace" . }}
+  labels:
+    {{- include "function-autoscaler.labels" . | nindent 4 }}
+data:
+  secrets.json.tmpl: |-
+{{ .Files.Get "vault-agent-templates/secrets.json.tmpl" | indent 4 }}
+{{- end }}
