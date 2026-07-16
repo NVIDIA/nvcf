@@ -100,7 +100,7 @@ jobs:
           http-invocation|src/invocation-plane-services/http-invocation|false
           llm-api-gateway|src/invocation-plane-services/llm-api-gateway|false
           vanity-gateway|src/invocation-plane-services/vanity-gateway|false
-          nvca|src/compute-plane-services/nvca|false
+          nvca|src/compute-plane-services/nvca|true
           ess-agent|src/compute-plane-services/ess-agent|false
           image-credential-helper|src/compute-plane-services/image-credential-helper|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
@@ -251,17 +251,31 @@ jobs:
         if: steps.precheck.outputs.skip == 'false'
         working-directory: ${{ matrix.subtree.path }}
         run: |
-          FLAGS=(--remote_cache=)
+          # COMMON holds non-cache flags shared by both the cached attempt and
+          # the cacheless retry, so any future non-cache flag is applied to both.
+          # CACHE holds only the cache-specific flags.
+          COMMON=()
+          CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
-            FLAGS=(--remote_cache="$CACHE_ENDPOINT"
+            CACHE=(--remote_cache="$CACHE_ENDPOINT"
                    --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression
                    --remote_download_all
                    --remote_timeout=120 --remote_retries=5)
-            [ "$CACHE_UPLOAD" = "true" ] || FLAGS+=(--remote_upload_local_results=false)
+            [ "$CACHE_UPLOAD" = "true" ] || CACHE+=(--remote_upload_local_results=false)
           fi
-          bazel build "${FLAGS[@]}" //...
+          # Rock-solid cache: if the cached build fails for any cache-related
+          # reason -- the TLS/GetCapabilities handshake, UNAVAILABLE, or a 502
+          # during the matrix-start connection burst, none of which
+          # --remote_download_all or --remote_local_fallback cover -- retry once
+          # with the cache fully off (same COMMON flags). A real build break
+          # fails both attempts, so this never hides one.
+          if ! bazel build "${COMMON[@]}" "${CACHE[@]}" //...; then
+            [ "${CACHE_READY:-0}" = "1" ] || exit 1
+            echo "::warning::remote cache build failed; retrying cacheless (local)"
+            bazel build "${COMMON[@]}" --remote_cache= //...
+          fi
 
       - name: bazel test //...
         # `tests_skip: true` on the matrix row keeps the subtree in the matrix
@@ -271,17 +285,25 @@ jobs:
         if: steps.precheck.outputs.skip == 'false' && !matrix.subtree.tests_skip
         working-directory: ${{ matrix.subtree.path }}
         run: |
-          FLAGS=(--remote_cache=)
+          COMMON=(--flaky_test_attempts=3)
+          CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
-            FLAGS=(--remote_cache="$CACHE_ENDPOINT"
+            CACHE=(--remote_cache="$CACHE_ENDPOINT"
                    --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression
                    --remote_download_all
                    --remote_timeout=120 --remote_retries=5)
-            [ "$CACHE_UPLOAD" = "true" ] || FLAGS+=(--remote_upload_local_results=false)
+            [ "$CACHE_UPLOAD" = "true" ] || CACHE+=(--remote_upload_local_results=false)
           fi
-          bazel test "${FLAGS[@]}" --flaky_test_attempts=3 //...
+          # Same cacheless retry as the build step: cache flakiness must never
+          # fail the matrix (see the build step for the rationale). COMMON keeps
+          # the non-cache flags (--flaky_test_attempts) on both attempts.
+          if ! bazel test "${COMMON[@]}" "${CACHE[@]}" //...; then
+            [ "${CACHE_READY:-0}" = "1" ] || exit 1
+            echo "::warning::remote cache test failed; retrying cacheless (local)"
+            bazel test "${COMMON[@]}" --remote_cache= //...
+          fi
 
   bazel-verification:
     name: bazel verification
