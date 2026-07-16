@@ -79,6 +79,33 @@ func TestServerTelemetryMiddlewareRecordsStatusAndRouteMetrics(t *testing.T) {
 	}))
 }
 
+func TestHTTPDurationHistogramBoundaries(t *testing.T) {
+	expectedBoundaries := []float64{
+		0.1, 0.25, 0.5, 0.75, 1, 2, 5, 10,
+		15, 30, 60, 120, 300, 600, 900,
+	}
+	reader := sdkmetric.NewManualReader()
+	provider := newHTTPMeterProvider(reader)
+	t.Cleanup(func() {
+		require.NoError(t, provider.Shutdown(context.Background()))
+	})
+
+	handler := ServerTelemetryMiddleware(otelhttp.WithMeterProvider(provider))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	client := &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport, otelhttp.WithMeterProvider(provider))}
+	response, err := client.Get(server.URL)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+
+	metrics := collectMetrics(t, reader)
+	require.Equal(t, expectedBoundaries, histogramBounds(t, metrics, "http.server.request.duration"))
+	require.Equal(t, expectedBoundaries, histogramBounds(t, metrics, "http.client.request.duration"))
+}
+
 func TestAddOpenAIRequestMetricAttributesCopiesModelName(t *testing.T) {
 	const value = "meta/llama-3"
 	// Model names parsed by goccy/go-json can share the request body's backing storage.
@@ -139,6 +166,23 @@ func histogramHasAttributes(data metricdata.Aggregation, want map[attribute.Key]
 		}
 	}
 	return false
+}
+
+func histogramBounds(t *testing.T, metrics []metricdata.Metrics, name string) []float64 {
+	t.Helper()
+
+	for _, metric := range metrics {
+		if metric.Name != name {
+			continue
+		}
+		histogram, ok := metric.Data.(metricdata.Histogram[float64])
+		if ok && len(histogram.DataPoints) > 0 {
+			return histogram.DataPoints[0].Bounds
+		}
+	}
+
+	require.FailNow(t, "histogram not found", name)
+	return nil
 }
 
 func dataPointHasAttributes(attrs attribute.Set, want map[attribute.Key]attribute.Value) bool {

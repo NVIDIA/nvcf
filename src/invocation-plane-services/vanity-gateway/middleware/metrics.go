@@ -30,6 +30,11 @@ var (
 	setupHTTPMetricsErr  error
 )
 
+var httpDurationHistogramBoundaries = []float64{
+	0.1, 0.25, 0.5, 0.75, 1, 2, 5, 10,
+	15, 30, 60, 120, 300, 600, 900,
+}
+
 func SetupHTTPMetrics() error {
 	setupHTTPMetricsOnce.Do(func() {
 		exporter, err := otelprom.New()
@@ -38,9 +43,26 @@ func SetupHTTPMetrics() error {
 			return
 		}
 
-		provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
+		provider := newHTTPMeterProvider(exporter)
 		otel.SetMeterProvider(provider)
 	})
 
 	return setupHTTPMetricsErr
+}
+
+func newHTTPMeterProvider(reader sdkmetric.Reader) *sdkmetric.MeterProvider {
+	return sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(reader),
+		sdkmetric.WithView(httpDurationHistogramView("http.server.request.duration")),
+		sdkmetric.WithView(httpDurationHistogramView("http.client.request.duration")),
+	)
+}
+
+func httpDurationHistogramView(name string) sdkmetric.View {
+	return sdkmetric.NewView(
+		sdkmetric.Instrument{Name: name},
+		sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+			Boundaries: httpDurationHistogramBoundaries,
+		}},
+	)
 }
