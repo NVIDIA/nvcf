@@ -1,0 +1,48 @@
+# OpenBao upgrade values
+# Usage: make install additional_values=values.local.yaml,upgrade/values-upgrades.yaml
+
+openbao:
+  server:
+    image:
+      tag: 2.5.5-nv-1.3.1
+
+    # Update auto-unseal sidecar to match server version
+    extraContainers:
+      - name: auto-unseal-sidecar
+        image: '{{ .Values.server.image.registry }}/{{ .Values.server.image.repository }}:{{ .Values.server.image.tag | default (trimPrefix "v" .Chart.AppVersion) }}'
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 256Mi
+        volumeMounts:
+          - name: openbao-server-unseal
+            mountPath: /vault/userconfig/unseal
+            readOnly: true
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Starting auto-unseal monitor..."
+            echo http://$HOSTNAME:8200
+            export BAO_ADDR=http://$HOSTNAME:8200
+            while true; do
+              if [ -f /vault/userconfig/unseal/unseal_key ]; then
+                UNSEAL_KEY=$(cat /vault/userconfig/unseal/unseal_key)
+                if [ ! -z "$UNSEAL_KEY" ]; then
+                    bao operator unseal $UNSEAL_KEY
+                    sleep 60
+                    continue
+                else
+                  echo "Unseal key is empty, waiting..."
+                fi
+              else
+                echo "Unseal key file not found, waiting..."
+              fi
+              sleep 10
+            done
+
+  injector:
+    agentImage:
+      tag: 2.5.5-nv-1.3.1

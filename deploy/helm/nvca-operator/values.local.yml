@@ -1,0 +1,41 @@
+# Baseline values for standalone self-managed NVCA installation.
+# The `render-values-from-stack` and `install-from-stack` targets replace the
+# placeholder repositories below with values derived from the control-plane
+# stack environment file.
+
+# Optional for self-managed mode. Leave blank to use the chart defaults.
+ncaID: ""
+clusterName: ""
+clusterID: ""
+
+image:
+  repository: "<REGISTRY>/<REPOSITORY>/nvca-operator"
+  tag: "3.0.4"
+
+nvcaImage:
+  repositoryOverride: "<REGISTRY>/<REPOSITORY>/nvca"
+
+ngcConfig:
+  clusterSource: self-managed
+  serviceKey: "not-used"
+
+selfManaged:
+  icmsServiceURL: "http://icms.example.invalid:8080"
+  icmsServiceHostHeaderOverride: ""
+  revalServiceURL: "http://reval.example.invalid:8080"
+  revalServiceHostHeaderOverride: ""
+  natsURL: "nats://nats.example.invalid:4222"
+  natsHostOverride: ""
+  nvcaVersion: "3.0.4"
+  featureGateValues: ["DynamicGPUDiscovery", "SelfHosted"]
+  imageCredHelper:
+    imageRepository: "<REGISTRY>/<REPOSITORY>/nvcf-image-credential-helper"
+    imageTag: "0.5.0"
+  sharedStorage:
+    imageRepository: "<REGISTRY>/<REPOSITORY>/samba"
+    imageTag: "1.0.5"
+
+generateImagePullSecret: false
+imagePullSecrets: []
+nameOverride: "nvca-operator"
+fullnameOverride: "nvca-operator"
