@@ -6,9 +6,9 @@ BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Build variables
 BINARY_NAME = nvcf-nats-auth-callout-service
 MAIN_PATH = ./cmd/nvcf-nats-auth-callout-service
-LDFLAGS = -ldflags "-X github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/version.Version=$(VERSION) \
-                   -X github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/version.GitCommit=$(GIT_COMMIT) \
-                   -X github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/version.BuildDate=$(BUILD_DATE)"
+LDFLAGS = -ldflags "-X github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.Version=$(VERSION) \
+                   -X github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.GitCommit=$(GIT_COMMIT) \
+                   -X github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.BuildDate=$(BUILD_DATE)"
 
 # Docker build variables
 DOCKER_IMAGE_NAME ?= $(BINARY_NAME)

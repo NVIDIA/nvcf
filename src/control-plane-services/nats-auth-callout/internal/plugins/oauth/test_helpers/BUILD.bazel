@@ -18,7 +18,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "test_helpers",
     srcs = ["test_helpers.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/plugins/oauth/test_helpers",
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/oauth/test_helpers",
     visibility = ["//:__subpackages__"],
     deps = ["@com_github_golang_jwt_jwt_v5//:jwt"],
 )

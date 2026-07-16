@@ -25,7 +25,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/config"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
 
 	"github.com/spf13/cobra"
 )

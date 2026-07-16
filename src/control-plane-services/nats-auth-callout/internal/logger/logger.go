@@ -26,8 +26,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/version"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version"
 )
 
 // NewLogger creates a new zap logger based on the configuration

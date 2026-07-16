@@ -23,7 +23,7 @@ go_library(
         "server.go",
         "version.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service/cli",
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service/cli",
     # CLI is an implementation detail of the `cmd/` binary; no external
     # consumer should depend on it. CodeRabbit nit on !25.
     visibility = ["//cmd/nvcf-nats-auth-callout-service:__pkg__"],

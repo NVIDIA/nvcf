@@ -15,7 +15,7 @@
 
 load("@gazelle//:def.bzl", "gazelle")
 
-# gazelle:prefix github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout
+# gazelle:prefix github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout
 # gazelle:exclude local-dev
 # gazelle:exclude deploy
 # gazelle:exclude docs

@@ -26,8 +26,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/plugins/types"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
 
 	"github.com/hashicorp/go-retryablehttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"

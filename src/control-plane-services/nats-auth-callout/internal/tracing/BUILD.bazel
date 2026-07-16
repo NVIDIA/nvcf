@@ -24,7 +24,7 @@ go_library(
         "noop.go",
         "otel.go",
     ],
-    importpath = "github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/tracing",
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/tracing",
     visibility = ["//:__subpackages__"],
     deps = [
         "@io_opentelemetry_go_otel//:otel",

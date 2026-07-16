@@ -21,8 +21,8 @@ import (
 	"crypto/x509"
 	"time"
 
-	acConfig "github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/plugins"
+	acConfig "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/nats-io/nats.go"

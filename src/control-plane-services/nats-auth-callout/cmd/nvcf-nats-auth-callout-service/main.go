@@ -43,7 +43,7 @@ package main
 import (
 	_ "embed"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service/cli"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service/cli"
 )
 
 //go:embed config.yaml
