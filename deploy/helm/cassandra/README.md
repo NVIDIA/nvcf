@@ -15,14 +15,14 @@ cassandra:
   migrations:
     image:
       registry: nvcr.io
-      repository: 0651155215864979/ncp-dev/nvcf-cassandra-migrations
+      repository: <your-org>/nvcf-cassandra-migrations
   image:
     registry: nvcr.io
-    repository: 0651155215864979/ncp-dev/bitnami-cassandra
+    repository: <your-org>/bitnami-cassandra
   dynamicSeedDiscovery:
     image:
       registry: nvcr.io
-      repository: 0651155215864979/ncp-dev/bitnami-cassandra
+      repository: <your-org>/bitnami-cassandra
 ```
 
 ## Prerequisites
