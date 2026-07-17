@@ -80,6 +80,23 @@ jobs:
         with:
           # The companion workflow parses this artifact as untrusted data only.
           name: codeql-pr-results-${{ matrix.language }}
-          path: results/*.sarif
+          path: results/${{ matrix.language }}.sarif
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Prepare fork PR metadata
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.language == 'go' }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/codeql-pr-metadata"
+          printf '%s\n' "$PR_NUMBER" > "${RUNNER_TEMP}/codeql-pr-metadata/pr-number"
+
+      - name: Upload fork PR metadata
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.language == 'go' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-pr-metadata
+          path: ${{ runner.temp }}/codeql-pr-metadata/pr-number
           if-no-files-found: error
           retention-days: 1

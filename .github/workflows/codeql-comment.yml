@@ -30,12 +30,8 @@ permissions:
   actions: read
   pull-requests: write
 
-concurrency:
-  group: codeql-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: true
-
 jobs:
-  comment:
+  resolve-pr:
     # Same-repository PRs are commented on directly by the CodeQL workflow.
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
@@ -43,6 +39,55 @@ jobs:
       github.event.workflow_run.head_repository.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      pr_number: ${{ steps.validate.outputs.pr_number }}
+    steps:
+      - name: Download fork PR metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codeql-pr-metadata
+          path: codeql-pr-metadata
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate pull request metadata
+        id: validate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          PR_NUMBER=$(tr -d '[:space:]' < codeql-pr-metadata/pr-number)
+          if ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid pull request number in CodeQL metadata artifact"
+            exit 1
+          fi
+
+          PR_DATA=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          if ! jq -e \
+            --arg head_repository "$HEAD_REPOSITORY" \
+            --arg head_branch "$HEAD_BRANCH" \
+            --arg head_sha "$HEAD_SHA" \
+            '.state == "open" and
+             .head.repo.full_name == $head_repository and
+             .head.ref == $head_branch and
+             .head.sha == $head_sha' <<< "$PR_DATA" > /dev/null; then
+            echo "::error::Pull request ${PR_NUMBER} does not match the CodeQL workflow run"
+            exit 1
+          fi
+
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+  comment:
+    needs: resolve-pr
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: codeql-comment-pr-${{ needs.resolve-pr.outputs.pr_number }}
+      cancel-in-progress: true
     steps:
       - name: Download CodeQL results
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -56,26 +101,11 @@ jobs:
       - name: Post or update CodeQL results comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.pr_number }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           set -euo pipefail
-
-          # workflow_run.pull_requests can be empty for fork runs. Resolve the PR
-          # from trusted event metadata instead of fork-controlled artifacts.
-          HEAD_OWNER=${HEAD_REPOSITORY%%/*}
-          PR_NUMBER=$(gh api --method GET \
-            "repos/${GITHUB_REPOSITORY}/pulls" \
-            -f state=open \
-            -f head="${HEAD_OWNER}:${HEAD_BRANCH}" |
-            jq -r --arg sha "$HEAD_SHA" \
-              '[.[] | select(.head.sha == $sha)][0].number // empty')
-          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
-            echo "::warning::Could not resolve a pull request for CodeQL run ${RUN_URL}"
-            exit 0
-          fi
 
           mapfile -d '' SARIF_FILES < <(find codeql-results -type f -name '*.sarif' -print0)
           if [ "${#SARIF_FILES[@]}" -eq 0 ]; then
