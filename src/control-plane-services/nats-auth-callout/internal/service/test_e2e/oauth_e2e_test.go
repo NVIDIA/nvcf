@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/oauth"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/oauth/test_helpers"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
+	"github.com/nats-io/nats.go"
 )
 
 func TestOAuthPluginE2E(t *testing.T) {
