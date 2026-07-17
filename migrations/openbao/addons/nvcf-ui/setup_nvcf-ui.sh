@@ -43,7 +43,7 @@ sis_policy_base="services-${sis_account}"
 SCOPES="attributes_listing,cluster-management,clusters_listing,cluster_listing,gpu_listing,instance_types,regions_listing"
 
 # Issuer: http://api.sis.svc.cluster.local
-jwt_secret_role=$(generate_jwt_secret_role "${sis_namespace}" "${sis_service}" "${SERVICE_ACCOUNT_NAME}" "${SCOPES}")
+jwt_secret_role=$(generate_jwt_secret_role "${sis_namespace}" "${sis_service}" "${SERVICE_ACCOUNT_NAME}" "${SCOPES}" "${JWT_ISSUER_OVERRIDE:-}")
 create_secret_jwt_role "${sis_secret_base}/jwt" "${SERVICE_ACCOUNT_NAME}" "${jwt_secret_role}"
 
 policy=$(generate_acl_policy "${sis_secret_base}/jwt/sign/${SERVICE_ACCOUNT_NAME}" "create,update,read")
