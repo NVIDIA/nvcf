@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	echo "github.com/labstack/echo/v4"
 	"go.opentelemetry.io/otel"
@@ -36,6 +37,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
@@ -124,19 +127,110 @@ func TestNewContextMiddlewareRecordsServiceScopedHTTPMetrics(t *testing.T) {
 
 	metrics := collectMetrics(t, reader)
 	assertMetricHasAttributes(t, metrics, "llm_api_gateway_http_requests_total", map[string]string{
-		"method": http.MethodGet,
-		"route":  "/healthz",
-		"status": "202",
+		"method":      http.MethodGet,
+		"route":       "/healthz",
+		"status":      "202",
+		"function_id": "none",
 	})
 	assertMetricHasAttributes(t, metrics, "llm_api_gateway_http_request_duration_seconds", map[string]string{
-		"method": http.MethodGet,
-		"route":  "/healthz",
-		"status": "202",
+		"method":      http.MethodGet,
+		"route":       "/healthz",
+		"status":      "202",
+		"function_id": "none",
 	})
 	assertMetricHasAttributes(t, metrics, "llm_api_gateway_http_active_requests", map[string]string{
-		"method": http.MethodGet,
-		"route":  "/healthz",
+		"method":      http.MethodGet,
+		"route":       "/healthz",
+		"function_id": "none",
 	})
+}
+
+func TestRequestMetricsIncludeFunctionID(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	oldMeterProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(meterProvider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(oldMeterProvider)
+		_ = meterProvider.Shutdown(context.Background())
+	})
+
+	e := echo.New()
+	e.Use(NewContextMiddleware(config.Default()))
+	e.POST("/v1/chat/completions", func(ec echo.Context) error {
+		return ec.NoContent(http.StatusOK)
+	})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"fn-metrics/provider/model"}`),
+	)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	observability := newObservabilityMetrics()
+	observability.recordLLMUsage(
+		context.Background(),
+		"/v1/chat/completions",
+		"fn-metrics",
+		&models.ChatCompletionUsage{
+			PromptTokens:     2,
+			PromptTime:       0.02,
+			CompletionTokens: 3,
+			CompletionTime:   0.03,
+			TotalTokens:      5,
+			TotalTime:        0.05,
+		},
+		false,
+	)
+
+	content := "first token"
+	firstTokenRecorded := false
+	recordFirstTokenIfNeeded(
+		context.Background(),
+		"/v1/chat/completions",
+		"fn-metrics",
+		observability,
+		&models.ChatCompletionChunk{
+			Choices: []models.ChatCompletionChunkChoice{{
+				Delta: models.ChatCompletionChunkDelta{Content: &content},
+			}},
+		},
+		&firstTokenRecorded,
+		time.Now().Add(-time.Millisecond),
+	)
+
+	events := make(chan provider.StreamEvent)
+	close(events)
+	handlers := &OpenAIChatHandlers{handlers: &Handlers{observability: observability}}
+	wrapped := handlers.wrapStreamForFinalization(
+		context.Background(),
+		context.Background(),
+		"/v1/chat/completions",
+		"fn-metrics",
+		nil,
+		"",
+		events,
+		&streamFinalizationState{},
+	)
+	for range wrapped {
+	}
+
+	metrics := collectMetrics(t, reader)
+	for _, name := range []string{
+		"llm_api_gateway_http_requests_total",
+		"llm_api_gateway_http_request_duration_seconds",
+		"llm_api_gateway_http_active_requests",
+		"llm_api_gateway_llm_tokens_total",
+		"llm_api_gateway_provider_time_seconds",
+		"llm_api_gateway_stream_first_token_seconds",
+		"llm_api_gateway_stream_duration_seconds",
+	} {
+		assertMetricHasAttributes(t, metrics, name, map[string]string{
+			"function_id": "fn-metrics",
+		})
+	}
 }
 
 func assertHasAttribute(t *testing.T, attrs []attribute.KeyValue, key string, want any) {

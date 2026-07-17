@@ -20,7 +20,6 @@ package api
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -305,7 +304,7 @@ func (h *ResponsesHandlers) relayNativeResponsesStream(
 	setMultiTurnSessionResponseHeader(c)
 	c.Response().WriteHeader(resp.StatusCode)
 	if resp.Body == nil {
-		h.finalizeNativeResponsesUsage(c.UserContext(), request, nil, true)
+		h.finalizeNativeResponsesUsage(c, request, nil, true)
 		return nil
 	}
 	defer resp.Body.Close()
@@ -316,9 +315,9 @@ func (h *ResponsesHandlers) relayNativeResponsesStream(
 		c.Response().Writer,
 	)
 	if terminalResponse != nil {
-		h.recordNativeResponsesProviderTime(c.UserContext(), start, true)
+		h.recordNativeResponsesProviderTime(c, start, true)
 	}
-	h.finalizeNativeResponsesUsage(c.UserContext(), request, terminalResponse, true)
+	h.finalizeNativeResponsesUsage(c, request, terminalResponse, true)
 	return err
 }
 
@@ -328,7 +327,7 @@ func (h *ResponsesHandlers) aggregateNativeResponsesStream(
 	resp *provider.ProxyResponse,
 ) error {
 	if resp.Body == nil {
-		h.finalizeNativeResponsesUsage(c.UserContext(), request, nil, false)
+		h.finalizeNativeResponsesUsage(c, request, nil, false)
 		return echo.NewHTTPError(http.StatusBadGateway, "responses proxy returned no body")
 	}
 	defer resp.Body.Close()
@@ -338,26 +337,26 @@ func (h *ResponsesHandlers) aggregateNativeResponsesStream(
 		setMultiTurnSessionResponseHeader(c)
 		c.Response().WriteHeader(resp.StatusCode)
 		_, err := io.Copy(c.Response().Writer, resp.Body)
-		h.finalizeNativeResponsesUsage(c.UserContext(), request, nil, false)
+		h.finalizeNativeResponsesUsage(c, request, nil, false)
 		return err
 	}
 
 	start := time.Now()
 	terminalResponse, err := consumeNativeResponsesSSE(resp.Body, nil)
 	if err != nil {
-		h.finalizeNativeResponsesUsage(c.UserContext(), request, nil, false)
+		h.finalizeNativeResponsesUsage(c, request, nil, false)
 		return err
 	}
 	if terminalResponse == nil {
-		h.finalizeNativeResponsesUsage(c.UserContext(), request, nil, false)
+		h.finalizeNativeResponsesUsage(c, request, nil, false)
 		return echo.NewHTTPError(
 			http.StatusBadGateway,
 			"responses proxy stream ended without a terminal response event",
 		)
 	}
 
-	h.recordNativeResponsesProviderTime(c.UserContext(), start, false)
-	h.finalizeNativeResponsesUsage(c.UserContext(), request, terminalResponse, false)
+	h.recordNativeResponsesProviderTime(c, start, false)
+	h.finalizeNativeResponsesUsage(c, request, terminalResponse, false)
 	setMultiTurnSessionResponseHeader(c)
 	return c.JSON(http.StatusOK, terminalResponse)
 }
@@ -464,23 +463,31 @@ func parseNativeResponsesSSEBlock(block []byte) *openairesponses.Response {
 }
 
 func (h *ResponsesHandlers) finalizeNativeResponsesUsage(
-	ctx context.Context,
+	c *GatewayContext,
 	request *provider.NormalizedRequest,
 	response *openairesponses.Response,
 	stream bool,
 ) {
+	ctx := c.UserContext()
 	usage := chatUsageFromResponses(response)
 	if usageHasTokenCounts(usage) {
-		h.handlers.observability.recordLLMUsage(ctx, responsesEndpointPath, usage, stream)
+		h.handlers.observability.recordLLMUsage(
+			ctx,
+			responsesEndpointPath,
+			requestFunctionID(c),
+			usage,
+			stream,
+		)
 	}
 	h.handlers.finalizeTokenConsumption(ctx, request, usage)
 }
 
 func (h *ResponsesHandlers) recordNativeResponsesProviderTime(
-	ctx context.Context,
+	c *GatewayContext,
 	start time.Time,
 	stream bool,
 ) {
+	ctx := c.UserContext()
 	telemetry.RecordWithContext(
 		ctx,
 		h.handlers.observability.providerTime,
@@ -488,6 +495,7 @@ func (h *ResponsesHandlers) recordNativeResponsesProviderTime(
 		attribute.String("endpoint", responsesEndpointPath),
 		attribute.String("phase", "total"),
 		attribute.String("stream", boolLabel(stream)),
+		telemetry.FunctionIDAttribute(requestFunctionID(c)),
 	)
 }
 

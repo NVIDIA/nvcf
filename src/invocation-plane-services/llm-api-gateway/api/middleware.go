@@ -92,6 +92,7 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			metricAttrs := []attribute.KeyValue{
 				attribute.String("method", gc.Request().Method),
 				attribute.String("route", routePath),
+				telemetry.FunctionIDAttribute(routingKey),
 			}
 			telemetry.AddUpDownWithContext(ctx, activeRequests, 1, metricAttrs...)
 			defer telemetry.AddUpDownWithContext(context.WithoutCancel(ctx), activeRequests, -1, metricAttrs...)

@@ -32,7 +32,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
@@ -40,7 +43,72 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
+
+func TestStargateProviderMetricsIncludeFunctionID(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	oldMeterProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(meterProvider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(oldMeterProvider)
+		_ = meterProvider.Shutdown(context.Background())
+	})
+
+	p := &StargateProvider{
+		upstreamRequestsTotal:   telemetry.UpstreamRequestsTotal(),
+		upstreamRequestDuration: telemetry.UpstreamRequestDuration(),
+	}
+	p.recordUpstreamRequest(
+		context.Background(),
+		&requestctx.RequestContext{RoutingKey: "fn-upstream"},
+		time.Now().Add(-time.Millisecond),
+		http.StatusOK,
+		nil,
+	)
+
+	var resourceMetrics metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &resourceMetrics))
+	want := map[string]bool{
+		"llm_api_gateway_upstream_requests_total":           false,
+		"llm_api_gateway_upstream_request_duration_seconds": false,
+	}
+	for _, scope := range resourceMetrics.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if _, ok := want[metric.Name]; ok && metricHasFunctionID(metric.Data, "fn-upstream") {
+				want[metric.Name] = true
+			}
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Fatalf("metric %q missing function_id=fn-upstream", name)
+		}
+	}
+}
+
+func metricHasFunctionID(data metricdata.Aggregation, want string) bool {
+	hasFunctionID := func(attrs attribute.Set) bool {
+		value, ok := attrs.Value(attribute.Key("function_id"))
+		return ok && value.AsString() == want
+	}
+	switch typed := data.(type) {
+	case metricdata.Sum[int64]:
+		for _, point := range typed.DataPoints {
+			if hasFunctionID(point.Attributes) {
+				return true
+			}
+		}
+	case metricdata.Histogram[float64]:
+		for _, point := range typed.DataPoints {
+			if hasFunctionID(point.Attributes) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing.T) {
 	t.Parallel()

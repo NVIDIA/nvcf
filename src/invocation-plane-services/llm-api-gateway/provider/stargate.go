@@ -219,6 +219,7 @@ func (p *StargateProvider) recordUpstreamRequest(
 		attribute.String("upstream", upstreamName),
 		attribute.String("result", result),
 		attribute.String("status", status),
+		telemetry.FunctionIDAttribute(reqCtx.RoutingKey),
 	}
 	telemetry.AddWithContext(ctx, p.upstreamRequestsTotal, 1, attrs...)
 	telemetry.RecordWithContext(ctx, p.upstreamRequestDuration, time.Since(start).Seconds(), attrs...)

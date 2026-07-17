@@ -111,6 +111,29 @@ func TestMetricsDefinitionsUseServiceScopedNames(t *testing.T) {
 	}
 }
 
+func TestFunctionIDAttribute(t *testing.T) {
+	tests := []struct {
+		name       string
+		functionID string
+		want       string
+	}{
+		{name: "function", functionID: "fn-123", want: "fn-123"},
+		{name: "missing", want: "none"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			attr := FunctionIDAttribute(test.functionID)
+			if got := string(attr.Key); got != "function_id" {
+				t.Fatalf("attribute key = %q, want function_id", got)
+			}
+			if got := attr.Value.AsString(); got != test.want {
+				t.Fatalf("attribute value = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestInitStartsPrometheusMetricsServer(t *testing.T) {
 	port := freePort(t)
 
