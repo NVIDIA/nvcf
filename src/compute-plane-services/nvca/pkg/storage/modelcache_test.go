@@ -270,20 +270,15 @@ func TestReconcile_ModelCache(t *testing.T) {
 		}, 5*time.Second, 50*time.Millisecond)
 	}
 
-	initJob.Status.Succeeded++
-	initJob.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-	initJob.Status.Conditions = append(initJob.Status.Conditions,
-		batchv1.JobCondition{
-			Type:   batchv1.JobSuccessCriteriaMet,
-			Status: corev1.ConditionTrue,
-		},
-		batchv1.JobCondition{
-			Type:   batchv1.JobComplete,
-			Status: corev1.ConditionTrue,
-		},
-	)
-	err = c.Status().Update(ctx, initJob)
-	require.NoError(t, err)
+	// Drive the writer Job to completion. The reconciler keys off
+	// CompletionTime + Succeeded (see modelcache.go), not the conditions, but
+	// the apiserver validates the condition shape and its rules differ by
+	// version: k8s >= 1.34 requires SuccessCriteriaMet before Complete, while
+	// k8s 1.30-1.33 reject SuccessCriteriaMet on this NonIndexed Job (it has no
+	// SuccessPolicy). The Job's spec is reconciler-owned and immutable here, so
+	// apply the modern shape and fall back to the pre-1.34 shape if the running
+	// apiserver rejects it.
+	completeJob(ctx, t, c, initJob)
 
 	for _, st := range sts {
 		assert.EventuallyWithT(t, func(ct *assert.CollectT) {
@@ -731,4 +726,41 @@ func TestMapPodIssuesToFailureReason(t *testing.T) {
 			assert.Equal(t, tt.expectedReason, result)
 		})
 	}
+}
+
+// completeJob marks a writer Job as succeeded in a way the running apiserver
+// accepts. The reconciler detects completion via CompletionTime + Succeeded
+// (see modelcache.go), not the Job conditions, but the apiserver still
+// validates the condition shape and its rules changed across versions:
+//   - k8s >= 1.34 requires a SuccessCriteriaMet condition before Complete, and
+//     rejects CompletionTime without Complete.
+//   - k8s 1.30-1.33 reject SuccessCriteriaMet on a NonIndexed Job that has no
+//     SuccessPolicy, which is exactly this writer Job's shape.
+//
+// The Job's spec is reconciler-owned and immutable on update, so the test
+// cannot reshape it to satisfy both. Apply the modern (>= 1.34) condition shape
+// and fall back to the pre-1.34 shape only if the apiserver rejects it.
+func completeJob(ctx context.Context, t *testing.T, c client.Client, job *batchv1.Job) {
+	t.Helper()
+
+	job.Status.Succeeded = 1
+	job.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	job.Status.Conditions = append(job.Status.Conditions,
+		batchv1.JobCondition{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue},
+		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+	)
+	if err := c.Status().Update(ctx, job); err == nil {
+		return
+	}
+
+	// Pre-1.34 apiserver rejected SuccessCriteriaMet. Re-fetch to reset the
+	// stale in-memory status and apply only Complete, which those versions
+	// accept alongside CompletionTime.
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(job), job))
+	job.Status.Succeeded = 1
+	job.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	job.Status.Conditions = append(job.Status.Conditions,
+		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+	)
+	require.NoError(t, c.Status().Update(ctx, job))
 }
