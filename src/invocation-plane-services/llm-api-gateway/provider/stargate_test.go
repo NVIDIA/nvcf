@@ -67,23 +67,44 @@ func TestStargateProviderMetricsIncludeFunctionID(t *testing.T) {
 		http.StatusOK,
 		nil,
 	)
+	p.recordUpstreamRequest(
+		context.Background(),
+		nil,
+		time.Now().Add(-time.Millisecond),
+		http.StatusOK,
+		nil,
+	)
 
 	var resourceMetrics metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &resourceMetrics))
-	want := map[string]bool{
-		"llm_api_gateway_upstream_requests_total":           false,
-		"llm_api_gateway_upstream_request_duration_seconds": false,
+	want := map[string]map[string]bool{
+		"llm_api_gateway_upstream_requests_total": {
+			"fn-upstream": false,
+			"none":        false,
+		},
+		"llm_api_gateway_upstream_request_duration_seconds": {
+			"fn-upstream": false,
+			"none":        false,
+		},
 	}
 	for _, scope := range resourceMetrics.ScopeMetrics {
 		for _, metric := range scope.Metrics {
-			if _, ok := want[metric.Name]; ok && metricHasFunctionID(metric.Data, "fn-upstream") {
-				want[metric.Name] = true
+			functionIDs, ok := want[metric.Name]
+			if !ok {
+				continue
+			}
+			for functionID := range functionIDs {
+				if metricHasFunctionID(metric.Data, functionID) {
+					functionIDs[functionID] = true
+				}
 			}
 		}
 	}
-	for name, found := range want {
-		if !found {
-			t.Fatalf("metric %q missing function_id=fn-upstream", name)
+	for name, functionIDs := range want {
+		for functionID, found := range functionIDs {
+			if !found {
+				t.Fatalf("metric %q missing function_id=%s", name, functionID)
+			}
 		}
 	}
 }

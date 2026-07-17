@@ -215,11 +215,15 @@ func (p *StargateProvider) recordUpstreamRequest(
 		status = strconv.Itoa(statusCode)
 	}
 
+	routingKey := ""
+	if reqCtx != nil {
+		routingKey = reqCtx.RoutingKey
+	}
 	attrs := []attribute.KeyValue{
 		attribute.String("upstream", upstreamName),
 		attribute.String("result", result),
 		attribute.String("status", status),
-		telemetry.FunctionIDAttribute(reqCtx.RoutingKey),
+		telemetry.FunctionIDAttribute(routingKey),
 	}
 	telemetry.AddWithContext(ctx, p.upstreamRequestsTotal, 1, attrs...)
 	telemetry.RecordWithContext(ctx, p.upstreamRequestDuration, time.Since(start).Seconds(), attrs...)

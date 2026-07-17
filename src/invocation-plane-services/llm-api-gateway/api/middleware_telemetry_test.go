@@ -97,6 +97,7 @@ func TestNewContextMiddlewareRecordsTraceParentAndStatus(t *testing.T) {
 	assertHasAttribute(t, attrs, "http.response.status_code", int64(http.StatusAccepted))
 	assertHasAttribute(t, attrs, "url.path", "/v1/chat/completions")
 	assertHasAttribute(t, attrs, "http.request.method", http.MethodPost)
+	assertHasAttribute(t, attrs, "nvcf.function.id", "fn-chat")
 }
 
 func TestNewContextMiddlewareRecordsServiceScopedHTTPMetrics(t *testing.T) {
@@ -146,6 +147,20 @@ func TestNewContextMiddlewareRecordsServiceScopedHTTPMetrics(t *testing.T) {
 }
 
 func TestRequestMetricsIncludeFunctionID(t *testing.T) {
+	spanRecorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spanRecorder))
+	t.Cleanup(func() {
+		_ = tracerProvider.Shutdown(context.Background())
+	})
+
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = sync.OnceValue(func() trace.Tracer {
+		return tracerProvider.Tracer("test")
+	})
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+	})
+
 	reader := sdkmetric.NewManualReader()
 	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	oldMeterProvider := otel.GetMeterProvider()
@@ -215,6 +230,18 @@ func TestRequestMetricsIncludeFunctionID(t *testing.T) {
 		&streamFinalizationState{},
 	)
 	for range wrapped {
+	}
+
+	streamSpanFound := false
+	for _, span := range spanRecorder.Ended() {
+		if span.Name() != "llm-api-gateway.stream" {
+			continue
+		}
+		assertHasAttribute(t, span.Attributes(), "nvcf.function.id", "fn-metrics")
+		streamSpanFound = true
+	}
+	if !streamSpanFound {
+		t.Fatal("missing llm-api-gateway.stream span")
 	}
 
 	metrics := collectMetrics(t, reader)

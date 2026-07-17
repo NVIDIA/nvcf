@@ -81,6 +81,9 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 				attribute.String("url.path", routePath),
 				attribute.String("gateway.routing_key", routingKey),
 			)
+			if routingKey != "" {
+				span.SetAttributes(attribute.String("nvcf.function.id", routingKey))
+			}
 
 			logger := requestLogger(requestID, routingKey, targetRegion, gc.Request().Method, routePath)
 

@@ -258,6 +258,9 @@ func (h *OpenAIChatHandlers) wrapStreamForFinalization(
 		ctx, span := telemetry.Tracer().Start(streamCtx, "llm-api-gateway.stream")
 		defer span.End()
 		span.SetAttributes(attribute.String("endpoint", endpoint))
+		if functionID != "" {
+			span.SetAttributes(attribute.String("nvcf.function.id", functionID))
+		}
 
 		streamStart := time.Now()
 		firstTokenRecorded := false
