@@ -25,8 +25,7 @@
 #
 # Updates: otel-collector-build.yaml, AGENTS.md, README.md, Makefile, Dockerfile,
 #          Dockerfile.nvcf-otel-collector, .gitlab-ci.yml,
-#          scripts/regenerate-otelcol.sh,
-#          ../../../ai-tooling/dev/skills/update-otel-collector-version/SKILL.md, VERSION
+#          scripts/regenerate-otelcol.sh, VERSION
 # Run from the BYOO collector root.
 
 set -euo pipefail
@@ -159,7 +158,6 @@ V_FORM_FILES=(
 	Dockerfile.nvcf-otel-collector
 	.gitlab-ci.yml
 	scripts/regenerate-otelcol.sh
-	../../../ai-tooling/dev/skills/update-otel-collector-version/SKILL.md
 )
 
 PLAIN_FORM_FILES=(
@@ -167,7 +165,6 @@ PLAIN_FORM_FILES=(
 	README.md
 	.gitlab-ci.yml
 	Dockerfile.nvcf-otel-collector
-	../../../ai-tooling/dev/skills/update-otel-collector-version/SKILL.md
 )
 
 # Replace vX.Y.Z (builder/gomod form)
