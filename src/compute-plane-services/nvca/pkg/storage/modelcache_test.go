@@ -749,9 +749,14 @@ func completeJob(ctx context.Context, t *testing.T, c client.Client, job *batchv
 		batchv1.JobCondition{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue},
 		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
 	)
-	if err := c.Status().Update(ctx, job); err == nil {
+	err := c.Status().Update(ctx, job)
+	if err == nil {
 		return
 	}
+	// Only a validation rejection means the modern condition shape is wrong for
+	// this apiserver version. Any other error (conflict, network, RBAC) is a
+	// real failure and must surface, not be masked by the fallback write.
+	require.True(t, apierrors.IsInvalid(err), "unexpected error updating Job status: %v", err)
 
 	// Pre-1.34 apiserver rejected SuccessCriteriaMet. Re-fetch to reset the
 	// stale in-memory status and apply only Complete, which those versions
