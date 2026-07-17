@@ -1,7 +1,7 @@
 # KAI Scheduler Integration Guide
 
 [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler) is an open source Kubernetes Native scheduler for AI workloads at large scale.
-To use the KAI Scheduler for NVCF Workloads the following configuration should be applied post the installation of the KAI Scheduler in the cluster and the [Optimized AI Workload Scheduling](nvca-feature-flags) enabled on the
+To use the KAI Scheduler for NVCF Workloads the following configuration should be applied post the installation of the KAI Scheduler in the cluster and the [Optimized AI Workload Scheduling](./configuration.md#managing-feature-flags) enabled on the
 cluster. NVCF Workloads deployed will be automatically BinPacked upon this cluster configuration changes.
 
 **KAI Scheduler Installation**
