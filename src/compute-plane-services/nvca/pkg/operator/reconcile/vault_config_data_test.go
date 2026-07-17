@@ -233,12 +233,45 @@ func TestGetVaultConfigData_TemplateUsesOAuthClientMountPath(t *testing.T) {
 	configData := getVaultConfigData(nb)
 
 	// Template uses OAuthClientMountPath from VaultConfig
-	if assert.Contains(t, configData, "template.hcl") {
-		expected := `{{ with secret "nvidia/services/oauth/clients/template-client-id/kv/secret" }}
-OAUTH_CLIENT_SECRET_KEY={{ .Data.data.secret }}
+	require.Contains(t, configData, "template.hcl")
+	expected := `{{ with secret "nvidia/services/oauth/clients/template-client-id/kv/secret" }}
+{{ .Data.data.secret }}
 {{ end }}`
-		assert.Equal(t, expected, configData["template.hcl"])
+	assert.Equal(t, expected, configData["template.hcl"])
+}
+
+// Guard: the otel collector reads the rendered secret file whole as the
+// client secret (no dotenv parsing), so the template must render the bare
+// secret — a KEY= prefix breaks its token fetch with 401. The agent's
+// fetcher accepts both forms, so raw is safe for all consumers.
+func TestGetVaultConfigData_TemplateRendersRawSecretForOTelCollector(t *testing.T) {
+	nb := &nvidiaiov1.NVCFBackend{
+		Spec: nvidiaiov1.NVCFBackendSpec{
+			NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+				Version: "3.0.7",
+				ClusterConfig: nvidiaiov1.ClusterConfig{
+					ClusterName: "test-cluster",
+				},
+				VaultConfig: nvidiaiov1.VaultConfig{
+					OAuthClientMountPath: "nvidia/services/oauth/clients/test-client-id/kv/secret",
+				},
+				OAuthConfig: nvidiaiov1.OAuthConfig{
+					ClientID: "test-client-id",
+				},
+			},
+		},
 	}
+
+	configData := getVaultConfigData(nb)
+
+	require.Contains(t, configData, "template.hcl")
+	tpl := configData["template.hcl"]
+	assert.NotContains(t, tpl, "OAUTH_CLIENT_SECRET_KEY=",
+		"secret template must render the bare secret: the otel collector reads the file whole as client_secret")
+	expected := `{{ with secret "nvidia/services/oauth/clients/test-client-id/kv/secret" }}
+{{ .Data.data.secret }}
+{{ end }}`
+	assert.Equal(t, expected, tpl)
 }
 
 func TestGetVaultConfigData_ConfigInitAndNonInit(t *testing.T) {

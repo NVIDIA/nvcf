@@ -22,7 +22,6 @@ import (
 	"fmt"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth"
 )
 
 const (
@@ -99,10 +98,13 @@ func getVaultConfigData(nb *nvidiaiov1.NVCFBackend) map[string]string {
 	// Get OAuth mount path from CRD spec (set by helm chart or ngcclient)
 	vaultSecretPath := getOAuthClientMountPath(nb)
 
-	// Generate template with OAuth names (NVCA handles backwards compatibility)
-	temCfg := fmt.Sprintf("{{ with secret %q }}\n%s={{ %s }}\n{{ end }}",
+	// Render the bare secret, no KEY= prefix: the otel collector's
+	// oauth2client extension reads client_secret_file whole (no dotenv
+	// parsing), so any prefix breaks its token fetch with 401. The agent's
+	// fetcher parses both forms, and its client ID comes from config/env.
+	temCfg := fmt.Sprintf("{{ with secret %q }}\n{{ %s }}\n{{ end }}",
 		vaultSecretPath,
-		auth.ClientSecretEnv, secretDataPath)
+		secretDataPath)
 
 	return map[string]string{
 		"config-init.hcl": cfgTplInit,
