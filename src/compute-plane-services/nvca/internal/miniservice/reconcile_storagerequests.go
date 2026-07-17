@@ -43,13 +43,16 @@ func (r *Reconciler) doStorageRequests(ctx context.Context,
 	workerImagePullSecrets []*corev1.Secret,
 	cacheInitJob *batchv1.Job,
 	cacheInitPVC *corev1.PersistentVolumeClaim,
+	cacheBackend nvcastorage.HelmCacheBackend,
 ) (allReady bool, err error) {
 	log := logf.FromContext(ctx)
 
-	sts, err := r.makeStorageRequests(icmsReq, workerImagePullSecrets, cacheInitJob, cacheInitPVC)
+	sts, err := r.makeStorageRequests(icmsReq, workerImagePullSecrets, cacheInitJob, cacheInitPVC, cacheBackend)
 	if err != nil {
 		log.Error(err, "Failed to make StorageRequests")
-		return false, reconcile.TerminalError(err)
+		// makeStorageRequests marks genuinely terminal errors (invalid spec)
+		// with reconcile.TerminalError itself; anything else is retried.
+		return false, err
 	}
 	stNames := sets.New[string]()
 	for _, st := range sts {
@@ -130,15 +133,28 @@ func (r *Reconciler) makeStorageRequests(
 	workerImagePullSecrets []*corev1.Secret,
 	cacheInitJob *batchv1.Job,
 	cacheInitPVC *corev1.PersistentVolumeClaim,
+	backend nvcastorage.HelmCacheBackend,
 ) (sts []*nvcav2beta1.StorageRequest, err error) {
-	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.CachingSupport) &&
-		r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.HelmCachingSupport) &&
-		cacheInitJob != nil && cacheInitPVC != nil {
-		st, err := nvcastorage.NewModelCacheStorageRequest(icmsReq, r.FeatureFlagFetcher)
-		if err != nil {
-			return nil, err
+	// The caching backend is selected ONCE per reconcile by the caller
+	// (SelectHelmCacheBackend in doInstall) and passed in, so StorageRequest
+	// creation and the ephemeral annotation decision always agree even if the
+	// cluster's storage classes change mid-reconcile.
+	// NVMesh, shared-FS, and Samba all populate the cache via a ModelCacheRequest;
+	// the Backend field tells the storage controller which populate path to run
+	// (Samba stands up its own server and serves via static PVs). Only the
+	// ephemeral backend is handled outside the storage controller.
+	switch backend {
+	case nvcastorage.HelmCacheBackendNVMesh, nvcastorage.HelmCacheBackendSharedFS, nvcastorage.HelmCacheBackendSamba:
+		if cacheInitJob != nil && cacheInitPVC != nil {
+			st, err := nvcastorage.NewModelCacheStorageRequest(icmsReq, r.FeatureFlagFetcher)
+			if err != nil {
+				// Invalid cache spec is not retryable; keep it terminal (the
+				// caller no longer wraps makeStorageRequests errors as terminal).
+				return nil, reconcile.TerminalError(err)
+			}
+			st.Spec.ModelCache.Backend = string(backend)
+			sts = append(sts, st)
 		}
-		sts = append(sts, st)
 	}
 	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(&featureflag.HelmSharedStorage.FeatureFlag) {
 		sts = append(sts, nvcastorage.NewSharedStorageRequest(icmsReq, r.FeatureFlagFetcher, r.cfg,

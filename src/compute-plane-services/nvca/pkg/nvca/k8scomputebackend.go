@@ -747,8 +747,11 @@ func (c K8sComputeBackend) doHelmChartStorageRequests(ctx context.Context,
 	metrics := nvcametrics.FromContext(ctx)
 
 	var sts []*nvcav2beta1.StorageRequest
-	if needsCaching && c.bk8s.cachingSupportEnabled &&
-		c.bk8s.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.HelmCachingSupport) {
+	// NOTE: doHelmChartStorageRequests has no callers (dead code); the active
+	// helm storage-request path is the miniservice reconciler. The
+	// HelmCachingSupport sub-gate is dropped here only so this compiles after
+	// the flag is removed; backend selection lives in makeStorageRequests.
+	if needsCaching && c.bk8s.cachingSupportEnabled {
 		st, err := nvcastorage.NewModelCacheStorageRequest(req, c.bk8s.featureFlagFetcher)
 		if err != nil {
 			return nil, nil, err

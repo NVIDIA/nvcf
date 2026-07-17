@@ -55,3 +55,7 @@ var AllFailureReasons = []string{
 	ReasonAdmissionRejected,
 	ReasonInitJobFailed,
 }
+
+// Backend label values come from the HelmCacheBackend constants in pkg/types
+// (shared with pkg/storage); callers pass string(backend) directly. See
+// nvcatypes.AllSelectableHelmCacheBackends for the pre-initialization set.

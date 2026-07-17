@@ -574,8 +574,9 @@ rate(nvca_k8s_api_failure_total[5m]) > 0.1
 - `nvca_version` - NVCA version
 - `result` - Operation result: `success` or `failure`
 - `failure_reason` - Specific failure reason (empty string for success)
+- `backend` - Model cache backend: `nvmesh`, `sharedfs`, `samba`, `ephemeral` (empty when not yet known, e.g. early validation failures)
 
-**Note:** This metric uses 3 labels (excluding `nvca_nca_id`) for backwards compatibility with storage metrics.
+**Note:** This metric uses the storage labels (excluding `nvca_nca_id`) for backwards compatibility with storage metrics.
 
 **Failure Reasons:**
 | Reason | Description |
@@ -610,6 +611,62 @@ sum by (nvca_cluster_name) (rate(nvca_model_cache_result_total[5m]))
 sum(rate(nvca_model_cache_result_total{result="failure"}[5m])) /
 sum(rate(nvca_model_cache_result_total[5m])) > 0.1
 ```
+
+### `nvca_model_cache_backends`
+
+**Type:** Gauge
+
+**Description:** Number of model caches currently provisioned, by backend. For Samba this is the count of per-handle backing PVCs / servers ("how many Samba caches exist"); for NVMesh it is the count of retained primary PVs. Refreshed by the periodic idle-cleanup sweep.
+
+**Labels:** storage labels + `backend`.
+
+### `nvca_model_cache_backend_selected_total`
+
+**Type:** Counter
+
+**Description:** Total model cache requests by the backend selected for them (recorded once per request). Shows the backend mix across the fleet.
+
+**Labels:** storage labels + `backend`.
+
+### `nvca_model_cache_populate_total`
+
+**Type:** Counter
+
+**Description:** Total model cache populates, i.e. the single-writer download actually ran, by backend.
+
+**Labels:** storage labels + `backend`.
+
+### `nvca_model_cache_reuse_total`
+
+**Type:** Counter
+
+**Description:** Total model cache reuses, i.e. an already-populated cache was attached without a download (cache effectiveness), by backend.
+
+**Labels:** storage labels + `backend`.
+
+### `nvca_model_cache_reclaimed_total`
+
+**Type:** Counter
+
+**Description:** Total idle model caches reclaimed by garbage collection, by backend.
+
+**Labels:** storage labels + `backend`.
+
+**Usage:**
+
+```promql
+# How many Samba caches are currently provisioned
+nvca_model_cache_backends{backend="samba"}
+
+# Cache reuse ratio (effectiveness)
+sum(rate(nvca_model_cache_reuse_total[1h])) /
+(sum(rate(nvca_model_cache_reuse_total[1h])) + sum(rate(nvca_model_cache_populate_total[1h])))
+
+# Backend mix
+sum by (backend) (increase(nvca_model_cache_backend_selected_total[1h]))
+```
+
+**Tracing:** model cache reconciliation emits a `nvca.modelcache.reconcile` span per request (with a `nvcf.modelcache.backend` attribute), and a `nvca.modelcache.samba.ensure_infra` child span around per-handle Samba server provisioning.
 
 ---
 

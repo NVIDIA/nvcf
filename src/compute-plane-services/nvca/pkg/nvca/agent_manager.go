@@ -63,6 +63,23 @@ func init() {
 
 // startControllerManagerForAgent creates and starts a controller-runtime manager
 // for auxiliary CRD controllers.
+// storageControllerTypes returns the StorageRequest controller types to
+// register with the agent's controller manager. The model-cache controller is
+// included only when caching is enabled, since it backs all storage-class-
+// selected cache backends (NVMesh / shared-FS / Samba). Callers pass the stable
+// agent-level caching flag (a.CachingSupportEnabled), not a live feature-flag
+// lookup, so the set is deterministic for the lifetime of the agent.
+func storageControllerTypes(cachingEnabled bool) []nvcav1new.StorageRequestType {
+	sts := []nvcav1new.StorageRequestType{
+		nvcav1new.SharedStorageRequest,
+		nvcav1new.InternalPersistentStorageRequest,
+	}
+	if cachingEnabled {
+		sts = append(sts, nvcav1new.ModelCacheRequest)
+	}
+	return sts
+}
+
 func startControllerManagerForAgent(
 	ctx context.Context,
 	a *Agent,
@@ -97,14 +114,15 @@ func startControllerManagerForAgent(
 		return fmt.Errorf("create controller manager: %v", err)
 	}
 
-	// Create storage controllers for each type
-	sts := []nvcav1new.StorageRequestType{
-		nvcav1new.SharedStorageRequest,
-		nvcav1new.InternalPersistentStorageRequest,
-	}
-	if a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.HelmCachingSupport) {
-		sts = append(sts, nvcav1new.ModelCacheRequest)
-	}
+	// Create storage controllers for each type. The model-cache controller
+	// backs every storage-class-selected cache backend (NVMesh / shared-FS /
+	// Samba), so it is registered whenever caching is enabled.
+	cachingEnabled := a.CachingSupportEnabled
+	sts := storageControllerTypes(cachingEnabled)
+	log.WithField("controllers", sts).
+		WithField("caching_support_enabled", cachingEnabled).
+		WithField("caching_support_flag", a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.CachingSupport)).
+		Info("Registering storage controllers")
 	for _, st := range sts {
 		if err := storage.BuildController(a.Config, st, mgr,
 			a.ClusterName,
@@ -119,6 +137,7 @@ func startControllerManagerForAgent(
 			log.WithError(err).Errorf("Failed to create storage controller %s", st)
 			return fmt.Errorf("create storage controller %s: %v", st, err)
 		}
+		log.WithField("type", st).Info("Registered storage controller")
 	}
 
 	log.Info("Starting MiniService controller")

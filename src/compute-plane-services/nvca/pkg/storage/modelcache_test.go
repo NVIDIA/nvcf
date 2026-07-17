@@ -19,8 +19,10 @@ package storage
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,17 +31,22 @@ import (
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	coordv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	nvcaenvtest "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/envtest"
 	modelcachetypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
@@ -47,6 +54,7 @@ import (
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage/cacheprobe"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -64,6 +72,9 @@ func TestReconcile_ModelCache(t *testing.T) {
 		BaseContext:             func() context.Context { return ctx },
 		WebhookServer:           nvcaenvtest.NewFakeWebhookServer(),
 		Metrics:                 nvcaenvtest.NewFakeMetricsOptions(),
+		// Two model-cache envtests run in one process; the controller name
+		// "modelcache" is otherwise globally unique per controller-runtime.
+		Controller: ctrlconfig.Controller{SkipNameValidation: newBool(true)},
 	})
 	require.NoError(t, err)
 
@@ -89,46 +100,7 @@ func TestReconcile_ModelCache(t *testing.T) {
 	require.NoError(t, err)
 
 	cacheHandle := "abc123handle"
-	srSpec := nvcav2beta1.ICMSRequestSpec{
-		FunctionDetails: function.Details{
-			FunctionID:        "funcid-1",
-			FunctionVersionID: "funcverid-1",
-			FunctionType:      "DEFAULT",
-		},
-		Action:         common.FunctionCreationAction,
-		NCAId:          "ncaid-1",
-		RequestID:      "reqid1",
-		MessageBatchID: "mbatchid1",
-		CreationMsgInfo: nvcav2beta1.ICMSCreationMessageInfo{
-			CreationQueueMessageMetadata: common.CreationQueueMessageMetadata{
-				Action:            common.FunctionCreationAction,
-				RequestID:         "reqid1",
-				MessageBatchID:    "mbatchid1",
-				InstanceType:      "ON-PREM.GPU.L40",
-				InstanceTypeName:  "ON-PREM.GPU.L40_1x",
-				InstanceTypeValue: "ON-PREM.GPU.L40",
-				GPUType:           "L40",
-				RequestedGPUCount: 1,
-				InstanceCount:     1,
-				NCAID:             "ncaid-1",
-			},
-			FunctionLaunchSpecification: &function.LaunchSpecification{
-				CloudProvider:   "DGXCLOUD",
-				ICMSEnvironment: "prod",
-				GPUName:         "L40",
-				EnvironmentB64:  "QVRUQUNIRURfR1BVX0NPVU5UPSIxIgpCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUj1udmNyLmlvL3F0ZnB0MWgwYmlldS9udmNmLWNvcmUvYnlvby1vdGVsLWNvbGxlY3RvcjoxLjIuMwpDTE9VRF9QUk9WSURFUj1PTi1QUkVNCkVTU19BR0VOVF9DT05UQUlORVI9bnZjci5pby9udi1jZi9udmNmLWNvcmUvZXNzLWFnZW50OjEuMC4wCkZVTkNUSU9OX0lEPTVhM2Q0YTdlLTllZTMtNDc2Mi04ZDM3LWQzYjQwYTZmODRjNgpGVU5DVElPTl9OQU1FPW15LWZ1bmMKRlVOQ1RJT05fVkVSU0lPTl9JRD0yYzk0OGQ5Yi1kYjVkLTRmOTMtOGMyOS1mNWQ4YTVkODljYjkKR1BVX05BTUU9TDQwCkhFTE1fQ0hBUlRfSU5GRVJFTkNFX1NFUlZJQ0VfTkFNRT1teXNlcnZpY2UKQ09OVEFJTkVSX1JFR0lTVFJJRVNfQ1JFREVOVElBTFM9ZXlKck9ITlRaV055WlhSeklqcGJleUpoZFhSb2N5STZleUp1ZG1OeUxtbHZJanA3SW1GMWRHZ2lPaUpqTTFKdVRGZEdhVmw2UlhsTmVtOHlXbXBaZWs1SFVUUk9VekExVFhwR2JFeFVVWGhhYWxsMFdWUktiRmw1TURKT01razBUbnBWZDFwcVJYbE9NbFU5SW4xOWZWMTkKSU5GRVJFTkNFX0NPTlRBSU5FUl9FTlY9VzNzaWEyVjVJam9pU1U1R1JWSkZUa05GWDBWT1ZsOUxSVmtpTENKMllXeDFaU0k2SW1sdVptVnlaVzVqWlY5MllXeDFaU0o5WFE9PQpJTkZFUkVOQ0VfSEVBTFRIX0VORFBPSU5UPS92Mi9oZWFsdGgvcmVhZHkKSU5GRVJFTkNFX0hFQUxUSF9FWFBFQ1RFRF9SRVNQT05TRV9DT0RFPSIyMDAiCklORkVSRU5DRV9IRUFMVEhfUE9SVD0iNTAwNTEiCklORkVSRU5DRV9QT1JUPSI1MDA1MSIKSU5GRVJFTkNFX1BST1RPQ09MPUdSUEMKSU5GRVJFTkNFX1VSTD0vZ3JwYwpJTklUX0NPTlRBSU5FUj1udmNyLmlvL3F0ZnB0MWgwYmlldS9udmNmLWNvcmUvbnZjZl93b3JrZXJfaW5pdDowLjI0LjEwCk1BWF9SRVFVRVNUX0NPTkNVUlJFTkNZPSIxIgpOQ0FfSUQ9X2xJTFhCLTFOZk5tQm5RU2tfc3BxVldPdENBWFFtNTBVRU13ajNUUmd5bUpKMkF5dXdjZ3hxCk5WQ0ZfRlFETj1odHRwczovL3VzLXdlc3QtMi5hcGkubnZjZi5udmlkaWEuY29tCk5WQ0ZfRlFETl9HUlBDPWh0dHBzOi8vZ3JwYy5hcGkubnZjZi5udmlkaWEuY29tCk5WQ0ZfRlFETl9OQVRTPXRsczovL3VzLXdlc3QtMi5hd3MuY2xvdWQubmF0cy5udmNmLm52aWRpYS5jb206NDIyMgpOVkNGX1dPUktFUl9UT0tFTj10b2sKT1RFTF9DT05UQUlORVI9bnZjci5pby9xdGZwdDFoMGJpZXUvbnZjZi1jb3JlL29wZW50ZWxlbWV0cnktY29sbGVjdG9yOjAuNzQuMApPVEVMX0VYUE9SVEVSX09UTFBfRU5EUE9JTlQ9aHR0cHM6Ly9wcm9kLm90ZWwua2FpemVuLm52aWRpYS5jb206ODI4MgpTRUNSRVRTX0FTU0VSVElPTl9UT0tFTj1leUpoYkdjaU9pSlNVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKemRXSWlPaUl4TWpNME5UWTNPRGt3SWl3aWJtRnRaU0k2SWtwdmFHNGdSRzlsSWl3aVlYTnpaWEowYVc5dUlqcDdJbk5sWTNKbGRGQmhkR2h6SWpwYkltRmpZMjkxYm5SekwxOXNTVXhZUWkweFRtWk9iVUp1VVZOclgzTndjVlpYVDNSRFFWaFJiVFV3VlVWTmQyb3pWRkpuZVcxS1NqSkJlWFYzWTJkNGNTOTBaV3hsYldWMGNua3ZObVpoT0RNMk5tVXROMkpoTWkwME1UUXpMV0UzTkRRdE56VXhOV1poWmpsaVpqY3lJaXdpWVdOamIzVnVkSE12WDJ4SlRGaENMVEZPWms1dFFtNVJVMnRmYzNCeFZsZFBkRU5CV0ZGdE5UQlZSVTEzYWpOVVVtZDViVXBLTWtGNWRYZGpaM2h4TDNSbGJHVnRaWFJ5ZVM4MlptRTRNelkyWlMwM1ltRXlMVFF4TkRNdFlUYzBOQzAzTlRFMVptRm1PV0ptT0RFaVhYMHNJbUZrYldsdUlqcDBjblZsTENKcFlYUWlPakUxTVRZeU16a3dNako5LlNwUVliRmUxbmZyUTVLc2hSbHk5U1VDMjZXX2oycFFoNkRNaW5zYnJzUUh2S2cxc2Uyb0gzVnpvaW5iTWJRel81TFhjZy1YTmt4NGNOSk4yQWp1d1VJems2RElVTElDSGVxdWpxLXhBYWdGUjhfejI1bzExZDAxekJTNU54RjlBQ2d0SWw2OWRoVEhrOHNLMmVRYjRBRkdDRmZmNjFqMGtYYWJJWUVTR0p4ZHY5UmtOZld0WVotRm1JYzl1RjRqWTU5elIxRUJkWGlsY2NjUjBSaUN2S0FsVFlvckU3VGotMDRLZ1RGbnZRYm1QMFRRR1FkNnhicWRBYVBSQnBYeUJHMDRxbUEyOTZUZnJBT1ZfMDJhSWR0akhhNVNqbXZ0UEFiVmVIVlY1QnhfWmQ4eVZteU4wZTdxZWduQU9xYzVOUDNrRjM4VzRuV2hURThWa05UWmpUUEEKU0lERUNBUl9SRUdJU1RSWV9DUkVERU5USUFMPWV5SmhkWFJvY3lJNmV5SnVkbU55TG1sdklqcDdJbUYxZEdnaU9pSktSemxvWkZoU2IyUkhPWEphVnpRMlltNWFhR05IYTNSak0xSnVURmRHYVZsNlJYbE5kejA5SW4xOWZRbz0KVFJBQ0lOR19BQ0NFU1NfVE9LRU49dHJhY2UtdG9rLTEKVVRJTFNfQ09OVEFJTkVSPW52Y3IuaW8vcXRmcHQxaDBiaWV1L252Y2YtY29yZS9udmNmX3dvcmtlcl91dGlsczoyLjIxLjQKSEVMTV9SRUdJU1RSSUVTX0NSRURFTlRJQUxTPWV5SnJPSE5UWldOeVpYUnpJanBiZXlKaGRYUm9jeUk2ZXlKb1pXeHRMbTVuWXk1dWRtbGthV0V1WTI5dElqcDdJbUYxZEdnaU9pSmpNMUp1VEZkR2FWbDZSWGxOZW04eVdtcFplazVIVVRST1V6QTFUWHBHYkV4VVVYaGFhbGwwV1ZSS2JGbDVNREpPTWtrMFRucFZkMXBxUlhsT01sVTlJbjE5ZlYxOQo=",
-				HelmChartLaunchSpecification: &common.HelmChartLaunchSpecification{
-					HelmChartURL: "https://helm.ngc.nvidia.com/myorg/myteam/charts/image-segmentation-1.0.3.tgz",
-					Values:       []byte(`{"foo":{"bar":"baz"}}`),
-				},
-				CacheLaunchSpecification: &common.CacheLaunchSpecification{
-					CacheArtifacts: true,
-					CacheHandle:    cacheHandle,
-					CacheSize:      262144000,
-				},
-			},
-		},
-	}
+	srSpec := newModelCacheICMSSpec(cacheHandle)
 
 	sts := []*nvcav1new.StorageRequest{}
 	for i := range 3 {
@@ -731,4 +703,672 @@ func TestMapPodIssuesToFailureReason(t *testing.T) {
 			assert.Equal(t, tt.expectedReason, result)
 		})
 	}
+}
+
+// newModelCacheLaunchEnvB64 builds the encoded launch env consumed by the
+// model cache envtests at runtime. The registry credentials and assertion
+// token are synthetic and assembled here instead of being committed as an
+// encoded blob, which secret scanners flag even for fake values.
+func newModelCacheLaunchEnvB64() string {
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	registryCreds := b64(`{"k8sSecrets":[{"auths":{"nvcr.io":{"auth":"` + b64("stg-user:fake-registry-password") + `"}}}]}`)
+	helmCreds := b64(`{"k8sSecrets":[{"auths":{"helm.ngc.nvidia.com":{"auth":"` + b64("stg-user:fake-registry-password") + `"}}}]}`)
+	sidecarCred := b64(`{"auths":{"nvcr.io":{"auth":"` + b64("$oauthtoken:fake-sidecar-token") + `"}}}`)
+
+	env := strings.Join([]string{
+		`ATTACHED_GPU_COUNT="1"`,
+		"BYOO_OTEL_COLLECTOR_CONTAINER=nvcr.io/qtfpt1h0bieu/nvcf-core/byoo-otel-collector:1.2.3",
+		"CLOUD_PROVIDER=ON-PREM",
+		"ESS_AGENT_CONTAINER=nvcr.io/nv-cf/nvcf-core/ess-agent:1.0.0",
+		"FUNCTION_ID=5a3d4a7e-9ee3-4762-8d37-d3b40a6f84c6",
+		"FUNCTION_NAME=my-func",
+		"FUNCTION_VERSION_ID=2c948d9b-db5d-4f93-8c29-f5d8a5d89cb9",
+		"GPU_NAME=L40",
+		"HELM_CHART_INFERENCE_SERVICE_NAME=myservice",
+		"CONTAINER_REGISTRIES_CREDENTIALS=" + registryCreds,
+		"INFERENCE_CONTAINER_ENV=" + b64(`[{"key":"INFERENCE_ENV_KEY","value":"inference_value"}]`),
+		"INFERENCE_HEALTH_ENDPOINT=/v2/health/ready",
+		`INFERENCE_HEALTH_EXPECTED_RESPONSE_CODE="200"`,
+		`INFERENCE_HEALTH_PORT="50051"`,
+		`INFERENCE_PORT="50051"`,
+		"INFERENCE_PROTOCOL=GRPC",
+		"INFERENCE_URL=/grpc",
+		"INIT_CONTAINER=nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_init:0.24.10",
+		`MAX_REQUEST_CONCURRENCY="1"`,
+		"NCA_ID=_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq",
+		"NVCF_FQDN=https://us-west-2.api.nvcf.nvidia.com",
+		"NVCF_FQDN_GRPC=https://grpc.api.nvcf.nvidia.com",
+		"NVCF_FQDN_NATS=tls://us-west-2.aws.cloud.nats.nvcf.nvidia.com:4222",
+		"NVCF_WORKER_TOKEN=tok",
+		"OTEL_CONTAINER=nvcr.io/qtfpt1h0bieu/nvcf-core/opentelemetry-collector:0.74.0",
+		"OTEL_EXPORTER_OTLP_ENDPOINT=https://prod.otel.kaizen.nvidia.com:8282",
+		"SECRETS_ASSERTION_TOKEN=fake-assertion-token",
+		"SIDECAR_REGISTRY_CREDENTIAL=" + sidecarCred,
+		"TRACING_ACCESS_TOKEN=trace-tok-1",
+		"UTILS_CONTAINER=nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_utils:2.21.4",
+		"HELM_REGISTRIES_CREDENTIALS=" + helmCreds,
+	}, "\n")
+	return b64(env)
+}
+
+// newModelCacheICMSSpec returns the ICMS request spec used by the model cache
+// envtests (NVMesh and shared-FS). The EnvironmentB64 carries the encoded
+// launch env from which the writer job and cache PVC are decoded.
+func newModelCacheICMSSpec(cacheHandle string) nvcav2beta1.ICMSRequestSpec {
+	return nvcav2beta1.ICMSRequestSpec{
+		FunctionDetails: function.Details{
+			FunctionID:        "funcid-1",
+			FunctionVersionID: "funcverid-1",
+			FunctionType:      "DEFAULT",
+		},
+		Action:         common.FunctionCreationAction,
+		NCAId:          "ncaid-1",
+		RequestID:      "reqid1",
+		MessageBatchID: "mbatchid1",
+		CreationMsgInfo: nvcav2beta1.ICMSCreationMessageInfo{
+			CreationQueueMessageMetadata: common.CreationQueueMessageMetadata{
+				Action:            common.FunctionCreationAction,
+				RequestID:         "reqid1",
+				MessageBatchID:    "mbatchid1",
+				InstanceType:      "ON-PREM.GPU.L40",
+				InstanceTypeName:  "ON-PREM.GPU.L40_1x",
+				InstanceTypeValue: "ON-PREM.GPU.L40",
+				GPUType:           "L40",
+				RequestedGPUCount: 1,
+				InstanceCount:     1,
+				NCAID:             "ncaid-1",
+			},
+			FunctionLaunchSpecification: &function.LaunchSpecification{
+				CloudProvider:   "DGXCLOUD",
+				ICMSEnvironment: "prod",
+				GPUName:         "L40",
+				EnvironmentB64:  newModelCacheLaunchEnvB64(),
+				HelmChartLaunchSpecification: &common.HelmChartLaunchSpecification{
+					HelmChartURL: "https://helm.ngc.nvidia.com/myorg/myteam/charts/image-segmentation-1.0.3.tgz",
+					Values:       []byte(`{"foo":{"bar":"baz"}}`),
+				},
+				CacheLaunchSpecification: &common.CacheLaunchSpecification{
+					CacheArtifacts: true,
+					CacheHandle:    cacheHandle,
+					CacheSize:      262144000,
+				},
+			},
+		},
+	}
+}
+
+// TestReconcile_ModelCacheSharedFS drives the shared-FS (nvcf-miniservice-sc) populate
+// path: the cache is populated once via the single-writer init job (no NVMesh
+// primary/secondary PV), then a per-namespace read-only PVC on the shared class
+// is created and the request becomes Ready. The CSI probe is pre-seeded as ROX
+// so the path does not attempt a live probe under envtest.
+func TestReconcile_ModelCacheSharedFS(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	cfg, _, cleanup, err := nvcaenvtest.SetupEnvtest()
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+
+	mgr, err := ctrl.NewManager(cfg, manager.Options{
+		Scheme:                  mgrScheme,
+		GracefulShutdownTimeout: new(time.Duration),
+		BaseContext:             func() context.Context { return ctx },
+		WebhookServer:           nvcaenvtest.NewFakeWebhookServer(),
+		Metrics:                 nvcaenvtest.NewFakeMetricsOptions(),
+		// Two model-cache envtests run in one process; the controller name
+		// "modelcache" is otherwise globally unique per controller-runtime.
+		Controller: ctrlconfig.Controller{SkipNameValidation: newBool(true)},
+	})
+	require.NoError(t, err)
+
+	defaultTimeConfig := (&k8sutil.TimeConfig{}).Complete()
+	err = BuildController(nvcaconfig.Config{}, nvcav1new.ModelCacheRequest, mgr, "my-cluster", "us-west-1", defaultTimeConfig, ControllerOptions{})
+	require.NoError(t, err)
+
+	mgrErrCh, err := nvcaenvtest.StartManager(ctx, mgr)
+	require.NoError(t, err)
+
+	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+	mgr.GetCache().WaitForCacheSync(cctx)
+	ccancel()
+
+	c := mgr.GetClient()
+
+	srNamespace := &corev1.Namespace{}
+	srNamespace.Name = types.DefaultICMSRequestNamespace
+	require.NoError(t, c.Create(ctx, srNamespace))
+	require.NoError(t, c.Create(ctx, NewModelCacheInitNamespace()))
+
+	// The shared class exists (operator- or Samba-provided) and its reader
+	// access mode is pre-resolved to ROX so resolveSharedFSStrategy does not
+	// run a live probe.
+	require.NoError(t, c.Create(ctx, &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: HelmCacheSharedStorageClassName},
+		Provisioner: SMBCSIDriverName,
+	}))
+	store := cacheprobe.NewStateStore(c, ModelCacheInitNamespace)
+	require.NoError(t, store.Save(ctx, map[string]cacheprobe.Result{
+		cacheprobe.ResultKey(HelmCacheSharedStorageClassName, cacheprobe.StrategyROX): {
+			State: cacheprobe.StateSupported,
+		},
+	}))
+
+	cacheHandle := "sharedfshandle"
+	workloadNS := &corev1.Namespace{}
+	workloadNS.Name = "sr-sharedfs"
+	require.NoError(t, c.Create(ctx, workloadNS))
+
+	sr := &nvcav2beta1.ICMSRequest{}
+	sr.Name, sr.Namespace = workloadNS.Name, srNamespace.Name
+	sr.Spec = newModelCacheICMSSpec(cacheHandle)
+	require.NoError(t, c.Create(ctx, sr))
+
+	st := &nvcav1new.StorageRequest{}
+	st.Name, st.Namespace = nvcav1new.ModelCacheRequest.Name(), workloadNS.Name
+	st.Spec.Type = nvcav1new.ModelCacheRequest
+	st.Spec.ICMSRequestName = sr.Name
+	st.Spec.ICMSRequestNamespace = srNamespace.Name
+	st.Spec.ModelCache = &nvcav1new.ModelCacheSpec{
+		CacheHandle: cacheHandle,
+		Backend:     string(HelmCacheBackendSharedFS),
+	}
+	require.NoError(t, c.Create(ctx, st))
+
+	// The writer job is created on the shared backend.
+	initJob := &batchv1.Job{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "writer-job-" + cacheHandle, Namespace: ModelCacheInitNamespace}, initJob)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// The writer RW PVC is on the shared class, not an NVMesh class.
+	rwPVC := &corev1.PersistentVolumeClaim{}
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "rw-pvc-" + cacheHandle, Namespace: ModelCacheInitNamespace}, rwPVC))
+	if assert.NotNil(t, rwPVC.Spec.StorageClassName) {
+		assert.Equal(t, HelmCacheSharedStorageClassName, *rwPVC.Spec.StorageClassName)
+	}
+
+	// Drive the writer job to "started" so the request moves to InitRunning.
+	initJobPod := &corev1.Pod{}
+	initJobPod.Name, initJobPod.Namespace = initJob.Spec.Template.Name+"-foobar", initJob.Namespace
+	initJobPod.Labels = make(map[string]string, len(initJob.Spec.Template.Labels))
+	maps.Copy(initJobPod.Labels, initJob.Spec.Template.Labels)
+	maps.Copy(initJobPod.Labels, initJob.Spec.Selector.MatchLabels)
+	initJobPod.Annotations = initJob.Spec.Template.Annotations
+	initJobPod.Spec = initJob.Spec.Template.Spec
+	require.NoError(t, c.Create(ctx, initJobPod))
+	initJobPod.Status = corev1.PodStatus{Phase: corev1.PodRunning}
+	require.NoError(t, c.Status().Update(ctx, initJobPod))
+
+	initJob.Status.StartTime = &metav1.Time{Time: time.Now().Add(-1 * time.Minute)}
+	require.NoError(t, c.Status().Update(ctx, initJob))
+
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st), st)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageInitRunning, st.Status.Phase)
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// Bind the writer RW PVC and complete the job: shared-FS keeps the writer
+	// claim (no primary PV finalize) and moves to Creating.
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC))
+	rwPVC.Status.Phase = corev1.ClaimBound
+	require.NoError(t, c.Status().Update(ctx, rwPVC))
+
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(initJob), initJob))
+	initJob.Status.Succeeded++
+	initJob.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	initJob.Status.Conditions = append(initJob.Status.Conditions,
+		batchv1.JobCondition{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue},
+		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+	)
+	require.NoError(t, c.Status().Update(ctx, initJob))
+
+	// A read-only reader PVC is created in the workload namespace on the shared
+	// class with the probed ROX access mode.
+	roPVC := &corev1.PersistentVolumeClaim{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "ro-pvc-" + cacheHandle, Namespace: workloadNS.Name}, roPVC)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	if assert.NotNil(t, roPVC.Spec.StorageClassName) {
+		assert.Equal(t, HelmCacheSharedStorageClassName, *roPVC.Spec.StorageClassName)
+	}
+	assert.Equal(t, []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}, roPVC.Spec.AccessModes)
+
+	// Shared-FS does not create cross-namespace primary/secondary PVs.
+	secondaryPV := &corev1.PersistentVolume{}
+	err = c.Get(ctx, client.ObjectKey{Name: "secondary-pv-" + st.Name}, secondaryPV)
+	assert.True(t, apierrors.IsNotFound(err), "shared-FS must not create a secondary PV")
+
+	// Bind the reader PVC: the request becomes Ready and exposes the RO PVC.
+	roPVC.Status.Phase = corev1.ClaimBound
+	require.NoError(t, c.Status().Update(ctx, roPVC))
+
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st), st)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageReady, st.Status.Phase)
+			if assert.NotNil(ct, st.Status.ModelCache) {
+				assert.Equal(ct, "ro-pvc-"+cacheHandle, st.Status.ModelCache.ROPVCName)
+			}
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// After population the init job and lease are torn down (partial cleanup)
+	// while the writer PVC is retained as the durable populated marker.
+	lease := &coordv1.Lease{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		leaseErr := c.Get(ctx, client.ObjectKey{Name: buildInitLeaseName(cacheHandle), Namespace: ModelCacheInitNamespace}, lease)
+		assert.True(ct, apierrors.IsNotFound(leaseErr), "init lease must be deleted after shared-FS population")
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// envtest runs no GC controller, so a foreground-deleted Job lingers with a
+	// deletion timestamp; deletion having been initiated is the signal.
+	gotJob := &batchv1.Job{}
+	switch jobErr := c.Get(ctx, client.ObjectKeyFromObject(initJob), gotJob); {
+	case apierrors.IsNotFound(jobErr):
+	default:
+		require.NoError(t, jobErr)
+		assert.NotNil(t, gotJob.DeletionTimestamp, "init job deletion must be initiated after shared-FS population")
+	}
+
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC))
+	assert.Nil(t, rwPVC.DeletionTimestamp, "writer PVC must be retained as the populated marker")
+
+	require.NoError(t, c.Delete(ctx, st))
+	cancel()
+	<-mgrErrCh
+}
+
+// TestReconcile_ModelCacheSamba drives the Samba (backend 3) path and asserts it
+// follows the NVMesh lifecycle, differing only in the backing store. The first
+// namespace populates the cache via the single-writer init job; on success the
+// static SMB RW PV is retained as the durable primary-PV marker and the writer
+// job/PVC/lease are torn down. A second namespace with the same handle then
+// binds its own RO reader purely from the marker, without re-running the writer
+// or touching the init lease, which is the cross-namespace / restart-safe
+// behavior the marker provides.
+func TestReconcile_ModelCacheSamba(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	cfg, _, cleanup, err := nvcaenvtest.SetupEnvtest()
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+
+	mgr, err := ctrl.NewManager(cfg, manager.Options{
+		Scheme:                  mgrScheme,
+		GracefulShutdownTimeout: new(time.Duration),
+		BaseContext:             func() context.Context { return ctx },
+		WebhookServer:           nvcaenvtest.NewFakeWebhookServer(),
+		Metrics:                 nvcaenvtest.NewFakeMetricsOptions(),
+		Controller:              ctrlconfig.Controller{SkipNameValidation: newBool(true)},
+	})
+	require.NoError(t, err)
+
+	defaultTimeConfig := (&k8sutil.TimeConfig{}).Complete()
+	// The Samba path requires the server image to be configured; an empty image
+	// makes EnsureSambaModelCacheInfra return a terminal error.
+	nvcaCfg := nvcaconfig.Config{}
+	nvcaCfg.Agent.SharedStorage.Server.Image = "samba:test"
+	err = BuildController(nvcaCfg, nvcav1new.ModelCacheRequest, mgr, "my-cluster", "us-west-1", defaultTimeConfig, ControllerOptions{})
+	require.NoError(t, err)
+
+	mgrErrCh, err := nvcaenvtest.StartManager(ctx, mgr)
+	require.NoError(t, err)
+
+	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+	mgr.GetCache().WaitForCacheSync(cctx)
+	ccancel()
+
+	c := mgr.GetClient()
+
+	srNamespace := &corev1.Namespace{}
+	srNamespace.Name = types.DefaultICMSRequestNamespace
+	require.NoError(t, c.Create(ctx, srNamespace))
+	require.NoError(t, c.Create(ctx, NewModelCacheInitNamespace()))
+
+	cacheHandle := "sambahandle"
+
+	// newSambaSR creates the ICMSRequest + StorageRequest pair for a workload
+	// namespace, all wired to the shared cache handle on the Samba backend.
+	newSambaSR := func(nsName string) *nvcav1new.StorageRequest {
+		ns := &corev1.Namespace{}
+		ns.Name = nsName
+		require.NoError(t, c.Create(ctx, ns))
+		icms := &nvcav2beta1.ICMSRequest{}
+		icms.Name, icms.Namespace = nsName, srNamespace.Name
+		icms.Spec = newModelCacheICMSSpec(cacheHandle)
+		require.NoError(t, c.Create(ctx, icms))
+		st := &nvcav1new.StorageRequest{}
+		st.Name, st.Namespace = nvcav1new.ModelCacheRequest.Name(), nsName
+		st.Spec.Type = nvcav1new.ModelCacheRequest
+		st.Spec.ICMSRequestName = icms.Name
+		st.Spec.ICMSRequestNamespace = srNamespace.Name
+		st.Spec.ModelCache = &nvcav1new.ModelCacheSpec{
+			CacheHandle: cacheHandle,
+			Backend:     string(HelmCacheBackendSamba),
+		}
+		require.NoError(t, c.Create(ctx, st))
+		return st
+	}
+
+	st1 := newSambaSR("sr-samba-1")
+
+	// The per-handle Samba server Deployment (samba-<handle>) is bootstrapped
+	// idempotently. envtest has no deployment controller, so mark it Available to
+	// unblock the writer init.
+	dep := &appsv1.Deployment{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: sambaModelCacheResourceName(cacheHandle), Namespace: ModelCacheInitNamespace}, dep)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	dep.Status.Replicas = 1
+	dep.Status.ReadyReplicas = 1
+	dep.Status.AvailableReplicas = 1
+	require.NoError(t, c.Status().Update(ctx, dep))
+
+	// The writer job and the STATIC SMB RW PV/PVC are created (no StorageClass).
+	initJob := &batchv1.Job{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "writer-job-" + cacheHandle, Namespace: ModelCacheInitNamespace}, initJob)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	rwPVC := &corev1.PersistentVolumeClaim{}
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "rw-pvc-" + cacheHandle, Namespace: ModelCacheInitNamespace}, rwPVC))
+	assert.Equal(t, "samba-rw-pv-"+cacheHandle, rwPVC.Spec.VolumeName)
+	if assert.NotNil(t, rwPVC.Spec.StorageClassName) {
+		assert.Equal(t, "", *rwPVC.Spec.StorageClassName, "Samba RW PVC must bind a static PV, not a StorageClass")
+	}
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "samba-rw-pv-" + cacheHandle}, &corev1.PersistentVolume{}))
+
+	// Drive the writer pod to running so the request moves to InitRunning.
+	initJobPod := &corev1.Pod{}
+	initJobPod.Name, initJobPod.Namespace = initJob.Spec.Template.Name+"-foobar", initJob.Namespace
+	initJobPod.Labels = make(map[string]string, len(initJob.Spec.Template.Labels))
+	maps.Copy(initJobPod.Labels, initJob.Spec.Template.Labels)
+	maps.Copy(initJobPod.Labels, initJob.Spec.Selector.MatchLabels)
+	initJobPod.Annotations = initJob.Spec.Template.Annotations
+	initJobPod.Spec = initJob.Spec.Template.Spec
+	require.NoError(t, c.Create(ctx, initJobPod))
+	initJobPod.Status = corev1.PodStatus{Phase: corev1.PodRunning}
+	require.NoError(t, c.Status().Update(ctx, initJobPod))
+
+	initJob.Status.StartTime = &metav1.Time{Time: time.Now().Add(-1 * time.Minute)}
+	require.NoError(t, c.Status().Update(ctx, initJob))
+
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st1), st1)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageInitRunning, st1.Status.Phase)
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// Bind the RW PVC and complete the writer job.
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC))
+	rwPVC.Status.Phase = corev1.ClaimBound
+	require.NoError(t, c.Status().Update(ctx, rwPVC))
+
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(initJob), initJob))
+	initJob.Status.Succeeded++
+	initJob.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	initJob.Status.Conditions = append(initJob.Status.Conditions,
+		batchv1.JobCondition{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue},
+		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+	)
+	require.NoError(t, c.Status().Update(ctx, initJob))
+
+	// On success the per-handle backing PVC (samba-<handle>) is stamped with the
+	// durable populated marker. That label, not an NVMesh primary PV, is the
+	// cross-namespace / restart-safe reuse signal for the Samba backend.
+	backingPVC := &corev1.PersistentVolumeClaim{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: SambaModelCacheBackingPVCName(cacheHandle), Namespace: ModelCacheInitNamespace}, backingPVC)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, cachePopulatedLabelValue, backingPVC.Labels[cachePopulatedLabelKey])
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// The writer's static plumbing PV is deleted with the writer teardown
+	// (static PVs are never reclaimed by the PV controller, so it must be
+	// removed explicitly). envtest has no PV-protection controller, so accept a
+	// pending deletion (deletionTimestamp set) as deleted.
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		writerPV := &corev1.PersistentVolume{}
+		err := c.Get(ctx, client.ObjectKey{Name: sambaModelCacheWriterPVName(cacheHandle)}, writerPV)
+		assert.True(ct, apierrors.IsNotFound(err) || writerPV.DeletionTimestamp != nil,
+			"writer plumbing PV must be deleted with the writer teardown")
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// First namespace: an RO reader PV/PVC is created against the per-handle share.
+	ro1 := &corev1.PersistentVolumeClaim{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "ro-pvc-" + cacheHandle, Namespace: st1.Namespace}, ro1)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "samba-ro-pv-" + st1.Namespace + "-" + cacheHandle}, &corev1.PersistentVolume{}))
+	ro1.Status.Phase = corev1.ClaimBound
+	require.NoError(t, c.Status().Update(ctx, ro1))
+
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st1), st1)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageReady, st1.Status.Phase)
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// Second namespace, same handle: it must reach Ready purely from the durable
+	// backing-PVC populated marker. The init lease was deleted during the first
+	// namespace's writer teardown; if the second namespace re-ran init it would
+	// recreate the lease. Asserting the lease stays absent proves the marker path
+	// was taken.
+	st2 := newSambaSR("sr-samba-2")
+	ro2 := &corev1.PersistentVolumeClaim{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "ro-pvc-" + cacheHandle, Namespace: st2.Namespace}, ro2)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "samba-ro-pv-" + st2.Namespace + "-" + cacheHandle}, &corev1.PersistentVolume{}))
+	ro2.Status.Phase = corev1.ClaimBound
+	require.NoError(t, c.Status().Update(ctx, ro2))
+
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st2), st2)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageReady, st2.Status.Phase)
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	lease := &coordv1.Lease{}
+	leaseErr := c.Get(ctx, client.ObjectKey{Name: buildInitLeaseName(cacheHandle), Namespace: ModelCacheInitNamespace}, lease)
+	assert.True(t, apierrors.IsNotFound(leaseErr),
+		"second namespace must consume the cache via the backing-PVC marker, not re-run the init lease")
+
+	// Deleting a consumer SR must run cleanup to completion and drop the
+	// storage-request finalizer (the workload namespaces are not terminating
+	// here, so this exercises the normal cleanup path, not the escape hatch).
+	// Deleting one consumer must NOT delete the shared per-handle backing PVC;
+	// it is reclaimed only when the cache goes idle (cleanupIdleModelCaches).
+	require.NoError(t, c.Delete(ctx, st1))
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st1), st1)
+		assert.True(ct, apierrors.IsNotFound(err), "st1 must be fully deleted (finalizer removed by cleanup)")
+	}, 10*time.Second, 100*time.Millisecond)
+
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: SambaModelCacheBackingPVCName(cacheHandle), Namespace: ModelCacheInitNamespace}, backingPVC),
+		"shared backing PVC must survive a single consumer's deletion")
+
+	require.NoError(t, c.Delete(ctx, st2))
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st2), st2)
+		assert.True(ct, apierrors.IsNotFound(err), "st2 must be fully deleted (finalizer removed by cleanup)")
+	}, 10*time.Second, 100*time.Millisecond)
+
+	cancel()
+	<-mgrErrCh
+}
+
+// TestDoModelCacheSharedFS_Validation covers the early terminal-validation
+// branches of the shared-FS path that run before any probe or client call.
+func TestDoModelCacheSharedFS_Validation(t *testing.T) {
+	tests := []struct {
+		name       string
+		modelCache *nvcav1new.ModelCacheSpec
+	}{
+		{name: "nil modelCache", modelCache: nil},
+		{name: "empty cacheHandle", modelCache: &nvcav1new.ModelCacheSpec{Backend: string(HelmCacheBackendSharedFS)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Reconciler{
+				Client:  fake.NewClientBuilder().WithScheme(mgrScheme).Build(),
+				metrics: newTestMetrics(),
+				fff:     &featureflagmock.Fetcher{},
+			}
+			st := nvcav1new.StorageRequest{}
+			stCopy := &nvcav1new.StorageRequest{Spec: nvcav1new.StorageRequestSpec{ModelCache: tt.modelCache}}
+			_, err := r.doModelCacheSharedFS(context.Background(), st, stCopy, &nvcav2beta1.ICMSRequest{})
+			require.Error(t, err)
+			assert.True(t, isTerminal(err), "validation failure must be terminal")
+		})
+	}
+}
+
+// TestDoCleanupModelCacheNVMesh_RequeuesWhileWriterVolumeAttached proves the
+// cleanup never blocks the single reconcile worker polling for volume detach:
+// while the writer volume is still attached read-write it requeues (does not
+// delete the writer PVC or mark cleanup successful), and once detached it
+// completes.
+func TestDoCleanupModelCacheNVMesh_RequeuesWhileWriterVolumeAttached(t *testing.T) {
+	ctx := context.Background()
+	handle := "attachhandle"
+	pvName := "pv-" + handle
+
+	rwPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "rw-pvc-" + handle,
+			Namespace: ModelCacheInitNamespace,
+			Labels:    map[string]string{modelCacheHandleLabelKey: handle},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{VolumeName: pvName},
+	}
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: pvName},
+		Spec: corev1.PersistentVolumeSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		},
+	}
+	va := &storagev1.VolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{Name: "va-1"},
+		Spec: storagev1.VolumeAttachmentSpec{
+			Attacher: "smb.csi.k8s.io",
+			NodeName: "node1",
+			Source:   storagev1.VolumeAttachmentSource{PersistentVolumeName: &pvName},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(rwPVC, pv, va).Build()
+	r := &Reconciler{
+		Client:        c,
+		metrics:       newTestMetrics(),
+		fff:           &featureflagmock.Fetcher{},
+		nowFunc:       time.Now,
+		k8sTimeConfig: (&k8sutil.TimeConfig{}).Complete(),
+	}
+	st := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: nvcav1new.ModelCacheRequest.Name(), Namespace: "ns1"},
+		Spec: nvcav1new.StorageRequestSpec{
+			Type:       nvcav1new.ModelCacheRequest,
+			ModelCache: &nvcav1new.ModelCacheSpec{CacheHandle: handle},
+		},
+	}
+
+	// Still attached read-write: requeue, do not delete the writer PVC, do not
+	// mark cleanup successful.
+	res, err := r.doCleanupModelCacheNVMesh(ctx, st)
+	require.NoError(t, err)
+	assert.Equal(t, volumeDetachRequeueInterval, res.RequeueAfter, "must requeue (not block) while attached")
+	if cond := meta.FindStatusCondition(st.Status.Conditions, ConditionTypeCleanupSuccessful); assert.NotNil(t, cond) {
+		assert.Equal(t, metav1.ConditionFalse, cond.Status)
+	}
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rwPVC), &corev1.PersistentVolumeClaim{}),
+		"writer PVC must not be deleted while its volume is still attached")
+
+	// Detach: cleanup completes, writer PVC deleted, condition True.
+	require.NoError(t, c.Delete(ctx, va))
+	res, err = r.doCleanupModelCacheNVMesh(ctx, st)
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, res, "must not requeue once detached")
+	if cond := meta.FindStatusCondition(st.Status.Conditions, ConditionTypeCleanupSuccessful); assert.NotNil(t, cond) {
+		assert.Equal(t, metav1.ConditionTrue, cond.Status)
+	}
+	getErr := c.Get(ctx, client.ObjectKeyFromObject(rwPVC), &corev1.PersistentVolumeClaim{})
+	assert.True(t, apierrors.IsNotFound(getErr), "writer PVC must be deleted once detached")
+}
+
+// TestReclaimIdleSharedFSModelCaches proves the retained shared-FS writer PVC
+// (the durable backing claim) is reclaimed once no StorageRequest references
+// its handle and the idle period has passed, while active handles, recently
+// referenced handles, and Samba backing PVCs (reclaimed with their server by
+// the Samba pass) are left alone.
+func TestReclaimIdleSharedFSModelCaches(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	idle := (&k8sutil.TimeConfig{}).Complete().ModelCacheIdlePeriod
+
+	mkPVC := func(name, handle string, lastRef time.Time, sambaComponent bool) *corev1.PersistentVolumeClaim {
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ModelCacheInitNamespace,
+				Labels:    map[string]string{cachePopulatedLabelKey: cachePopulatedLabelValue},
+				Annotations: map[string]string{
+					primaryPVLastReferencedAnnotationKey: lastRef.Format(primaryPVLastReferencedTimeFormat),
+				},
+			},
+		}
+		if handle != "" {
+			pvc.Labels[modelCacheHandleLabelKey] = handle
+		}
+		if sambaComponent {
+			pvc.Labels[sambaModelCacheComponentLabelKey] = sambaModelCacheComponentLabelValue
+		}
+		return pvc
+	}
+
+	idlePVC := mkPVC("rw-pvc-idle", "idle-handle", now.Add(-2*idle), false)
+	activePVC := mkPVC("rw-pvc-active", "active-handle", now.Add(-2*idle), false)
+	recentPVC := mkPVC("rw-pvc-recent", "recent-handle", now.Add(-idle/2), false)
+	sambaPVC := mkPVC("samba-idle2", "", now.Add(-2*idle), true)
+
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).
+		WithObjects(idlePVC, activePVC, recentPVC, sambaPVC).Build()
+	r := &Reconciler{
+		Client:        c,
+		metrics:       newTestMetrics(),
+		fff:           &featureflagmock.Fetcher{},
+		nowFunc:       func() time.Time { return now },
+		k8sTimeConfig: (&k8sutil.TimeConfig{}).Complete(),
+	}
+
+	stList := &nvcav1new.StorageRequestList{Items: []nvcav1new.StorageRequest{{
+		Spec: nvcav1new.StorageRequestSpec{
+			Type:       nvcav1new.ModelCacheRequest,
+			ModelCache: &nvcav1new.ModelCacheSpec{CacheHandle: "active-handle"},
+		},
+	}}}
+
+	require.NoError(t, r.reclaimIdleSharedFSModelCaches(ctx, stList))
+
+	err := c.Get(ctx, client.ObjectKeyFromObject(idlePVC), &corev1.PersistentVolumeClaim{})
+	assert.True(t, apierrors.IsNotFound(err), "idle unreferenced writer PVC must be reclaimed")
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(activePVC), &corev1.PersistentVolumeClaim{}),
+		"actively referenced handle must be kept")
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(recentPVC), &corev1.PersistentVolumeClaim{}),
+		"recently referenced handle must be kept")
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sambaPVC), &corev1.PersistentVolumeClaim{}),
+		"samba backing PVCs are reclaimed by the samba pass, not here")
 }

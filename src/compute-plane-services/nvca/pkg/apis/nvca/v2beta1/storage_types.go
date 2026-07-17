@@ -70,6 +70,12 @@ func (sType StorageRequestType) Name() string {
 type ModelCacheSpec struct {
 	CacheHandle string                `json:"cacheHandle"`
 	Encryption  *ModelCacheEncryption `json:"encryption,omitempty"`
+	// Backend selects the storage backend used to populate and expose the
+	// cache: "nvmesh" (NVMesh 3.x, nvcf-sc-30) or "sharedfs" (a shared
+	// filesystem class, nvcf-miniservice-sc, including the Samba-backed case). Empty
+	// is treated as "nvmesh" for backward compatibility. Set by the reconciler
+	// from SelectHelmCacheBackend.
+	Backend string `json:"backend,omitempty"`
 }
 
 type ModelCacheEncryption struct {
