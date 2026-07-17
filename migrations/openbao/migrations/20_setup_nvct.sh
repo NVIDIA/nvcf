@@ -126,7 +126,7 @@ SCOPES="spot-request,cluster_listing,instance_types,cluster-management"
 # Create JWT Secret Role for NVCF JWT Signer
 #-------------------------------------------
 # Issuer: http://api.sis.svc.cluster.local
-jwt_secret_role=$(generate_jwt_secret_role "${SIS_API_SERVICE_ACCOUNT_NAMESPACE}" "${SIS_API_SERVICE_NAME}" "${SERVICE_ACCOUNT_NAME}" "${SCOPES}")
+jwt_secret_role=$(generate_jwt_secret_role "${SIS_API_SERVICE_ACCOUNT_NAMESPACE}" "${SIS_API_SERVICE_NAME}" "${SERVICE_ACCOUNT_NAME}" "${SCOPES}" "${JWT_ISSUER_OVERRIDE:-}")
 create_secret_jwt_role "${SIS_API_SECRET_BASE_PATH}/jwt" "${SERVICE_ACCOUNT_NAME}" "${jwt_secret_role}"
 
 #-------------------------------------------
