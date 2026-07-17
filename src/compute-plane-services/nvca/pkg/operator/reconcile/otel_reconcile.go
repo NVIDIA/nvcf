@@ -18,8 +18,11 @@ limitations under the License.
 package operator
 
 import (
+	"bytes"
 	_ "embed"
+	"fmt"
 	"strings"
+	"text/template"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
@@ -42,13 +45,26 @@ type otelCollectorAuthConfig struct {
 	authenticator    string
 }
 
+// otelCollectorConfigTemplateData contains values used to render the OTel collector configuration template.
+type otelCollectorConfigTemplateData struct {
+	UseOAuth2 bool
+}
+
 // getOTelCollectorConfigData returns the OTel collector configuration data.
-// Values will be substituted by OTel Collector at runtime
-// from environment variables set in the container spec.
-func (bc *BackendK8sCache) getOTelCollectorConfigData() map[string]string {
-	return map[string]string{
-		"config.yaml": otelCollectorConfigTpl,
+// The authentication extension is selected when the ConfigMap is rendered. Remaining
+// values are substituted by the OTel Collector at runtime from the container environment.
+func (bc *BackendK8sCache) getOTelCollectorConfigData(nb *nvidiaiov1.NVCFBackend) (map[string]string, error) {
+	tmpl, err := template.New("otel_collector_config.yaml").Parse(otelCollectorConfigTpl)
+	if err != nil {
+		return nil, fmt.Errorf("parse OTel collector config template: %w", err)
 	}
+
+	var config bytes.Buffer
+	if err := tmpl.Execute(&config, otelCollectorConfigTemplateData{UseOAuth2: useOTelCollectorOAuth2(nb)}); err != nil {
+		return nil, fmt.Errorf("render OTel collector config template: %w", err)
+	}
+
+	return map[string]string{"config.yaml": config.String()}, nil
 }
 
 func useOTelCollectorOAuth2(nb *nvidiaiov1.NVCFBackend) bool {

@@ -2638,6 +2638,10 @@ func (bc *BackendK8sCache) setupOTelCollectorConfigMap(ctx context.Context, nb *
 	}
 
 	log.Info("setting up OTel collector ConfigMap")
+	configData, err := bc.getOTelCollectorConfigData(nb)
+	if err != nil {
+		return fmt.Errorf("render OTel collector ConfigMap data: %w", err)
+	}
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2646,7 +2650,7 @@ func (bc *BackendK8sCache) setupOTelCollectorConfigMap(ctx context.Context, nb *
 			Annotations: getNBAnnotations(nb),
 			Labels:      getAppLabels(),
 		},
-		Data: bc.getOTelCollectorConfigData(),
+		Data: configData,
 	}
 
 	return bc.createOrUpdateConfigMap(ctx, cm)

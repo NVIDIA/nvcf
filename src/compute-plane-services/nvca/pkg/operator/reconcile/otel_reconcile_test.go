@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/yaml"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
@@ -90,34 +91,78 @@ func TestGetFNDSEndpoint(t *testing.T) {
 }
 
 func TestGetOTelCollectorConfigData(t *testing.T) {
-	bc := &BackendK8sCache{}
-	configData := bc.getOTelCollectorConfigData()
+	tests := []struct {
+		name                   string
+		nb                     *nvidiaiov1.NVCFBackend
+		expectedAuthenticator  string
+		unexpectedExtension    string
+		expectedPlaceholders   []string
+		unexpectedPlaceholders []string
+	}{
+		{
+			name:                  "service API key authentication",
+			nb:                    &nvidiaiov1.NVCFBackend{},
+			expectedAuthenticator: NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			unexpectedExtension:   NVCAOTelCollectorAuthenticatorOAuth2Client,
+			expectedPlaceholders:  []string{"${env:NGC_SERVICE_API_KEY_FILE}"},
+			unexpectedPlaceholders: []string{
+				"${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_ID}",
+				"${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE}",
+				"${env:NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL}",
+			},
+		},
+		{
+			name: "OAuth authentication",
+			nb: &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{
+				NVCFBackendSpecT: otelAuthSpec(true, "client-id", "", "", "", ""),
+			}},
+			expectedAuthenticator: NVCAOTelCollectorAuthenticatorOAuth2Client,
+			unexpectedExtension:   NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			expectedPlaceholders: []string{
+				"${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_ID}",
+				"${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE}",
+				"${env:NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL}",
+			},
+			unexpectedPlaceholders: []string{"${env:NGC_SERVICE_API_KEY_FILE}"},
+		},
+	}
 
-	require.Contains(t, configData, "config.yaml")
-	config := configData["config.yaml"]
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bc := &BackendK8sCache{}
+			configData, err := bc.getOTelCollectorConfigData(tt.nb)
+			require.NoError(t, err)
+			require.Contains(t, configData, "config.yaml")
+			config := configData["config.yaml"]
 
-	// Verify environment variable placeholders are present in config (NVCA_OTEL_COLLECTOR_* naming)
-	assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_REQUESTS_NAMESPACE}", "should contain requests namespace env var placeholder")
-	assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_MEMORY_LIMIT_PERCENTAGE}", "should contain memory limit percentage env var placeholder")
-	assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_SPIKE_LIMIT_PERCENTAGE}", "should contain spike limit percentage env var placeholder")
-	assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_HEALTH_CHECK_PORT}", "should contain health check port env var placeholder")
-	assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_FNDS_ENDPOINT}", "should contain FNDS endpoint env var placeholder")
-	assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_METRICS_PORT}", "should contain metrics port env var placeholder")
+			var parsed struct {
+				Extensions map[string]any `json:"extensions"`
+			}
+			require.NoError(t, yaml.Unmarshal([]byte(config), &parsed))
+			assert.Contains(t, parsed.Extensions, tt.expectedAuthenticator)
+			assert.NotContains(t, parsed.Extensions, tt.unexpectedExtension)
+			assert.Contains(t, parsed.Extensions, "health_check")
 
-	// Verify OAuth-related env var placeholders are present
-	assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_ID}", "should contain OAuth client ID env var placeholder")
-	assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE}", "should contain OAuth client secret file env var placeholder")
-	assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL}", "should contain OAuth token URL env var placeholder")
-	assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_AUTHENTICATOR}", "should contain authenticator env var placeholder")
-	assert.Contains(t, config, "${env:NGC_SERVICE_API_KEY_FILE}", "should contain NGC service API key file env var placeholder")
+			for _, placeholder := range tt.expectedPlaceholders {
+				assert.Contains(t, config, placeholder)
+			}
+			for _, placeholder := range tt.unexpectedPlaceholders {
+				assert.NotContains(t, config, placeholder)
+			}
 
-	// Verify key config sections are present
-	assert.Contains(t, config, "memory_limiter", "should contain memory_limiter processor")
-	assert.Contains(t, config, "k8s_events", "should contain k8s_events receiver")
-	assert.Contains(t, config, "k8sattributes", "should contain k8sattributes processor")
-	assert.Contains(t, config, "otlphttp", "should contain otlphttp exporter")
-	assert.Contains(t, config, NVCAOTelCollectorAuthenticatorBearerTokenAuth, "should contain bearertokenauth extension")
-	assert.Contains(t, config, NVCAOTelCollectorAuthenticatorOAuth2Client, "should contain oauth2client extension")
+			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_REQUESTS_NAMESPACE}")
+			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_MEMORY_LIMIT_PERCENTAGE}")
+			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_SPIKE_LIMIT_PERCENTAGE}")
+			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_HEALTH_CHECK_PORT}")
+			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_FNDS_ENDPOINT}")
+			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_METRICS_PORT}")
+			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_AUTHENTICATOR}")
+			assert.Contains(t, config, "memory_limiter")
+			assert.Contains(t, config, "k8s_events")
+			assert.Contains(t, config, "k8sattributes")
+			assert.Contains(t, config, "otlphttp")
+		})
+	}
 }
 
 // otelAuthSpec builds minimal NVCFBackendSpecT for getOTelCollectorAuthConfig tests.
