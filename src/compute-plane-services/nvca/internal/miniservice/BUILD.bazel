@@ -179,6 +179,7 @@ go_test(
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
         "//vendor/github.com/bombsimon/logrusr/v4:logrusr",
+        "//vendor/github.com/go-logr/logr/funcr",
         "//vendor/github.com/google/go-cmp/cmp",
         "//vendor/github.com/prometheus/client_golang/prometheus",
         "//vendor/github.com/prometheus/client_model/go",
