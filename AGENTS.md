@@ -16,13 +16,8 @@ Useful pointers:
 - `BAZEL.md` for the contributor-facing Bazel build path
 - `docs/AGENTS.md` for in-repo user and developer documentation
 - `tools/AGENTS.md` for repo tooling
-- `deploy/helm/AGENTS.md` for native Helm chart guidance
-- `migrations/AGENTS.md` for native migration image guidance
 - `imports.yaml` for subtree ownership and commit pins
 - `.cursor/skills/documentation-style/SKILL.md` for docs style
-- `.cursor/skills/nvcf-gitlab-subproject-ci/SKILL.md` for native subproject CI
-  (read before editing `.gitlab-ci.yml`, `subproject-validations.yaml`, or
-  `generated-release-jobs.yml`)
 - `.cursor/skills/` for root dev-skill symlink fanout
 - `ai-tooling/user/skills/` and `ai-tooling/dev/skills/` for public skills
 
@@ -206,16 +201,8 @@ manually before finishing.
 
 | Skill | Location | Purpose |
 |-------|----------|---------|
-| `bazel-go-gazelle` | `ai-tooling/dev/skills/` | Wire Go modules into Bazel with rules_go and Gazelle |
-| `bazel-java-maven` | `ai-tooling/dev/skills/` | Wire Java and Spring Boot services into Bazel with Maven artifacts |
-| `bazel-gitlab-child-pipelines` | `ai-tooling/dev/skills/` | Generic Bazel parent-child pipeline pattern; for this repo prefer `nvcf-gitlab-subproject-ci` |
-| `bazel-monorepo-bootstrap` | `ai-tooling/dev/skills/` | Bootstrap Bazel in an existing polyglot monorepo |
-| `bazel-oci-images` | `ai-tooling/dev/skills/` | Build multi-arch OCI images from Bazel binaries |
-| `bazel-rust-crate-universe` | `ai-tooling/dev/skills/` | Wire Rust services into Bazel with crate_universe |
-| `nvcf-gitlab-subproject-ci` | `ai-tooling/dev/skills/` | Native subproject CI via generated child pipeline (not root `.gitlab-ci.yml`) |
 | `documentation-style` | `ai-tooling/dev/skills/` | NVCF documentation conventions (no bold, no emojis, no em-dash) |
 | `nvcf-explore-stack` | `ai-tooling/dev/skills/` | Navigate the self-hosted stack topology and dependency graph |
-| `official-docs-style` | `ai-tooling/dev/skills/` | External-facing NVCF user documentation voice and structure |
 | `nvcf-self-managed-cli` | `ai-tooling/user/skills/` | Install, operate, and manage self-managed NVCF through `nvcf-cli` |
 | `nvcf-self-managed-installation` | `ai-tooling/user/skills/` | Install and deploy the self-managed NVCF stack |
 | `nvcf-self-managed-prerequisite` | `ai-tooling/user/skills/` | Install cluster-level prerequisites such as KAI Scheduler and SMB CSI driver |
@@ -232,7 +219,7 @@ build, test, helm-lint, or release validation jobs go.
 | License scan, bazel-smoke, docs, OSS snapshot | root `.gitlab-ci.yml` only |
 
 Before adding or moving any CI job for a path under `src/`, `deploy/helm/`, or
-`migrations/`, read `nvcf-gitlab-subproject-ci` (`.cursor/skills/` symlink).
+`migrations/`, read this section in full.
 Do not add per-service jobs to root `.gitlab-ci.yml` and do not recreate
 `src/**/.gitlab-ci.yml`, `deploy/helm/**/.gitlab-ci.yml`, or
 `migrations/**/.gitlab-ci.yml` for native subprojects. Helm CI-only values
