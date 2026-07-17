@@ -76,12 +76,15 @@ spec:
         # event-loop io_uring ring below, not this. Set explicitly rather
         # than relying on torch's default.
         - { name: USE_LIBUV, value: "1" }
-        # libuv >=1.46 batches epoll_ctl through an internal SQPOLL io_uring
-        # ring; that ring restores its config but aborts on first
-        # epoll_ctl_flush after a cross-pod criu-v2 restore (silent SIGABRT,
-        # release-build libuv). This is the one remaining restore lever.
-        # Durable fix = SQPOLL ring restore at the CRIU layer (nvsnap#107).
-        - { name: UV_USE_IO_URING, value: "0" }
+        # libuv >=1.46 uses an internal SQPOLL io_uring ring for epoll_ctl
+        # batching. This used to abort the event loop on the first
+        # epoll_ctl_flush after a criu-v2 restore (SIGABRT): the CRIU restore
+        # recreated the ring but left its SQ-array index map zeroed, so
+        # submissions misrouted and completions never returned. Fixed in the
+        # CRIU fork (io-uring-cr, sq_array identity-map restore); io_uring is
+        # now C/R-safe and enabled. Validated e2e across the single-GPU
+        # workloads (vllm-small/8b/qwen32b, e5-mistral). nvsnap#107.
+        - { name: UV_USE_IO_URING, value: "1" }
         - { name: HF_HUB_DISABLE_XET, value: "1" }
         - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
         - { name: VLLM_LOGGING_LEVEL, value: "INFO" }
