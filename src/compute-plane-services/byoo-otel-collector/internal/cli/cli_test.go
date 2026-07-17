@@ -20,6 +20,7 @@ package cli
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -37,30 +38,42 @@ func (f *fakeProcess) Wait() (*os.ProcessState, error) {
 	return nil, f.waitErr
 }
 
+// TestWaitAndLogProcessExit covers waitAndLogProcessExit directly: both runSecretsCheckLoop
+// call sites (interrupt shutdown and secret-triggered restart) delegate to this same helper, so
+// exercising it once here covers both.
 func TestWaitAndLogProcessExit(t *testing.T) {
 	tests := []struct {
 		name    string
 		waitErr error
 		wantLog bool
 	}{
-		{name: "interrupt shutdown wait error is logged", waitErr: errors.New("wait: no child processes"), wantLog: true},
-		{name: "secret-triggered restart wait error is logged", waitErr: errors.New("signal: killed"), wantLog: true},
+		{name: "wait error is logged with its message", waitErr: errors.New("wait: no child processes"), wantLog: true},
+		{name: "a different wait error message is preserved verbatim", waitErr: errors.New("signal: killed"), wantLog: true},
 		{name: "clean exit logs nothing", waitErr: nil, wantLog: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			orig := logger.Logger
+			t.Cleanup(func() { logger.Logger = orig })
+
 			core, logs := observer.New(zapcore.DebugLevel)
 			logger.Logger = zap.New(core).Sugar()
 
 			waitAndLogProcessExit(&fakeProcess{waitErr: tt.waitErr})
 
 			entries := logs.TakeAll()
-			if tt.wantLog && len(entries) != 1 {
+			if !tt.wantLog {
+				if len(entries) != 0 {
+					t.Fatalf("expected no log entries, got %d", len(entries))
+				}
+				return
+			}
+			if len(entries) != 1 {
 				t.Fatalf("expected 1 log entry, got %d", len(entries))
 			}
-			if !tt.wantLog && len(entries) != 0 {
-				t.Fatalf("expected no log entries, got %d", len(entries))
+			if !strings.Contains(entries[0].Message, tt.waitErr.Error()) {
+				t.Fatalf("expected log message to contain %q, got %q", tt.waitErr.Error(), entries[0].Message)
 			}
 		})
 	}
