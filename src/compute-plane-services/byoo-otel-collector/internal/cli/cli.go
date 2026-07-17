@@ -37,6 +37,20 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/secrets"
 )
 
+// processWaiter is the subset of *os.Process used by runSecretsCheckLoop, extracted so tests
+// can exercise the wait-error logging without spawning a real OS process.
+type processWaiter interface {
+	Wait() (*os.ProcessState, error)
+}
+
+// waitAndLogProcessExit waits for otelcol-contrib to exit and logs a non-nil error instead of
+// discarding it.
+func waitAndLogProcessExit(proc processWaiter) {
+	if _, waitErr := proc.Wait(); waitErr != nil {
+		logger.Logger.Errorf("error waiting for otelcol-contrib to exit: %v", waitErr)
+	}
+}
+
 func runSecretsCheckLoop(ctx context.Context, otelCollectorProc *os.Process, args []string, accountsSecrets, secretsFolder string, lastContent []byte, lastModTime time.Time) error {
 	restartCh := make(chan struct{}, 1)
 
@@ -72,9 +86,7 @@ func runSecretsCheckLoop(ctx context.Context, otelCollectorProc *os.Process, arg
 			logger.Logger.Info("Received interrupt signal, terminating otelcol-contrib and exiting.")
 			otelcollector.GracefulShutdown(otelCollectorProc)
 			// Wait for the process to actually exit
-			if _, waitErr := otelCollectorProc.Wait(); waitErr != nil {
-				logger.Logger.Errorf("error waiting for otelcol-contrib to exit: %v", waitErr)
-			}
+			waitAndLogProcessExit(otelCollectorProc)
 			return nil
 		case <-restartCh:
 			logger.Logger.Info("Regenerating the secret files and restarting otelcol-contrib due to the secret file changes.")
@@ -90,9 +102,7 @@ func runSecretsCheckLoop(ctx context.Context, otelCollectorProc *os.Process, arg
 			// shutdown the current otelcol-contrib process
 			otelcollector.GracefulShutdown(otelCollectorProc)
 			// Wait for it to exit
-			if _, waitErr := otelCollectorProc.Wait(); waitErr != nil {
-				logger.Logger.Errorf("error waiting for otelcol-contrib to exit: %v", waitErr)
-			}
+			waitAndLogProcessExit(otelCollectorProc)
 
 			// run the otelcol-contrib process again
 			if otelCollectorProc, err = otelcollector.RunOtelCollector(args); err != nil {
