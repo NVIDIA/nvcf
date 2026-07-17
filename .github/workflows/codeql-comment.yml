@@ -131,22 +131,14 @@ jobs:
             WARNINGS=$(jq -s '[.[].runs[]?.results[]? | select(.level == "warning")] | length' "${SARIF_FILES[@]}")
             NOTES=$(jq -s '[.[].runs[]?.results[]? | select(.level == "note")] | length' "${SARIF_FILES[@]}")
 
-            # SARIF artifacts from fork runs are untrusted. Encode and truncate
-            # displayed fields before adding up to five findings to the comment.
+            # Match the shared action's same-repository comment format.
             TOP_ISSUES=$(jq -rs '
-              def safe($limit):
-                tostring
-                | gsub("[\\r\\n\\t]+"; " ")
-                | .[0:$limit]
-                | explode
-                | map("&#\(.);")
-                | join("");
               [.[].runs[]?.results[]?
                 | select(.level == "error" or .level == "warning")][0:5][]
-              | "- **\((.ruleId // "unknown") | safe(100))**: "
-                + "\((.message.text // "No description") | safe(300)) "
-                + "(\((.locations[0].physicalLocation.artifactLocation.uri // "unknown") | safe(200)):"
-                + "\((.locations[0].physicalLocation.region.startLine // "?") | safe(20)))"
+              | "- **\(.ruleId // "unknown")**: "
+                + "\(.message.text // "No description") "
+                + "(\(.locations[0].physicalLocation.artifactLocation.uri // "unknown"):"
+                + "\(.locations[0].physicalLocation.region.startLine // "?"))"
             ' "${SARIF_FILES[@]}")
 
             REPORT="${COMMENT_MARKER}
