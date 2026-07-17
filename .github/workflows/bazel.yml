@@ -83,13 +83,18 @@ jobs:
           #  umbrella-phase1: //src/libraries/go/lib test issues
           #    (icms-translate env-flaky, core_test goroutine leak) -- nvcf-go
           #    team owns the test-layer cleanup.
-          #  nvca: tests run. TestReconcile_ModelCache drives the
-          #    writer Job to completion and is version-adaptive: it applies the
-          #    k8s >= 1.34 Job condition shape and falls back to the pre-1.34
-          #    shape if the apiserver rejects it, so it passes on the bazel-ci
-          #    envtest (verified against 1.30.3 and 1.34.1). The only flaky test,
-          #    TestBackendK8sCacheQueryAPIs, is t.Skip'd at the source with a
-          #    reference (informer/lister sync race, nvca-team fix).
+          #  nvca: build-only. TestReconcile_ModelCache (pkg/storage) is now
+          #    version-adaptive and passes, but enabling `bazel test //...`
+          #    surfaces other failures under the bazel-ci envtest that are the
+          #    nvca team's to fix at the test layer (do not change reconciler
+          #    logic to satisfy them):
+          #      //pkg/operator/reconcile: TestGetMiniServiceRBACCmData,
+          #        TestGetNetworkPoliciesDataEmptyDDCSIPList,
+          #        TestGetNetworkPoliciesDataWithDDCSIPList (pass under `go test`,
+          #        differ under Bazel envtest).
+          #      //pkg/nvca: TestCreateMiniService_Function/_Task/_TaskDelayedAck
+          #        (412 "Need to add GVK to test"), Test_applyContainerTaskCreationMessage.
+          #    Tracked in NVIDIA/nvcf#238. Flip to run once those are green.
           #  nvsnap (src/compute-plane-services/nvsnap): intentionally NOT a
           #    matrix row. It is a self-contained Bazel module whose OCI base is
           #    its own private agent image (not publicly pullable), so it is not
@@ -102,7 +107,7 @@ jobs:
           http-invocation|src/invocation-plane-services/http-invocation|false
           llm-api-gateway|src/invocation-plane-services/llm-api-gateway|false
           vanity-gateway|src/invocation-plane-services/vanity-gateway|false
-          nvca|src/compute-plane-services/nvca|false
+          nvca|src/compute-plane-services/nvca|true
           ess-agent|src/compute-plane-services/ess-agent|false
           image-credential-helper|src/compute-plane-services/image-credential-helper|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
