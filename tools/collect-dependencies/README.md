@@ -22,8 +22,7 @@ go run ./tools/collect-dependencies -l helm
 
 ## Outputs
 
-- [`../../dependencies.md`](../../dependencies.md): Shared rollup for Go modules, Rust crates, Python packages, Java Maven coordinates, and Helm chart dependencies. Entries are deduped and grouped by normalized license expression. Each bullet keeps a language tag, and MPL groups keep the explicit version (`MPL-1.0`, `MPL-1.1`, `MPL-2.0`) in the heading.
-- [`../../dependencies-java.md`](../../dependencies-java.md): Existing Java-only grouped snapshot kept at the repo root for reference. The generator no longer rewrites this file. Java dependencies now flow into `../../dependencies.md`.
+- [`../../dependencies.md`](../../dependencies.md): Shared rollup for Go modules, Rust crates, Python packages, Java Maven coordinates, and Helm chart dependencies, including Java. Entries are deduped and grouped by normalized license expression. Each bullet keeps a language tag, and MPL groups keep the explicit version (`MPL-1.0`, `MPL-1.1`, `MPL-2.0`) in the heading.
 
 Regenerate when imported trees or their dependency manifests change.
 
