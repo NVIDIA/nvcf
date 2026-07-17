@@ -87,11 +87,12 @@ func TestReValClientHostHeader(t *testing.T) {
 
 func TestReValClientPayloadLogRedactsCredentials(t *testing.T) {
 	const (
-		apiKey        = "super-secret-api-key"
-		registryAuth  = "leaked-registry-auth"
-		urlPassword   = "hunter2"
-		signedToken   = "leak-me"
-		wantHelmChart = "https://charts.example.invalid/chart.tgz"
+		apiKey            = "super-secret-api-key"
+		helmRegistryAuth  = "leaked-helm-registry-auth"
+		imageRegistryAuth = "leaked-image-registry-auth"
+		urlPassword       = "hunter2"
+		signedToken       = "leak-me"
+		wantHelmChart     = "https://charts.example.invalid/chart.tgz"
 	)
 
 	var lines []string
@@ -116,22 +117,36 @@ func TestReValClientPayloadLogRedactsCredentials(t *testing.T) {
 		NCAID:        "test-nca",
 		HelmChartURL: fmt.Sprintf("https://user:%s@charts.example.invalid/chart.tgz?token=%s", urlPassword, signedToken),
 		ReleaseName:  "my-release",
+		InstanceType: "gpu.small",
+		GPUName:      "A100",
+		K8sVersion:   "1.30",
 		APIKey:       apiKey,
 		HelmRegistryAuthConfig: common.RegistryAuthConfig{
 			K8sSecrets: []common.RegistryAuthSecret{{
-				Auths: map[string]common.RegistryAuth{"registry.example.invalid": {Auth: registryAuth}},
+				Auths: map[string]common.RegistryAuth{"registry.example.invalid": {Auth: helmRegistryAuth}},
+			}},
+		},
+		ImageRegistryAuthConfig: common.RegistryAuthConfig{
+			K8sSecrets: []common.RegistryAuthSecret{{
+				Auths: map[string]common.RegistryAuth{"registry.example.invalid": {Auth: imageRegistryAuth}},
 			}},
 		},
 	})
 	require.NoError(t, err)
 
 	output := strings.Join(lines, "\n")
+	// Credentials must never appear in the logged payload.
 	assert.NotContains(t, output, apiKey)
-	assert.NotContains(t, output, registryAuth)
+	assert.NotContains(t, output, helmRegistryAuth)
+	assert.NotContains(t, output, imageRegistryAuth)
 	assert.NotContains(t, output, urlPassword)
 	assert.NotContains(t, output, signedToken)
 
+	// Non-sensitive metadata must still be logged for debuggability.
 	assert.Contains(t, output, "my-release")
+	assert.Contains(t, output, "gpu.small")
+	assert.Contains(t, output, "A100")
+	assert.Contains(t, output, "1.30")
 	assert.Contains(t, output, wantHelmChart)
 }
 
