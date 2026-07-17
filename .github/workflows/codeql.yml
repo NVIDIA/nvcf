@@ -67,7 +67,17 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           upload-sarif: true
-          post-pr-comment: true
+          # Fork pull requests receive a read-only token and cannot post comments.
+          post-pr-comment: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
           # Non-blocking during rollout: findings surface in the Security tab and
           # as a PR comment, but do not gate merges yet. Tighten once triaged.
           fail-on-findings: false
+
+      - name: Upload CodeQL results for fork PR comment
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-pr-results-${{ matrix.language }}
+          path: results/*.sarif
+          if-no-files-found: error
+          retention-days: 1

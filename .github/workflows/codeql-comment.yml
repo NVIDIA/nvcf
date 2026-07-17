@@ -1,0 +1,147 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The pull_request CodeQL workflow cannot comment on fork PRs because GitHub
+# gives those runs a read-only token. This companion workflow runs only after
+# CodeQL completes, downloads its SARIF artifacts, and posts the comment from
+# the base repository context without checking out or executing fork code.
+
+name: "CodeQL: Comment"
+
+on:
+  workflow_run:
+    workflows: ["codeql"]
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_repository.full_name || github.repository }}-${{ github.event.workflow_run.head_branch || github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  comment:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download CodeQL results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codeql-pr-results-*
+          path: codeql-results
+          merge-multiple: true
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post or update CodeQL results comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          EVENT_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          set -euo pipefail
+
+          PR_NUMBER="$EVENT_PR_NUMBER"
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            PR_NUMBER=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/pull_requests" \
+              --jq 'map(select(.state == "open")) | .[0].number // empty')
+          fi
+
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Could not resolve a pull request for CodeQL run ${RUN_ID}"
+            exit 0
+          fi
+
+          mapfile -d '' SARIF_FILES < <(find codeql-results -type f -name '*.sarif' -print0)
+          if [ "${#SARIF_FILES[@]}" -eq 0 ]; then
+            echo "::error::No SARIF files were downloaded for CodeQL run ${RUN_ID}"
+            exit 1
+          fi
+
+          RESULTS_FILE=$(mktemp)
+          BODY_FILE=$(mktemp)
+          COMMENTS_FILE=$(mktemp)
+          trap 'rm -f "$RESULTS_FILE" "$BODY_FILE" "$COMMENTS_FILE"' EXIT
+
+          jq -s '[.[].runs[]?.results[]?]' "${SARIF_FILES[@]}" > "$RESULTS_FILE"
+
+          TOTAL_ISSUES=$(jq 'length' "$RESULTS_FILE")
+          ERRORS=$(jq '[.[] | select(.level == "error")] | length' "$RESULTS_FILE")
+          WARNINGS=$(jq '[.[] | select(.level == "warning")] | length' "$RESULTS_FILE")
+          NOTES=$(jq '[.[] | select(.level == "note")] | length' "$RESULTS_FILE")
+
+          {
+            echo '<!-- dsx-codeql-scan -->'
+            echo '## CodeQL Analysis'
+            echo
+            if [ "$TOTAL_ISSUES" -eq 0 ]; then
+              echo 'No security issues found.'
+            else
+              echo "Found **${TOTAL_ISSUES}** issue(s)."
+              echo
+              echo "- Errors: ${ERRORS}"
+              echo "- Warnings: ${WARNINGS}"
+              echo "- Notes: ${NOTES}"
+              echo
+              echo '<details>'
+              echo '<summary>Top issues</summary>'
+              echo
+              jq -r '
+                .[0:5][] |
+                "- **\(.ruleId // "unknown")**: " +
+                "\(.message.text // "No description") " +
+                "(`\(.locations[0].physicalLocation.artifactLocation.uri // "unknown"):" +
+                "\(.locations[0].physicalLocation.region.startLine // "?")`)"
+              ' "$RESULTS_FILE"
+              echo
+              echo '</details>'
+            fi
+            echo
+            echo "[View the CodeQL workflow run](${RUN_URL})"
+            echo
+            echo "<sub>Commit: ${HEAD_SHA:0:7}</sub>"
+          } > "$BODY_FILE"
+
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            > "$COMMENTS_FILE"
+
+          COMMENT_ID=$(jq -r '
+            [.[][] |
+              select(.user.login == "github-actions[bot]") |
+              select(.body | contains("<!-- dsx-codeql-scan -->"))] |
+            first | .id // empty
+          ' "$COMMENTS_FILE")
+
+          if [ -n "$COMMENT_ID" ]; then
+            jq -n --rawfile body "$BODY_FILE" '{body: $body}' |
+              gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
+                --method PATCH \
+                --input -
+          else
+            jq -n --rawfile body "$BODY_FILE" '{body: $body}' |
+              gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+                --method POST \
+                --input -
+          fi
