@@ -233,12 +233,11 @@ func TestGetVaultConfigData_TemplateUsesOAuthClientMountPath(t *testing.T) {
 	configData := getVaultConfigData(nb)
 
 	// Template uses OAuthClientMountPath from VaultConfig
-	if assert.Contains(t, configData, "template.hcl") {
-		expected := `{{ with secret "nvidia/services/oauth/clients/template-client-id/kv/secret" }}
+	require.Contains(t, configData, "template.hcl")
+	expected := `{{ with secret "nvidia/services/oauth/clients/template-client-id/kv/secret" }}
 {{ .Data.data.secret }}
 {{ end }}`
-		assert.Equal(t, expected, configData["template.hcl"])
-	}
+	assert.Equal(t, expected, configData["template.hcl"])
 }
 
 // Guard: the otel collector reads the rendered secret file whole as the
@@ -265,15 +264,14 @@ func TestGetVaultConfigData_TemplateRendersRawSecretForOTelCollector(t *testing.
 
 	configData := getVaultConfigData(nb)
 
-	if assert.Contains(t, configData, "template.hcl") {
-		tpl := configData["template.hcl"]
-		assert.NotContains(t, tpl, "OAUTH_CLIENT_SECRET_KEY=",
-			"secret template must render the bare secret: the otel collector reads the file whole as client_secret")
-		expected := `{{ with secret "nvidia/services/oauth/clients/test-client-id/kv/secret" }}
+	require.Contains(t, configData, "template.hcl")
+	tpl := configData["template.hcl"]
+	assert.NotContains(t, tpl, "OAUTH_CLIENT_SECRET_KEY=",
+		"secret template must render the bare secret: the otel collector reads the file whole as client_secret")
+	expected := `{{ with secret "nvidia/services/oauth/clients/test-client-id/kv/secret" }}
 {{ .Data.data.secret }}
 {{ end }}`
-		assert.Equal(t, expected, tpl)
-	}
+	assert.Equal(t, expected, tpl)
 }
 
 func TestGetVaultConfigData_ConfigInitAndNonInit(t *testing.T) {
