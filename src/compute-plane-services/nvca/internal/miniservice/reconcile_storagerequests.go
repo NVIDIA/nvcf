@@ -136,16 +136,19 @@ func (r *Reconciler) makeStorageRequests(
 	backend nvcastorage.HelmCacheBackend,
 ) (sts []*nvcav2beta1.StorageRequest, err error) {
 	// The caching backend is selected ONCE per reconcile by the caller
-	// (SelectHelmCacheBackend in doInstall) and passed in, so StorageRequest
-	// creation and the ephemeral annotation decision always agree even if the
-	// cluster's storage classes change mid-reconcile.
+	// (SelectHelmCacheBackend in doInstall, gated on cacheLaunchRequested) and
+	// passed in, so StorageRequest creation and the ephemeral annotation
+	// decision always agree even if the cluster's storage classes change
+	// mid-reconcile.
 	// NVMesh, shared-FS, and Samba all populate the cache via a ModelCacheRequest;
 	// the Backend field tells the storage controller which populate path to run
 	// (Samba stands up its own server and serves via static PVs). Only the
 	// ephemeral backend is handled outside the storage controller.
+	// cacheLaunchRequested is the same predicate that gates the ephemeral
+	// injection, so a request either caches on every backend or on none.
 	switch backend {
 	case nvcastorage.HelmCacheBackendNVMesh, nvcastorage.HelmCacheBackendSharedFS, nvcastorage.HelmCacheBackendSamba:
-		if cacheInitJob != nil && cacheInitPVC != nil {
+		if cacheInitJob != nil && cacheInitPVC != nil && cacheLaunchRequested(icmsReq) {
 			st, err := nvcastorage.NewModelCacheStorageRequest(icmsReq, r.FeatureFlagFetcher)
 			if err != nil {
 				// Invalid cache spec is not retryable; keep it terminal (the

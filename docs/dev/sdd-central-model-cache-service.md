@@ -65,8 +65,10 @@ per-pod fallback described separately.
    The lease holder creates the writer Job and the read-write PVC in the control
    namespace; non-holders wait.
 3. On writer success the reconciler records a durable marker (see below) and
-   tears down the writer Job, its pods, the read-write PVC, and the lease
-   (`cleanupInitModelCache`). The marker survives.
+   tears down the temporary initialization resources: the writer Job, its
+   pods, and the lease (`cleanupInitModelCache`). The read-write PVC is also
+   deleted for nvmesh and samba, but retained for sharedfs, where it is
+   itself the durable marker. The marker survives.
 
 ### Durable markers
 
@@ -189,6 +191,23 @@ Metrics (`internal/metrics`), all labeled by `backend`:
 Tracing: `nvca.modelcache.reconcile` span per request (with a
 `nvcf.modelcache.backend` attribute) and a `nvca.modelcache.samba.ensure_infra`
 child span around per-handle Samba provisioning.
+
+## Known gaps and fast-follows
+
+- sharedfs reader binding assumes the class exposes one shared filesystem:
+  separately provisioned PVCs on the same StorageClass do not share data on
+  provisioners that create per-claim access points, subvolumes, or
+  directories (EFS access points, CephFS subvolumes, some NFS provisioners).
+  Classes backed by a single share (for example an SMB class pointing at one
+  server share) work. The capability probe validates bindability, not
+  data-sharing; the fast-follow is a write-through-one-claim /
+  read-through-another probe, and deriving reader PVs from the writer's bound
+  volume where the driver supports it.
+- The per-handle Samba infrastructure is create-once: image, resource, and
+  cache-size changes do not reconcile onto an existing server or expand its
+  backing PVC.
+- The ephemeral init env forwards the full launch environment; it should be
+  narrowed to the variables the model-cache-init container actually consumes.
 
 ## Key invariants
 

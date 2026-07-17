@@ -57,6 +57,7 @@ func TestMakeStorageRequests_BackendHandling(t *testing.T) {
 			CacheLaunchSpecification: &common.CacheLaunchSpecification{
 				CacheArtifacts: true,
 				CacheHandle:    "h1",
+				CacheSize:      262144000,
 			},
 		}
 		sts, err := r.makeStorageRequests(icmsReq, nil, job, pvc, nvcastorage.HelmCacheBackendSamba)
@@ -69,11 +70,31 @@ func TestMakeStorageRequests_BackendHandling(t *testing.T) {
 	t.Run("invalid cache spec is terminal", func(t *testing.T) {
 		icmsReq := &nvcav2beta1.ICMSRequest{}
 		icmsReq.Spec.Action = common.FunctionCreationAction
-		icmsReq.Spec.CreationMsgInfo.FunctionLaunchSpecification = &function.LaunchSpecification{}
+		// Requests caching (size > 0) but is invalid: no cache handle.
+		icmsReq.Spec.CreationMsgInfo.FunctionLaunchSpecification = &function.LaunchSpecification{
+			CacheLaunchSpecification: &common.CacheLaunchSpecification{
+				CacheArtifacts: true,
+				CacheSize:      262144000,
+			},
+		}
 		_, err := r.makeStorageRequests(icmsReq, nil, job, pvc, nvcastorage.HelmCacheBackendSamba)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, reconcile.TerminalError(nil)),
 			"invalid cache spec must be terminal, not retried")
+	})
+
+	t.Run("cache spec without a requested size emits no ModelCacheRequest", func(t *testing.T) {
+		icmsReq := &nvcav2beta1.ICMSRequest{}
+		icmsReq.Spec.Action = common.FunctionCreationAction
+		icmsReq.Spec.CreationMsgInfo.FunctionLaunchSpecification = &function.LaunchSpecification{
+			CacheLaunchSpecification: &common.CacheLaunchSpecification{
+				CacheArtifacts: true,
+				CacheHandle:    "h1",
+			},
+		}
+		sts, err := r.makeStorageRequests(icmsReq, nil, job, pvc, nvcastorage.HelmCacheBackendSamba)
+		require.NoError(t, err)
+		assert.Empty(t, sts, "cacheLaunchRequested gates durable backends like the ephemeral path")
 	})
 
 	t.Run("ephemeral backend emits no ModelCacheRequest", func(t *testing.T) {

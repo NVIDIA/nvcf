@@ -130,6 +130,13 @@ func (p *Prober) ProbeAccessMode(ctx context.Context, mode corev1.PersistentVolu
 		p.cleanupProbe(cleanupCtx, podName, pvcName)
 	}()
 
+	// A crashed prior run can leave a completed probe pod/PVC behind, and a
+	// stale Succeeded pod must not be accepted as the current probe's result.
+	// Delete leftovers first; if deletion has not finished by the time the
+	// creates below run, they fail with AlreadyExists and the probe returns a
+	// short-TTL Unsupported result and retries, never a stale success.
+	p.cleanupProbe(ctx, podName, pvcName)
+
 	// Unsupported results carry a capped TTL (see UnsupportedResultTTLSeconds):
 	// a failed probe may be a transient environment problem, not a property of
 	// the storage class, and must not suppress re-probing for the full window.
@@ -196,10 +203,10 @@ func (p *Prober) createProbePVC(ctx context.Context, name string, mode corev1.Pe
 			},
 		},
 	}
-	if err := p.client.Create(ctx, pvc); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-	return nil
+	// No AlreadyExists tolerance: leftovers are deleted before each probe run,
+	// so an existing object means that deletion is still in flight, and reusing
+	// it could accept a stale prior result.
+	return p.client.Create(ctx, pvc)
 }
 
 func (p *Prober) createProbePod(ctx context.Context, name, pvcName string) error {
@@ -250,10 +257,8 @@ func (p *Prober) createProbePod(ctx context.Context, name, pvcName string) error
 			}},
 		},
 	}
-	if err := p.client.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-	return nil
+	// See createProbePVC for why AlreadyExists is not tolerated here.
+	return p.client.Create(ctx, pod)
 }
 
 func (p *Prober) waitForPodRunning(ctx context.Context, name string) error {

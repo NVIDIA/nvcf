@@ -196,9 +196,11 @@ func sambaModelCacheSelector(cacheHandle string) map[string]string {
 }
 
 // sambaModelCacheServiceDNS is the stable in-cluster DNS name of a handle's
-// Samba Service, used as the host in the static PV SMB source.
+// Samba Service, used as the host in the static PV SMB source. The name stops
+// at .svc (no cluster domain suffix) because the cluster domain is
+// configurable and .svc resolves in any cluster.
 func sambaModelCacheServiceDNS(cacheHandle string) string {
-	return fmt.Sprintf("%s.%s.svc.cluster.local", sambaModelCacheResourceName(cacheHandle), ModelCacheInitNamespace)
+	return fmt.Sprintf("%s.%s.svc", sambaModelCacheResourceName(cacheHandle), ModelCacheInitNamespace)
 }
 
 // sambaModelCacheShareRoot is the SMB source for a handle's share. Each handle
@@ -374,6 +376,11 @@ func newSambaModelCacheDeployment(cacheHandle, image string, resources corev1.Re
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
+			// The server owns a single RWO backing PVC, so a rolling update
+			// would start a second pod against the same volume and block on
+			// multi-attach (or serve the share twice). Recreate stops the old
+			// pod before starting the new one.
+			Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},
 			Selector: &metav1.LabelSelector{MatchLabels: sambaModelCacheSelector(cacheHandle)},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: sambaModelCacheSelector(cacheHandle)},

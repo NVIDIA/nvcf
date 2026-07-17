@@ -250,7 +250,7 @@ func TestNewSambaModelCachePV_RWandRO(t *testing.T) {
 	// Each handle has its own per-handle server, so the share root IS the cache
 	// root (no per-handle subdir). Both writer and readers mount the share root;
 	// access is differentiated by RW vs RO credentials.
-	root := "//" + sambaModelCacheResourceName(handle) + "." + ModelCacheInitNamespace + ".svc.cluster.local/" + SambaModelCacheShareName
+	root := "//" + sambaModelCacheResourceName(handle) + "." + ModelCacheInitNamespace + ".svc/" + SambaModelCacheShareName
 
 	rw := newSambaModelCachePV("rw-pv", "rw-pvc-"+handle, ModelCacheInitNamespace, handle, false, cap1)
 	assert.Equal(t, []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}, rw.Spec.AccessModes)

@@ -224,6 +224,7 @@ func (r *Reconciler) cleanupInitModelCache(ctx context.Context, st *nvcav1new.St
 
 	if !retainWriterPVC {
 		// Delete the RW PVC once all Pods are deleted.
+		writerVolumeSettled := true
 		pvcList := &corev1.PersistentVolumeClaimList{}
 		if err := r.Client.List(ctx, pvcList, listOpts...); err != nil {
 			log.Error(err, "RW PVC list failed, manual cleanup needed")
@@ -251,7 +252,9 @@ func (r *Reconciler) cleanupInitModelCache(ctx context.Context, st *nvcav1new.St
 						deletePVC = false
 					}
 				}
-				if deletePVC {
+				if !deletePVC {
+					writerVolumeSettled = false
+				} else {
 					log.V(1).Info("Deleting model cache init RW PVC", "pvc", pvc.Name)
 					if err := r.Client.Delete(ctx, &pvc); err != nil && !apierrors.IsNotFound(err) {
 						log.Error(err, "Init RW PVC delete failed, manual cleanup needed", "pvc", pvc.Name)
@@ -268,12 +271,16 @@ func (r *Reconciler) cleanupInitModelCache(ctx context.Context, st *nvcav1new.St
 		// The Samba writer binds a static plumbing SMB PV; delete it with the writer
 		// PVC. Static PVs have no provisioner, so a Released one leaks forever, and
 		// its stale claimRef would block a later writer PVC from re-binding.
-		// NotFound is the normal case for the other backends.
-		sambaWriterPV := &corev1.PersistentVolume{}
-		sambaWriterPV.Name = sambaModelCacheWriterPVName(st.Spec.ModelCache.CacheHandle)
-		if err := r.Client.Delete(ctx, sambaWriterPV); err != nil && !apierrors.IsNotFound(err) {
-			log.Error(err, "Samba writer PV delete failed, manual cleanup needed", "pv", sambaWriterPV.Name)
-			errs = append(errs, err)
+		// NotFound is the normal case for the other backends. While the writer
+		// volume is still attached the PVC is retained above, so retain the PV
+		// with it; the requeued cleanup deletes both after detachment.
+		if writerVolumeSettled {
+			sambaWriterPV := &corev1.PersistentVolume{}
+			sambaWriterPV.Name = sambaModelCacheWriterPVName(st.Spec.ModelCache.CacheHandle)
+			if err := r.Client.Delete(ctx, sambaWriterPV); err != nil && !apierrors.IsNotFound(err) {
+				log.Error(err, "Samba writer PV delete failed, manual cleanup needed", "pv", sambaWriterPV.Name)
+				errs = append(errs, err)
+			}
 		}
 	}
 

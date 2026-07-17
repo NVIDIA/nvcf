@@ -671,11 +671,17 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	// (further down). Selecting twice would race a StorageClass change between
 	// the two calls and could both create a ModelCacheRequest and inject the
 	// ephemeral init container, or neither.
+	// Skip the lookup entirely when the launch does not request caching: the
+	// selection needs a StorageClass API call, and a transient API error must
+	// not fail or delay installs that never cache.
 	// Non-terminal on purpose: this is a StorageClass API lookup, so a
 	// transient error (timeout, rate-limit) must be retried.
-	cacheBackend, err := nvcastorage.SelectHelmCacheBackend(ctx, r.Client, r.FeatureFlagFetcher)
-	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("select helm cache backend: %w", err)
+	cacheBackend := nvcastorage.HelmCacheBackendNone
+	if cacheLaunchRequested(icmsReq) {
+		cacheBackend, err = nvcastorage.SelectHelmCacheBackend(ctx, r.Client, r.FeatureFlagFetcher)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("select helm cache backend: %w", err)
+		}
 	}
 
 	// Create storage requests if configured for the cluster.

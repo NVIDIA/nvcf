@@ -193,8 +193,14 @@ func (r *Reconciler) doModelCacheRouted(ctx context.Context,
 		res, err = r.doModelCacheSharedFS(ctx, st, stCopy, icmsReq)
 	case string(HelmCacheBackendSamba):
 		res, err = r.doModelCacheSamba(ctx, st, stCopy, icmsReq)
-	default:
+	case "", string(HelmCacheBackendNVMesh):
+		// Empty preserves requests created before the Backend field existed.
 		res, err = r.doModelCacheNVMesh(ctx, st, stCopy, icmsReq)
+	default:
+		// A typo or a non-provisioning value (e.g. "ephemeral") must not fall
+		// through to NVMesh provisioning against an unavailable backend.
+		err = r.terminalErrorWithMetric(modelcachetypes.ReasonCacheSpecInvalid,
+			fmt.Sprintf("unsupported model cache backend %q", backend))
 	}
 	if isTerminal(err) {
 		stCopy.Status.Phase = nvcav1new.StorageFailed
@@ -470,19 +476,6 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 		return reconcile.Result{RequeueAfter: defaultRequeueDelay}, nil
 	}
 
-	// Writer RW SMB PV bound to the per-handle Samba share root. Each handle has
-	// its own server/share, so no per-handle subdir (and no subPath) is needed.
-	// It is plumbing, not data: cleanupInitModelCache deletes it with the writer
-	// PVC (static PVs are never reclaimed by the PV controller).
-	emptySC := ""
-	rwPVName := sambaModelCacheWriterPVName(cacheHandle)
-	rwPVC.Spec.StorageClassName = &emptySC
-	rwPVC.Spec.VolumeName = rwPVName
-	if err := ensureCreated(ctx, r.Client,
-		newSambaModelCachePV(rwPVName, rwPVC.Name, ModelCacheInitNamespace, cacheHandle, false, capacity)); err != nil {
-		return reconcile.Result{}, err
-	}
-
 	// The per-handle backing PVC is the durable reuse marker. Its existence means
 	// the cache is being provisioned; its cachePopulatedLabelKey label (stamped by
 	// the writer on success) means readers may attach. This is restart-safe and
@@ -497,6 +490,21 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 	switch st.Status.Phase {
 	case nvcav1new.StorageUnknown, nvcav1new.StoragePending, nvcav1new.StorageInitRunning:
 		if !populated {
+			// Writer RW SMB PV bound to the per-handle Samba share root. Each
+			// handle has its own server/share, so no per-handle subdir (and no
+			// subPath) is needed. It is plumbing, not data, and is created only
+			// while population is required: cleanupInitModelCache deletes it
+			// with the writer PVC after population (static PVs are never
+			// reclaimed by the PV controller), and recreating it afterwards
+			// would leave an orphaned Released static PV per handle.
+			emptySC := ""
+			rwPVName := sambaModelCacheWriterPVName(cacheHandle)
+			rwPVC.Spec.StorageClassName = &emptySC
+			rwPVC.Spec.VolumeName = rwPVName
+			if err := ensureCreated(ctx, r.Client,
+				newSambaModelCachePV(rwPVName, rwPVC.Name, ModelCacheInitNamespace, cacheHandle, false, capacity)); err != nil {
+				return reconcile.Result{}, err
+			}
 			// Not yet populated: single-writer populate via the init lease/job.
 			// On success reconcileInitModelCacheNVMesh marks the backing PVC
 			// populated and tears down the writer (backend-aware).
@@ -1228,11 +1236,21 @@ func (r *Reconciler) markSambaCachePopulated(ctx context.Context, cacheHandle st
 // PVC so cleanupIdleModelCaches can reclaim it (and, for Samba, the per-handle
 // server) once no function has referenced the handle for the idle period.
 func (r *Reconciler) touchCacheReferenced(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
+	// Patching the watched PVC requeues every request sharing its handle, and
+	// each of those reconciles would patch it again. Skip the patch while the
+	// existing stamp is fresh (a quarter of the idle period keeps idle GC
+	// accurate enough) so steady state does not fan out into a requeue loop.
+	now := r.nowFunc()
+	if prev, err := time.Parse(primaryPVLastReferencedTimeFormat,
+		pvc.Annotations[primaryPVLastReferencedAnnotationKey]); err == nil &&
+		now.Sub(prev) < r.k8sTimeConfig.ModelCacheIdlePeriod/4 {
+		return nil
+	}
 	old := pvc.DeepCopy()
 	if pvc.Annotations == nil {
 		pvc.Annotations = map[string]string{}
 	}
-	pvc.Annotations[primaryPVLastReferencedAnnotationKey] = r.nowFunc().Format(primaryPVLastReferencedTimeFormat)
+	pvc.Annotations[primaryPVLastReferencedAnnotationKey] = now.Format(primaryPVLastReferencedTimeFormat)
 	if err := r.Client.Patch(ctx, pvc, client.MergeFrom(old)); err != nil {
 		return fmt.Errorf("touch cache referenced: %w", err)
 	}

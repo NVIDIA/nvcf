@@ -108,8 +108,9 @@ func TestProber_createProbePVC(t *testing.T) {
 	require.NotNil(t, pvc.Spec.StorageClassName)
 	assert.Equal(t, "nvcf-miniservice-sc", *pvc.Spec.StorageClassName)
 
-	// Idempotent: re-create returns no error.
-	assert.NoError(t, p.createProbePVC(t.Context(), "probe-pvc", corev1.ReadOnlyMany))
+	// Re-create errors with AlreadyExists: leftovers are deleted before each
+	// probe run, so an existing PVC must not be silently reused.
+	assert.True(t, apierrors.IsAlreadyExists(p.createProbePVC(t.Context(), "probe-pvc", corev1.ReadOnlyMany)))
 }
 
 func TestProber_cleanupProbe(t *testing.T) {
