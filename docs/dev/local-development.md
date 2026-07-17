@@ -19,14 +19,16 @@ cd nvcf
 
 ## Pick a flow
 
-Four canonical flows are documented, one per page.
+Four canonical flows are covered below: pick a topology from
+[Topologies](#topologies) and an install path from
+[Install paths](#install-paths).
 
-| Topology | Install path | Page |
-|---|---|---|
-| Single-cluster | CLI (`nvcf-cli self-hosted install`) | [Single-cluster CLI](./local-development/single-cluster-cli.md) |
-| Single-cluster | Helmfile (`make install HELMFILE_ENV=...`) | [Single-cluster Helmfile](./local-development/single-cluster-helmfile.md) |
-| Multi-cluster | CLI (`nvcf-cli self-hosted install`) | [Multi-cluster CLI](./local-development/multi-cluster-cli.md) |
-| Multi-cluster | Helmfile (`make install HELMFILE_ENV=...`) | [Multi-cluster Helmfile](./local-development/multi-cluster-helmfile.md) |
+| Topology | Install path |
+|---|---|
+| Single-cluster | CLI (`nvcf-cli self-hosted install`) |
+| Single-cluster | Helmfile (`make install HELMFILE_ENV=...`) |
+| Multi-cluster | CLI (`nvcf-cli self-hosted install`) |
+| Multi-cluster | Helmfile (`make install HELMFILE_ENV=...`) |
 
 ## Topologies
 
@@ -86,8 +88,6 @@ the rationale.
   ```bash
   go build -C src/clis/nvcf-cli -o ../../../nvcf-cli .
   ```
-
-Each flow page restates exactly the prerequisites that flow needs.
 
 ## Cleanup
 
