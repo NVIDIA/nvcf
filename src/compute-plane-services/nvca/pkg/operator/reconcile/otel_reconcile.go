@@ -30,8 +30,6 @@ import (
 const (
 	NVCAOTelCollectorAuthenticatorOAuth2Client    = "oauth2client"
 	NVCAOTelCollectorAuthenticatorBearerTokenAuth = "bearertokenauth"
-
-	NVCAOTelCollectorOAuthPlaceholderClientID = "nvca-otel-collector-client-id"
 )
 
 //go:embed manifests/otel_collector_config.yaml
@@ -71,10 +69,10 @@ func useOTelCollectorOAuth2(nb *nvidiaiov1.NVCFBackend) bool {
 	return nb.Spec.VaultConfig.Enabled && getOAuthConfig(nb).ClientID != ""
 }
 
-// getOTelCollectorAuthConfig determines the authentication configuration for the OTel collector.
-// Falls back to NVCAOTelCollectorAuthenticatorBearerTokenAuth when Vault is disabled or client ID is empty.
+// getOTelCollectorAuthConfig selects OAuth2 authentication when Vault is enabled
+// and a client ID is configured; otherwise, it selects bearer-token authentication.
 func (bc *BackendK8sCache) getOTelCollectorAuthConfig(nb *nvidiaiov1.NVCFBackend) otelCollectorAuthConfig {
-	clientID := NVCAOTelCollectorOAuthPlaceholderClientID
+	clientID := ""
 	vaultSecretFilePath := DefaultVaultSecretFilePath
 	authenticator := NVCAOTelCollectorAuthenticatorBearerTokenAuth
 
