@@ -71,7 +71,7 @@ spec:
           mountPath: /nvsnap-lib
   # Copy intercept lib from agent
     - name: get-intercept-lib
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.20
+      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.21
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "-c"]
       args:

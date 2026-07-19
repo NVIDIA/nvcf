@@ -87,7 +87,7 @@ spec:
     # Drops both libnvsnap_intercept.so and the runtime sitecustomize.py.
     # Renamed from get-intercept-lib to get-nvsnap to reflect the broader job.
     - name: get-nvsnap
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.20
+      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.21
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "-c"]
       args:

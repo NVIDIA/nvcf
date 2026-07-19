@@ -24,6 +24,7 @@ metadata:
     nvsnap.io/gpus: "1"
     nvsnap.io/path: "criu"
 spec:
+  automountServiceAccountToken: false
   tolerations:
     - key: "nvidia.com/gpu"
       operator: "Exists"

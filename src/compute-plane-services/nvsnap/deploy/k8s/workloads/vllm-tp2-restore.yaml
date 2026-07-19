@@ -5,7 +5,7 @@
 # Same dumb-reaper convention as vllm-small-restore.yaml, sized for 2 GPUs.
 # Note: k8s may hand this pod a different physical GPU pair than the source
 # had; on p5 (NVSwitch, all-to-all NVLink) any pair is topologically
-# equivalent — device remap correctness is part of the E1 experiment.
+# equivalent - device remap correctness is part of the E1 experiment.
 apiVersion: v1
 kind: Pod
 metadata:

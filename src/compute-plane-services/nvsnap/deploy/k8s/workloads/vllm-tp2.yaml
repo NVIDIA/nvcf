@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # E1 multi-GPU ladder: vLLM TinyLlama-1.1B, TP=2, EAGER (no CUDA graphs),
-# multi-process — the first criu-v2 multi-GPU experiment (issue #25).
+# multi-process - the first criu-v2 multi-GPU experiment (issue #25).
 #
 # Prior findings (MULTIGPU-CR-FINDINGS.md): transparent cuda-checkpoint of
 # EAGER multi-GPU vLLM works; only CUDA-graph capture hangs. This probes the
 # eager case through the modern criu-v2 in-namespace engine: session dump of
 # the TP worker tree, per-GPU-pid cuda-checkpoint via the CRIU plugin, NCCL
-# comms (NVLink P2P on p5), torch TCPStore, and worker ZMQ — all in one dump.
+# comms (NVLink P2P on p5), torch TCPStore, and worker ZMQ - all in one dump.
 # Force with: CAPTURE_PATH=criu-v2 ./scripts/test-e2e.sh vllm-tp2
 apiVersion: v1
 kind: Pod
@@ -26,6 +26,7 @@ metadata:
     nvsnap.io/gpus: "2"
     nvsnap.io/path: "criu"
 spec:
+  automountServiceAccountToken: false
   tolerations:
     - key: "nvidia.com/gpu"
       operator: "Exists"
@@ -48,13 +49,13 @@ spec:
           # to a rootfs file; bash stays pid1 to reap orphans. See vllm-small.
           #
           # E1b config-severed profile (ember M0 Exp 3): GPU peer state is THE
-          # multi-GPU cuda-checkpoint blocker — with default config (NVLink P2P
+          # multi-GPU cuda-checkpoint blocker - with default config (NVLink P2P
           # + custom all-reduce) the TP workers hang in UvmUnregisterGpu even
           # when ALL ranks are locked first (verified 2026-07-18, driver
           # 580.126). Disabling every peer-state path (flags + env below) drops
           # all-reduce to PYNCCL over sockets, and per-rank cuda-checkpoint
           # works. Default-config support needs the transparent sever
-          # (teardown/reinit) — the nvsnap_cr.so/lib-sever port, issue #25.
+          # (teardown/reinit) - the nvsnap_cr.so/lib-sever port, issue #25.
           nohup setsid vllm serve \
             --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
             --host 0.0.0.0 \
