@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # pyzmq wheel builder for NVSNAP
 #
 # Builds pyzmq linked against our patched libzmq (not bundled stock libzmq).

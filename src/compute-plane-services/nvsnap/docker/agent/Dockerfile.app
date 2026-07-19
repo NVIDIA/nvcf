@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # NVSNAP Agent Application Image
 # Builds on top of nvsnap-agent-base with Go binaries and intercept library
 # This is the image that gets rebuilt frequently during development

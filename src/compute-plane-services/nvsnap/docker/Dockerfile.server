@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # NVSNAP Server Dockerfile
 # Multi-stage: build React UI, build Go server (embeds UI), minimal runtime.
 

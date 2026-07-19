@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Dockerfile for the nvsnap-l2-wait init container (nvsnap#147).
 #
 # This container is injected by the mutating webhook onto restore

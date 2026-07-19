@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # NVSNAP Agent Dockerfile - Builds CRIU from source for reproducibility
 #
 # This Dockerfile builds everything from versioned source code:
