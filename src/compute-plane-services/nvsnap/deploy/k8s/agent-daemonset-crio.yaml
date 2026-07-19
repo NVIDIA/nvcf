@@ -48,7 +48,7 @@ spec:
         - name: nvsnap-pull-secret
       containers:
         - name: agent
-          image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.17
+          image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.20
           imagePullPolicy: Always
           args:
             - --cuda-checkpoint-path=/criu-bundle/cuda-checkpoint
