@@ -40,6 +40,11 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Decide which languages to analyze. On a PR, only the language(s) whose files
+  # changed run (a Rust-only PR skips the ~25 min Go autobuild, and vice versa).
+  # Pushes to main and the weekly schedule scan both. Emits a dynamic matrix so
+  # no job-level `if` referencing `matrix` is needed (that context is not allowed
+  # in a job `if`). Uses the GitHub API, not a third-party action (org allowlist).
   detect:
     name: Detect changed languages
     runs-on: ubuntu-latest
@@ -47,8 +52,8 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      go: ${{ steps.f.outputs.go }}
-      rust: ${{ steps.f.outputs.rust }}
+      matrix: ${{ steps.f.outputs.matrix }}
+      any: ${{ steps.f.outputs.any }}
     steps:
       - name: Detect changed languages
         id: f
@@ -64,33 +69,29 @@ jobs:
           fi
           go=false; rust=false
           if [ "${{ github.event_name }}" != "pull_request" ]; then go=true; rust=true; fi
-          printf '%s\n' "$files" | grep -qE '(\.go|/go\.mod|/go\.sum)$'         && go=true   || true
-          printf '%s\n' "$files" | grep -qE '(\.rs|/Cargo\.toml|/Cargo\.lock)$' && rust=true || true
+          if printf '%s\n' "$files" | grep -qE '(\.go|/go\.mod|/go\.sum)$';         then go=true;   fi
+          if printf '%s\n' "$files" | grep -qE '(\.rs|/Cargo\.toml|/Cargo\.lock)$'; then rust=true; fi
           # A change to the scan config itself re-scans both languages.
-          printf '%s\n' "$files" | grep -qE '\.github/workflows/codeql\.yml$'    && { go=true; rust=true; } || true
-          echo "go=$go"     >> "$GITHUB_OUTPUT"
-          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          if printf '%s\n' "$files" | grep -qE '\.github/workflows/codeql\.yml$';    then go=true; rust=true; fi
+          inc=""
+          if [ "$go" = true ];   then inc="${inc}{\"language\":\"go\",\"build-mode\":\"autobuild\"},"; fi
+          if [ "$rust" = true ]; then inc="${inc}{\"language\":\"rust\",\"build-mode\":\"none\"},"; fi
+          inc="${inc%,}"
+          echo "matrix={\"include\":[${inc}]}" >> "$GITHUB_OUTPUT"
+          if [ -n "$inc" ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
           echo "changed-languages: go=$go rust=$rust"
 
   analyze:
     name: CodeQL (${{ matrix.language }})
     needs: detect
-    # On a PR, only run the language(s) that actually changed: a Rust-only PR
-    # skips the expensive Go autobuild, and a Go-only PR skips Rust. Pushes to
-    # main and the weekly schedule always run both for a complete baseline.
-    if: github.event_name != 'pull_request' || needs.detect.outputs[matrix.language] == 'true'
+    if: needs.detect.outputs.any == 'true'
     runs-on: ubuntu-latest
     strategy:
       # Keep one language's failure from cancelling the others.
       fail-fast: false
-      matrix:
-        include:
-          # Go is a traced language and does not support build-mode none, so it
-          # autobuilds. Rust has no autobuilder and uses buildless extraction.
-          - language: go
-            build-mode: autobuild
-          - language: rust
-            build-mode: none
+      # Only the languages detect selected. Go must autobuild (CodeQL 2.26
+      # confirmed Go does not support build-mode none); Rust uses buildless.
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
