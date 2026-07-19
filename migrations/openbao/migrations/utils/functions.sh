@@ -469,27 +469,33 @@ EOF
 # @param target_service_account_namespace The namespace of the target service account
 # @param client_service_name The name of the client service
 # @param scopes The scopes to be added to the JWT secret role
+# @param issuer_override Optional. When non-empty, overrides the derived
+#        "http://<target_service_name>.<target_service_account_namespace>.svc.cluster.local"
+#        issuer. Leave empty to preserve the default in-cluster issuer.
 #
 function generate_jwt_secret_role() {
   local target_service_account_namespace=$1
   local target_service_name=$2
   local client_service_name=$3
   local scopes=$4
+  local issuer_override=${5:-""}
 
   local quoted_scopes=$(sed 's/\([^,]*\)/"\1"/g' <<< "$scopes")
-  local issuer="http://${target_service_name}.${target_service_account_namespace}.svc.cluster.local"
 
-  local role_json=$(cat <<EOF
-{
-  "issuer":"${issuer}",
-  "claims":{
-    "azp":"${client_service_name}",
-    "aud":["${client_service_name}","s:${target_service_name}"],
-    "scopes":[${quoted_scopes}],
-    "sub":"${client_service_name}"
-  }
-}
-EOF
-)
+  local issuer="http://${target_service_name}.${target_service_account_namespace}.svc.cluster.local"
+  if [[ -n "${issuer_override}" ]]; then
+    issuer="${issuer_override}"
+  fi
+
+  # Build the role JSON with jq so every string value is escaped correctly.
+  # Delegating to --arg handles quotes, backslashes, and control characters,
+  # which manual interpolation into a heredoc cannot do safely.
+  local role_json
+  role_json=$(jq -n \
+    --arg issuer     "${issuer}" \
+    --arg client     "${client_service_name}" \
+    --arg target     "${target_service_name}" \
+    --argjson scopes "[${quoted_scopes}]" \
+    '{issuer: $issuer, claims: {azp: $client, aud: [$client, ("s:" + $target)], scopes: $scopes, sub: $client}}')
   echo "$role_json"
 }

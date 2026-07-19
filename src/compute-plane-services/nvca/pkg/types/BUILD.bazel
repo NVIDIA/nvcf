@@ -9,6 +9,7 @@ go_library(
         "common_labels.go",
         "gpu.go",
         "miniservice_types.go",
+        "modelcache_types.go",
         "resource_types.go",
         "types.go",
     ],

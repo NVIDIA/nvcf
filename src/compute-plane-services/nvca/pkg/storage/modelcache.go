@@ -27,6 +27,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	otelattr "go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	batchv1 "k8s.io/api/batch/v1"
 	coordv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -36,15 +38,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	modelcachetypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
+	nvcaotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/otel"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage/cacheprobe"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -82,6 +85,17 @@ const (
 	primaryPVLabelKey   = fqdnPrefix + "/modelcache-primary-pv"
 	primaryPVLabelValue = "true"
 
+	// cachePopulatedLabelKey marks a per-handle backing PVC as holding a fully
+	// populated cache. It is the durable, restart-safe "cache populated" signal
+	// for the backends that key reuse on a PVC rather than an NVMesh primary PV:
+	// the Samba per-handle backing PVC (samba-<handle>) and the shared-FS retained
+	// writer PVC. Consumers check it before deciding to run the single-writer
+	// init, so a cold reconcile (e.g. after an agent restart, when the in-memory
+	// init-status fan-out is empty) never re-runs the writer or hangs on the
+	// lease. It is the PVC analogue of the primaryPVLabelKey marker.
+	cachePopulatedLabelKey   = fqdnPrefix + "/modelcache-populated"
+	cachePopulatedLabelValue = "true"
+
 	// The annotation applied to primary PV's that denotes the last time
 	// a function or task referenced it.
 	// If now + modelCacheIdlePeriod > this value and no model cache storage requests
@@ -96,14 +110,16 @@ const (
 )
 
 // terminalErrorWithMetric records a model cache failure metric and returns a terminal error.
+// These cover early/validation failures where the backend is not necessarily
+// known, so the backend label is left empty.
 func (r *Reconciler) terminalErrorWithMetric(reason, msg string) error {
-	r.metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, reason)
+	r.metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, reason, "")
 	return reconcile.TerminalError(errors.New(msg))
 }
 
 // terminalErrorWithMetricErr records a model cache failure metric and returns a terminal error wrapping the given error.
 func (r *Reconciler) terminalErrorWithMetricErr(reason string, err error) error {
-	r.metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, reason)
+	r.metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, reason, "")
 	return reconcile.TerminalError(err)
 }
 
@@ -126,17 +142,72 @@ func mapPodIssuesToFailureReason(podIssues sets.Set[string]) string {
 	return modelcachetypes.ReasonInitJobFailed
 }
 
+// modelCacheTracer traces model cache reconciliation.
+var modelCacheTracer = nvcaotel.NewTracer(nvcaotel.WithName(
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage/modelcache"))
+
+// doModelCache wraps the model cache reconcile in an inbound span (nesting under
+// the per-request parent span established from the ICMS trace context in
+// Reconcile) and delegates to doModelCacheRouted.
 func (r *Reconciler) doModelCache(ctx context.Context,
 	st nvcav1new.StorageRequest, stCopy *nvcav1new.StorageRequest,
 	icmsReq *nvcav2beta1.ICMSRequest,
 ) (reconcile.Result, error) {
-	res, err := r.doModelCacheNVMesh(ctx, st, stCopy, icmsReq)
+	var res reconcile.Result
+	err := nvcaotel.InvokeWithSpan(ctx, modelCacheTracer, "nvca.modelcache.reconcile",
+		func(ctx context.Context) error {
+			var e error
+			res, e = r.doModelCacheRouted(ctx, st, stCopy, icmsReq)
+			return e
+		},
+		oteltrace.WithAttributes(nvcaotel.GetOTelAttributesFromICMSRequest(icmsReq)...),
+	)
+	return res, err
+}
+
+func (r *Reconciler) doModelCacheRouted(ctx context.Context,
+	st nvcav1new.StorageRequest, stCopy *nvcav1new.StorageRequest,
+	icmsReq *nvcav2beta1.ICMSRequest,
+) (reconcile.Result, error) {
+	// Select the populate path by the backend stamped on the request by the
+	// miniservice reconciler (SelectHelmCacheBackend). Empty backend defaults to
+	// NVMesh for backward compatibility.
+	var res reconcile.Result
+	var err error
+	backend := ""
+	if stCopy.Spec.ModelCache != nil {
+		backend = stCopy.Spec.ModelCache.Backend
+	}
+	selectedBackend := backend
+	if selectedBackend == "" {
+		selectedBackend = string(HelmCacheBackendNVMesh)
+	}
+	// Tag the reconcile span with the selected backend for filtering.
+	oteltrace.SpanFromContext(ctx).SetAttributes(otelattr.String("nvcf.modelcache.backend", selectedBackend))
+	// Record the selected backend once, on the first reconcile of the request.
+	if st.Status.Phase == nvcav1new.StorageUnknown {
+		r.metrics.RecordModelCacheBackendSelected(selectedBackend)
+	}
+	switch backend {
+	case string(HelmCacheBackendSharedFS):
+		res, err = r.doModelCacheSharedFS(ctx, st, stCopy, icmsReq)
+	case string(HelmCacheBackendSamba):
+		res, err = r.doModelCacheSamba(ctx, st, stCopy, icmsReq)
+	case "", string(HelmCacheBackendNVMesh):
+		// Empty preserves requests created before the Backend field existed.
+		res, err = r.doModelCacheNVMesh(ctx, st, stCopy, icmsReq)
+	default:
+		// A typo or a non-provisioning value (e.g. "ephemeral") must not fall
+		// through to NVMesh provisioning against an unavailable backend.
+		err = r.terminalErrorWithMetric(modelcachetypes.ReasonCacheSpecInvalid,
+			fmt.Sprintf("unsupported model cache backend %q", backend))
+	}
 	if isTerminal(err) {
 		stCopy.Status.Phase = nvcav1new.StorageFailed
 	}
 
 	if stCopy.Status.Phase == nvcav1new.StorageFailed {
-		if errs := r.cleanupInitModelCache(ctx, stCopy); len(errs) == 0 {
+		if errs := r.cleanupInitModelCache(ctx, stCopy, false); len(errs) == 0 {
 			meta.SetStatusCondition(&st.Status.Conditions, metav1.Condition{
 				Type:    ConditionTypeCleanupSuccessful,
 				Status:  metav1.ConditionTrue,
@@ -153,6 +224,360 @@ func (r *Reconciler) doModelCache(ctx context.Context,
 	}
 
 	return res, err
+}
+
+// sharedFSProbeTTLSeconds is how long a cached CSI ROX/RWX probe result for
+// nvcf-miniservice-sc is reused before re-probing.
+const sharedFSProbeTTLSeconds = 3600
+
+// resolveSharedFSStrategy returns the cached probe strategy for nvcf-miniservice-sc,
+// re-probing (and persisting the result) when no valid cached strategy exists.
+func (r *Reconciler) resolveSharedFSStrategy(ctx context.Context) (cacheprobe.AccessModeStrategy, error) {
+	log := logf.FromContext(ctx)
+	store := cacheprobe.NewStateStore(r.Client, ModelCacheInitNamespace)
+	strategy, err := store.GetStrategy(ctx, HelmCacheSharedStorageClassName)
+	if err != nil {
+		return cacheprobe.StrategyFallback, err
+	}
+	if strategy != cacheprobe.StrategyFallback {
+		return strategy, nil
+	}
+	// GetStrategy returns Fallback both when results are missing/expired and
+	// when a fresh probe found the class unsupported. Honour the TTL of a fresh
+	// negative result: if the class was recently probed and found unusable, do
+	// not re-probe (which would create a PVC+pod) on every reconcile.
+	fresh, err := store.HasFreshResult(ctx, HelmCacheSharedStorageClassName)
+	if err != nil {
+		return cacheprobe.StrategyFallback, err
+	}
+	if fresh {
+		return cacheprobe.StrategyFallback, nil
+	}
+	// No valid cached result: probe ROX then RWX and persist.
+	prober := cacheprobe.NewProber(r.Client, ModelCacheInitNamespace, HelmCacheSharedStorageClassName, sharedFSProbeTTLSeconds)
+	strategy, results := prober.DetermineStrategy(ctx)
+	if err := store.Save(ctx, results); err != nil {
+		log.Error(err, "Failed to persist shared-FS probe results")
+	}
+	return strategy, nil
+}
+
+// doModelCacheSharedFS populates and exposes the model cache on a shared
+// filesystem storage class (nvcf-miniservice-sc), used when NVMesh is not present. The
+// cache is populated once (single-writer via the init lease/job, writing to the
+// shared backend), and each workload namespace gets a read-only PVC on the same
+// class that the existing webhook mounts via ModelCacheStatus.ROPVCName. The
+// reader access mode (ROX preferred, RWX fallback) is chosen by a CSI probe.
+//
+// Unlike the NVMesh path it does not create primary/secondary PVs or rewrite
+// CSI volume handles: cross-namespace sharing is a property of the shared class.
+func (r *Reconciler) doModelCacheSharedFS(ctx context.Context,
+	st nvcav1new.StorageRequest, stCopy *nvcav1new.StorageRequest,
+	icmsReq *nvcav2beta1.ICMSRequest,
+) (reconcile.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if stCopy.Spec.ModelCache == nil {
+		return reconcile.Result{}, r.terminalErrorWithMetric(modelcachetypes.ReasonCacheSpecInvalid, "modelCache field is not set")
+	}
+	cacheHandle := stCopy.Spec.ModelCache.CacheHandle
+	if cacheHandle == "" {
+		return reconcile.Result{}, r.terminalErrorWithMetric(modelcachetypes.ReasonCacheSpecInvalid, "modelCache.cacheHandle field is not set")
+	}
+	if stCopy.Labels == nil {
+		stCopy.Labels = map[string]string{}
+	}
+	if stCopy.Labels[modelCacheHandleLabelKey] == "" {
+		stCopy.Labels[modelCacheHandleLabelKey] = cacheHandle
+	}
+
+	rwPVC, initJob, pullSecrets, err := r.findAndDecodeCacheArtifacts(icmsReq, st.Namespace)
+	if err != nil {
+		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("find and decode artifacts: %w", err))
+	}
+	sharedSC := HelmCacheSharedStorageClassName
+	rwPVC.Spec.StorageClassName = &sharedSC
+
+	// Gate on the durable populated marker, mirroring the NVMesh/Samba
+	// getPrimaryPV gate. Shared storage shares data across namespaces natively
+	// so there is no primary PV, but consumers still need a restart-safe signal
+	// that the cache is populated; the in-memory init-status fan-out is lost on
+	// agent restart. The marker is a label on the retained writer RW PVC.
+	writerPVC, populated, err := r.sharedFSCachePopulated(ctx, rwPVC.Name)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	switch st.Status.Phase {
+	case nvcav1new.StorageUnknown, nvcav1new.StoragePending, nvcav1new.StorageInitRunning:
+		if !populated {
+			// Not yet populated: populate the cache on the shared backend via
+			// the single-writer init path. Populating the writer PVC does not
+			// need the reader access-mode probe.
+			return r.doInitModelCacheNVMesh(ctx, st, stCopy, rwPVC, initJob, pullSecrets, HelmCacheBackendSharedFS)
+		}
+		// Cache already populated (durable marker present): skip init and bind
+		// this namespace's reader below.
+		r.metrics.RecordModelCacheReuse(string(HelmCacheBackendSharedFS))
+		stCopy.Status.Phase = nvcav1new.StorageCreating
+	case nvcav1new.StorageFailed, nvcav1new.StorageRuntimeError:
+		log.V(1).Error(fmt.Errorf("storage request is failed"), "Ignoring failed shared-FS model cache")
+		return reconcile.Result{}, nil
+	case nvcav1new.StorageCreating, nvcav1new.StorageReady:
+		// Cache populated; ensure the per-namespace reader PVC below.
+	}
+
+	// Record last-referenced on the retained writer PVC so idle GC
+	// (reclaimIdleSharedFSModelCaches) can reclaim it once no function
+	// references the handle. Best effort.
+	if writerPVC != nil {
+		if err := r.touchCacheReferenced(ctx, writerPVC); err != nil {
+			log.V(1).Error(err, "Failed to update shared-FS writer PVC last-referenced", "pvc", writerPVC.Name)
+		}
+	}
+
+	// Reader RO PVC in the workload namespace on the shared class. With a
+	// shared-capable class all consumers see the same published cache data.
+	roPVCName := "ro-pvc-" + cacheHandle
+	roPVC := &corev1.PersistentVolumeClaim{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: roPVCName, Namespace: stCopy.Namespace}, roPVC); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, err
+		}
+		// The reader PVC does not exist yet: probe the shared class once to
+		// choose its access mode. The probe is intentionally scoped to reader
+		// creation; once the reader exists we never re-probe, so a transient
+		// probe failure after the TTL expires can never mark an already-healthy
+		// cache as failed.
+		strategy, err := r.resolveSharedFSStrategy(ctx)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		if strategy == cacheprobe.StrategyFallback {
+			return reconcile.Result{}, r.terminalErrorWithMetric("shared_fs_unusable",
+				fmt.Sprintf("%s supports neither ROX nor RWX; shared caching disabled", HelmCacheSharedStorageClassName))
+		}
+		accessMode := corev1.ReadWriteMany
+		if strategy == cacheprobe.StrategyROX {
+			accessMode = corev1.ReadOnlyMany
+		}
+		roPVC = &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        roPVCName,
+				Namespace:   stCopy.Namespace,
+				Labels:      types.GetLabelsForRequest(icmsReq, r.fff),
+				Annotations: types.GetAnnotationsForRequest(icmsReq),
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes:      []corev1.PersistentVolumeAccessMode{accessMode},
+				StorageClassName: &sharedSC,
+				Resources:        rwPVC.Spec.Resources,
+			},
+		}
+		maps.Copy(roPVC.Labels, getClusterWideResourceLabels(stCopy))
+		if err := r.setControlledObjectMeta(ctx, stCopy, roPVC); err != nil {
+			return reconcile.Result{}, err
+		}
+		if err := r.Client.Create(ctx, roPVC); err != nil {
+			return reconcile.Result{}, err
+		}
+		log.Info("Shared-FS reader RO PVC created", "pvc", roPVCName, "accessMode", accessMode)
+	}
+
+	switch r.getPVCState(roPVC) {
+	case pvcBound:
+		if stCopy.Status.Phase != nvcav1new.StorageReady || stCopy.Status.ModelCache == nil {
+			log.Info("Shared-FS reader RO PVC bound, storage is ready")
+			stCopy.Status.Phase = nvcav1new.StorageReady
+			stCopy.Status.ModelCache = &nvcav1new.ModelCacheStatus{ROPVCName: roPVC.Name}
+			r.metrics.RecordModelCacheResult(modelcachetypes.ResultSuccess, "", string(HelmCacheBackendSharedFS))
+		}
+	case pvcBindFailed:
+		log.Error(fmt.Errorf("pvc bind failed"), "Shared-FS reader RO PVC failed", "pvc", roPVC.Name)
+		stCopy.Status.Phase = nvcav1new.StorageFailed
+		r.metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCBindFailed, string(HelmCacheBackendSharedFS))
+	case pvcUnbound:
+		// PVC events will requeue the storage request.
+	}
+
+	return reconcile.Result{}, nil
+}
+
+// doModelCacheSamba populates and exposes the model cache on an NVCA-managed
+// per-cacheHandle Samba server (backend 3, "Samba over NVMesh"). Each handle gets
+// its OWN Samba server + nvcf-sc data PVC (samba-<cacheHandle>, sized to the
+// request's cacheSize) exporting one SMB share; there is no shared/global data
+// PVC. The per-handle backing PVC is the durable reuse marker: if it already
+// exists the cache is reused, and a cachePopulatedLabelKey label on it (stamped
+// by the writer on success) signals readers may safely attach. A single-writer
+// init job populates the share; on success the writer (job/RW SMB PV/PVC/lease)
+// is torn down and the backing PVC is marked populated. Each workload namespace
+// then binds its own RO SMB PV/PVC to the share. It creates no StorageClass
+// (nvcf-miniservice-sc is the operator's branch-2 class) and needs no CSI probe (SMB is
+// RWX/ROX). Idle per-handle servers/PVCs are reclaimed by cleanupIdleModelCaches.
+func (r *Reconciler) doModelCacheSamba(ctx context.Context,
+	st nvcav1new.StorageRequest, stCopy *nvcav1new.StorageRequest,
+	icmsReq *nvcav2beta1.ICMSRequest,
+) (reconcile.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if stCopy.Spec.ModelCache == nil {
+		return reconcile.Result{}, r.terminalErrorWithMetric(modelcachetypes.ReasonCacheSpecInvalid, "modelCache field is not set")
+	}
+	cacheHandle := stCopy.Spec.ModelCache.CacheHandle
+	if cacheHandle == "" {
+		return reconcile.Result{}, r.terminalErrorWithMetric(modelcachetypes.ReasonCacheSpecInvalid, "modelCache.cacheHandle field is not set")
+	}
+	if stCopy.Labels == nil {
+		stCopy.Labels = map[string]string{}
+	}
+	if stCopy.Labels[modelCacheHandleLabelKey] == "" {
+		stCopy.Labels[modelCacheHandleLabelKey] = cacheHandle
+	}
+
+	rwPVC, initJob, pullSecrets, err := r.findAndDecodeCacheArtifacts(icmsReq, st.Namespace)
+	if err != nil {
+		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("find and decode artifacts: %w", err))
+	}
+	// cacheSize comes from the request payload (the translator sizes the cache
+	// PVC from CacheLaunchSpecification.CacheSize): the per-handle backing volume
+	// is sized to it, not a global guess.
+	capacity := rwPVC.Spec.Resources.Requests[corev1.ResourceStorage]
+
+	// Ensure the per-handle Samba server + nvcf-sc backing PVC (samba-<handle>,
+	// sized to cacheSize). Idempotent: an existing backing PVC is reused.
+	smbResources := corev1.ResourceRequirements{
+		Limits:   corev1.ResourceList(r.cfg.Agent.SharedStorage.Server.ContainerResources.Limits),
+		Requests: corev1.ResourceList(r.cfg.Agent.SharedStorage.Server.ContainerResources.Requests),
+		Claims:   r.cfg.Agent.SharedStorage.Server.ContainerResources.Claims,
+	}
+	var ready bool
+	err = nvcaotel.InvokeWithSpan(ctx, modelCacheTracer, "nvca.modelcache.samba.ensure_infra",
+		func(ctx context.Context) error {
+			var e error
+			ready, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle, r.cfg.Agent.SharedStorage.Server.Image, smbResources, capacity)
+			return e
+		},
+		oteltrace.WithAttributes(otelattr.String("nvcf.modelcache.handle", cacheHandle)),
+	)
+	if err != nil {
+		// This runs on EVERY reconcile of a Samba request (including ones whose
+		// cache is already Ready), so a transient API error (timeout, 429, 503)
+		// must requeue, never terminally fail the request. Only genuinely
+		// non-transient errors (misconfiguration, Forbidden, Invalid) are
+		// terminal.
+		if k8sutil.IsTransientK8sError(err) {
+			log.V(1).Info("Transient error ensuring Samba model cache infra, requeuing", "error", err.Error())
+			return reconcile.Result{Requeue: true}, nil
+		}
+		return reconcile.Result{}, r.terminalErrorWithMetricErr("samba_infra_failed", fmt.Errorf("ensure samba model cache infra: %w", err))
+	}
+	if !ready {
+		log.V(1).Info("Samba model cache server not ready, requeuing")
+		return reconcile.Result{RequeueAfter: defaultRequeueDelay}, nil
+	}
+
+	// The per-handle backing PVC is the durable reuse marker. Its existence means
+	// the cache is being provisioned; its cachePopulatedLabelKey label (stamped by
+	// the writer on success) means readers may attach. This is restart-safe and
+	// cross-namespace: it does not rely on the init lease or in-memory fan-out.
+	backingPVCName := SambaModelCacheBackingPVCName(cacheHandle)
+	backingPVC := &corev1.PersistentVolumeClaim{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: backingPVCName}, backingPVC); err != nil {
+		return reconcile.Result{}, err
+	}
+	populated := backingPVC.Labels[cachePopulatedLabelKey] == cachePopulatedLabelValue
+
+	switch st.Status.Phase {
+	case nvcav1new.StorageUnknown, nvcav1new.StoragePending, nvcav1new.StorageInitRunning:
+		if !populated {
+			// Writer RW SMB PV bound to the per-handle Samba share root. Each
+			// handle has its own server/share, so no per-handle subdir (and no
+			// subPath) is needed. It is plumbing, not data, and is created only
+			// while population is required: cleanupInitModelCache deletes it
+			// with the writer PVC after population (static PVs are never
+			// reclaimed by the PV controller), and recreating it afterwards
+			// would leave an orphaned Released static PV per handle.
+			emptySC := ""
+			rwPVName := sambaModelCacheWriterPVName(cacheHandle)
+			rwPVC.Spec.StorageClassName = &emptySC
+			rwPVC.Spec.VolumeName = rwPVName
+			if err := ensureCreated(ctx, r.Client,
+				newSambaModelCachePV(rwPVName, rwPVC.Name, ModelCacheInitNamespace, cacheHandle, false, capacity)); err != nil {
+				return reconcile.Result{}, err
+			}
+			// Not yet populated: single-writer populate via the init lease/job.
+			// On success reconcileInitModelCacheNVMesh marks the backing PVC
+			// populated and tears down the writer (backend-aware).
+			return r.doInitModelCacheNVMesh(ctx, st, stCopy, rwPVC, initJob, pullSecrets, HelmCacheBackendSamba)
+		}
+		// Cache populated: skip init and bind the per-namespace reader below.
+		r.metrics.RecordModelCacheReuse(string(HelmCacheBackendSamba))
+		stCopy.Status.Phase = nvcav1new.StorageCreating
+	case nvcav1new.StorageFailed, nvcav1new.StorageRuntimeError:
+		log.V(1).Error(fmt.Errorf("storage request is failed"), "Ignoring failed Samba model cache")
+		return reconcile.Result{}, nil
+	case nvcav1new.StorageCreating, nvcav1new.StorageReady:
+		if !populated {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonPVCSetupFailed,
+				fmt.Errorf("samba backing PVC %s not marked populated after init", backingPVCName))
+		}
+		// Cache populated; ensure the per-namespace reader PV/PVC below.
+	}
+
+	// Record last-referenced on the backing PVC so idle GC can reclaim the
+	// per-handle server/PVC once no function references the handle. Best effort.
+	if err := r.touchCacheReferenced(ctx, backingPVC); err != nil {
+		log.V(1).Error(err, "Failed to update Samba backing PVC last-referenced", "pvc", backingPVCName)
+	}
+
+	// Reader RO PV + PVC in the workload namespace, bound statically to the same
+	// per-handle Samba share, mounted read-only.
+	roPVCName := "ro-pvc-" + cacheHandle
+	roPVName := "samba-ro-pv-" + stCopy.Namespace + "-" + cacheHandle
+	roPVC := &corev1.PersistentVolumeClaim{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: roPVCName, Namespace: stCopy.Namespace}, roPVC); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, err
+		}
+		// Carry the cluster-wide resource labels so the per-request cleanup
+		// (doCleanupModelCacheNVMesh lists PVs by these labels) deletes this
+		// static PV when the StorageRequest goes away; the PV controller never
+		// reclaims a Released static PV on its own.
+		roPV := newSambaModelCachePV(roPVName, roPVCName, stCopy.Namespace, cacheHandle, true, capacity)
+		maps.Copy(roPV.Labels, getClusterWideResourceLabels(stCopy))
+		if err := ensureCreated(ctx, r.Client, roPV); err != nil {
+			return reconcile.Result{}, err
+		}
+		roPVC = newSambaModelCachePVC(roPVCName, stCopy.Namespace, roPVName, true, capacity)
+		roPVC.Labels = types.GetLabelsForRequest(icmsReq, r.fff)
+		roPVC.Annotations = types.GetAnnotationsForRequest(icmsReq)
+		maps.Copy(roPVC.Labels, getClusterWideResourceLabels(stCopy))
+		if err := r.setControlledObjectMeta(ctx, stCopy, roPVC); err != nil {
+			return reconcile.Result{}, err
+		}
+		if err := r.Client.Create(ctx, roPVC); err != nil {
+			return reconcile.Result{}, err
+		}
+		log.Info("Samba reader RO PVC created", "pvc", roPVCName)
+	}
+
+	switch r.getPVCState(roPVC) {
+	case pvcBound:
+		if stCopy.Status.Phase != nvcav1new.StorageReady || stCopy.Status.ModelCache == nil {
+			log.Info("Samba reader RO PVC bound, storage is ready")
+			stCopy.Status.Phase = nvcav1new.StorageReady
+			stCopy.Status.ModelCache = &nvcav1new.ModelCacheStatus{ROPVCName: roPVC.Name}
+			r.metrics.RecordModelCacheResult(modelcachetypes.ResultSuccess, "", string(HelmCacheBackendSamba))
+		}
+	case pvcBindFailed:
+		log.Error(fmt.Errorf("pvc bind failed"), "Samba reader RO PVC failed", "pvc", roPVC.Name)
+		stCopy.Status.Phase = nvcav1new.StorageFailed
+		r.metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCBindFailed, string(HelmCacheBackendSamba))
+	case pvcUnbound:
+		// PVC events will requeue the storage request.
+	}
+
+	return reconcile.Result{}, nil
 }
 
 var accessModesRO = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
@@ -198,11 +623,12 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 	switch st.Status.Phase {
 	case nvcav1new.StorageUnknown, nvcav1new.StoragePending, nvcav1new.StorageInitRunning:
 		if apierrors.IsNotFound(ppvErr) {
-			return r.doInitModelCacheNVMesh(ctx, st, stCopy, rwPVC, initJob, workerPullSecrets)
+			return r.doInitModelCacheNVMesh(ctx, st, stCopy, rwPVC, initJob, workerPullSecrets, HelmCacheBackendNVMesh)
 		} else if ppvErr != nil {
 			return reconcile.Result{}, ppvErr
 		}
 		// Fallthrough and finalize secondary storage objects since the primary PV exists.
+		r.metrics.RecordModelCacheReuse(string(HelmCacheBackendNVMesh))
 		stCopy.Status.Phase = nvcav1new.StorageCreating
 	case nvcav1new.StorageCreating, nvcav1new.StorageReady:
 		if ppvErr != nil {
@@ -216,14 +642,14 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		// Fallthrough and finalize secondary storage objects since there were no issues retrieving.
 	case nvcav1new.StorageFailed, nvcav1new.StorageRuntimeError:
 		log.V(1).Error(fmt.Errorf("storage request is failed"), "Ignoring failed storage request")
-		return reconcile.Result{}, r.doCleanupModelCacheNVMesh(ctx, stCopy)
+		return r.doCleanupModelCacheNVMesh(ctx, stCopy)
 	}
 
 	switch primaryPV.Status.Phase {
 	case corev1.VolumeFailed:
 		log.Info("Primary PV is failed", "pv", primaryPV.Name)
 		stCopy.Status.Phase = nvcav1new.StorageFailed
-		r.metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCSetupFailed)
+		r.metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCSetupFailed, string(HelmCacheBackendNVMesh))
 		return reconcile.Result{}, nil
 	case corev1.VolumePending:
 		log.V(1).Info("Primary PV is pending", "pv", primaryPV.Name)
@@ -342,12 +768,12 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 				ROPVCName:    roPVC.Name,
 				VolumeHandle: secondaryPV.Spec.CSI.VolumeHandle,
 			}
-			r.metrics.RecordModelCacheResult(modelcachetypes.ResultSuccess, "")
+			r.metrics.RecordModelCacheResult(modelcachetypes.ResultSuccess, "", string(HelmCacheBackendNVMesh))
 		}
 	case pvcBindFailed:
 		log.Error(fmt.Errorf("pvc bind failed"), "RO PVC failed", "pvc", roPVC.Name)
 		stCopy.Status.Phase = nvcav1new.StorageFailed
-		r.metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCBindFailed)
+		r.metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCBindFailed, string(HelmCacheBackendNVMesh))
 	case pvcUnbound:
 		// PVC events will requeue the storage request.
 		//
@@ -398,6 +824,7 @@ func (r *Reconciler) doInitModelCacheNVMesh(ctx context.Context,
 	rwPVC *corev1.PersistentVolumeClaim,
 	initJob *batchv1.Job,
 	pullSecrets []*corev1.Secret,
+	backend HelmCacheBackend,
 ) (res reconcile.Result, err error) {
 	logf.IntoContext(ctx, logf.FromContext(ctx, "namespace", ModelCacheInitNamespace))
 
@@ -429,7 +856,7 @@ func (r *Reconciler) doInitModelCacheNVMesh(ctx context.Context,
 	r.initStatuses.Lock()
 	defer r.initStatuses.Unlock()
 
-	res, err = r.reconcileInitModelCacheNVMesh(ctx, st, stCopy, rwPVC, initJob, pullSecrets)
+	res, err = r.reconcileInitModelCacheNVMesh(ctx, st, stCopy, rwPVC, initJob, pullSecrets, backend)
 
 	// The lease holder updates the status for all non-holders (fan-out).
 	if existingStatus, ok := r.initStatuses.get(cacheHandle); !ok ||
@@ -453,6 +880,7 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 	rwPVC *corev1.PersistentVolumeClaim,
 	initJob *batchv1.Job,
 	pullSecrets []*corev1.Secret,
+	backend HelmCacheBackend,
 ) (reconcile.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -473,8 +901,11 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 			initJob.Spec.Template.Labels = map[string]string{}
 		}
 		initJob.Spec.Template.Labels[modelCacheHandleLabelKey] = stCopy.Spec.ModelCache.CacheHandle
-		// NVMesh client readiness scheduling.
-		SetNVMeshClientStatusSchedulingRequirement(&initJob.Spec.Template.Spec)
+		// NVMesh client readiness scheduling applies only to the NVMesh backend;
+		// the shared-FS backend (nvcf-miniservice-sc) has no NVMesh node requirement.
+		if backend == HelmCacheBackendNVMesh {
+			SetNVMeshClientStatusSchedulingRequirement(&initJob.Spec.Template.Spec)
+		}
 		objsToCreate = append(objsToCreate, initJob)
 		for _, obj := range objsToCreate {
 			obj.SetNamespace(ModelCacheInitNamespace)
@@ -534,17 +965,51 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 		}
 		switch r.getPVCState(rwPVC) {
 		case pvcBound:
-			log.Info("Cache init RW PVC bound, finalizing primary PV")
-
-			if err := r.finalizePrimaryPVOnSuccessfulInit(ctx, stCopy, rwPVC); err != nil {
-				log.Error(err, "Failed to finalize primary PV")
-				return reconcile.Result{}, err
+			switch backend {
+			case HelmCacheBackendNVMesh:
+				// NVMesh: retain the bound dynamic PV as the cross-namespace
+				// "primary" PV (it carries the data volume handle that secondary
+				// PVs copy) and tear down the writer job/RW PVC.
+				log.Info("Cache init RW PVC bound, finalizing primary PV")
+				if err := r.finalizePrimaryPVOnSuccessfulInit(ctx, stCopy, rwPVC); err != nil {
+					log.Error(err, "Failed to finalize primary PV")
+					return reconcile.Result{}, err
+				}
+				_ = r.cleanupInitModelCache(ctx, stCopy, false)
+			case HelmCacheBackendSamba:
+				// Samba: the cache data lives in the per-handle backing PVC
+				// (samba-<handle>), populated via the writer's SMB mount. Stamp
+				// the populated marker on that durable PVC and tear down the
+				// ephemeral writer (job/RW SMB PV/PVC/lease). The backing PVC and
+				// its label are the cross-namespace, restart-safe reuse marker.
+				if err := r.markSambaCachePopulated(ctx, stCopy.Spec.ModelCache.CacheHandle); err != nil {
+					log.Error(err, "Failed to mark Samba cache populated")
+					return reconcile.Result{}, err
+				}
+				_ = r.cleanupInitModelCache(ctx, stCopy, false)
+			default:
+				// Shared-FS: the cache data lives on the shared backend
+				// (nvcf-miniservice-sc). Keep the writer RW PVC/job as the persistent
+				// writer-side claim; readers mount the same backend RO. There is
+				// no primary PV, but stamp a durable "populated" marker on the
+				// retained RW PVC so any namespace, including after an agent
+				// restart (when the in-memory init-status fan-out is empty), can
+				// detect the cache is populated and skip init.
+				log.Info("Cache init RW PVC bound (shared-FS), marking cache populated")
+				if err := r.markCachePopulated(ctx, rwPVC); err != nil {
+					log.Error(err, "Failed to mark shared-FS cache populated")
+					return reconcile.Result{}, err
+				}
+				// Tear down the init job and lease but retain the writer PVC:
+				// without this, one completed Job and one Lease would accumulate
+				// per cache handle with no other cleanup path (idle GC only
+				// reclaims writer PVCs).
+				_ = r.cleanupInitModelCache(ctx, stCopy, true)
 			}
 
-			_ = r.cleanupInitModelCache(ctx, stCopy)
-
+			// The single-writer download completed: count one populate for the backend.
+			r.metrics.RecordModelCachePopulate(string(backend))
 			stCopy.Status.Phase = nvcav1new.StorageCreating
-			// Requeue to check if PV is finalized.
 			return reconcile.Result{Requeue: true}, nil
 		case pvcBindFailed:
 			// The caller's cleanup method will delete cache resources.
@@ -736,6 +1201,77 @@ func (r *Reconciler) finalizePrimaryPVOnSuccessfulInit(ctx context.Context,
 	}
 
 	return nil
+}
+
+// markCachePopulated stamps the durable populated marker (cachePopulatedLabelKey)
+// on a per-handle backing PVC (the Samba samba-<handle> PVC or the shared-FS
+// retained writer PVC). Patching the label is also a PVC update event, which
+// fans out to every StorageRequest with the same cache-handle label, waking
+// namespaces waiting on the populate.
+func (r *Reconciler) markCachePopulated(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
+	old := pvc.DeepCopy()
+	if pvc.Labels == nil {
+		pvc.Labels = map[string]string{}
+	}
+	pvc.Labels[cachePopulatedLabelKey] = cachePopulatedLabelValue
+	if err := r.Client.Patch(ctx, pvc, client.MergeFrom(old)); err != nil {
+		return fmt.Errorf("mark cache populated: %w", err)
+	}
+	return nil
+}
+
+// markSambaCachePopulated stamps the populated marker on the per-handle Samba
+// backing PVC (samba-<cacheHandle>) once the writer has finished populating the
+// share over SMB.
+func (r *Reconciler) markSambaCachePopulated(ctx context.Context, cacheHandle string) error {
+	pvc := &corev1.PersistentVolumeClaim{}
+	key := client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: SambaModelCacheBackingPVCName(cacheHandle)}
+	if err := r.Client.Get(ctx, key, pvc); err != nil {
+		return fmt.Errorf("get samba backing pvc: %w", err)
+	}
+	return r.markCachePopulated(ctx, pvc)
+}
+
+// touchCacheReferenced records the last-referenced time on a per-handle backing
+// PVC so cleanupIdleModelCaches can reclaim it (and, for Samba, the per-handle
+// server) once no function has referenced the handle for the idle period.
+func (r *Reconciler) touchCacheReferenced(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
+	// Patching the watched PVC requeues every request sharing its handle, and
+	// each of those reconciles would patch it again. Skip the patch while the
+	// existing stamp is fresh (a quarter of the idle period keeps idle GC
+	// accurate enough) so steady state does not fan out into a requeue loop.
+	now := r.nowFunc()
+	if prev, err := time.Parse(primaryPVLastReferencedTimeFormat,
+		pvc.Annotations[primaryPVLastReferencedAnnotationKey]); err == nil &&
+		now.Sub(prev) < r.k8sTimeConfig.ModelCacheIdlePeriod/4 {
+		return nil
+	}
+	old := pvc.DeepCopy()
+	if pvc.Annotations == nil {
+		pvc.Annotations = map[string]string{}
+	}
+	pvc.Annotations[primaryPVLastReferencedAnnotationKey] = now.Format(primaryPVLastReferencedTimeFormat)
+	if err := r.Client.Patch(ctx, pvc, client.MergeFrom(old)); err != nil {
+		return fmt.Errorf("touch cache referenced: %w", err)
+	}
+	return nil
+}
+
+// sharedFSCachePopulated reports whether the retained shared-FS writer RW PVC
+// (rwPVCName, in the model-cache init namespace) carries the durable populated
+// marker, returning the PVC so callers can record last-referenced on it. A
+// missing PVC means the cache has not been populated yet and is not an error.
+// It is the shared-FS analogue of getPrimaryPV.
+func (r *Reconciler) sharedFSCachePopulated(ctx context.Context, rwPVCName string) (*corev1.PersistentVolumeClaim, bool, error) {
+	pvc := &corev1.PersistentVolumeClaim{}
+	key := client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: rwPVCName}
+	if err := r.Client.Get(ctx, key, pvc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return pvc, pvc.Labels[cachePopulatedLabelKey] == cachePopulatedLabelValue, nil
 }
 
 func newInitLease(st *nvcav1new.StorageRequest) *coordv1.Lease {
@@ -951,45 +1487,38 @@ func isInitJobPodProgressing(pod *corev1.Pod, k8sTimeConfig *k8sutil.TimeConfig)
 	return fmt.Sprintf("code bug: unreachable pod phase %s", ps.Phase), false
 }
 
-func (r *Reconciler) waitForVolumeDetach(ctx context.Context, volumeName string) error {
+// isVolumeDetached performs a SINGLE, non-blocking check of whether volumeName
+// is still attached read-write. The model-cache controller has one reconcile
+// worker; polling for detachment inside a reconcile (the previous behavior)
+// would block that worker for up to the detach timeout, starving every other
+// StorageRequest, including the terminating-namespace finalizer escape hatch.
+// Callers instead requeue when this returns false, so the worker is never held.
+func (r *Reconciler) isVolumeDetached(ctx context.Context, volumeName string) (bool, error) {
 	log := logf.FromContext(ctx).WithValues("pv", volumeName)
-	log.V(1).Info("Checking attachment status of volume")
 
-	interval := 1 * time.Second
-	if err := wait.PollUntilContextTimeout(ctx, interval, r.k8sTimeConfig.ModelCacheVolumeDetachmentTimeout, true,
-		func(ctx context.Context) (done bool, err error) {
-			vaList := &storagev1.VolumeAttachmentList{}
-			if err := r.Client.List(ctx, vaList); err != nil {
-				log.Error(err, "Failed to list volume attachments")
-				return false, err
-			}
-
-			for _, va := range vaList.Items {
-				if va.Spec.Source.PersistentVolumeName != nil && *va.Spec.Source.PersistentVolumeName == volumeName {
-					pv := &corev1.PersistentVolume{}
-					if err := r.Client.Get(ctx, client.ObjectKey{Name: volumeName}, pv); err != nil {
-						if apierrors.IsNotFound(err) {
-							log.V(1).Info("PV not found, skipping wait for detach")
-							return true, nil
-						}
-						return false, fmt.Errorf("failed to get PV %v to check volume attachment status: %w", volumeName, err)
-					}
-					if len(pv.Spec.AccessModes) == 1 && pv.Spec.AccessModes[0] == corev1.ReadOnlyMany {
-						// not attached in rwMode.
-						log.V(1).Info("PV not attached in RW mode")
-						return true, nil
-					}
-					log.V(1).Info("PV still attached, retrying after interval")
-					return false, nil
-				}
-			}
-			log.V(1).Info("PV not found in volume attachments, assuming detached")
-			return true, nil
-		},
-	); err == nil || !errors.Is(err, context.Canceled) {
-		return err
+	vaList := &storagev1.VolumeAttachmentList{}
+	if err := r.Client.List(ctx, vaList); err != nil {
+		return false, fmt.Errorf("list volume attachments: %w", err)
 	}
-	return fmt.Errorf("PV still attached after timeout")
+	for _, va := range vaList.Items {
+		if va.Spec.Source.PersistentVolumeName == nil || *va.Spec.Source.PersistentVolumeName != volumeName {
+			continue
+		}
+		pv := &corev1.PersistentVolume{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: volumeName}, pv); err != nil {
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+			return false, fmt.Errorf("get PV %v to check attachment status: %w", volumeName, err)
+		}
+		// A read-only attachment does not block deleting the writer PVC.
+		if len(pv.Spec.AccessModes) == 1 && pv.Spec.AccessModes[0] == corev1.ReadOnlyMany {
+			return true, nil
+		}
+		log.V(1).Info("PV still attached read-write")
+		return false, nil
+	}
+	return true, nil
 }
 
 // Cross-namespace NVMesh volumes (in NVMesh 3.2) are a required feature for this controller's

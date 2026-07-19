@@ -194,6 +194,47 @@ For Responses API follow-up calls, `previous_response_id` does not override the 
 
 Sticky routing only affects backend selection when the LLM request router is configured with a cache-affinity-aware routing method for the target model. Clients should only use `x-multi-turn-session-id`. The gateway derives and forwards the internal `x-cache-affinity-key`; clients should not send that header.
 
+## Metrics
+
+LLM API Gateway request metrics include a `function_id` label. The value is the
+function ID extracted from the request routing key. Requests without a routing
+key, such as health checks, use `function_id="none"`.
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `llm_api_gateway_http_requests_total` | Counter | `method`, `route`, `status`, `function_id` | Inbound HTTP requests. |
+| `llm_api_gateway_http_request_duration_seconds` | Histogram | `method`, `route`, `status`, `function_id` | Inbound HTTP request latency. |
+| `llm_api_gateway_http_active_requests` | Up-down counter | `method`, `route`, `function_id` | In-flight inbound HTTP requests. |
+| `llm_api_gateway_upstream_requests_total` | Counter | `upstream`, `result`, `status`, `function_id` | Requests sent to an upstream provider. |
+| `llm_api_gateway_upstream_request_duration_seconds` | Histogram | `upstream`, `result`, `status`, `function_id` | Upstream provider request latency. |
+| `llm_api_gateway_llm_tokens_total` | Counter | `endpoint`, `token_type`, `stream`, `function_id` | Token counts reported by upstream providers. |
+| `llm_api_gateway_provider_time_seconds` | Histogram | `endpoint`, `phase`, `stream`, `function_id` | Provider-reported timing phases. |
+| `llm_api_gateway_stream_first_token_seconds` | Histogram | `endpoint`, `function_id` | Time from stream request start to the first token. |
+| `llm_api_gateway_stream_duration_seconds` | Histogram | `endpoint`, `status`, `function_id` | Total stream duration. |
+
+Infrastructure metrics for authentication, rate limit synchronization, pub/sub,
+and the distributed cache do not include `function_id` because they are not
+associated with a single routed function.
+
+Use the label to calculate request rate by function:
+
+```promql
+sum by (function_id) (
+  rate(llm_api_gateway_http_requests_total[5m])
+)
+```
+
+Use the histogram label to calculate p95 request latency by function:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le, function_id) (
+    rate(llm_api_gateway_http_request_duration_seconds_bucket[5m])
+  )
+)
+```
+
 ## Operational Notes
 
 - The LLM invocation route is served by the `llm.invocation.<domain>` hostname.

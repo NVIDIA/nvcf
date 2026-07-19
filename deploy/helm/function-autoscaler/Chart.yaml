@@ -1,11 +1,11 @@
-# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#     https://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,13 +15,8 @@
 
 apiVersion: v2
 name: helm-nvcf-function-autoscaler
-description: "Rust Service Framework"
+description: A Helm chart for NVCF Function Autoscaler Service
 
 type: application
-version: 0.0.0 # To be filled in by CI pipeline
-
-dependencies:
-- name: ov-otel-collector
-  version: "0.3.10"
-  repository: "https://helm.ngc.nvidia.com/shhh2i6mga69/devinfra"
-  condition: ov-otel-collector.enabled
+version: 0.0.0 # autoversioning enabled via release pipeline
+appVersion: "0.0.0"

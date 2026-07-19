@@ -234,7 +234,7 @@ func (w *miniserviceMutatingWebhook) Handle(ctx context.Context, req admission.R
 	if pod, ok := obj.(*corev1.Pod); ok && pod.Name == translatecommon.UtilsPodName {
 		if isCreate {
 			// Shared storage mutation does not need metadata.
-			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj); err != nil {
+			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, nvcatypes.MiniserviceMetadata{}); err != nil {
 				return admission.Errored(http.StatusInternalServerError,
 					fmt.Errorf("mutate shared storage on utils pod: %w", err))
 			}
@@ -334,7 +334,7 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 				w.mutateNVLinkDRA(obj.GetNamespace(), t)
 			}
 
-			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj); err != nil {
+			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, meta); err != nil {
 				return fmt.Errorf("mutate shared storage: %w", err)
 			}
 		}

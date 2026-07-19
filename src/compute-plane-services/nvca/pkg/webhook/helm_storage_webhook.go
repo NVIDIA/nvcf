@@ -20,6 +20,7 @@ package webhook
 import (
 	"context"
 	"errors"
+	"sort"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	appsv1 "k8s.io/api/apps/v1"
@@ -29,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	cmnnvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 var (
@@ -48,7 +50,11 @@ func (v *helmStorageMutatingWebhook) Handle(_ context.Context, _ admission.Reque
 	return admission.Allowed("")
 }
 
-func (v *helmStorageMutatingWebhook) mutate(ctx context.Context, obj client.Object) (ok bool, warnings admission.Warnings, err error) {
+func (v *helmStorageMutatingWebhook) mutate(
+	ctx context.Context,
+	obj client.Object,
+	meta nvcatypes.MiniserviceMetadata,
+) (ok bool, warnings admission.Warnings, err error) {
 	log := core.GetLogger(ctx)
 
 	var mutations []podMutateFunc
@@ -117,10 +123,32 @@ func (v *helmStorageMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 			false))
 	}
 
-	// Mutate if this is model cache pvc annotation exists
+	// Mutate if this is model cache pvc annotation exists.
+	//
+	// Drop any existing model-cache volume/mount first, then re-add, exactly like
+	// the shared-storage volumes above. The shared-storage path drops and re-adds
+	// its volumes on every admission; if model-data were only idempotently
+	// appended, the shared-storage re-add would land AFTER the sticky model-data
+	// volume on re-admission, reordering volumes relative to the originally
+	// admitted pod. The API server rejects volume reordering on an existing pod,
+	// so when a controller re-submits the pod via UPDATE (e.g. the KAI scheduler's
+	// pod-grouper) the update is rejected and the pod never schedules. Dropping
+	// and re-adding makes the post-admission volume/mount order deterministic and
+	// identical across CREATE and UPDATE.
 	if pvcName, ok := annotations[cmnnvcastorage.WebhookModelCachePVCNameAnnotationKey]; ok {
+		mutations = append(mutations, getModelCacheDropReservedFunc())
 		mutations = append(mutations, getModelCachePVCVolumeAppendFunc(pvcName))
 		mutations = append(mutations, getModelCachePVCVolumeMountAppendFunc())
+	}
+
+	// Inject the ephemeral (emptyDir) model cache init container when the
+	// reconciler selected the ephemeral backend (no shared cache available).
+	// The image annotation and the metadata env are set together by the
+	// reconciler; the init container downloads the model into an emptyDir
+	// shared with the workload containers.
+	initImage := annotations[cmnnvcastorage.WebhookEphemeralModelCacheInitImageAnnotationKey]
+	if initImage != "" && len(meta.ModelCacheInitEnv) > 0 {
+		mutations = append(mutations, getEphemeralModelCacheInitAppendFunc(initImage, meta.ModelCacheInitEnv))
 	}
 
 	var errs []error
@@ -147,6 +175,41 @@ func (v *helmStorageMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 	}
 
 	return len(mutations) > 0, warnings, errors.Join(errs...)
+}
+
+// getModelCacheDropReservedFunc removes the model-cache volume and its mounts
+// from the PodSpec so the subsequent append re-adds them in a deterministic
+// position on every admission. It matches the model-cache volume by name only
+// (and its mounts by name), so it never touches shared-storage or workload
+// volumes.
+func getModelCacheDropReservedFunc() podMutateFunc {
+	return func(_ context.Context, ps *corev1.PodSpec) bool {
+		mod := false
+		volumes := make([]corev1.Volume, 0, len(ps.Volumes))
+		for _, v := range ps.Volumes {
+			if v.Name == cmnnvcastorage.ModelCachePodVolumeName {
+				mod = true
+				continue
+			}
+			volumes = append(volumes, v)
+		}
+		ps.Volumes = volumes
+
+		for _, containers := range [][]corev1.Container{ps.InitContainers, ps.Containers} {
+			for i := range containers {
+				mounts := make([]corev1.VolumeMount, 0, len(containers[i].VolumeMounts))
+				for _, m := range containers[i].VolumeMounts {
+					if m.Name == cmnnvcastorage.ModelCachePodVolumeName {
+						mod = true
+						continue
+					}
+					mounts = append(mounts, m)
+				}
+				containers[i].VolumeMounts = mounts
+			}
+		}
+		return mod
+	}
 }
 
 func getModelCachePVCVolumeAppendFunc(pvcName string) podMutateFunc {
@@ -190,6 +253,98 @@ func getModelCachePVCVolumeMountAppendFunc() podMutateFunc {
 		}
 		return mod
 	}
+}
+
+// getEphemeralModelCacheInitAppendFunc injects a model-cache-init init
+// container that downloads the model into an emptyDir shared with the workload
+// containers. Used as the per-pod fallback (backend "ephemeral") when no shared
+// model-cache backend is available. Workload containers see the cache at the
+// same mount paths as the shared-PVC path, so the workload is backend-agnostic.
+// envSet comes from the miniservice metadata ConfigMap and is injected as
+// explicit env vars, sorted by name for deterministic admission output.
+func getEphemeralModelCacheInitAppendFunc(initImage string, envSet map[string]string) podMutateFunc {
+	return func(_ context.Context, ps *corev1.PodSpec) bool {
+		if len(ps.Containers) == 0 {
+			return false
+		}
+		// Mount the shared model-data emptyDir into the workload containers.
+		mod := addVolumeMount(ps.Containers, cmnnvcastorage.ModelCachePodVolumeName,
+			cmnnvcastorage.ModelCachePodModelMountPath, false)
+		if addVolumeMount(ps.Containers, cmnnvcastorage.ModelCachePodVolumeName,
+			cmnnvcastorage.ModelCachePodResourcesMountPath, false) {
+			mod = true
+		}
+
+		// Add the emptyDir volumes the init and workload containers share.
+		for _, volName := range []string{
+			cmnnvcastorage.ModelCachePodVolumeName,
+			cmnnvcastorage.EphemeralModelCacheConfigDataVolumeName,
+		} {
+			if !hasVolumeNamed(ps.Volumes, volName) {
+				ps.Volumes = append(ps.Volumes, corev1.Volume{
+					Name:         volName,
+					VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+				})
+				mod = true
+			}
+		}
+
+		// Add the init container once.
+		if hasContainerNamed(ps.InitContainers, cmnnvcastorage.EphemeralModelCacheInitContainerName) {
+			return mod
+		}
+		envKeys := make([]string, 0, len(envSet))
+		for k := range envSet {
+			envKeys = append(envKeys, k)
+		}
+		sort.Strings(envKeys)
+		env := make([]corev1.EnvVar, 0, len(envKeys))
+		for _, k := range envKeys {
+			env = append(env, corev1.EnvVar{Name: k, Value: envSet[k]})
+		}
+		ps.InitContainers = append(ps.InitContainers, corev1.Container{
+			Name:            cmnnvcastorage.EphemeralModelCacheInitContainerName,
+			Image:           initImage,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			SecurityContext: &corev1.SecurityContext{
+				Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"NET_RAW"}},
+			},
+			Env: env,
+			VolumeMounts: []corev1.VolumeMount{
+				{
+					Name:      cmnnvcastorage.EphemeralModelCacheConfigDataVolumeName,
+					MountPath: cmnnvcastorage.EphemeralModelCacheConfigSharedMountPath,
+				},
+				{
+					Name:      cmnnvcastorage.ModelCachePodVolumeName,
+					MountPath: cmnnvcastorage.ModelCachePodModelMountPath,
+				},
+				{
+					Name:      cmnnvcastorage.ModelCachePodVolumeName,
+					MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath,
+				},
+			},
+		})
+		return true
+	}
+}
+
+func hasVolumeNamed(volumes []corev1.Volume, name string) bool {
+	for _, v := range volumes {
+		if v.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasContainerNamed(containers []corev1.Container, name string) bool {
+	for _, c := range containers {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func getSharedVolumeDropAllReservedFunc(

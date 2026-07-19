@@ -666,10 +666,28 @@ func (r *Reconciler) doInstall(ctx context.Context,
 			k8sutil.BYOOMetricsEgressTargetLabelValue
 	}
 
+	// Select the model cache backend ONCE per reconcile and use the same value
+	// for both StorageRequest creation (below) and the ephemeral annotation
+	// (further down). Selecting twice would race a StorageClass change between
+	// the two calls and could both create a ModelCacheRequest and inject the
+	// ephemeral init container, or neither.
+	// Skip the lookup entirely when the launch does not request caching: the
+	// selection needs a StorageClass API call, and a transient API error must
+	// not fail or delay installs that never cache.
+	// Non-terminal on purpose: this is a StorageClass API lookup, so a
+	// transient error (timeout, rate-limit) must be retried.
+	cacheBackend := nvcastorage.HelmCacheBackendNone
+	if cacheLaunchRequested(icmsReq) {
+		cacheBackend, err = nvcastorage.SelectHelmCacheBackend(ctx, r.Client, r.FeatureFlagFetcher)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("select helm cache backend: %w", err)
+		}
+	}
+
 	// Create storage requests if configured for the cluster.
 	stDone, err := r.doStorageRequests(ctx,
 		ms, icmsReq, infraObjectMutators,
-		workerPullSecrets, cacheInitJob, cacheInitPVC,
+		workerPullSecrets, cacheInitJob, cacheInitPVC, cacheBackend,
 	)
 	if err != nil || !stDone {
 		return reconcile.Result{}, err
@@ -695,6 +713,21 @@ func (r *Reconciler) doInstall(ctx context.Context,
 			log.V(1).Info("Conflict updating ICMSRequest status with cache reference, will requeue")
 			return reconcile.Result{Requeue: true}, nil
 		}
+	}
+
+	// The NVMesh, shared-FS, and Samba backends all populate via a
+	// ModelCacheRequest handled by the storage controller (see
+	// doStorageRequests / makeStorageRequests), mounted through the
+	// ModelCacheRequest ROPVCName annotation. Only the ephemeral backend is
+	// handled here: inject a per-pod model-cache-init init container via the
+	// webhook (no shared cache backend available).
+	if cacheLaunchRequested(icmsReq) && cacheBackend == nvcastorage.HelmCacheBackendEphemeral {
+		initEnv, initImage, err := ephemeralModelCacheInitEnv(ms, icmsReq)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		metaInput.PodAnnotations[nvcastorage.WebhookEphemeralModelCacheInitImageAnnotationKey] = initImage
+		metaInput.ModelCacheInitEnv = initEnv
 	}
 
 	// BYOO-specific mutators.
@@ -2026,4 +2059,50 @@ func updateResourcesStatus(ms *v1alpha1.MiniService, resources []v1alpha1.Resour
 		ms.Status.RenderDetails = &v1alpha1.RenderDetailsStatus{}
 	}
 	ms.Status.RenderDetails.Resources = resources
+}
+
+// cacheLaunchRequested reports whether the request asks for model caching
+// (a CacheLaunchSpecification with a positive size).
+func cacheLaunchRequested(icmsReq *nvcav2beta1.ICMSRequest) bool {
+	if icmsReq == nil {
+		return false
+	}
+	var cls *common.CacheLaunchSpecification
+	switch {
+	case icmsReq.Spec.CreationMsgInfo.FunctionLaunchSpecification != nil:
+		cls = icmsReq.Spec.CreationMsgInfo.FunctionLaunchSpecification.CacheLaunchSpecification
+	case icmsReq.Spec.CreationMsgInfo.TaskLaunchSpecification != nil:
+		cls = icmsReq.Spec.CreationMsgInfo.TaskLaunchSpecification.CacheLaunchSpecification
+	default:
+		return false
+	}
+	return cls != nil && cls.CacheSize > 0
+}
+
+// ephemeralModelCacheInitEnv materializes the launch env (plus INSTANCE_ID)
+// consumed by the ephemeral model-cache-init container and returns it with
+// the init image. The env travels to the webhook inside the miniservice
+// metadata ConfigMap (MiniserviceMetadata.ModelCacheInitEnv) instead of a
+// dedicated per-instance ConfigMap.
+func ephemeralModelCacheInitEnv(
+	ms *v1alpha1.MiniService,
+	icmsReq *nvcav2beta1.ICMSRequest,
+) (map[string]string, string, error) {
+	envSet, err := parseWorkloadEnvSet(icmsReq)
+	if err != nil {
+		return nil, "", fmt.Errorf("decode launch env for model cache init: %w", err)
+	}
+
+	initImage := envSet[common.InitImageEnv]
+	if initImage == "" {
+		return nil, "", fmt.Errorf("missing %s in launch environment", common.InitImageEnv)
+	}
+
+	data := maps.Clone(envSet)
+	if data == nil {
+		data = map[string]string{}
+	}
+	data["INSTANCE_ID"] = ms.Name
+
+	return data, initImage, nil
 }

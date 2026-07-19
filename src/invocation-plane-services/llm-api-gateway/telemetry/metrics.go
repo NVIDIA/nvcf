@@ -30,13 +30,21 @@ import (
 )
 
 const (
-	metricPrefix = "llm_api_gateway_"
+	metricPrefix           = "llm_api_gateway_"
+	missingFunctionIDLabel = "none"
 
 	dropReasonSameCluster      = "same_cluster"
 	dropReasonOldMessage       = "old_message"
 	dropReasonRemoteApplyOff   = "remote_apply_disabled"
 	synchronizerDropOldMessage = "old_message"
 )
+
+func FunctionIDAttribute(functionID string) attribute.KeyValue {
+	if functionID == "" {
+		functionID = missingFunctionIDLabel
+	}
+	return attribute.String("function_id", functionID)
+}
 
 var DurationBuckets = []float64{
 	0.005,

@@ -71,7 +71,12 @@ const (
 	GCCleanerRunTotalMetricName            = "nvca_gc_cleaner_run_total"
 
 	// Model cache metrics
-	ModelCacheResultTotalMetricName = "nvca_model_cache_result_total"
+	ModelCacheResultTotalMetricName          = "nvca_model_cache_result_total"
+	ModelCacheBackendsMetricName             = "nvca_model_cache_backends"
+	ModelCacheBackendSelectedTotalMetricName = "nvca_model_cache_backend_selected_total"
+	ModelCachePopulateTotalMetricName        = "nvca_model_cache_populate_total"
+	ModelCacheReuseTotalMetricName           = "nvca_model_cache_reuse_total"
+	ModelCacheReclaimedTotalMetricName       = "nvca_model_cache_reclaimed_total"
 
 	// Cluster attribute metrics
 	KataRuntimeIsolationEnabledMetricName = "nvca_kata_runtime_isolation_enabled"
@@ -148,6 +153,7 @@ const (
 	// Model cache labels
 	ResultLabel        = "result"
 	FailureReasonLabel = "failure_reason"
+	BackendLabel       = "backend"
 
 	// Workload result labels
 	WorkloadTypeLabel    = "workload_type"
@@ -282,7 +288,12 @@ type Metrics struct {
 	GCCleanerRunTotal            *prometheus.CounterVec
 
 	// Model cache metrics
-	ModelCacheResultTotal *prometheus.CounterVec
+	ModelCacheResultTotal          *prometheus.CounterVec
+	ModelCacheBackends             *prometheus.GaugeVec
+	ModelCacheBackendSelectedTotal *prometheus.CounterVec
+	ModelCachePopulateTotal        *prometheus.CounterVec
+	ModelCacheReuseTotal           *prometheus.CounterVec
+	ModelCacheReclaimedTotal       *prometheus.CounterVec
 
 	// Cluster attribute metrics
 	KataRuntimeIsolationEnabled *prometheus.GaugeVec
@@ -361,6 +372,11 @@ func (m *Metrics) Destroy() {
 	prometheus.Unregister(m.OrphanedResourceCleanupTotal)
 	prometheus.Unregister(m.GCCleanerRunTotal)
 	prometheus.Unregister(m.ModelCacheResultTotal)
+	prometheus.Unregister(m.ModelCacheBackends)
+	prometheus.Unregister(m.ModelCacheBackendSelectedTotal)
+	prometheus.Unregister(m.ModelCachePopulateTotal)
+	prometheus.Unregister(m.ModelCacheReuseTotal)
+	prometheus.Unregister(m.ModelCacheReclaimedTotal)
 	prometheus.Unregister(m.KataRuntimeIsolationEnabled)
 	prometheus.Unregister(m.MaintenanceModeState)
 	prometheus.Unregister(m.ClusterValidatorReady)
@@ -675,14 +691,56 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	// Model cache metrics (uses storage labels for backwards compatibility)
 	m.ModelCacheResultTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
 		Name: ModelCacheResultTotalMetricName,
-		Help: "Total number of model cache operations by result. " +
+		Help: "Total number of model cache operations by result and backend. " +
 			"result is 'success' or 'failure', failure_reason is set only on failure.",
-	}, withStorageLabels(ResultLabel, FailureReasonLabel))
+	}, withStorageLabels(ResultLabel, FailureReasonLabel, BackendLabel))
 
-	// Initialize model cache metrics to zero for known result/failure_reason combinations
-	m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultSuccess, "")...)
+	// nvca_model_cache_backends: a gauge of how many distinct caches are
+	// currently provisioned per backend (e.g. how many Samba backing PVCs/servers
+	// exist). Refreshed by the periodic idle-cleanup sweep.
+	m.ModelCacheBackends = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: ModelCacheBackendsMetricName,
+		Help: "Number of model caches currently provisioned, by backend.",
+	}, withStorageLabels(BackendLabel))
+
+	m.ModelCacheBackendSelectedTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: ModelCacheBackendSelectedTotalMetricName,
+		Help: "Total model cache requests by selected backend.",
+	}, withStorageLabels(BackendLabel))
+
+	m.ModelCachePopulateTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: ModelCachePopulateTotalMetricName,
+		Help: "Total model cache populates (the single-writer download ran), by backend.",
+	}, withStorageLabels(BackendLabel))
+
+	m.ModelCacheReuseTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: ModelCacheReuseTotalMetricName,
+		Help: "Total model cache reuses (an already-populated cache was attached without a download), by backend.",
+	}, withStorageLabels(BackendLabel))
+
+	m.ModelCacheReclaimedTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: ModelCacheReclaimedTotalMetricName,
+		Help: "Total idle model caches reclaimed by garbage collection, by backend.",
+	}, withStorageLabels(BackendLabel))
+
+	// Initialize model cache metrics to zero for known label combinations.
+	m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultSuccess, "", "")...)
+	for _, b := range types.AllSelectableHelmCacheBackends {
+		backend := string(b)
+		m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultSuccess, "", backend)...)
+		for _, reason := range modelcachetypes.AllFailureReasons {
+			m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultFailure, reason, backend)...)
+		}
+		m.ModelCacheBackends.WithLabelValues(m.withStorageLabelValues(backend)...).Set(0)
+		m.ModelCacheBackendSelectedTotal.WithLabelValues(m.withStorageLabelValues(backend)...)
+		m.ModelCachePopulateTotal.WithLabelValues(m.withStorageLabelValues(backend)...)
+		m.ModelCacheReuseTotal.WithLabelValues(m.withStorageLabelValues(backend)...)
+		m.ModelCacheReclaimedTotal.WithLabelValues(m.withStorageLabelValues(backend)...)
+	}
+	// Also keep the no-backend failure series (validation failures before a
+	// backend is known).
 	for _, reason := range modelcachetypes.AllFailureReasons {
-		m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultFailure, reason)...)
+		m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultFailure, reason, "")...)
 	}
 
 	// Cluster attribute metrics
@@ -1048,11 +1106,56 @@ func (m *Metrics) RecordGCCleanerRun(cleanerName, status string) {
 // RecordModelCacheResult records a model cache operation result.
 // result should be "success" or "failure".
 // failureReason should be empty string for success, or one of the defined failure reasons for failure.
-func (m *Metrics) RecordModelCacheResult(result, failureReason string) {
+// backend is the model cache backend (nvmesh/sharedfs/samba/ephemeral) or "" when not yet known.
+func (m *Metrics) RecordModelCacheResult(result, failureReason, backend string) {
 	if m == nil {
 		return
 	}
-	m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(result, failureReason)...).Inc()
+	m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(result, failureReason, backend)...).Inc()
+}
+
+// RecordModelCacheBackendSelected increments the per-backend selection counter.
+func (m *Metrics) RecordModelCacheBackendSelected(backend string) {
+	if m == nil {
+		return
+	}
+	m.ModelCacheBackendSelectedTotal.WithLabelValues(m.withStorageLabelValues(backend)...).Inc()
+}
+
+// RecordModelCachePopulate increments the per-backend populate counter (a
+// single-writer download actually ran).
+func (m *Metrics) RecordModelCachePopulate(backend string) {
+	if m == nil {
+		return
+	}
+	m.ModelCachePopulateTotal.WithLabelValues(m.withStorageLabelValues(backend)...).Inc()
+}
+
+// RecordModelCacheReuse increments the per-backend reuse counter (a consumer
+// attached an already-populated cache without downloading).
+func (m *Metrics) RecordModelCacheReuse(backend string) {
+	if m == nil {
+		return
+	}
+	m.ModelCacheReuseTotal.WithLabelValues(m.withStorageLabelValues(backend)...).Inc()
+}
+
+// RecordModelCacheReclaimed increments the per-backend GC reclaim counter.
+func (m *Metrics) RecordModelCacheReclaimed(backend string) {
+	if m == nil {
+		return
+	}
+	m.ModelCacheReclaimedTotal.WithLabelValues(m.withStorageLabelValues(backend)...).Inc()
+}
+
+// SetModelCacheBackendCount sets the gauge of currently-provisioned caches for a
+// backend. Called from the periodic idle-cleanup sweep, which already lists the
+// relevant objects.
+func (m *Metrics) SetModelCacheBackendCount(backend string, count int) {
+	if m == nil {
+		return
+	}
+	m.ModelCacheBackends.WithLabelValues(m.withStorageLabelValues(backend)...).Set(float64(count))
 }
 
 // SetKataRuntimeIsolationEnabled sets the Kata runtime isolation gauge.

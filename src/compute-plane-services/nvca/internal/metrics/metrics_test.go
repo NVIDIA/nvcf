@@ -917,7 +917,7 @@ func TestModelCacheResultMetric(t *testing.T) {
 	require.NotNil(t, metrics.ModelCacheResultTotal)
 
 	t.Run("RecordSuccess", func(t *testing.T) {
-		metrics.RecordModelCacheResult("success", "")
+		metrics.RecordModelCacheResult("success", "", "nvmesh")
 
 		metricFamilies, err := reg.Gather()
 		require.NoError(t, err)
@@ -928,18 +928,20 @@ func TestModelCacheResultMetric(t *testing.T) {
 				found = true
 				require.Greater(t, len(mf.Metric), 0)
 
-				// Find the success metric
+				// Find the success metric for the nvmesh backend.
 				for _, metric := range mf.Metric {
-					var resultLabel, reasonLabel string
+					var resultLabel, reasonLabel, backendLabel string
 					for _, label := range metric.Label {
-						if *label.Name == ResultLabel {
+						switch *label.Name {
+						case ResultLabel:
 							resultLabel = *label.Value
-						}
-						if *label.Name == FailureReasonLabel {
+						case FailureReasonLabel:
 							reasonLabel = *label.Value
+						case BackendLabel:
+							backendLabel = *label.Value
 						}
 					}
-					if resultLabel == "success" {
+					if resultLabel == "success" && backendLabel == "nvmesh" {
 						assert.Equal(t, "", reasonLabel, "Success should have empty failure_reason")
 						assert.Equal(t, float64(1), *metric.Counter.Value)
 					}
@@ -950,7 +952,7 @@ func TestModelCacheResultMetric(t *testing.T) {
 	})
 
 	t.Run("RecordFailure", func(t *testing.T) {
-		metrics.RecordModelCacheResult("failure", "pvc_bind_failed")
+		metrics.RecordModelCacheResult("failure", "pvc_bind_failed", "samba")
 
 		metricFamilies, err := reg.Gather()
 		require.NoError(t, err)
@@ -959,23 +961,25 @@ func TestModelCacheResultMetric(t *testing.T) {
 		for _, mf := range metricFamilies {
 			if *mf.Name == ModelCacheResultTotalMetricName {
 				for _, metric := range mf.Metric {
-					var resultLabel, reasonLabel string
+					var resultLabel, reasonLabel, backendLabel string
 					for _, label := range metric.Label {
-						if *label.Name == ResultLabel {
+						switch *label.Name {
+						case ResultLabel:
 							resultLabel = *label.Value
-						}
-						if *label.Name == FailureReasonLabel {
+						case FailureReasonLabel:
 							reasonLabel = *label.Value
+						case BackendLabel:
+							backendLabel = *label.Value
 						}
 					}
-					if resultLabel == "failure" && reasonLabel == "pvc_bind_failed" {
+					if resultLabel == "failure" && reasonLabel == "pvc_bind_failed" && backendLabel == "samba" {
 						found = true
 						assert.Equal(t, float64(1), *metric.Counter.Value)
 					}
 				}
 			}
 		}
-		assert.True(t, found, "Failure metric with pvc_bind_failed reason should be found")
+		assert.True(t, found, "Failure metric with pvc_bind_failed reason and samba backend should be found")
 	})
 }
 
@@ -984,11 +988,19 @@ func TestModelCacheResultMetricNilSafety(t *testing.T) {
 	var metrics *Metrics
 
 	assert.NotPanics(t, func() {
-		metrics.RecordModelCacheResult("success", "")
+		metrics.RecordModelCacheResult("success", "", "nvmesh")
 	})
 
 	assert.NotPanics(t, func() {
-		metrics.RecordModelCacheResult("failure", "pvc_bind_failed")
+		metrics.RecordModelCacheResult("failure", "pvc_bind_failed", "samba")
+	})
+
+	assert.NotPanics(t, func() {
+		metrics.RecordModelCacheBackendSelected("samba")
+		metrics.RecordModelCachePopulate("samba")
+		metrics.RecordModelCacheReuse("samba")
+		metrics.RecordModelCacheReclaimed("samba")
+		metrics.SetModelCacheBackendCount("samba", 3)
 	})
 }
 
@@ -1001,18 +1013,19 @@ func TestModelCacheResultMetricLabels(t *testing.T) {
 	t.Cleanup(func() { metrics.Destroy() })
 	require.NotNil(t, metrics)
 
-	metrics.RecordModelCacheResult("failure", "image_pull")
+	metrics.RecordModelCacheResult("failure", "image_pull", "nvmesh")
 
 	metricFamilies, err := reg.Gather()
 	require.NoError(t, err)
 
-	// Should have: ClusterName, ClusterGroup, Version, Result, FailureReason (no NCAID for storage metrics)
+	// Should have: ClusterName, ClusterGroup, Version, Result, FailureReason, Backend (no NCAID for storage metrics)
 	expectedLabels := map[string]string{
 		ClusterNameLabel:   "test-cluster",
 		ClusterGroupLabel:  "test-group",
 		VersionLabel:       "v1.0.0",
 		ResultLabel:        "failure",
 		FailureReasonLabel: "image_pull",
+		BackendLabel:       "nvmesh",
 	}
 
 	found := false
@@ -1024,7 +1037,8 @@ func TestModelCacheResultMetricLabels(t *testing.T) {
 				for _, label := range metric.Label {
 					actualLabels[*label.Name] = *label.Value
 				}
-				if actualLabels[ResultLabel] == "failure" && actualLabels[FailureReasonLabel] == "image_pull" {
+				if actualLabels[ResultLabel] == "failure" && actualLabels[FailureReasonLabel] == "image_pull" &&
+					actualLabels[BackendLabel] == "nvmesh" {
 					found = true
 					for expectedName, expectedValue := range expectedLabels {
 						actualValue, exists := actualLabels[expectedName]
@@ -1051,7 +1065,7 @@ func TestModelCacheResultMetricFailureReasons(t *testing.T) {
 			metrics := FromContext(ctx)
 			require.NotNil(t, metrics)
 
-			metrics.RecordModelCacheResult("failure", reason)
+			metrics.RecordModelCacheResult("failure", reason, "nvmesh")
 
 			metricFamilies, err := reg.Gather()
 			require.NoError(t, err)
@@ -1060,11 +1074,18 @@ func TestModelCacheResultMetricFailureReasons(t *testing.T) {
 			for _, mf := range metricFamilies {
 				if *mf.Name == ModelCacheResultTotalMetricName {
 					for _, metric := range mf.Metric {
+						var reasonLabel, backendLabel string
 						for _, label := range metric.Label {
-							if *label.Name == FailureReasonLabel && *label.Value == reason {
-								found = true
-								assert.Equal(t, float64(1), *metric.Counter.Value)
+							switch *label.Name {
+							case FailureReasonLabel:
+								reasonLabel = *label.Value
+							case BackendLabel:
+								backendLabel = *label.Value
 							}
+						}
+						if reasonLabel == reason && backendLabel == "nvmesh" {
+							found = true
+							assert.Equal(t, float64(1), *metric.Counter.Value)
 						}
 					}
 				}
@@ -1540,6 +1561,23 @@ func TestMetricsInitializedToZero(t *testing.T) {
 			value, found := findMetricValue(K8sAPIFailureTotalMetricName, "resource", resource)
 			assert.True(t, found, "K8sAPIFailureTotal should be initialized for resource %s", resource)
 			assert.Equal(t, float64(0), value, "K8sAPIFailureTotal should be zero for resource %s", resource)
+		}
+	})
+
+	t.Run("ModelCache backend counters initialized to zero", func(t *testing.T) {
+		counters := []string{
+			ModelCacheBackendSelectedTotalMetricName,
+			ModelCachePopulateTotalMetricName,
+			ModelCacheReuseTotalMetricName,
+			ModelCacheReclaimedTotalMetricName,
+		}
+		backends := []string{"nvmesh", "sharedfs", "samba", "ephemeral"}
+		for _, name := range counters {
+			for _, backend := range backends {
+				value, found := findMetricValue(name, BackendLabel, backend)
+				assert.True(t, found, "%s should be initialized for backend %s", name, backend)
+				assert.Equal(t, float64(0), value, "%s should be zero for backend %s", name, backend)
+			}
 		}
 	})
 

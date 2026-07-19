@@ -126,6 +126,8 @@ go_test(
         "metadata_configmap_test.go",
         "mutate_test.go",
         "prereqs_test.go",
+        "reconcile_modelcache_test.go",
+        "reconcile_storagerequests_test.go",
         "reconcile_test.go",
         "reconcile_update_test.go",
         "reval_client_test.go",
