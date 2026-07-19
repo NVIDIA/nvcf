@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # E0 multi-GPU ladder: vLLM TinyLlama-1.1B, single GPU, MULTI-PROCESS
 # (VLLM_ENABLE_V1_MULTIPROCESSING=1: APIServer + separate EngineCore proc,
 # ZMQ RPC between them). Isolates "multi-process" from "multi-GPU" for the

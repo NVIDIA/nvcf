@@ -1,4 +1,7 @@
 /*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * nvsnap-cuda-checkpoint: a drop-in replacement for NVIDIA's `cuda-checkpoint`
  * binary, built directly on the CUDA driver checkpoint API (the CUDA_CHECKPOINT
  * group: cuCheckpointProcess{GetState,GetRestoreThreadId,Lock,Checkpoint,

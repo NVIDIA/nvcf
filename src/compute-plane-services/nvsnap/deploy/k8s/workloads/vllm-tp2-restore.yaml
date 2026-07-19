@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Restore placeholder for a criu-v2 checkpoint of vllm-tp2 (E1 TP=2 eager).
 # Same dumb-reaper convention as vllm-small-restore.yaml, sized for 2 GPUs.
 # Note: k8s may hand this pod a different physical GPU pair than the source
