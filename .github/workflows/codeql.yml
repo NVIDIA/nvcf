@@ -48,10 +48,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Go is a traced language and does not support build-mode none, so it
-          # autobuilds. Rust has no autobuilder and uses buildless extraction.
+          # Both languages use buildless extraction. Go autobuild compiled and
+          # downloaded deps for every module in this umbrella, which was slow;
+          # CodeQL 2.16+ supports build-mode none for Go, so extract from source.
           - language: go
-            build-mode: autobuild
+            build-mode: none
           - language: rust
             build-mode: none
     steps:
