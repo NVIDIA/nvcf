@@ -1,5 +1,29 @@
 # NVSNAP Checkpoint/Restore Benchmarks
 
+## Huge-page CRIU restore (Lever A), July 2026
+
+Cluster: aws-dev1, H100 80GB (single GPU), driver 580.126, criu-v2 engine.
+The CRIU fork now `madvise(MADV_HUGEPAGE)`s the premapped private-VMA arena
+before faulting in the process image, so the CPU-side memory installs as 2MB
+pages instead of ~800k 4KB pages. Matched agent-restore time, before (app
+v0.2.20) vs after (app v0.2.21, base v0.0.11, criu fork `1ddd5c9c3`):
+
+| Workload | Checkpoint | Before | After | Delta |
+|---|---:|---:|---:|---:|
+| vllm-small (TinyLlama 1.1B) | 3.2G | 44.3 s | 32.2 s | -27% |
+| vllm-8b (Llama-3.1-8B) | 18G | 58.9 s | 38.5 s | -35% |
+| e5-mistral-7b | 15G | 84.0 s | 40.8 s | -51% |
+| vllm-qwen32b (Qwen2.5-32B) | 64G | 77.4 s | 48.5 s | -37% |
+
+Every single-GPU workload restores faster; the win grows with the process's
+CPU-side memory footprint. Phase split from the vllm-small `-v4` restore.log:
+the CPU pages-restore phase dropped 13.5 s to 3.8 s (-72%); the cuda_plugin GPU
+restore phase (~27 s) is unchanged. No lasting memory cost: `AnonHugePages` is 0
+in the final restored process because the huge pages exist only transiently in
+the CRIU staging arena during population and split on the remap to final
+addresses. Best-effort and safe: on a non-THP node the madvise is a no-op and
+restore proceeds unchanged. Design: `docs/proposals/single-gpu-restore-speedup.md`.
+
 ## Warm cache restore (cachedir), June 2026
 
 Cluster: GKE, H100 80GB (1-8x per workload), kernel 6.x. Restore reads the
