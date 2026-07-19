@@ -5,6 +5,20 @@
 # Build: docker build -t nvsnap-agent-base:latest -f Dockerfile.base .
 # Usage: FROM nvsnap-agent-base:latest in Dockerfile.app
 
+# nvsnap-cuda-checkpoint: our own cuda-checkpoint CLI, built from source on
+# the public CUDA driver checkpoint API (cuCheckpointProcess*). Replaces the
+# previously committed NVIDIA prebuilt binary: buildable for x86-64 AND arm64
+# (NVIDIA publishes x86-64 only), and extensible (r580 gpuPairs migration,
+# lock timeouts). Requires driver 570+ on the node at runtime. The CUDA devel
+# image supplies cuda.h and the libcuda link stub; at runtime the wrapper
+# points LD_LIBRARY_PATH at the node's real driver libcuda.
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cuda-cli-builder
+COPY nvsnap-cuda-checkpoint.c /src/nvsnap-cuda-checkpoint.c
+RUN gcc -O2 -o /src/nvsnap-cuda-checkpoint /src/nvsnap-cuda-checkpoint.c \
+        -I/usr/local/cuda/include -L/usr/local/cuda/lib64/stubs -lcuda && \
+    strings /src/nvsnap-cuda-checkpoint | grep -q "nvsnap-cuda-checkpoint" \
+        || (echo "provenance marker missing" && exit 1)
+
 FROM ubuntu:22.04 AS criu-builder
 
 # Install build dependencies
@@ -114,8 +128,9 @@ RUN pip3 install --no-cache-dir /tmp/criu-lib /tmp/criu-crit && \
 # Copy lz4 into bundle so restore pods get it via get-criu init container
 RUN cp /usr/bin/lz4 /criu-bundle/lz4
 
-# Copy cuda-checkpoint (wrapper + real binary)
-COPY cuda-checkpoint /criu-bundle/cuda-checkpoint.real
+# cuda-checkpoint: our source-built CLI (see cuda-cli-builder stage above);
+# the wrapper below execs it as /criu-bundle/cuda-checkpoint.real.
+COPY --from=cuda-cli-builder /src/nvsnap-cuda-checkpoint /criu-bundle/cuda-checkpoint.real
 # Wrapper is checked into the repo (single source of truth — see CLAUDE.md
 # rule 13). Composes LD_LIBRARY_PATH from runtime-discovered $NVSNAP_CUDA_LIB_DIR
 # (set by the nvsnap-agent) + a fallback list of known driver layouts.

@@ -14,9 +14,10 @@ The criu-v2 engine builds from public inputs only:
 
 - The CRIU fork (`github.com/balajinvda/criu`, `io-uring-cr`): one `make`
   produces both the `criu` binary and `cuda_plugin.so`.
-- `cuda-checkpoint`: shipped in-repo at `docker/agent/cuda-checkpoint`. The
-  public NVIDIA release is x86-64 only, so the binary is committed here; an
-  arm64 build needs the arm64 binary committed too.
+- `cuda-checkpoint`: built from source (`docker/agent/nvsnap-cuda-checkpoint.c`)
+  in the base image's `cuda-cli-builder` stage, on the public CUDA driver
+  checkpoint API (`cuCheckpointProcess*`, driver 570+ at runtime). Works for
+  x86-64 and arm64 — no committed binaries.
 - The Go agent and `nvsnap_cr.so`: this repository.
 
 The legacy LD_PRELOAD injection stack (patched uvloop/libuv/libzmq) is not used
