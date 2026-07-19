@@ -1,0 +1,112 @@
+# E1 multi-GPU ladder: vLLM TinyLlama-1.1B, TP=2, EAGER (no CUDA graphs),
+# multi-process — the first criu-v2 multi-GPU experiment (issue #25).
+#
+# Prior findings (MULTIGPU-CR-FINDINGS.md): transparent cuda-checkpoint of
+# EAGER multi-GPU vLLM works; only CUDA-graph capture hangs. This probes the
+# eager case through the modern criu-v2 in-namespace engine: session dump of
+# the TP worker tree, per-GPU-pid cuda-checkpoint via the CRIU plugin, NCCL
+# comms (NVLink P2P on p5), torch TCPStore, and worker ZMQ — all in one dump.
+# Force with: CAPTURE_PATH=criu-v2 ./scripts/test-e2e.sh vllm-tp2
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-tp2
+  namespace: nvsnap-system
+  labels:
+    app: vllm-tp2
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/demo-name: "vLLM TP=2 eager"
+    nvsnap.io/desc: "TinyLlama 1.1B on vLLM, TP=2 eager (E1, criu-v2 multi-GPU)"
+    nvsnap.io/model: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    nvsnap.io/port: "8000"
+    nvsnap.io/gpus: "2"
+    nvsnap.io/path: "criu"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          ulimit -c unlimited
+          mkdir -p /var/run/vllm
+          # criu-v2 convention: workload in its own session via setsid; stdio
+          # to a rootfs file; bash stays pid1 to reap orphans. See vllm-small.
+          #
+          # E1b config-severed profile (ember M0 Exp 3): GPU peer state is THE
+          # multi-GPU cuda-checkpoint blocker — with default config (NVLink P2P
+          # + custom all-reduce) the TP workers hang in UvmUnregisterGpu even
+          # when ALL ranks are locked first (verified 2026-07-18, driver
+          # 580.126). Disabling every peer-state path (flags + env below) drops
+          # all-reduce to PYNCCL over sockets, and per-rank cuda-checkpoint
+          # works. Default-config support needs the transparent sever
+          # (teardown/reinit) — the nvsnap_cr.so/lib-sever port, issue #25.
+          nohup setsid vllm serve \
+            --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --max-model-len 2048 \
+            --tensor-parallel-size 2 \
+            --enforce-eager \
+            --disable-custom-all-reduce \
+            --gpu-memory-utilization 0.3 > /vllm.out 2>&1 < /dev/null &
+          tail -F /vllm.out &
+          while true; do sleep 30; done
+      env:
+        - { name: LD_LIBRARY_PATH, value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PYTHONFAULTHANDLER, value: "1" }
+        - { name: PYTHONUNBUFFERED,   value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,     value: "3" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0,1" }
+        - { name: HF_HOME,            value: "/root/.cache/huggingface" }
+        # TP=2 requires the multi-process engine (EngineCore + TP workers).
+        - { name: VLLM_ENABLE_V1_MULTIPROCESSING, value: "1" }
+        # E1b peer-state sever (config-based, ember M0 Exp 3 set): kill NCCL
+        # P2P/NVLS/SHM transports + vLLM symm-mem all-reduce. Together with
+        # --disable-custom-all-reduce above, no cross-GPU peer mappings exist.
+        - { name: NCCL_P2P_DISABLE,  value: "1" }
+        - { name: NCCL_NVLS_DISABLE, value: "1" }
+        - { name: NCCL_SHM_DISABLE,  value: "1" }
+        - { name: VLLM_ALLREDUCE_USE_SYMM_MEM, value: "0" }
+        - { name: USE_LIBUV, value: "1" }
+        # io_uring is C/R-safe (CRIU fork sq_array identity-map restore fix).
+        - { name: UV_USE_IO_URING, value: "1" }
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - { name: VLLM_LOGGING_LEVEL, value: "INFO" }
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 60
+      resources:
+        limits:
+          nvidia.com/gpu: "2"
+        requests:
+          nvidia.com/gpu: "2"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+
+  restartPolicy: Never
