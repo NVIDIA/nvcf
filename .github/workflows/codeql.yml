@@ -40,8 +40,45 @@ permissions:
   pull-requests: write
 
 jobs:
+  detect:
+    name: Detect changed languages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      go: ${{ steps.f.outputs.go }}
+      rust: ${{ steps.f.outputs.rust }}
+    steps:
+      - name: Detect changed languages
+        id: f
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            files="$(gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --jq '.[].filename' || true)"
+          else
+            files=""
+          fi
+          go=false; rust=false
+          if [ "${{ github.event_name }}" != "pull_request" ]; then go=true; rust=true; fi
+          printf '%s\n' "$files" | grep -qE '(\.go|/go\.mod|/go\.sum)$'         && go=true   || true
+          printf '%s\n' "$files" | grep -qE '(\.rs|/Cargo\.toml|/Cargo\.lock)$' && rust=true || true
+          # A change to the scan config itself re-scans both languages.
+          printf '%s\n' "$files" | grep -qE '\.github/workflows/codeql\.yml$'    && { go=true; rust=true; } || true
+          echo "go=$go"     >> "$GITHUB_OUTPUT"
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "changed-languages: go=$go rust=$rust"
+
   analyze:
     name: CodeQL (${{ matrix.language }})
+    needs: detect
+    # On a PR, only run the language(s) that actually changed: a Rust-only PR
+    # skips the expensive Go autobuild, and a Go-only PR skips Rust. Pushes to
+    # main and the weekly schedule always run both for a complete baseline.
+    if: github.event_name != 'pull_request' || needs.detect.outputs[matrix.language] == 'true'
     runs-on: ubuntu-latest
     strategy:
       # Keep one language's failure from cancelling the others.
