@@ -40,11 +40,14 @@ permissions:
   pull-requests: write
 
 jobs:
-  # Decide which languages to analyze. On a PR, only the language(s) whose files
-  # changed run (a Rust-only PR skips the ~25 min Go autobuild, and vice versa).
-  # Pushes to main and the weekly schedule scan both. Emits a dynamic matrix so
-  # no job-level `if` referencing `matrix` is needed (that context is not allowed
-  # in a job `if`). Uses the GitHub API, not a third-party action (org allowlist).
+  # Decide which languages to analyze. PR policy: only buildless languages scan
+  # pre-merge (today Rust; Java joins as build-mode none when it lands). Go is
+  # excluded on PRs: its traced autobuild compiles the whole umbrella (~20+ min)
+  # for advisory-only feedback (fail-on-findings is false). Go coverage comes
+  # from every push to main and the weekly schedule, which scan everything.
+  # Emits a dynamic matrix so no job-level `if` referencing `matrix` is needed
+  # (that context is not allowed in a job `if`). Uses the GitHub API, not a
+  # third-party action (org allowlist).
   detect:
     name: Detect changed languages
     runs-on: ubuntu-latest
@@ -68,18 +71,21 @@ jobs:
             files=""
           fi
           go=false; rust=false
-          if [ "${{ github.event_name }}" != "pull_request" ]; then go=true; rust=true; fi
-          if printf '%s\n' "$files" | grep -qE '(\.go|/go\.mod|/go\.sum)$';         then go=true;   fi
-          if printf '%s\n' "$files" | grep -qE '(\.rs|/Cargo\.toml|/Cargo\.lock)$'; then rust=true; fi
-          # A change to the scan config itself re-scans both languages.
-          if printf '%s\n' "$files" | grep -qE '\.github/workflows/codeql\.yml$';    then go=true; rust=true; fi
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            # Pushes to main and the weekly schedule scan everything, Go included.
+            go=true; rust=true
+          else
+            if printf '%s\n' "$files" | grep -qE '(\.rs|/Cargo\.toml|/Cargo\.lock)$'; then rust=true; fi
+            # A change to the scan config itself re-scans the PR-time languages.
+            if printf '%s\n' "$files" | grep -qE '\.github/workflows/codeql\.yml$';    then rust=true; fi
+          fi
           inc=""
           if [ "$go" = true ];   then inc="${inc}{\"language\":\"go\",\"build-mode\":\"autobuild\"},"; fi
           if [ "$rust" = true ]; then inc="${inc}{\"language\":\"rust\",\"build-mode\":\"none\"},"; fi
           inc="${inc%,}"
           echo "matrix={\"include\":[${inc}]}" >> "$GITHUB_OUTPUT"
           if [ -n "$inc" ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
-          echo "changed-languages: go=$go rust=$rust"
+          echo "selected languages: go=$go rust=$rust"
 
   analyze:
     name: CodeQL (${{ matrix.language }})
