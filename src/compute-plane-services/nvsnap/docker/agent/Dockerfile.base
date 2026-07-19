@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # NVSNAP Agent Base Image
 # Contains: CRIU, system dependencies, static tools
 # This image changes rarely and should be cached/pushed to registry
