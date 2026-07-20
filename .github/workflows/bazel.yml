@@ -80,14 +80,16 @@ jobs:
         run: |
           set -euo pipefail
           # id|path|tests_skip. tests_skip notes:
-          #  umbrella-phase1: //src/libraries/go/lib test issues (NVCF-10337;
-          #    icms-translate env-flaky, core_test goroutine leak) -- nvcf-go
+          #  umbrella-phase1: //src/libraries/go/lib test issues
+          #    (icms-translate env-flaky, core_test goroutine leak) -- nvcf-go
           #    team owns the test-layer cleanup.
-          #  nvca: tests run. TestReconcile_ModelCache (NVCF-10347) now
-          #    passes under the bazel-ci envtest, verified locally against
-          #    envtest 1.34.1 (5/5). The only flaky test,
-          #    TestBackendK8sCacheQueryAPIs, is t.Skip'd at the source with a
-          #    reference (informer/lister sync race, nvca-team fix).
+          #  nvca: tests run. The failures tracked in NVIDIA/nvcf#238 were all
+          #    test-layer and are fixed: the vendored dra-driver version stamp
+          #    (x_defs on vendor/.../internal/info, mirroring the module
+          #    Makefile's -ldflags -X), SPDX license headers in testdata and
+          #    rendered template assets (empty-YAML-doc skip + stripSPDXHeaders
+          #    in golden comparisons), and the version-adaptive completeJob for
+          #    envtest Job completion.
           #  nvsnap (src/compute-plane-services/nvsnap): intentionally NOT a
           #    matrix row. It is a self-contained Bazel module whose OCI base is
           #    its own private agent image (not publicly pullable), so it is not
@@ -100,7 +102,7 @@ jobs:
           http-invocation|src/invocation-plane-services/http-invocation|false
           llm-api-gateway|src/invocation-plane-services/llm-api-gateway|false
           vanity-gateway|src/invocation-plane-services/vanity-gateway|false
-          nvca|src/compute-plane-services/nvca|true
+          nvca|src/compute-plane-services/nvca|false
           ess-agent|src/compute-plane-services/ess-agent|false
           image-credential-helper|src/compute-plane-services/image-credential-helper|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false

@@ -242,20 +242,15 @@ func TestReconcile_ModelCache(t *testing.T) {
 		}, 5*time.Second, 50*time.Millisecond)
 	}
 
-	initJob.Status.Succeeded++
-	initJob.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-	initJob.Status.Conditions = append(initJob.Status.Conditions,
-		batchv1.JobCondition{
-			Type:   batchv1.JobSuccessCriteriaMet,
-			Status: corev1.ConditionTrue,
-		},
-		batchv1.JobCondition{
-			Type:   batchv1.JobComplete,
-			Status: corev1.ConditionTrue,
-		},
-	)
-	err = c.Status().Update(ctx, initJob)
-	require.NoError(t, err)
+	// Drive the writer Job to completion. The reconciler keys off
+	// CompletionTime + Succeeded (see modelcache.go), not the conditions, but
+	// the apiserver validates the condition shape and its rules differ by
+	// version: k8s >= 1.34 requires SuccessCriteriaMet before Complete, while
+	// k8s 1.30-1.33 reject SuccessCriteriaMet on this NonIndexed Job (it has no
+	// SuccessPolicy). The Job's spec is reconciler-owned and immutable here, so
+	// apply the modern shape and fall back to the pre-1.34 shape only when the
+	// running apiserver returns an Invalid validation error.
+	completeJob(ctx, t, c, initJob)
 
 	for _, st := range sts {
 		assert.EventuallyWithT(t, func(ct *assert.CollectT) {
@@ -705,6 +700,49 @@ func TestMapPodIssuesToFailureReason(t *testing.T) {
 	}
 }
 
+// completeJob marks a writer Job as succeeded in a way the running apiserver
+// accepts. The reconciler detects completion via CompletionTime + Succeeded
+// (see modelcache.go), not the Job conditions, but the apiserver still
+// validates the condition shape and its rules changed across versions:
+//   - k8s >= 1.34 requires a SuccessCriteriaMet condition before Complete, and
+//     rejects CompletionTime without Complete.
+//   - k8s 1.30-1.33 reject SuccessCriteriaMet on a NonIndexed Job that has no
+//     SuccessPolicy, which is exactly this writer Job's shape.
+//
+// The Job's spec is reconciler-owned and immutable on update, so the test
+// cannot reshape it to satisfy both. Apply the modern (>= 1.34) condition shape
+// and fall back to the pre-1.34 shape only when the apiserver returns an
+// Invalid validation error (apierrors.IsInvalid).
+func completeJob(ctx context.Context, t *testing.T, c client.Client, job *batchv1.Job) {
+	t.Helper()
+
+	job.Status.Succeeded = 1
+	job.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	job.Status.Conditions = append(job.Status.Conditions,
+		batchv1.JobCondition{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue},
+		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+	)
+	err := c.Status().Update(ctx, job)
+	if err == nil {
+		return
+	}
+	// Only a validation rejection means the modern condition shape is wrong for
+	// this apiserver version. Any other error (conflict, network, RBAC) is a
+	// real failure and must surface, not be masked by the fallback write.
+	require.True(t, apierrors.IsInvalid(err), "unexpected error updating Job status: %v", err)
+
+	// Pre-1.34 apiserver rejected SuccessCriteriaMet. Re-fetch to reset the
+	// stale in-memory status and apply only Complete, which those versions
+	// accept alongside CompletionTime.
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(job), job))
+	job.Status.Succeeded = 1
+	job.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	job.Status.Conditions = append(job.Status.Conditions,
+		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+	)
+	require.NoError(t, c.Status().Update(ctx, job))
+}
+
 // newModelCacheLaunchEnvB64 builds the encoded launch env consumed by the
 // model cache envtests at runtime. The registry credentials and assertion
 // token are synthetic and assembled here instead of being committed as an
@@ -918,13 +956,7 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 	require.NoError(t, c.Status().Update(ctx, rwPVC))
 
 	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(initJob), initJob))
-	initJob.Status.Succeeded++
-	initJob.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-	initJob.Status.Conditions = append(initJob.Status.Conditions,
-		batchv1.JobCondition{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue},
-		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
-	)
-	require.NoError(t, c.Status().Update(ctx, initJob))
+	completeJob(ctx, t, c, initJob)
 
 	// A read-only reader PVC is created in the workload namespace on the shared
 	// class with the probed ROX access mode.
@@ -1114,13 +1146,7 @@ func TestReconcile_ModelCacheSamba(t *testing.T) {
 	require.NoError(t, c.Status().Update(ctx, rwPVC))
 
 	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(initJob), initJob))
-	initJob.Status.Succeeded++
-	initJob.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-	initJob.Status.Conditions = append(initJob.Status.Conditions,
-		batchv1.JobCondition{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue},
-		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
-	)
-	require.NoError(t, c.Status().Update(ctx, initJob))
+	completeJob(ctx, t, c, initJob)
 
 	// On success the per-handle backing PVC (samba-<handle>) is stamped with the
 	// durable populated marker. That label, not an NVMesh primary PV, is the

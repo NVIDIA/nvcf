@@ -908,6 +908,12 @@ func decodeYAMLFile(t *testing.T, fp string) []*unstructured.Unstructured {
 		err = sigsyaml.Unmarshal(doc, &obj.Object)
 		require.NoError(t, err)
 
+		// Skip documents with no content, e.g. the license header comment
+		// block before the first separator or a trailing separator.
+		if len(obj.Object) == 0 {
+			continue
+		}
+
 		objs = append(objs, obj)
 	}
 
