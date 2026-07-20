@@ -10,6 +10,7 @@ on:
       - "src/**"
       - "**/*.go"
       - "**/*.rs"
+      - "**/*.java"
       - "**/go.mod"
       - "**/go.sum"
       - "**/Cargo.toml"
@@ -21,6 +22,7 @@ on:
       - "src/**"
       - "**/*.go"
       - "**/*.rs"
+      - "**/*.java"
       - "**/go.mod"
       - "**/go.sum"
       - "**/Cargo.toml"
@@ -53,6 +55,10 @@ jobs:
           - language: go
             build-mode: autobuild
           - language: rust
+            build-mode: none
+          # Java (CodeQL id java-kotlin) supports buildless extraction, so it
+          # runs build-mode none like rust: no Bazel/Maven build on PRs.
+          - language: java-kotlin
             build-mode: none
     steps:
       - name: Checkout repository
