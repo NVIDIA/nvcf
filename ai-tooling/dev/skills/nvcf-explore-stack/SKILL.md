@@ -43,7 +43,6 @@ Read these from the monorepo root (the directory containing `imports.yaml`):
 
 Authoritative (always read first when answering):
 
-- `deploy/stacks/self-managed/helmfile.d/000-prepare.yaml.gotmpl`
 - `deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl`
 - `deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl`
 - `deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl`
