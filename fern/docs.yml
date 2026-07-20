@@ -36,6 +36,10 @@ versions:
   path: versions/v0.5.yml
   slug: "v0.5"
 
+check:
+  rules:
+    broken-links: warn
+
 redirects:
   - source: "/nvcf/index.html"
     destination: "/nvcf/"
