@@ -15,8 +15,9 @@ v0.2.20) vs after (app v0.2.21, base v0.0.11, criu fork `1ddd5c9c3`):
 | e5-mistral-7b | 15G | 84.0 s | 40.8 s | -51% |
 | vllm-qwen32b (Qwen2.5-32B) | 64G | 77.4 s | 48.5 s | -37% |
 
-Every single-GPU workload restores faster; the win grows with the process's
-CPU-side memory footprint. Phase split from the vllm-small `-v4` restore.log:
+All four tested single-GPU workloads restore faster; larger CPU-side footprints
+generally benefit, although the improvement is not monotonic in this sample.
+Phase split from the vllm-small `-v4` restore.log:
 the CPU pages-restore phase dropped 13.5 s to 3.8 s (-72%); the cuda_plugin GPU
 restore phase (~27 s) is unchanged. No lasting memory cost: `AnonHugePages` is 0
 in the final restored process because the huge pages exist only transiently in
