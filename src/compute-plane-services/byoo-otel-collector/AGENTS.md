@@ -74,4 +74,3 @@ The root generated release config must keep `release.version_file: VERSION` and 
 - `README.md`
 - `generator/doc/README.md`
 - `validator/README.md`
-- `docs/Deployment.md`
