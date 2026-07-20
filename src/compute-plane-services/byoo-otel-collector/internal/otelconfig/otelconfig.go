@@ -42,6 +42,9 @@ type envConfig struct {
 	ByooLogChunkMaxBodyBytes         int    `split_words:"true"`
 	ByooLogChunkDryRun               bool   `split_words:"true"`
 	ByooLogExporterBatchMaxSizeBytes int    `split_words:"true"`
+	ByooSreMetricsEnabled            bool   `split_words:"true"`
+	ByooSreMetricsFilterConfig       string `split_words:"true"`
+	ByooCustomerMetricsDropLabels    string `split_words:"true"`
 }
 
 func processEnvConfig(env *envConfig) error {
@@ -76,6 +79,15 @@ func getTemplateConfig() (TemplateConfig, error) {
 		return TemplateConfig{}, fmt.Errorf("BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES: %w", err)
 	}
 	tcgf.LogExporterBatchMaxSizeBytes = logExporterBatchMaxSizeBytes
+	sreMetricsFilterConfig, err := resolvedSREMetricsFilterConfig(env.ByooSreMetricsFilterConfig)
+	if err != nil {
+		return TemplateConfig{}, fmt.Errorf("BYOO_SRE_METRICS_FILTER_CONFIG: %w", err)
+	}
+	tcgf.SREMetrics = SREMetricsConfig{
+		Enabled:                   env.ByooSreMetricsEnabled,
+		FilterConfig:              sreMetricsFilterConfig,
+		CustomerMetricsDropLabels: resolvedCustomerMetricsDropLabels(env.ByooCustomerMetricsDropLabels),
+	}
 
 	functionID := env.NvcfFunctionID
 	functionVersionID := env.NvcfFunctionVersionID

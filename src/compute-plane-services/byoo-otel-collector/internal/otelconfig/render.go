@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -64,6 +65,19 @@ type OpenTelemetryConfig struct {
 }
 
 const defaultLogExporterBatchMaxSizeBytes = 1000000
+
+const (
+	sreMetricsExporterID                 = "prometheus/user-metrics"
+	sreMetricsFilterProcessorID          = "filter/sre_metrics"
+	sreMetricsBatchProcessorID           = "batch/sre_metrics"
+	customerMetricsDropLabelsProcessorID = "resource/customer_metrics"
+	defaultSREMetricsPort                = 19091
+)
+
+var defaultCustomerMetricsDropLabels = []string{
+	"sre_metrics_enabled",
+	"sre_enabled_metrics",
+}
 
 // Initialize the maps if they are nil
 func initializeConfigMaps(otelConfig *OpenTelemetryConfig) {
@@ -145,6 +159,91 @@ func resolvedLogExporterBatchMaxSizeBytes(configured int) (int, error) {
 		return defaultLogExporterBatchMaxSizeBytes, nil
 	}
 	return configured, nil
+}
+
+func defaultSREMetricsFilterConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"error_mode": "ignore",
+		"metric_conditions": []string{
+			`metric.name != "BpsInstrument" and metric.name != "FpsInstrument" and metric.name != "RtdInstrument" and metric.name != "StageOpenDuration"`,
+			`resource.attributes["sre_metrics_enabled"] == "false"`,
+			`resource.attributes["sre_enabled_metrics"] == "false"`,
+			`datapoint.attributes["sre_metrics_enabled"] == "false"`,
+			`datapoint.attributes["sre_enabled_metrics"] == "false"`,
+		},
+	}
+}
+
+func resolvedSREMetricsFilterConfig(configured string) (map[string]interface{}, error) {
+	if strings.TrimSpace(configured) == "" {
+		return defaultSREMetricsFilterConfig(), nil
+	}
+
+	filterConfig := map[string]interface{}{}
+	if err := yaml.Unmarshal([]byte(configured), &filterConfig); err != nil {
+		return nil, fmt.Errorf("invalid YAML: %w", err)
+	}
+	if len(filterConfig) == 0 {
+		return nil, fmt.Errorf("filter config must not be empty")
+	}
+
+	return unwrapSREMetricsFilterConfig(filterConfig)
+}
+
+func unwrapSREMetricsFilterConfig(filterConfig map[string]interface{}) (map[string]interface{}, error) {
+	if rawProcessors, ok := filterConfig["processors"]; ok {
+		processors, err := mapFromConfigValue(rawProcessors, "processors")
+		if err != nil {
+			return nil, err
+		}
+		rawFilter, ok := processors[sreMetricsFilterProcessorID]
+		if !ok {
+			return nil, fmt.Errorf("processors must include %q", sreMetricsFilterProcessorID)
+		}
+		return mapFromConfigValue(rawFilter, sreMetricsFilterProcessorID)
+	}
+
+	if rawFilter, ok := filterConfig[sreMetricsFilterProcessorID]; ok {
+		return mapFromConfigValue(rawFilter, sreMetricsFilterProcessorID)
+	}
+
+	if rawFilter, ok := filterConfig["filter"]; ok && len(filterConfig) == 1 {
+		return mapFromConfigValue(rawFilter, "filter")
+	}
+
+	return filterConfig, nil
+}
+
+func mapFromConfigValue(value interface{}, field string) (map[string]interface{}, error) {
+	configMap, ok := value.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("%s must be a YAML object", field)
+	}
+	if len(configMap) == 0 {
+		return nil, fmt.Errorf("%s must not be empty", field)
+	}
+	return configMap, nil
+}
+
+func resolvedCustomerMetricsDropLabels(configured string) []string {
+	if strings.TrimSpace(configured) == "" {
+		return append([]string(nil), defaultCustomerMetricsDropLabels...)
+	}
+
+	seen := map[string]struct{}{}
+	labels := []string{}
+	for _, label := range strings.Split(configured, ",") {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			continue
+		}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		labels = append(labels, label)
+	}
+	return labels
 }
 
 func logExporterSendingQueue(batchMaxSizeBytes int) map[string]interface{} {
@@ -401,6 +500,97 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 	return exporterId, nil
 }
 
+func addCustomerMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labels []string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+
+	actions := make([]map[string]interface{}, 0, len(labels))
+	for _, label := range labels {
+		actions = append(actions, map[string]interface{}{
+			"key":    label,
+			"action": "delete",
+		})
+	}
+	otelConfig.Processors[customerMetricsDropLabelsProcessorID] = map[string]interface{}{
+		"attributes": actions,
+	}
+	return customerMetricsDropLabelsProcessorID
+}
+
+func addSREMetricsExporter(otelConfig *OpenTelemetryConfig) {
+	otelConfig.Exporters[sreMetricsExporterID] = map[string]interface{}{
+		"endpoint": fmt.Sprintf("${env:OTEL_POD_IP:-0.0.0.0}:%d", defaultSREMetricsPort),
+		"resource_to_telemetry_conversion": map[string]interface{}{
+			"enabled": true,
+		},
+		"send_timestamps":     true,
+		"metric_expiration":   "5m",
+		"enable_open_metrics": true,
+	}
+}
+
+func cloneConfigMap(config map[string]interface{}) map[string]interface{} {
+	clone := make(map[string]interface{}, len(config))
+	for key, value := range config {
+		clone[key] = cloneConfigValue(value)
+	}
+	return clone
+}
+
+func cloneConfigValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return cloneConfigMap(typed)
+	case []interface{}:
+		clone := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			clone = append(clone, cloneConfigValue(item))
+		}
+		return clone
+	case []map[string]interface{}:
+		clone := make([]map[string]interface{}, 0, len(typed))
+		for _, item := range typed {
+			clone = append(clone, cloneConfigMap(item))
+		}
+		return clone
+	default:
+		return value
+	}
+}
+
+func addSREMetricsPipeline(otelConfig *OpenTelemetryConfig, config SREMetricsConfig) {
+	addSREMetricsExporter(otelConfig)
+
+	filterConfig := config.FilterConfig
+	if len(filterConfig) == 0 {
+		filterConfig = defaultSREMetricsFilterConfig()
+	}
+	otelConfig.Processors[sreMetricsFilterProcessorID] = cloneConfigMap(filterConfig)
+
+	batchConfig := map[string]interface{}{
+		"send_batch_size":     4096,
+		"timeout":             "400ms",
+		"send_batch_max_size": 8192,
+	}
+	if existingBatchConfig, ok := otelConfig.Processors["batch"]; ok {
+		batchConfig = cloneConfigMap(existingBatchConfig)
+	}
+	otelConfig.Processors[sreMetricsBatchProcessorID] = batchConfig
+
+	sreMetricsPipeline := otelConfig.Service.Pipelines["metrics/sre"]
+	sreMetricsPipeline.Receivers = []string{"otlp"}
+	sreMetricsPipeline.Exporters = []string{sreMetricsExporterID}
+	sreMetricsPipeline.Processors = []string{
+		"memory_limiter",
+		sreMetricsFilterProcessorID,
+		"resource",
+		"metrics_transform",
+		sreMetricsBatchProcessorID,
+	}
+	otelConfig.Service.Pipelines["metrics/sre"] = sreMetricsPipeline
+}
+
 func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {
 	var exporterType, exporterName string
 	var exporterCredential interface{}
@@ -624,8 +814,18 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline := otelConfig.Service.Pipelines["metrics"]
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
-		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource", "metrics_transform", "batch"}
+		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource"}
+		if tmplConfig.SREMetrics.Enabled {
+			if processorID := addCustomerMetricsDropLabelsProcessor(otelConfig, tmplConfig.SREMetrics.CustomerMetricsDropLabels); processorID != "" {
+				metricPipeline.Processors = append(metricPipeline.Processors, processorID)
+			}
+		}
+		metricPipeline.Processors = append(metricPipeline.Processors, "metrics_transform", "batch")
 		otelConfig.Service.Pipelines["metrics"] = metricPipeline
+
+		if tmplConfig.SREMetrics.Enabled {
+			addSREMetricsPipeline(otelConfig, tmplConfig.SREMetrics)
+		}
 	}
 
 	// Process Traces (if present)
