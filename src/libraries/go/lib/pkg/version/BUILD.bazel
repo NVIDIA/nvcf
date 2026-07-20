@@ -18,6 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "version",
     srcs = [
+        "handler.go",
         "http.go",
         "version.go",
     ],
@@ -28,6 +29,7 @@ go_library(
 go_test(
     name = "version_test",
     srcs = [
+        "handler_test.go",
         "http_test.go",
         "version_test.go",
     ],
