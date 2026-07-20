@@ -173,3 +173,7 @@ crio:
 # Monitoring configuration.
 monitoring:
   enabled: false
+
+updateStrategy:
+  rollingUpdate:
+    maxUnavailable: 1
