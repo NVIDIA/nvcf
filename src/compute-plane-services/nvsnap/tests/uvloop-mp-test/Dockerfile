@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Use Ubuntu 22.04 to match CRIU's glibc 2.35
 FROM ubuntu:22.04
 

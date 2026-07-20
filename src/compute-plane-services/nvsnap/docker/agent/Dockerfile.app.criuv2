@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # NvSnap agent — criu-v2-only image, buildable entirely from PUBLIC inputs.
 #
 # Unlike Dockerfile.app, this pulls no private builder images. criu-v2 dropped
