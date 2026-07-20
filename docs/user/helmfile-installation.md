@@ -701,6 +701,16 @@ printf '%s' "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 | tr -d '\n'
 
 </Tabs>
 
+Set kubectl to the control-plane cluster context before proceeding. Steps 4
+and 5 run kubectl and helmfile commands that target the current context. In a
+multi-cluster setup, verify the context is the control-plane cluster to avoid
+installing to the wrong cluster.
+
+```bash
+kubectl config use-context <control-plane-context>
+kubectl config current-context
+```
+
 ### Step 4. Configure image pull secrets (conditional)
 
 <Note>
@@ -758,14 +768,8 @@ This replaces any need for a separate admission controller or policy engine to i
 
 ### Step 5. Deploy the NVCF control plane components
 
-Set kubectl to the control-plane cluster context before deploying. In a
-multi-cluster setup, a bare `helmfile sync` targets whatever context is
-currently active, so verify the context is correct before proceeding.
-
-```bash
-kubectl config use-context <control-plane-context>
-kubectl config current-context
-```
+Confirm your kubectl context is still set to the control-plane cluster (see
+above).
 
 <Info>
 Ensure your local environment is authenticated to the container registry where
