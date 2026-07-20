@@ -93,26 +93,29 @@ Degradation by node THP state:
 Worst case is "no gain on that node", never "broken restore". Safe to ship to
 arbitrary customer clusters.
 
-### B. Parallelize the per-process CUDA restore (attacks the 27s serial phase) -- PROPOSED
+### B. Coalesce cuda-checkpoint spawns to cut cuInit cost -- EASY HALF DONE
 
-cuda_plugin restores GPU processes sequentially: pid 53 (13.5->22s) then pid 453
-(22->38s). On one physical GPU the context rebuilds may not fully overlap, but
-the ~3s per-proc "find restore thread" handshake gaps (spawn cuda-checkpoint +
-cuInit + query) are pure latency that can overlap. We already parallelized
-cuda-checkpoint loops in the legacy restore.go (#216); this is the criu-v2
-equivalent inside the plugin.
+Each cuda-checkpoint invocation pays a flat ~2.7s cuInit driver-attach (measured:
+6 successive --get-state calls on a running process, all ~2.7s, so it is driver
+attach, not a wait). The plugin spawns cuda-checkpoint ~3x per pid on the restore
+path (get-restore-tid, restore, unlock). Two collapses:
 
-```text
-today:   [ctx rebuild 53][gap][ctx rebuild 453][gap]      ~27s
-target:  [ctx rebuild 53          ]
-         [gap][ctx rebuild 453     ]  (overlapped)         ~15s
-```
+- DONE (easy, shipped): on the common restore path a process needs both a restore
+  and an unlock; the plugin now issues them as one combined "resume" invocation
+  (one cuInit instead of two). Same driver operations, same order, one fewer
+  spawn per pid. Measured -4 to -6s per single-GPU workload; the win scales with
+  the GPU pid count.
+- NOT done (medium): eliminate the get-restore-tid spawn by scanning
+  /proc/<pid>/task for the restore-thread name instead of spawning
+  cuda-checkpoint --get-restore-tid. Riskier: a wrong tid signals the wrong
+  thread.
 
-Ceiling: the ~27s cuda phase -> ~15s (bounded by the single slowest context +
-GPU serialization of concurrent context creation).
-Risk: two contexts building on one GPU may serialize in the driver anyway;
-measure the real overlap before committing. Handshake-latency removal is the
-safe portion.
+The HARD half is truly parallelizing the per-pid context rebuilds. CRIU calls the
+cuda_plugin resume hook one pid at a time as it restores the task tree serially,
+and a UVM-ordering constraint ("the process must stay frozen or UVM pointer access
+crashes") means parallelizing needs a CRIU-core change and risks a crash-on-restore.
+Deferred: high risk, and much of the residual is the context rebuild's module/kernel
+reload, an NVIDIA-side cost.
 
 ### C. Warm-standby: never release the context (attacks the ENTIRE 27s) -- OUT OF SCOPE
 

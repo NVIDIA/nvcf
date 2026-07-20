@@ -1,7 +1,4 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
- * SPDX-License-Identifier: Apache-2.0
- *
  * nvsnap-cuda-checkpoint: a drop-in replacement for NVIDIA's `cuda-checkpoint`
  * binary, built directly on the CUDA driver checkpoint API (the CUDA_CHECKPOINT
  * group: cuCheckpointProcess{GetState,GetRestoreThreadId,Lock,Checkpoint,
@@ -11,7 +8,7 @@
  * by name on PATH) can call this instead, with no other changes:
  *
  *   --get-state       --pid <pid>
- *   --action lock|checkpoint|restore|unlock --pid <pid> [--timeout <ms>]
+ *   --action lock|checkpoint|restore|unlock|resume --pid <pid> [--timeout <ms>]
  *   --toggle          --pid <pid>
  *   --get-restore-tid --pid <pid>
  *
@@ -83,6 +80,15 @@ static int do_unlock(int pid)
     return r == CUDA_SUCCESS ? 0 : err_action("unlock", pid, r);
 }
 
+/* resume: restore then unlock in one process, so cuInit (the ~2.7s driver
+ * attach) is paid once instead of once per action. Used by the CRIU cuda
+ * plugin on the common restore path (process was running at checkpoint). */
+static int do_resume(int pid)
+{
+    int rc = do_restore(pid);
+    return rc ? rc : do_unlock(pid);
+}
+
 static int do_get_state(int pid)
 {
     CUprocessState s;
@@ -134,7 +140,7 @@ static void usage(const char *p)
         "nvsnap-cuda-checkpoint: CUDA checkpoint/restore via the driver API.\n"
         "Operations:\n"
         "  --get-state       --pid <pid>\n"
-        "  --action lock|checkpoint|restore|unlock --pid <pid> [--timeout <ms>]\n"
+        "  --action lock|checkpoint|restore|unlock|resume --pid <pid> [--timeout <ms>]\n"
         "  --toggle          --pid <pid>\n"
         "  --get-restore-tid --pid <pid>\n"
         "Options:\n"
@@ -201,6 +207,7 @@ int main(int argc, char **argv)
     if (!strcmp(action, "checkpoint")) return do_checkpoint(pid);
     if (!strcmp(action, "restore"))    return do_restore(pid);
     if (!strcmp(action, "unlock"))     return do_unlock(pid);
+    if (!strcmp(action, "resume"))     return do_resume(pid);
 
     fprintf(stderr, "error: unknown action '%s'\n", action);
     usage(argv[0]);
