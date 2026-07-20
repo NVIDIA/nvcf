@@ -1,0 +1,206 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "cassandra.fullname" . }}
+  namespace: {{ include "cassandra.namespace" . }}
+  labels: {{- include "cassandra.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "cassandra.fullname" . }}-headless
+  replicas: {{ .Values.cassandra.replicaCount }}
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels: {{- include "cassandra.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "cassandra.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Roll pods when the auth config changes so the initContainer re-patches.
+        checksum/cassandra-conf: {{ include (print $.Template.BasePath "/configmap-cassandra-conf.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.cassandra.global.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: {{ .Values.cassandra.podSecurityContext.fsGroup }}
+      initContainers:
+        # Copy the image's /etc/cassandra into a shared emptyDir and enable
+        # authentication in the copied cassandra.yaml. The main container mounts
+        # the same emptyDir at /etc/cassandra, so the official entrypoint still
+        # runs its sed over this copy and the image's own cassandra-env.sh
+        # (which owns the per-pod rack) is preserved. Auth keys are not touched
+        # by the entrypoint's fixed CASSANDRA_* loop, so the pre-set values
+        # survive container start. See configmap-cassandra-conf.yaml.
+        - name: cassandra-conf-init
+          image: "{{ .Values.cassandra.image.registry }}/{{ .Values.cassandra.image.repository }}:{{ .Values.cassandra.image.tag }}"
+          imagePullPolicy: {{ .Values.cassandra.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              # Copy the image's /etc/cassandra so cassandra-env.sh, the jvm
+              # options, and the rackdc logic are preserved, then deep-merge our
+              # cassandra.yaml overrides on top (our keys win, image defaults are
+              # kept for the rest). The main container mounts /shared-conf at
+              # /etc/cassandra, so the entrypoint still seds the CASSANDRA_* keys
+              # into the merged file. yq is provided by the runtime image.
+              cp -a /etc/cassandra/. /shared-conf/
+              yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' \
+                /shared-conf/cassandra.yaml /overrides/cassandra-overrides.yaml > /tmp/cassandra.yaml
+              mv /tmp/cassandra.yaml /shared-conf/cassandra.yaml
+              echo "Merged cassandra.yaml overrides from /overrides/cassandra-overrides.yaml"
+          volumeMounts:
+            - name: cassandra-conf
+              mountPath: /shared-conf
+            - name: cassandra-overrides
+              mountPath: /overrides
+              readOnly: true
+      containers:
+        - name: cassandra
+          image: "{{ .Values.cassandra.image.registry }}/{{ .Values.cassandra.image.repository }}:{{ .Values.cassandra.image.tag }}"
+          imagePullPolicy: {{ .Values.cassandra.image.pullPolicy }}
+          ports:
+            - name: intra
+              containerPort: 7000
+            - name: cql
+              containerPort: 9042
+            - name: metrics
+              containerPort: 9500
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: CASSANDRA_CLUSTER_NAME
+              value: {{ .Values.cassandra.cluster.name | quote }}
+            - name: CASSANDRA_SEEDS
+              value: {{ include "cassandra.seeds" . | quote }}
+            - name: CASSANDRA_NUM_TOKENS
+              value: {{ .Values.cassandra.cluster.numTokens | quote }}
+            - name: CASSANDRA_ENDPOINT_SNITCH
+              value: {{ .Values.cassandra.cluster.endpointSnitch | quote }}
+            # dc is owned by the chart and applied to cassandra-rackdc.properties
+            # by the image entrypoint. Keep it consistent with cluster.datacenter
+            # and the keyspace replication in the initdb ConfigMap.
+            - name: CASSANDRA_DC
+              value: {{ .Values.cassandra.cluster.datacenter | quote }}
+            # CASSANDRA_RACK is intentionally not set. The image's
+            # cassandra-env.sh derives the rack from the pod ordinal and writes
+            # cassandra-rackdc.properties directly. Setting CASSANDRA_RACK here
+            # would let the entrypoint fight the image over rack, so rack is
+            # left to the image and dc is owned by the chart.
+            - name: CASSANDRA_LISTEN_ADDRESS
+              value: "$(POD_IP)"
+            - name: CASSANDRA_BROADCAST_ADDRESS
+              value: "$(POD_IP)"
+            - name: CASSANDRA_RPC_ADDRESS
+              value: "0.0.0.0"
+            - name: CASSANDRA_BROADCAST_RPC_ADDRESS
+              value: "$(POD_IP)"
+            {{- /*
+              Bound the Cassandra heap. The image's cassandra-env.sh auto-sizes
+              the heap from total host memory when MAX_HEAP_SIZE is unset, which
+              on shared nodes (and k3d) reads the whole host, not the pod limit,
+              so multiple nodes oversubscribe and get OOMKilled. Set MAX_HEAP_SIZE
+              (and, only for non-G1 collectors, HEAP_NEWSIZE) to bound it. These
+              are dedicated env vars honored by cassandra-env.sh and do not
+              collide with the image-owned JVM_EXTRA_OPTS.
+            */ -}}
+            {{- $maxHeap := include "cassandra.maxHeapSize" . }}
+            {{- if $maxHeap }}
+            - name: MAX_HEAP_SIZE
+              value: {{ $maxHeap | quote }}
+            {{- end }}
+            {{- with .Values.cassandra.jvm.heapNewSize }}
+            - name: HEAP_NEWSIZE
+              value: {{ . | quote }}
+            {{- end }}
+            # JVM_EXTRA_OPTS is intentionally not set here. The runtime image
+            # owns this env var (mandatory --add-opens flags plus a
+            # build-arg-gated exporter -javaagent). A container env entry of
+            # the same name replaces the image's ENV rather than appending to
+            # it, so setting it from the chart drops the --add-opens flags
+            # (JVM aborts on the internal image) or re-enables the javaagent
+            # against a placeholder (JVM aborts on the OSS image).
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.cassandra.persistence.dataPath }}
+              {{- /*
+                subPath lets an over-the-top upgrade adopt an existing PVC whose
+                data lives in a nested subdirectory. Bitnami stored everything
+                under <mount>/data/{data,commitlog,hints,saved_caches}, so
+                subPath "data" surfaces that at the official image's default
+                /var/lib/cassandra/{data,commitlog,...} with no cassandra.yaml
+                changes. Empty (default) mounts the PVC root for fresh installs.
+              */}}
+              {{- with .Values.cassandra.persistence.subPath }}
+              subPath: {{ . }}
+              {{- end }}
+            # Shared conf populated by the cassandra-conf-init initContainer.
+            # Mounted at the image's CASSANDRA_CONF (/etc/cassandra) so the
+            # entrypoint seds this copy, auth stays enabled, and the image's
+            # cassandra-env.sh rack logic is preserved.
+            - name: cassandra-conf
+              mountPath: /etc/cassandra
+            - name: cassandra-init-cql
+              mountPath: /opt/nvcf/cassandra/cql
+              readOnly: true
+          # nodetool is a full JVM launch (~2-5s, slower under a CPU limit), so
+          # the probes need a timeout well above the 1s default or they time out
+          # and the pod never becomes ready (stalling OrderedReady rollout).
+          startupProbe:
+            exec:
+              command: ["/bin/sh", "-c", "nodetool status"]
+            failureThreshold: 60
+            periodSeconds: 10
+            timeoutSeconds: 15
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "nodetool status"]
+            periodSeconds: 30
+            timeoutSeconds: 15
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "nodetool status | grep -E '^UN'"]
+            periodSeconds: 10
+            timeoutSeconds: 15
+          resources: {{- include "cassandra.resources" . | nindent 12 }}
+      volumes:
+        # Writable copy of the image's /etc/cassandra. Populated by the
+        # cassandra-conf-init initContainer, mounted by the main container.
+        - name: cassandra-conf
+          emptyDir: {}
+        # cassandra.yaml overrides, deep-merged by the conf initContainer.
+        - name: cassandra-overrides
+          configMap:
+            name: {{ include "cassandra.fullname" . }}-conf
+        - name: cassandra-init-cql
+          configMap:
+            name: cassandra-init-cql
+            defaultMode: 0500
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.cassandra.persistence.size }}
+        {{- with .Values.cassandra.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}

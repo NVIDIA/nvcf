@@ -15,13 +15,128 @@
 
 ---
 cassandra:
-  # Namespace to deploy wrapper chart resources. Defaults to the release namespace.
+  # Namespace to deploy chart resources. Defaults to the release namespace.
   namespace: ""
 
   global:
     imagePullSecrets: []
-    security:
-      allowInsecureImages: true
+
+  image:
+    # registry: must be supplied in additional values
+    # repository: must be supplied in additional values
+    registry: ""
+    repository: ""
+    tag: 5.0.8-nv-0
+    pullPolicy: IfNotPresent
+
+  replicaCount: 3
+
+  cluster:
+    name: cassandra
+    seed: 2
+    numTokens: 8
+    datacenter: ncp
+    endpointSnitch: GossipingPropertyFileSnitch
+    # Extra seed addresses appended to the in-namespace seeds. Used for
+    # datacenter expansion: set this on a new datacenter to seed off a node in
+    # the existing datacenter (for example a headless DNS name in the other
+    # namespace). Empty for a normal single-datacenter install.
+    extraSeeds: []
+
+  # Overrides deep-merged onto the image's cassandra.yaml by the conf
+  # initContainer (via yq; these keys win, image defaults are kept for
+  # everything else). This is the values-driven way to set any cassandra.yaml
+  # setting. Do NOT set cluster_name, seeds, num_tokens, endpoint_snitch, or the
+  # listen/broadcast/rpc addresses here: the image entrypoint templates those
+  # from the CASSANDRA_* env vars derived from cluster.* above.
+  config:
+    authenticator: PasswordAuthenticator
+    authorizer: CassandraAuthorizer
+    # Required to read sstables written with UUID identifiers, which the
+    # existing Bitnami fleet runs with.
+    uuid_sstable_identifiers_enabled: true
+    # Match the existing Bitnami fleet, which runs storage_compatibility_mode:
+    # NONE (full Cassandra 5.0 native format). The Apache 5.0 default is
+    # CASSANDRA_4; leaving it there makes streaming between this node and a
+    # NONE-mode node fail during a datacenter-expansion rebuild, because the
+    # streaming connection is rejected as version-incompatible even though
+    # gossip and schema exchange succeed.
+    storage_compatibility_mode: NONE
+    # Automatic repair (Cassandra 5.0). Values supplied by the Cassandra SME.
+    reject_repair_compaction_threshold: 1024
+    repair_disk_headroom_reject_ratio: 0.2
+    auto_repair:
+      enabled: true
+      repair_check_interval: 10m
+      repair_task_min_duration: 5s
+      history_clear_delete_hosts_buffer_interval: 2h
+      mixed_major_version_repair_enabled: false
+      global_settings:
+        repair_by_keyspace: true
+        number_of_repair_threads: 1
+        sstable_upper_threshold: 10000
+        table_max_repair_time: 4h
+        ignore_dcs: []
+        repair_primary_token_range_only: true
+        parallel_repair_count: 1
+        parallel_repair_percentage: 3
+        allow_parallel_replica_repair: false
+        allow_parallel_replica_repair_across_schedules: true
+        materialized_view_repair_enabled: false
+        initial_scheduler_delay: 30m
+        repair_session_timeout: 3h
+        force_repair_new_node: false
+        repair_max_retries: 3
+        repair_retry_backoff: 60s
+        token_range_splitter:
+          class_name: org.apache.cassandra.repair.autorepair.RepairTokenRangeSplitter
+          parameters:
+            bytes_per_assignment: 50GiB
+            partitions_per_assignment: 1048576
+            max_tables_per_assignment: 64
+            max_bytes_per_schedule: 100GiB
+      repair_type_overrides:
+        full:
+          enabled: true
+          min_repair_interval: 5d
+        incremental:
+          enabled: true
+          min_repair_interval: 1d
+        preview_repaired:
+          enabled: false
+          min_repair_interval: 4h
+
+  persistence:
+    dataPath: /var/lib/cassandra
+    size: 10Gi
+    storageClass: ""
+    # subPath within the PVC to mount at dataPath. Leave empty for fresh
+    # installs (mount the PVC root). Set to "data" for an over-the-top upgrade
+    # that adopts an existing Bitnami PVC (whose contents are nested under
+    # data/), aligning the old layout with the official image defaults.
+    subPath: ""
+
+  podSecurityContext:
+    fsGroup: 999
+
+  # Cassandra JVM heap bounds. Leave empty to let the image auto-size from host
+  # memory. Set maxHeapSize (e.g. "4G") on shared nodes or multi-node clusters
+  # so a pod does not size its heap to the whole host and get OOMKilled. With
+  # G1 (Cassandra 5.0 default) set only maxHeapSize; leave heapNewSize empty.
+  jvm:
+    maxHeapSize: ""
+    heapNewSize: ""
+
+  # Named resource preset (none/nano/micro/small/medium/large/xlarge/2xlarge).
+  # Sets container requests/limits when `resources` is
+  # empty. When set, MAX_HEAP_SIZE is auto-derived to ~50% of the preset memory
+  # limit unless jvm.maxHeapSize is given. The stack passes resourcesPreset.
+  resourcesPreset: "none"
+
+  # Explicit pod resource requests/limits for the cassandra container. Overrides
+  # resourcesPreset when non-empty. Keep maxHeapSize below the memory limit to
+  # leave room for off-heap and page cache.
+  resources: {}
 
   hooks:
     initializeCluster:
@@ -47,42 +162,12 @@ cassandra:
 
   migrations:
     image:
+      # registry: must be supplied in additional values
+      # repository: must be supplied in additional values
       registry: ""
       repository: ""
       tag: 0.11.0
       pullPolicy: Always
-
-  image:
-    registry: ""
-    repository: ""
-    tag: 5.0.6-nv-1
-    pullPolicy: IfNotPresent
-    debug: true
-
-  dynamicSeedDiscovery:
-    enabled: true
-    image:
-      registry: ""
-      repository: ""
-      tag: 5.0.6-nv-1
-      pullPolicy: IfNotPresent
-    resources:
-      requests:
-        cpu: 50m
-        memory: 64Mi
-      limits:
-        cpu: 250m
-        memory: 256Mi
-
-  cluster:
-    name: cassandra
-    seed: 2
-    numTokens: 8
-    datacenter: ncp
-    endpointSnitch: GossipingPropertyFileSnitch
-    concurrent_compactors: 2
-
-  replicaCount: 3
 
   dbUser:
     user: cassandra
@@ -93,38 +178,3 @@ cassandra:
   # This should match the value configured in OpenBao migrations
   # (openbao.migrations.secrets.cassandraPassword)
   serviceRolePassword: "ch@ng3m3"
-
-  # https://github.com/bitnami/charts/blob/main/bitnami/cassandra/templates/statefulset.yaml#L531
-  #
-  # The init cql must run after all replicas are up. So it is
-  # mounted to the container, and a post-install job
-  # will exec in and run the cql from the mounted location.
-  #
-  # This replaces the usage of `values.initDBConfigMap`
-  #
-  # The configmap name and mount details are statically defined
-  # and should not be changed.
-  #
-  extraVolumes:
-    - name: cassandra-init-cql
-      configMap:
-        name: cassandra-init-cql
-        defaultMode: 0500
-  extraVolumeMounts:
-    - name: cassandra-init-cql
-      mountPath: /opt/nvcf/cassandra/cql
-      readOnly: true
-  livenessProbe:
-    initialDelaySeconds: 0
-  readinessProbe:
-    initialDelaySeconds: 0
-  startupProbe:
-    enabled: true
-
-  jvm:
-    # superuser_setup_delay_ms only be set for local development with only 1 replica is used.
-    # use of this with more than 1 replica will cause node startups to unexpectedly fail.
-    # cassandra-exporter-agent.jar is required to support prometheus metrics exposure
-    extraOpts: |
-      -javaagent:/opt/bitnami/cassandra/lib/cassandra-exporter-agent.jar 
-      -Dcassandra.superuser_setup_delay_ms=100

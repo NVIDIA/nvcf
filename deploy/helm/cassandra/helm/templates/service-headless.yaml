@@ -13,15 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: v2
-name: helm-nvcf-cassandra
-description: >
-  NVCF NCP Cassandra.
-  This chart is used to deploy a Cassandra cluster on a Kubernetes cluster,
-  and includes migration tools for keyspace initialization specific
-  for the NVCF NCP use-case.
-
-type: application
-
-version: 0.8.0
-appVersion: 5.0.8-nv-0
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cassandra.fullname" . }}-headless
+  namespace: {{ include "cassandra.namespace" . }}
+  labels: {{- include "cassandra.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {{- include "cassandra.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: intra
+      port: 7000
+    - name: cql
+      port: 9042
