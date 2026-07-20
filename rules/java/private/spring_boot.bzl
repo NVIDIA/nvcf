@@ -16,6 +16,7 @@
 "OCI image + library rules for Java (Spring Boot) services."
 
 load("@rules_java//java:defs.bzl", "java_library")
+load("@rules_java//java/common:java_info.bzl", "JavaInfo")
 load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("//rules/oci/private:common.bzl", "create_oci_image")

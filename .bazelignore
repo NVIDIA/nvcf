@@ -51,3 +51,4 @@ src/clis/nvcf-cli/vendor
 
 # Bazel-managed caches we keep inside the workspace for CI cache: paths.
 .bazel-cache
+
