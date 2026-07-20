@@ -36,6 +36,8 @@ import (
 
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 
+	nvcfversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+
 	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/authz"
@@ -166,6 +168,8 @@ func serveManagementRoutes(logger *zap.Logger, loggerAtomicLevel *zap.AtomicLeve
 			logger.Error("failed to write healthz response", zap.Error(err))
 		}
 	})
+
+	router.Handle("/version", nvcfversion.Handler())
 
 	router.Get("/log_level", loggerAtomicLevel.ServeHTTP)
 
