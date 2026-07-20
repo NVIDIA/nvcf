@@ -1,0 +1,41 @@
+load("//tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test")
+
+DATA_MIGRATION_NOTIFICATION_COMPILE_DEPS = [
+    "@nv_third_party_deps//:io_cloudevents_cloudevents_api",
+    "@nv_third_party_deps//:io_cloudevents_cloudevents_core",
+    "@nv_third_party_deps//:io_cloudevents_cloudevents_json_jackson",
+    "@nv_third_party_deps//:io_nats_jnats",
+    "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
+    "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_jackson",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_validation",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_core",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
+]
+
+nv_boot_library(
+    name = "nv_boot_starter_data_migration_notification",
+    srcs = glob(["src/main/java/**/*.java"]),
+    resource_strip_prefix = "nv-boot-starter-data-migration-notification/src/main/resources",
+    resources = glob(["src/main/resources/**"]),
+    visibility = ["//visibility:public"],
+    deps = DATA_MIGRATION_NOTIFICATION_COMPILE_DEPS,
+)
+
+nv_boot_library_test(
+    name = "tests",
+    srcs = glob(["src/test/java/**/*.java"]),
+    coverage_library = ":nv_boot_starter_data_migration_notification",
+    deps = [
+        ":nv_boot_starter_data_migration_notification",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_test",
+    ] + DATA_MIGRATION_NOTIFICATION_COMPILE_DEPS,
+)

@@ -1,0 +1,58 @@
+load("@rules_java//java:defs.bzl", "java_binary", "java_library", "java_plugin")
+load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "jacoco_test_runner.sh",
+    "lcov_to_sonar_generic.py",
+    "lcov_to_sonar_generic_test.sh",
+    "notice_metadata.json",
+    "notice_roots.json",
+])
+
+py_binary(
+    name = "generate_notice_tool",
+    srcs = ["generate_notice.py"],
+    main = "generate_notice.py",
+    python_version = "3.11",
+)
+
+sh_test(
+    name = "lcov_to_sonar_generic_test",
+    srcs = ["lcov_to_sonar_generic_test.sh"],
+    data = [":lcov_to_sonar_generic.py"],
+)
+
+sh_test(
+    name = "notice_check_test",
+    srcs = ["notice_check_test.sh"],
+    data = [
+        ":generate_notice.py",
+        ":notice_metadata.json",
+        "//:MODULE.bazel",
+        "//:NOTICE",
+        "//:maven_install.json",
+        ":notice_roots.json",
+    ],
+)
+
+java_plugin(
+    name = "lombok_plugin",
+    generates_api = True,
+    processor_class = "lombok.launch.AnnotationProcessorHider$AnnotationProcessor",
+    deps = ["@nv_third_party_deps//:org_projectlombok_lombok"],
+)
+
+java_binary(
+    name = "jacoco_cli",
+    main_class = "org.jacoco.cli.internal.Main",
+    runtime_deps = ["@nv_third_party_deps//:org_jacoco_org_jacoco_cli"],
+)
+
+java_library(
+    name = "lombok_annotations",
+    exports = ["@nv_third_party_deps//:org_projectlombok_lombok"],
+    neverlink = True,
+)

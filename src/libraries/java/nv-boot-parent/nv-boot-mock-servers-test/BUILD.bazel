@@ -1,0 +1,39 @@
+load("//tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test")
+
+MOCK_SERVERS_COMPILE_DEPS = [
+    "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",
+    "@nv_third_party_deps//:com_nimbusds_nimbus_jose_jwt",
+    "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
+    "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_apache_logging_log4j_log4j_api",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_core",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_jose",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
+]
+
+nv_boot_library(
+    name = "nv_boot_mock_servers_test",
+    srcs = glob(["src/main/java/**/*.java"]),
+    visibility = ["//visibility:public"],
+    deps = MOCK_SERVERS_COMPILE_DEPS,
+)
+
+nv_boot_library_test(
+    name = "tests",
+    srcs = glob(["src/test/java/**/*.java"]),
+    coverage_library = ":nv_boot_mock_servers_test",
+    deps = [
+        ":nv_boot_mock_servers_test",
+    ] + MOCK_SERVERS_COMPILE_DEPS,
+    size = "medium",
+    tags = ["exclusive"],
+    timeout = "moderate",
+)

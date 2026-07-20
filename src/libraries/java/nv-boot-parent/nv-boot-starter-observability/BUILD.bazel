@@ -1,0 +1,102 @@
+load("@rules_java//java:defs.bzl", "java_library")
+load("//tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
+
+OBSERVABILITY_REQUIRED_DEPS = [
+    "@nv_third_party_deps//:ch_qos_logback_logback_classic",
+    "@nv_third_party_deps//:ch_qos_logback_logback_core",
+    "@nv_third_party_deps//:io_micrometer_micrometer_commons",
+    "@nv_third_party_deps//:io_micrometer_micrometer_core",
+    "@nv_third_party_deps//:io_micrometer_micrometer_observation",
+    "@nv_third_party_deps//:io_micrometer_micrometer_tracing",
+    "@nv_third_party_deps//:io_micrometer_micrometer_tracing_bridge_otel",
+    "@nv_third_party_deps//:io_opentelemetry_opentelemetry_api",
+    "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_common",
+    "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_trace",
+    "@nv_third_party_deps//:io_opentelemetry_semconv_opentelemetry_semconv",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_actuator",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_actuator_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_health",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_metrics",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_observation",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_tracing",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_tracing_opentelemetry",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_opentelemetry",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_actuator",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_core",
+]
+
+# Cassandra, Spring Cloud, servlet, MVC, and WebFlux support is optional in the
+# Maven POM. Keep those APIs available to compile/test conditional integration
+# code without adding those frameworks to every downstream runtime classpath.
+OBSERVABILITY_OPTIONAL_COMPILE_DEPS = [
+    "@nv_third_party_deps//:jakarta_servlet_jakarta_servlet_api",
+    "@nv_third_party_deps//:org_apache_cassandra_java_driver_core",
+    "@nv_third_party_deps//:org_apache_cassandra_java_driver_guava_shaded",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_cassandra",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_data_cassandra",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_data_cassandra",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_web_server",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_commons",
+    "@nv_third_party_deps//:org_springframework_data_spring_data_cassandra",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:org_springframework_spring_webflux",
+    "@nv_third_party_deps//:org_springframework_spring_webmvc",
+]
+
+java_library(
+    name = "optional_compile_deps",
+    exports = OBSERVABILITY_OPTIONAL_COMPILE_DEPS,
+    neverlink = True,
+    visibility = ["//visibility:private"],
+)
+
+nv_boot_library(
+    name = "nv_boot_starter_observability",
+    srcs = glob(["src/main/java/**/*.java"]),
+    resource_strip_prefix = "nv-boot-starter-observability/src/main/resources",
+    resources = glob(["src/main/resources/**"]),
+    visibility = ["//visibility:public"],
+    deps = OBSERVABILITY_REQUIRED_DEPS + [":optional_compile_deps"],
+)
+
+nv_boot_runtime_classpath_test(
+    name = "runtime_scope_test",
+    target = ":nv_boot_starter_observability",
+    forbidden_artifacts = [
+        "cassandra",
+        "java-driver-core",
+        "java-driver-guava-shaded",
+        "jakarta.servlet-api",
+        "spring-cloud-commons",
+        "spring-web-",
+        "spring-webflux-",
+        "spring-webmvc-",
+    ],
+)
+
+nv_boot_library_test(
+    name = "tests",
+    srcs = glob(["src/test/java/**/*.java"]),
+    coverage_library = ":nv_boot_starter_observability",
+    resource_strip_prefix = "nv-boot-starter-observability/src/test/resources",
+    resources = glob(["src/test/resources/**"]),
+    deps = [
+        ":nv_boot_starter_observability",
+        "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_testing",
+        "@nv_third_party_deps//:org_awaitility_awaitility",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_actuator_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webflux_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_webmvc_test",
+    ] + OBSERVABILITY_REQUIRED_DEPS + OBSERVABILITY_OPTIONAL_COMPILE_DEPS,
+    size = "medium",
+    timeout = "moderate",
+)

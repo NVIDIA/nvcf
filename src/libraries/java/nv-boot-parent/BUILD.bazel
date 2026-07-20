@@ -1,0 +1,54 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "maven_install.json",
+    "MODULE.bazel",
+    "NOTICE",
+])
+
+genrule(
+    name = "third_party_notice",
+    srcs = [
+        ":maven_install.json",
+        "//tools/bazel:notice_metadata.json",
+        "//tools/bazel:notice_roots.json",
+    ],
+    tools = ["//tools/bazel:generate_notice_tool"],
+    outs = ["THIRD_PARTY_NOTICE"],
+    cmd = """
+set -eu
+"$(execpath //tools/bazel:generate_notice_tool)" \
+    --maven-install "$(location :maven_install.json)" \
+    --metadata "$(location //tools/bazel:notice_metadata.json)" \
+    --root-manifest "$(location //tools/bazel:notice_roots.json)" \
+    --output "$@" \
+    --write
+""",
+)
+
+genrule(
+    name = "generate_notice",
+    srcs = [
+        ":maven_install.json",
+        "//tools/bazel:notice_metadata.json",
+        "//tools/bazel:notice_roots.json",
+    ],
+    tools = ["//tools/bazel:generate_notice_tool"],
+    outs = ["generate_notice.sh"],
+    cmd = """
+cat > "$@" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+workspace="$${BUILD_WORKSPACE_DIRECTORY:-$$(pwd)}"
+exec "$(execpath //tools/bazel:generate_notice_tool)" \
+    --maven-install "$(location :maven_install.json)" \
+    --metadata "$${workspace}/tools/bazel/notice_metadata.json" \
+    --notice "$${workspace}/NOTICE" \
+    --root-manifest "$(location //tools/bazel:notice_roots.json)" \
+    "$$@"
+EOF
+chmod +x "$@"
+""",
+    executable = True,
+)

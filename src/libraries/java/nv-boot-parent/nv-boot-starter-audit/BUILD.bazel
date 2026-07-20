@@ -1,0 +1,70 @@
+load("@rules_java//java:defs.bzl", "java_library")
+load("//tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
+
+AUDIT_REQUIRED_DEPS = [
+    "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",
+    "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_databind",
+    "@nv_third_party_deps//:com_github_java_json_tools_json_patch",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_bouncycastle_bcprov_jdk18on",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_jackson",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_core",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_core",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_core",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
+]
+
+# The OAuth2 resource-server starter is optional in Maven. Keep its APIs on
+# this module's compile/test classpaths without exporting them at runtime.
+AUDIT_OPTIONAL_COMPILE_DEPS = [
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_security_oauth2_resource_server",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_core",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_jose",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_resource_server",
+]
+
+java_library(
+    name = "optional_compile_deps",
+    exports = AUDIT_OPTIONAL_COMPILE_DEPS,
+    neverlink = True,
+    visibility = ["//visibility:private"],
+)
+
+nv_boot_library(
+    name = "nv_boot_starter_audit",
+    srcs = glob(["src/main/java/**/*.java"]),
+    resource_strip_prefix = "nv-boot-starter-audit/src/main/resources",
+    resources = glob(["src/main/resources/**"]),
+    visibility = ["//visibility:public"],
+    deps = AUDIT_REQUIRED_DEPS + [":optional_compile_deps"],
+)
+
+nv_boot_runtime_classpath_test(
+    name = "runtime_scope_test",
+    target = ":nv_boot_starter_audit",
+    forbidden_artifacts = [
+        "spring-boot-starter-security-oauth2-resource-server",
+        "spring-security-oauth2-jose",
+        "spring-security-oauth2-resource-server",
+    ],
+)
+
+nv_boot_library_test(
+    name = "tests",
+    srcs = glob(["src/test/java/**/*.java"]),
+    coverage_library = ":nv_boot_starter_audit",
+    deps = [
+        ":nv_boot_starter_audit",
+        "@nv_third_party_deps//:ch_qos_logback_logback_classic",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_security_oauth2_resource_server_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_test",
+        "@nv_third_party_deps//:org_springframework_security_spring_security_test",
+    ] + AUDIT_REQUIRED_DEPS + AUDIT_OPTIONAL_COMPILE_DEPS,
+)

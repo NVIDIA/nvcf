@@ -1,0 +1,52 @@
+load("//tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test")
+
+TELEMETRY_COMPILE_DEPS = [
+    "@nv_third_party_deps//:io_cloudevents_cloudevents_api",
+    "@nv_third_party_deps//:io_cloudevents_cloudevents_core",
+    "@nv_third_party_deps//:io_cloudevents_cloudevents_json_jackson",
+    "@nv_third_party_deps//:io_netty_netty_common",
+    "@nv_third_party_deps//:io_netty_netty_transport",
+    "@nv_third_party_deps//:io_projectreactor_netty_reactor_netty_http",
+    "@nv_third_party_deps//:io_projectreactor_reactor_core",
+    "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_jackson",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_validation",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webflux",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_core",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_core",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:org_springframework_spring_webflux",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
+]
+
+nv_boot_library(
+    name = "nv_boot_starter_telemetry",
+    srcs = glob(["src/main/java/**/*.java"]),
+    resource_strip_prefix = "nv-boot-starter-telemetry/src/main/resources",
+    resources = glob(["src/main/resources/**"]),
+    visibility = ["//visibility:public"],
+    deps = TELEMETRY_COMPILE_DEPS,
+)
+
+nv_boot_library_test(
+    name = "tests",
+    srcs = glob(["src/test/java/**/*.java"]),
+    coverage_library = ":nv_boot_starter_telemetry",
+    deps = [
+        ":nv_boot_starter_telemetry",
+        "@nv_third_party_deps//:org_hibernate_validator_hibernate_validator",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webflux_test",
+        "@nv_third_party_deps//:org_springframework_security_spring_security_test",
+        "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
+    ] + TELEMETRY_COMPILE_DEPS,
+    size = "medium",
+    timeout = "moderate",
+)

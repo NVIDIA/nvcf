@@ -1,0 +1,69 @@
+load("//tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test")
+
+CASSANDRA_COMPILE_DEPS = [
+    "@nv_third_party_deps//:at_yawk_lz4_lz4_java",
+    "@nv_third_party_deps//:com_github_ben_manes_caffeine_guava",
+    "@nv_third_party_deps//:com_google_guava_guava",
+    "@nv_third_party_deps//:io_micrometer_micrometer_commons",
+    "@nv_third_party_deps//:io_micrometer_micrometer_core",
+    "@nv_third_party_deps//:io_micrometer_micrometer_observation",
+    "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
+    "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+    "@nv_third_party_deps//:org_apache_cassandra_java_driver_core",
+    "@nv_third_party_deps//:org_apache_cassandra_java_driver_metrics_micrometer",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_jspecify_jspecify",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_actuator",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_actuator_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_cassandra",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_data_cassandra",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_health",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_actuator",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_data_cassandra",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
+    "@nv_third_party_deps//:org_springframework_data_spring_data_cassandra",
+    "@nv_third_party_deps//:org_springframework_data_spring_data_commons",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_core",
+]
+
+CASSANDRA_TEST_DEPS = [
+    ":nv_boot_starter_cassandra",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_actuator_test",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_data_cassandra_test",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_webmvc_test",
+    "@nv_third_party_deps//:org_springframework_spring_aop",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:org_testcontainers_testcontainers",
+    "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
+    "@nv_third_party_deps//:org_testcontainers_testcontainers_junit_jupiter",
+] + CASSANDRA_COMPILE_DEPS
+
+nv_boot_library(
+    name = "nv_boot_starter_cassandra",
+    srcs = glob(["src/main/java/**/*.java"]),
+    resource_strip_prefix = "nv-boot-starter-cassandra/src/main/resources",
+    resources = glob(["src/main/resources/**"]),
+    visibility = ["//visibility:public"],
+    deps = CASSANDRA_COMPILE_DEPS,
+)
+
+nv_boot_library_test(
+    name = "tests",
+    srcs = glob(["src/test/java/**/*.java"]),
+    coverage_library = ":nv_boot_starter_cassandra",
+    resource_strip_prefix = "nv-boot-starter-cassandra/src/test/resources",
+    resources = glob(["src/test/resources/**"]),
+    deps = CASSANDRA_TEST_DEPS,
+    size = "large",
+    tags = [
+        "integration",
+        "requires-docker",
+    ],
+    timeout = "long",
+)
