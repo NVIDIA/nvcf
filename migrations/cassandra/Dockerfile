@@ -1,4 +1,4 @@
-FROM bitnami/cassandra:5.0.6
+FROM cassandra:5.0.8
 
 ARG TARGETARCH
 ARG KUBECTL_VERSION="1.36.1"
