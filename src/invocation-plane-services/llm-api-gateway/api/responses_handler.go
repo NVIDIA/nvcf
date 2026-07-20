@@ -53,6 +53,7 @@ const (
 	headerResponsesMethod       = "X-Routing-Method"
 	headerResponsesModel        = "X-Model"
 	headerResponsesAffinity     = "X-Cache-Affinity-Key"
+	headerResponsesPriority     = "X-Priority"
 )
 
 func (h *ResponsesHandlers) RegisterRoutes(group *echo.Group) {
@@ -292,6 +293,9 @@ func setResponsesProxyContextHeaders(headers http.Header, reqCtx *requestctx.Req
 	}
 	if reqCtx.CacheAffinityKey != "" {
 		headers.Set(headerResponsesAffinity, reqCtx.CacheAffinityKey)
+	}
+	if reqCtx.Priority != nil {
+		headers.Set(headerResponsesPriority, strconv.FormatUint(uint64(*reqCtx.Priority), 10))
 	}
 }
 
