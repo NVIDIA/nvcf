@@ -778,6 +778,47 @@ func Test_translateFunctionLaunchSpecification(t *testing.T) {
 		assert.Equal(t, "128Gi", gotPod.Spec.Containers[0].Resources.Limits.StorageEphemeral().String())
 	}
 
+	llmLaunchSpecification := *cmContainer.LaunchSpecification
+	llmEnvironment, err := base64.StdEncoding.DecodeString(llmLaunchSpecification.EnvironmentB64)
+	require.NoError(t, err)
+	llmLaunchSpecification.EnvironmentB64 = base64.StdEncoding.EncodeToString(append(
+		llmEnvironment,
+		[]byte("\nLLM_REQUEST_ROUTER_ADDRESS=llm-request-router.example.com:50071")...,
+	))
+	llmDetails := cmContainer.Details
+	llmDetails.FunctionType = function.FunctionTypeLLM
+	reqLLM := reqContainer.DeepCopy()
+	reqLLM.Name = "sr-llm"
+	reqLLM.Spec.FunctionDetails = llmDetails
+	reqLLM.Spec.CreationMsgInfo.FunctionLaunchSpecification = &llmLaunchSpecification
+
+	gotArtifactsLLM, err := kc.translateFunctionLaunchSpecification(ctx, reqLLM)
+	require.NoError(t, err)
+	var llmPodArtifact function.LaunchArtifact
+	for _, artifact := range gotArtifactsLLM {
+		if artifact.Type == function.LaunchArtifactTypePod {
+			llmPodArtifact = artifact
+			break
+		}
+	}
+	require.NotEmpty(t, llmPodArtifact.Specification)
+	llmPodArtifactBytes, err := base64.StdEncoding.DecodeString(llmPodArtifact.Specification)
+	require.NoError(t, err)
+	llmPod := &corev1.Pod{}
+	require.NoError(t, json.Unmarshal(llmPodArtifactBytes, llmPod))
+	var llmWorker *corev1.Container
+	for i := range llmPod.Spec.Containers {
+		if llmPod.Spec.Containers[i].Name == function.LLMWorkerContainerName {
+			llmWorker = &llmPod.Spec.Containers[i]
+			break
+		}
+	}
+	require.NotNil(t, llmWorker)
+	assert.Contains(t, llmWorker.Args, "--backend-connectivity=reverse")
+	assert.Contains(t, llmWorker.Args, "--initial-input-tps=100")
+	assert.NotContains(t, llmWorker.Args, "--reverse-tunnel")
+	assert.NotContains(t, llmWorker.Args, "--do-calibration")
+
 	// Helm chart basic function.
 	msgMetaHelmChart := cmHelmChart.CreationQueueMessageMetadata
 	reqHelmChart := &nvcav2beta1.ICMSRequest{

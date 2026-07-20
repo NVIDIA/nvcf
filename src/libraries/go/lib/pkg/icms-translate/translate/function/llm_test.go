@@ -64,7 +64,10 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 				assert.Equal(t, "llm-router.example.com:443", envMap["STARGATE_ADDRESS"])
 				assert.Contains(t, c.Args, "--inference-server-id=inst-123")
 				assert.Contains(t, c.Args, "--auth-token-file=/var/run/llm/worker-token")
-				assert.Contains(t, c.Args, "--reverse-tunnel")
+				assert.Contains(t, c.Args, "--backend-connectivity=reverse")
+				assert.Contains(t, c.Args, "--initial-input-tps=100")
+				assert.NotContains(t, c.Args, "--reverse-tunnel")
+				assert.NotContains(t, c.Args, "--do-calibration")
 				assert.NotContains(t, c.Args, "--quic-insecure")
 			},
 		},
