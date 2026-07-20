@@ -40,3 +40,26 @@ releases:
       - template: service
     # When enabled, this service will export realtime function information that can be
     # scraped by a Prometheus ServiceMonitor
+
+  # --- Function Autoscaler workload ---
+  # Deploys the function-autoscaler (chart nvcf/helm-nvcf-function-autoscaler),
+  # disabled by default. SECRETS_PATH and CONFIG come from the chart defaults;
+  # only the in-cluster endpoints are set here. Ordered after state-metrics and
+  # depends on the stage-01 Cassandra and OpenBao migrations and a reachable
+  # VictoriaMetrics from the observability stack.
+  - name: function-autoscaler
+    version: "{{ .Values.functionAutoscaler.chartVersion }}" # Pin to the published helm-nvcf-function-autoscaler version.
+    namespace: nvcf
+    condition: functionAutoscaler.enabled
+    needs:
+      - nvcf/state-metrics
+    inherit:
+      - template: service
+    values:
+      - functionautoscaler:
+          image:
+            registry: "{{ .Values.global.image.registry }}"
+            repository: "{{ .Values.global.image.repository }}/nvcf-autoscaler-service"
+          env:
+            CASSANDRA__CONTACT_POINTS: "{{ .Values.functionAutoscaler.cassandraContactPoints }}"
+            TIMESERIES_DB__TIMESERIES_DB_URL: "{{ .Values.functionAutoscaler.timeseriesDbUrl }}"
