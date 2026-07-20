@@ -20,7 +20,7 @@ The base64-encoded Docker credential in `secrets.yaml` was incorrectly formatted
 **Incorrect (will fail):**
 
 ```bash
-# ❌ WRONG - Only encoding the API key
+# WRONG - Only encoding the API key
 echo -n 'nvapi-1234567890abcdef' | base64
 # Results in: bnZhcGktMTIzNDU2Nzg5MGFiY2RlZg==
 ```
@@ -28,7 +28,7 @@ echo -n 'nvapi-1234567890abcdef' | base64
 **Correct:**
 
 ```bash
-# ✅ CORRECT - Encoding the full credential in basic auth format
+# CORRECT - Encoding the full credential in basic auth format
 echo -n '$oauthtoken:nvapi-1234567890abcdef' | base64
 # Results in: JG9hdXRodG9rZW46bnZhcGktMTIzNDU2Nzg5MGFiY2RlZg==
 ```
