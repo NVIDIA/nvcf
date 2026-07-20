@@ -1,4 +1,0 @@
-interface:
-  display_name: "Spring Boot App Bazel Enablement"
-  short_description: "Add Bazel-native builds to Spring Boot applications"
-  default_prompt: "Enable Bazel for this Spring Boot project. Classify it as OSS/self-hosted or managed from the request and repository, then follow the matching playbook end to end."

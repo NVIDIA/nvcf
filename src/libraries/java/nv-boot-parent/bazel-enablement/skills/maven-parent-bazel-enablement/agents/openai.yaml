@@ -1,4 +1,0 @@
-interface:
-  display_name: "Maven Parent Bazel Enablement"
-  short_description: "Add Bazel-native builds to Maven parent projects"
-  default_prompt: "Use $maven-parent-bazel-enablement to add a Bazel-native source-target build alongside this Maven parent project without simulating Maven publication in Bazel."
