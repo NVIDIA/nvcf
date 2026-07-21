@@ -1363,7 +1363,7 @@ nvcf-cli task update-secrets --secrets NGC_API_KEY=nvapi-... HF_TOKEN=hf_...
 nvcf-cli task update-secrets --input-file examples/update-task-secrets.json
 ```
 
-The PUT replaces the entire user-secret set on the task.
+The PUT merges the supplied secrets into the existing set: provided secrets are added or updated by name, and existing secrets not included in the request are preserved.
 
 ### Cancel and Delete
 
