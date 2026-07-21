@@ -739,7 +739,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		}
 		// Apply BYOO telemetry annotations to workload objects for Helm-rendered pods
 		metaInput.EnvVars = append(metaInput.EnvVars, byooEnvs...)
-		metaInput.OTelCollectorEnvVars = append(metaInput.OTelCollectorEnvVars, r.cfg.Agent.BYOOLogChunking.EnvVars()...)
+		metaInput.OTelCollectorEnvVars = append(metaInput.OTelCollectorEnvVars, r.cfg.Agent.BYOOOTelCollectorEnvVars()...)
 	}
 
 	// Task-specific mutators.

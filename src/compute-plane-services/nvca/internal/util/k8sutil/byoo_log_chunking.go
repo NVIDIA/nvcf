@@ -22,8 +22,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// AddBYOOLogChunkingEnvVarsToPodSpec injects env vars into only the BYOO OTel collector container.
-func AddBYOOLogChunkingEnvVarsToPodSpec(podSpec *corev1.PodSpec, envs []corev1.EnvVar) {
+// AddBYOOOTelCollectorEnvVarsToPodSpec injects env vars into only the BYOO OTel collector container.
+func AddBYOOOTelCollectorEnvVarsToPodSpec(podSpec *corev1.PodSpec, envs []corev1.EnvVar) {
 	if len(envs) == 0 {
 		return
 	}
@@ -33,4 +33,9 @@ func AddBYOOLogChunkingEnvVarsToPodSpec(podSpec *corev1.PodSpec, envs []corev1.E
 		}
 		AddEnvsToContainer(&podSpec.Containers[i], envs...)
 	}
+}
+
+// AddBYOOLogChunkingEnvVarsToPodSpec injects env vars into only the BYOO OTel collector container.
+func AddBYOOLogChunkingEnvVarsToPodSpec(podSpec *corev1.PodSpec, envs []corev1.EnvVar) {
+	AddBYOOOTelCollectorEnvVarsToPodSpec(podSpec, envs)
 }

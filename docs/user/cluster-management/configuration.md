@@ -854,6 +854,23 @@ isolated test clusters that run the LLM request router tunnel without TLS. For
 the full LLM addon setup, see
 [LLM Function Enablement](../llm-function-enablement.md).
 
+BYOO SRE metrics example:
+
+```yaml
+agentConfig:
+  mergeConfig: |
+    agent:
+      byooSREMetrics:
+        enabled: true
+        filterConfig: |
+          error_mode: ignore
+          metric_conditions:
+            - 'metric.name == "BpsInstrument"'
+        customerMetricsDropLabels:
+          - sre_metrics_enabled
+          - custom_label
+```
+
 Apply via Helm:
 
 ```bash

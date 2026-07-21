@@ -260,6 +260,11 @@ func TestReconcile_Function(t *testing.T) {
 		DryRun:                    true,
 		ExporterBatchMaxSizeBytes: &exporterBatchMaxSizeBytes,
 	}
+	r.cfg.Agent.BYOOSREMetrics = nvcaconfig.BYOOSREMetricsConfig{
+		Enabled:                   true,
+		FilterConfig:              "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
+		CustomerMetricsDropLabels: []string{"sre_metrics_enabled", "custom_label"},
+	}
 	err := k8sutil.SetConfigDefaultResources(&r.cfg)
 	require.NoError(t, err)
 	r.cfg.Workload.Tolerations = []corev1.Toleration{configuredToleration}
@@ -806,6 +811,7 @@ rules:
 		metaEnv[env.Name] = env.Value
 	}
 	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOSREMetricsEnabledEnv)
 	otelCollectorEnv := map[string]string{}
 	for _, env := range msMeta.OTelCollectorEnvVars {
 		otelCollectorEnv[env.Name] = env.Value
@@ -813,6 +819,9 @@ rules:
 	assert.Equal(t, "983040", otelCollectorEnv[nvcaconfig.BYOOLogChunkMaxBodyBytesEnv])
 	assert.Equal(t, "true", otelCollectorEnv[nvcaconfig.BYOOLogChunkDryRunEnv])
 	assert.Equal(t, "1000000", otelCollectorEnv[nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv])
+	assert.Equal(t, "true", otelCollectorEnv[nvcaconfig.BYOOSREMetricsEnabledEnv])
+	assert.Contains(t, otelCollectorEnv[nvcaconfig.BYOOSREMetricsFilterConfigEnv], "metric.name")
+	assert.Equal(t, "sre_metrics_enabled,custom_label", otelCollectorEnv[nvcaconfig.BYOOCustomerMetricsDropLabelsEnv])
 	assert.Equal(t, nodefeatures.UniformInstanceTypeLabelKey, msMeta.NodeAffinityKey)
 	assert.Equal(t, []corev1.Toleration{configuredToleration}, msMeta.Tolerations)
 

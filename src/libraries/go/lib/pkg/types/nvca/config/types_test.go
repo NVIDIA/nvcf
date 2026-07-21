@@ -86,6 +86,44 @@ func TestAgentConfig_Complete(t *testing.T) {
 	})
 }
 
+func TestBYOOSREMetricsConfig_EnvVars(t *testing.T) {
+	cfg := BYOOSREMetricsConfig{
+		Enabled:      true,
+		FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
+		CustomerMetricsDropLabels: []string{
+			"sre_metrics_enabled",
+			"custom_label",
+		},
+	}
+
+	assert.Equal(t, []corev1.EnvVar{
+		{Name: BYOOSREMetricsEnabledEnv, Value: "true"},
+		{Name: BYOOSREMetricsFilterConfigEnv, Value: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n"},
+		{Name: BYOOCustomerMetricsDropLabelsEnv, Value: "sre_metrics_enabled,custom_label"},
+	}, cfg.EnvVars())
+}
+
+func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
+	exporterBatchMaxSizeBytes := int64(1000000)
+	cfg := AgentConfig{
+		BYOOLogChunking: BYOOLogChunkingConfig{
+			MaxBodyBytes:              983040,
+			ExporterBatchMaxSizeBytes: &exporterBatchMaxSizeBytes,
+		},
+		BYOOSREMetrics: BYOOSREMetricsConfig{
+			Enabled:                   true,
+			CustomerMetricsDropLabels: []string{"sre_metrics_enabled"},
+		},
+	}
+
+	assert.Equal(t, []corev1.EnvVar{
+		{Name: BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
+		{Name: BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
+		{Name: BYOOSREMetricsEnabledEnv, Value: "true"},
+		{Name: BYOOCustomerMetricsDropLabelsEnv, Value: "sre_metrics_enabled"},
+	}, cfg.BYOOOTelCollectorEnvVars())
+}
+
 func TestAgentTimeConfig_Complete(t *testing.T) {
 	t.Run("sets_all_defaults", func(t *testing.T) {
 		cfg := AgentTimeConfig{}

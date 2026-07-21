@@ -69,6 +69,22 @@ func TestDeepCopy_AgentConfig_Nil(t *testing.T) {
 	assert.Nil(t, out)
 }
 
+func TestDeepCopy_BYOOSREMetricsConfig(t *testing.T) {
+	orig := &BYOOSREMetricsConfig{
+		Enabled:                   true,
+		FilterConfig:              "error_mode: ignore",
+		CustomerMetricsDropLabels: []string{"sre_metrics_enabled", "custom_label"},
+	}
+	out := orig.DeepCopy()
+	require.NotNil(t, out)
+	assert.Equal(t, orig.Enabled, out.Enabled)
+	assert.Equal(t, orig.FilterConfig, out.FilterConfig)
+	assert.Equal(t, orig.CustomerMetricsDropLabels, out.CustomerMetricsDropLabels)
+
+	orig.CustomerMetricsDropLabels[0] = "changed"
+	assert.Equal(t, "sre_metrics_enabled", out.CustomerMetricsDropLabels[0])
+}
+
 func TestDeepCopy_AllowedExtraKubernetesTypeConfig(t *testing.T) {
 	orig := &AllowedExtraKubernetesTypeConfig{Group: "apps", Version: "v1", Kind: "Deployment", Resource: "deployments"}
 	out := orig.DeepCopy()

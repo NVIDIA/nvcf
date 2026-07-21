@@ -733,6 +733,23 @@ pod and merged with the generated config at runtime.
        logLevel: debug
 ```
 
+**BYOO SRE metrics example:**
+
+```yaml
+ agentConfig:
+   mergeConfig: |
+     agent:
+       byooSREMetrics:
+         enabled: true
+         filterConfig: |
+           error_mode: ignore
+           metric_conditions:
+             - 'metric.name == "BpsInstrument"'
+         customerMetricsDropLabels:
+           - sre_metrics_enabled
+           - custom_label
+```
+
 **Apply via Helm:**
 
 ```bash
