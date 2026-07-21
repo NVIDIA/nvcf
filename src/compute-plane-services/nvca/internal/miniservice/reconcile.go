@@ -39,6 +39,8 @@ import (
 	translateutil "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
 	cmnotel "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/go-containerregistry/pkg/name"
 	otelattr "go.opentelemetry.io/otel/attribute"
 	otelcodes "go.opentelemetry.io/otel/codes"
@@ -443,6 +445,41 @@ func (r *Reconciler) patchMiniService(ctx context.Context, oldObj, newObj *v1alp
 	return nil
 }
 
+// saveWorkloadConfig persists the workload config decoded from the rendered workload config
+// ConfigMap onto the MiniService spec, patching only that field inline. It is a no-op when the
+// config is unchanged. On success ms is updated in place so callers see the persisted value
+// and current ResourceVersion.
+func (r *Reconciler) saveWorkloadConfig(
+	ctx context.Context,
+	ms *v1alpha1.MiniService,
+	desired *v1alpha1.WorkloadConfig,
+) error {
+	if cmp.Equal(ms.Spec.WorkloadConfig, desired, cmpopts.EquateEmpty()) {
+		return nil
+	}
+
+	base := &v1alpha1.MiniService{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: v1alpha1.SchemeGroupVersion.String(),
+			Kind:       "MiniService",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            ms.Name,
+			ResourceVersion: ms.ResourceVersion,
+		},
+		Spec: v1alpha1.MiniServiceSpec{
+			WorkloadConfig: desired.DeepCopy(),
+		},
+	}
+	if err := r.Client.Patch(ctx, base, client.Apply, client.ForceOwnership, client.FieldOwner(managedByValue)); err != nil {
+		return fmt.Errorf("patch miniservice %s workload config: %w", ms.Name, err)
+	}
+
+	ms.Spec.WorkloadConfig = desired
+	ms.ResourceVersion = base.ResourceVersion
+	return nil
+}
+
 // prepareUpdateIfNeeded detects spec changes by comparing metadata.generation
 // to status.observedGeneration. Because generation increments on any spec field change,
 // this method additionally compares helm values against the latest revision ConfigMap.
@@ -560,8 +597,13 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		}
 	}
 
-	workloadObjs, resources, err := decodeObjects(ctx, r.Decoder, objsData)
+	workloadObjs, resources, workloadConfig, err := decodeObjects(ctx, r.Decoder, objsData)
 	if err != nil {
+		return reconcile.Result{}, err
+	}
+	// Persist workload config decoded from the rendered workload config ConfigMap so later
+	// reconciles (e.g. status) can source it from the spec.
+	if err := r.saveWorkloadConfig(ctx, ms, workloadConfig); err != nil {
 		return reconcile.Result{}, err
 	}
 	// Update the resources status in the MiniService status.
@@ -911,7 +953,7 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 		}
 	}
 
-	workloadObjs, resources, err := decodeObjects(ctx, r.Decoder, objsData)
+	workloadObjs, resources, _, err := decodeObjects(ctx, r.Decoder, objsData)
 	if err != nil {
 		return nil, nil, "", "", err
 	}
@@ -1274,7 +1316,7 @@ func (r *Reconciler) doCleanup(ctx context.Context, //nolint:gocyclo
 	} else {
 		log.V(1).Info("Using cached rendered object data in cleanup")
 
-		if objs, _, err = decodeObjects(ctx, r.Decoder, objsData); err != nil {
+		if objs, _, _, err = decodeObjects(ctx, r.Decoder, objsData); err != nil {
 			return reconcile.Result{}, err
 		}
 		for i := 0; i < len(objs); i++ {
@@ -1511,8 +1553,6 @@ func (r *Reconciler) applyWorkload(ctx context.Context,
 	return r.create(ctx, ms, objectMutatorSet{}, genericMutator, c, objs...)
 }
 
-const fieldManagerName = "miniservice-controller"
-
 // applySSAWorkload applies workload objects using server-side apply for updates.
 // Like applyWorkload, it may use an impersonating client for RBAC enforcement.
 func (r *Reconciler) applySSAWorkload(ctx context.Context,
@@ -1587,7 +1627,7 @@ func (r *Reconciler) applySSA(ctx context.Context,
 		obj.SetResourceVersion("")
 		obj.GetObjectKind().SetGroupVersionKind(gvk)
 
-		if err := c.Patch(ctx, obj, client.Apply, client.FieldOwner(fieldManagerName), client.ForceOwnership); err != nil {
+		if err := c.Patch(ctx, obj, client.Apply, client.FieldOwner(managedByValue), client.ForceOwnership); err != nil {
 			if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
 				err = reconcile.TerminalError(err)
 			}
@@ -1802,29 +1842,46 @@ func weighObject(obj client.Object) int8 {
 	}
 }
 
-func decodeObjects(ctx context.Context, decoder runtime.Decoder, objsData []byte) ([]client.Object, []v1alpha1.ResourceStatus, error) {
+// decodeObjects decodes the ReVal-rendered object data into typed client objects and a
+// per-GVK resource summary. The workload config ConfigMap
+// (featureflag.WorkloadConfigConfigMapName) is a control signal from the chart and is never
+// created on-cluster: it is extracted and returned as a decoded WorkloadConfig, and excluded
+// from the returned objects and resource summary so it is never applied or status-checked.
+func decodeObjects(ctx context.Context, decoder runtime.Decoder, objsData []byte) (
+	[]client.Object, []v1alpha1.ResourceStatus, *v1alpha1.WorkloadConfig, error,
+) {
 	log := logf.FromContext(ctx)
 
 	var rawObjs []json.RawMessage
 	if err := json.Unmarshal(objsData, &rawObjs); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	objs := make([]client.Object, len(rawObjs))
+	objs := make([]client.Object, 0, len(rawObjs))
 	resourcesByGVK := map[string]v1alpha1.ResourceStatus{}
+	var workloadConfig *v1alpha1.WorkloadConfig
 	for i, rawObj := range rawObjs {
 		robj, _, err := decoder.Decode(rawObj, nil, nil)
 		if err != nil {
 			log.Error(err, "Error decoding object from ReVal", "index", i)
-			return nil, nil, reconcile.TerminalError(err)
+			return nil, nil, nil, reconcile.TerminalError(err)
 		}
 
 		cobj, ok := robj.(client.Object)
 		if !ok {
 			log.Error(nil, "Object does not implement client.Object", "index", i)
-			return nil, nil, reconcile.TerminalError(fmt.Errorf("bad object type"))
+			return nil, nil, nil, reconcile.TerminalError(fmt.Errorf("bad object type"))
 		}
 
-		objs[i] = cobj
+		// Extract the workload config ConfigMap. It must never be applied on-cluster,
+		// so drop it from the objects to create and status-check.
+		if cm, ok := cobj.(*corev1.ConfigMap); ok && cm.Name == featureflag.WorkloadConfigConfigMapName {
+			if workloadConfig, err = featureflag.DecodeWorkloadConfig(ctx, cm); err != nil {
+				return nil, nil, nil, err
+			}
+			continue
+		}
+
+		objs = append(objs, cobj)
 		gvk := cobj.GetObjectKind().GroupVersionKind().String()
 		if _, ok := resourcesByGVK[gvk]; ok {
 			resource := resourcesByGVK[gvk]
@@ -1846,7 +1903,7 @@ func decodeObjects(ctx context.Context, decoder runtime.Decoder, objsData []byte
 		log.V(1).Info("Decoded object", "gvk", resource.GVK, "names", resource.Names, "count", resource.Count)
 	}
 
-	return objs, resources, nil
+	return objs, resources, workloadConfig, nil
 }
 
 // getObjectGVK returns the GVK for an object using the gvkCache from context for better performance.

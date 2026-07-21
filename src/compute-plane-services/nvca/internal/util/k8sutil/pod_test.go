@@ -706,9 +706,10 @@ func TestImagePullIssuesReported(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, state, hasIssue := ImagePullIssuesReported(tt.status)
-			assert.Equal(t, tt.wantIssue, hasIssue)
-			assert.Equal(t, tt.wantReason, state.Reason)
+			imagePullIssues, hasIssue := ImagePullIssuesReported(tt.status)
+			if assert.Equal(t, tt.wantIssue, hasIssue) && assert.Len(t, imagePullIssues, 1) {
+				assert.Equal(t, tt.wantReason, imagePullIssues[0].Reason)
+			}
 		})
 	}
 }

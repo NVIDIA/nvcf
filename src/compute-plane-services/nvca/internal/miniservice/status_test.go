@@ -676,7 +676,7 @@ func Test_doTerminalTaskStatus(t *testing.T) {
 			currentTime:             baseTime.Add(10 * time.Minute),
 			expectedPhase:           "",
 			expectedConditionType:   v1alpha1.MiniServiceConditionObjectsHealthy,
-			expectedConditionReason: v1alpha1.MiniServiceStatusReasonDegradedWorkerPods,
+			expectedConditionReason: v1alpha1.MiniServiceStatusReasonDegradedWorker,
 			expectedRequeue:         false,
 			expectedError:           true,
 			expectedTerminalError:   true,

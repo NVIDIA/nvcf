@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "attribute.go",
         "featureflag.go",
+        "featureflag_workload.go",
         "fetcher.go",
         "persistentstorage.go",
         "sharedstorage.go",
@@ -16,6 +17,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/apis/nvca/v1:nvca",
+        "//pkg/apis/nvca/v1alpha1",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//vendor/github.com/urfave/cli/v2:cli",
         "//vendor/k8s.io/api/core/v1:core",
@@ -34,6 +36,7 @@ go_test(
     srcs = [
         "attribute_test.go",
         "featureflag_test.go",
+        "featureflag_workload_test.go",
         "fetcher_test.go",
         "persistentstorage_test.go",
         "sharedstorage_test.go",
@@ -41,6 +44,7 @@ go_test(
     embed = [":featureflag"],
     deps = [
         "//pkg/apis/nvca/v1:nvca",
+        "//pkg/apis/nvca/v1alpha1",
         "//vendor/github.com/stretchr/testify/assert",
         "//vendor/github.com/stretchr/testify/require",
         "//vendor/k8s.io/api/core/v1:core",
