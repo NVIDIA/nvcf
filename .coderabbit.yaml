@@ -25,10 +25,15 @@ reviews:
     title:
       mode: warning
       requirements: >-
-        The title must be a valid Conventional Commit (type(scope): subject)
-        with a single type prefix (no compound "type1+type2(scope):"), and the
-        <type> must accurately reflect the primary nature of the diff, not merely
-        be a valid type. Flag mismatches: a docs-only change (only *.md or
+        The title must follow Conventional Commits v1.0.0, grammar
+        `type[(scope)][!]: subject`, with exactly one type prefix (never a
+        compound like "type1+type2(scope):"). The scope and the breaking-change
+        `!` are optional, EXCEPT that the customer-impact types feat, fix, and
+        perf require a scope; docs, build, test, refactor, ci, chore, style, and
+        revert may omit it. Ignore a leading Draft:/[Draft]/[draft]:/WIP marker
+        when validating. Beyond format, the <type> must accurately reflect the
+        primary nature of the diff, not merely be a valid type. Flag mismatches:
+        a docs-only change (only *.md or
         docs/**) titled chore or fix should be docs; a CI/workflow-only change
         (.github/**, .gitlab-ci.yml, tools/ci/**) titled chore should be ci; and
         especially a bug fix or feature mislabeled as chore/docs/refactor, which
