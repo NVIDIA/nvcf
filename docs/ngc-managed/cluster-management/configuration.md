@@ -744,7 +744,7 @@ BYOO metric subset example:
          filterConfig: |
            error_mode: ignore
            metric_conditions:
-             - 'metric.name == "BpsInstrument"'
+             - 'metric.name != "BpsInstrument"'
        byooWorkloadMetrics:
          dropLabels:
            - metric_subset_enabled

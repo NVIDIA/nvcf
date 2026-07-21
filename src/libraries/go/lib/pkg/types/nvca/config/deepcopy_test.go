@@ -76,6 +76,7 @@ func TestDeepCopy_BYOOMetricSubsetConfig(t *testing.T) {
 	}
 	out := orig.DeepCopy()
 	require.NotNil(t, out)
+	assert.NotSame(t, orig, out)
 	assert.Equal(t, orig.Enabled, out.Enabled)
 	assert.Equal(t, orig.FilterConfig, out.FilterConfig)
 }
