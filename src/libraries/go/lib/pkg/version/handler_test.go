@@ -30,29 +30,46 @@ import (
 func TestHandlerFor(t *testing.T) {
 	tests := []struct {
 		name        string
+		service     string
 		ver         string
 		commit      string
+		wantService string
 		wantVersion string
 		wantCommit  string
 	}{
 		{
-			name:        "both set",
+			name:        "all set",
+			service:     "nvcf-my-service",
 			ver:         "1.2.3",
 			commit:      "abc1234",
+			wantService: "nvcf-my-service",
+			wantVersion: "1.2.3",
+			wantCommit:  "abc1234",
+		},
+		{
+			name:        "empty service falls back to unknown",
+			service:     "",
+			ver:         "1.2.3",
+			commit:      "abc1234",
+			wantService: "unknown",
 			wantVersion: "1.2.3",
 			wantCommit:  "abc1234",
 		},
 		{
 			name:        "empty version falls back to unknown",
+			service:     "nvcf-my-service",
 			ver:         "",
 			commit:      "abc1234",
+			wantService: "nvcf-my-service",
 			wantVersion: "unknown",
 			wantCommit:  "abc1234",
 		},
 		{
-			name:    "empty commit falls back to buildinfo or unknown",
-			ver:     "1.2.3",
-			commit:  "",
+			name:        "empty commit falls back to buildinfo or unknown",
+			service:     "nvcf-my-service",
+			ver:         "1.2.3",
+			commit:      "",
+			wantService: "nvcf-my-service",
 			wantVersion: "1.2.3",
 			// commit will be whatever buildinfo provides in the test binary,
 			// or "unknown" -- just assert it is non-empty string
@@ -62,8 +79,8 @@ func TestHandlerFor(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodGet, "/version", nil)
-			HandlerFor(tc.ver, tc.commit).ServeHTTP(w, r)
+			r := httptest.NewRequest(http.MethodGet, "/info", nil)
+			HandlerFor(tc.service, tc.ver, tc.commit).ServeHTTP(w, r)
 
 			assert.Equal(t, http.StatusOK, w.Code)
 			assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
@@ -71,6 +88,9 @@ func TestHandlerFor(t *testing.T) {
 			var got Info
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 
+			if tc.wantService != "" {
+				assert.Equal(t, tc.wantService, got.Service)
+			}
 			if tc.wantVersion != "" {
 				assert.Equal(t, tc.wantVersion, got.Version)
 			}
@@ -84,15 +104,17 @@ func TestHandlerFor(t *testing.T) {
 
 func TestHandler(t *testing.T) {
 	t.Cleanup(func() {
+		Service = ""
 		Version = ""
 		GitHash = ""
 	})
 
+	Service = "nvcf-my-service"
 	Version = "2.0.0"
 	GitHash = "deadbeef"
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/version", nil)
+	r := httptest.NewRequest(http.MethodGet, "/info", nil)
 	Handler().ServeHTTP(w, r)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -100,6 +122,7 @@ func TestHandler(t *testing.T) {
 
 	var got Info
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, "nvcf-my-service", got.Service)
 	assert.Equal(t, "2.0.0", got.Version)
 	assert.Equal(t, "deadbeef", got.Commit)
 }
