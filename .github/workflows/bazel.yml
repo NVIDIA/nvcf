@@ -81,10 +81,10 @@ jobs:
         run: |
           set -euo pipefail
           # id|path|tests_skip. tests_skip notes:
-          #  root: tests run. Two known-flaky go-lib areas (pkg/core goroutine
-          #    leak, pkg/icms-translate env-flaky) are quarantined via
-          #    .github/bazel-root-test-quarantine.txt rather than skipping the
-          #    whole row; nvcf-go owns the test-layer fix (NVIDIA/nvcf#284).
+          #  root: tests run. The few go-lib targets that fail in CI (a stale
+          #    Gazelle BUILD check and the icms-translate tests) are quarantined
+          #    per-target via .github/bazel-root-test-quarantine.txt rather than
+          #    skipping the whole row; nvcf-go owns the fix (NVIDIA/nvcf#284).
           #  nvca: tests run. The failures tracked in NVIDIA/nvcf#238 were all
           #    test-layer and are fixed: the vendored dra-driver version stamp
           #    (x_defs on vendor/.../internal/info, mirroring the module

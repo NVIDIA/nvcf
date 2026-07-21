@@ -1,17 +1,25 @@
 # Root Bazel test quarantine.
 #
 # Bazel negative target patterns subtracted from the root row's test set so the
-# rest of the root module can run tests in CI. Each entry is a package or target
-# known to fail in the GitHub Actions environment and is owned by the nvcf-go
-# team for a test-layer fix (not a production change). Remove an entry once its
-# tests pass; when this file is empty, the whole root module is under test.
+# rest of the root module can run tests in CI. Each entry is a target that fails
+# in the GitHub Actions environment and is owned by the nvcf-go team for a fix
+# (test-layer or codegen, not a production change). Remove an entry once it
+# passes; when this file is empty, the whole root module is under test.
 #
 # Format: one Bazel negative pattern per line ("-//path/...", "-//path:target").
 # Blank lines and lines starting with "#" are ignored.
 #
 # Tracking: NVIDIA/nvcf#284
 #
-# core_test: goroutine-leak detector fails under the CI runner.
--//src/libraries/go/lib/pkg/core/...
-# icms-translate: environment-dependent tests (env-flaky) across subpackages.
+# Established empirically from the first enabled root test run (78 tests: 76
+# pass). Note: //src/libraries/go/lib/pkg/nvkit/auth:auth_test is genuinely flaky
+# (timing) but recovers under --flaky_test_attempts=3, so it is NOT quarantined.
+#
+# gazelle_test: the committed BUILD files are stale versus the pinned Gazelle
+# (deterministic fail, 3/3). Fix by regenerating BUILD files, then remove this.
+-//src/libraries/go/lib:gazelle_test
+# icms-translate_test: deterministic fail (3/3) in cmd/icms-translate.
+-//src/libraries/go/lib/cmd/icms-translate:icms-translate_test
+# pkg/icms-translate: env-dependent tests (translate/function uses process-global
+# os.Setenv/os.Getenv rather than t.Setenv, which races under parallel tests).
 -//src/libraries/go/lib/pkg/icms-translate/...
