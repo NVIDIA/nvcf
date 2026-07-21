@@ -43,20 +43,20 @@ common --enable_platform_specific_config
 # public builds go straight to Maven Central and internal builds get the mirror.
 try-import %workspace%/tools/bazel/internal.bazelrc
 
-# Remote cache on by default for every developer. Pulls hits from the
-# configured remote cache (read-only), falls back to local execution on any
-# per-action remote failure (--remote_local_fallback below). Caveat:
-# the initial GetCapabilities RPC is NOT covered by
-# --remote_local_fallback, so if the cache is fully unreachable
-# (offline laptop, VPN down, cache outage) the build hard-fails on
-# the first cache call. Two ways to opt out:
-#   - one invocation:  bazel build --remote_cache= //some:target
-#   - persistently:    echo 'build --remote_cache=' >> ~/.bazelrc.user
-# (.bazelrc.user is try-imported at the bottom of this file, so
-# anything you put there overrides this default.)
-# CI sets --config=remote-write via .gitlab-ci.yml before_script after a
-# TCP probe, which extends this profile to also write back results.
-build --config=remote
+# Remote cache is opt-in, not a default. This matches the per-service Bazel
+# modules, whose .bazelrc carries no cache config at all: the caller supplies
+# the endpoint, credentials, and upload policy. That keeps a single source of
+# truth per environment and avoids a baked-in default that points at a cache
+# the caller cannot reach.
+#   - GitHub mirror CI: the bazel workflow sets --remote_cache to the public
+#     EC2 Buildbarn (with a bearer token and CA cert) and controls upload per
+#     trigger (read-only on PRs, read-write on main). The internal nvcfbarn
+#     cache below is unreachable from GitHub-hosted runners.
+#   - Internal GitLab CI / on-VPN devs: opt in with --config=remote (read-only)
+#     or --config=remote-write (read+write) to the internal nvcfbarn cache
+#     defined below, e.g. `bazel build --config=remote-write //...` or a
+#     persistent `build --config=remote` in ~/.bazelrc.user (try-imported at
+#     the bottom of this file).
 
 # Required for toolchains_protoc to register a prebuilt protoc instead
 # of falling back to the C++ protoc baked into @@protobuf+. Default
