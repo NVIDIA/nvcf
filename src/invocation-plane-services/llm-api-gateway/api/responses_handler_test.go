@@ -192,6 +192,21 @@ func TestSetResponsesProxyContextHeadersOmitsUnsetPriority(t *testing.T) {
 	}
 }
 
+func TestSetResponsesProxyContextHeadersStripsClientSuppliedPriorityWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	// The responses path clones inbound client headers before applying
+	// context headers; a client-supplied X-Priority must be stripped when no
+	// priority resolved.
+	headers := http.Header{}
+	headers.Set(headerResponsesPriority, "9")
+	setResponsesProxyContextHeaders(headers, &requestctx.RequestContext{})
+
+	if got := headers.Get(headerResponsesPriority); got != "" {
+		t.Fatalf("%s = %q, want empty", headerResponsesPriority, got)
+	}
+}
+
 func TestCreateResponseReusesReturnedSessionIDForAffinity(t *testing.T) {
 	t.Parallel()
 
