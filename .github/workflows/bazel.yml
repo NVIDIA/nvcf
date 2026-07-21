@@ -198,7 +198,7 @@ jobs:
       CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
       CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.12.2
+      image: ghcr.io/nvidia/nvcf/bazel-ci:0.12.0
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
