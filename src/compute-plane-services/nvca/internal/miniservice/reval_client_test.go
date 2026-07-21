@@ -26,11 +26,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
 
 func TestReValClientHostHeader(t *testing.T) {
@@ -78,6 +81,100 @@ func TestReValClientHostHeader(t *testing.T) {
 			_, err := client.Render(t.Context(), HelmReValRenderInput{NCAID: "test-nca"})
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantHost, gotHost)
+		})
+	}
+}
+
+func TestReValClientPayloadLogRedactsCredentials(t *testing.T) {
+	const (
+		apiKey            = "super-secret-api-key"
+		helmRegistryAuth  = "leaked-helm-registry-auth"
+		imageRegistryAuth = "leaked-image-registry-auth"
+		urlPassword       = "hunter2"
+		signedToken       = "leak-me"
+		wantHelmChart     = "https://charts.example.invalid/chart.tgz"
+	)
+
+	var lines []string
+	logger := funcr.New(func(prefix, args string) {
+		lines = append(lines, prefix+" "+args)
+	}, funcr.Options{Verbosity: 2})
+	ctx := logf.IntoContext(t.Context(), logger)
+
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"valid":true}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	client := NewReValClient("http://reval.example.invalid", testTokenFetcher{}, httpClient, nil)
+	_, err := client.Render(ctx, HelmReValRenderInput{
+		NCAID:        "test-nca",
+		HelmChartURL: fmt.Sprintf("https://user:%s@charts.example.invalid/chart.tgz?token=%s", urlPassword, signedToken),
+		ReleaseName:  "my-release",
+		InstanceType: "gpu.small",
+		GPUName:      "A100",
+		K8sVersion:   "1.30",
+		APIKey:       apiKey,
+		HelmRegistryAuthConfig: common.RegistryAuthConfig{
+			K8sSecrets: []common.RegistryAuthSecret{{
+				Auths: map[string]common.RegistryAuth{"registry.example.invalid": {Auth: helmRegistryAuth}},
+			}},
+		},
+		ImageRegistryAuthConfig: common.RegistryAuthConfig{
+			K8sSecrets: []common.RegistryAuthSecret{{
+				Auths: map[string]common.RegistryAuth{"registry.example.invalid": {Auth: imageRegistryAuth}},
+			}},
+		},
+	})
+	require.NoError(t, err)
+
+	output := strings.Join(lines, "\n")
+	// Credentials must never appear in the logged payload.
+	assert.NotContains(t, output, apiKey)
+	assert.NotContains(t, output, helmRegistryAuth)
+	assert.NotContains(t, output, imageRegistryAuth)
+	assert.NotContains(t, output, urlPassword)
+	assert.NotContains(t, output, signedToken)
+
+	// Non-sensitive metadata must still be logged for debuggability.
+	assert.Contains(t, output, "my-release")
+	assert.Contains(t, output, "gpu.small")
+	assert.Contains(t, output, "A100")
+	assert.Contains(t, output, "1.30")
+	assert.Contains(t, output, wantHelmChart)
+}
+
+func TestRedactedHelmChartURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "strips userinfo and query",
+			in:   "https://user:pass@charts.example.invalid/chart.tgz?token=secret",
+			want: "https://charts.example.invalid/chart.tgz",
+		},
+		{
+			name: "leaves a plain URL unchanged",
+			in:   "oci://registry.example.invalid/charts/foo:1.0.0",
+			want: "oci://registry.example.invalid/charts/foo:1.0.0",
+		},
+		{
+			name: "falls back on unparseable input",
+			in:   "://not a url",
+			want: "<unparseable>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, redactedHelmChartURL(tt.in))
 		})
 	}
 }

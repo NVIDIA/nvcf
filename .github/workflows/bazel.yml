@@ -74,13 +74,14 @@ jobs:
         id: detect
         env:
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           BEFORE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.sha }}
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           # id|path|tests_skip. tests_skip notes:
-          #  umbrella-phase1: //src/libraries/go/lib test issues
+          #  root: //src/libraries/go/lib test issues
           #    (icms-translate env-flaky, core_test goroutine leak) -- nvcf-go
           #    team owns the test-layer cleanup.
           #  nvca: tests run. The failures tracked in NVIDIA/nvcf#238 were all
@@ -95,7 +96,7 @@ jobs:
           #    its own private agent image (not publicly pullable), so it is not
           #    externally buildable and is built only by its own internal CI.
           #    Excluded from the public build pending a public base (NVIDIA/nvcf#39).
-          ROWS='umbrella-phase1|.|true
+          ROWS='root|.|true
           grpc-proxy|src/invocation-plane-services/grpc-proxy|false
           nats-auth-callout|src/control-plane-services/nats-auth-callout|false
           ratelimiter|src/invocation-plane-services/ratelimiter|false
@@ -107,9 +108,9 @@ jobs:
           image-credential-helper|src/compute-plane-services/image-credential-helper|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
           helm-reval|src/control-plane-services/helm-reval|false'
-          # Paths that affect the umbrella-phase1 workspace build (native
-          # Phase 1 roots plus the shared Bazel scaffold).
-          UMBRELLA_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/)
+          # Paths that affect the root-module workspace build (native
+          # root subtrees, Go and Java, plus the shared Bazel scaffold).
+          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/)
 
           run_all=false
           changed=""
@@ -135,6 +136,18 @@ jobs:
             run_all=true
           fi
 
+          # Warm the remote cache on every merge to main. The root row builds
+          # the whole ~7k-target closure; the build step uploads results only on
+          # main pushes (CACHE_UPLOAD). If root ran on main only when a ROOT_GLOB
+          # changed (~1 in 10 merges), the root closure would almost never be
+          # warmed, so PRs and later merges keep paying the full cold-build cost.
+          # Forcing the root row on every main push warms it each merge; hits on
+          # the shared closure then carry over to the per-service rows and PRs.
+          is_main_push=false
+          if [ "$EVENT" = "push" ] && [ "$REF" = "refs/heads/main" ]; then
+            is_main_push=true
+          fi
+
           include="[]"
           while IFS='|' read -r id path tests_skip; do
             id="$(echo "$id" | xargs)"; [ -z "$id" ] && continue
@@ -142,12 +155,17 @@ jobs:
             if [ "$run_all" = "true" ]; then
               hit=true
             elif [ "$path" = "." ]; then
-              for g in "${UMBRELLA_GLOBS[@]}"; do
-                # Fixed-string, start-of-line prefix test via awk index()==1:
-                # avoids treating the dots in .bazelrc/MODULE.bazel as regex
-                # wildcards and avoids any shell glob expansion of the token.
-                if printf '%s\n' "$changed" | awk -v p="$g" 'index($0, p) == 1 { f = 1 } END { exit !f }'; then hit=true; break; fi
-              done
+              # Always warm root on a main push, even when no ROOT_GLOB changed.
+              if [ "$is_main_push" = "true" ]; then
+                hit=true
+              else
+                for g in "${ROOT_GLOBS[@]}"; do
+                  # Fixed-string, start-of-line prefix test via awk index()==1:
+                  # avoids treating the dots in .bazelrc/MODULE.bazel as regex
+                  # wildcards and avoids any shell glob expansion of the token.
+                  if printf '%s\n' "$changed" | awk -v p="$g" 'index($0, p) == 1 { f = 1 } END { exit !f }'; then hit=true; break; fi
+                done
+              fi
             else
               if printf '%s\n' "$changed" | grep -q "^${path}/"; then hit=true; fi
             fi
@@ -183,6 +201,10 @@ jobs:
         subtree: ${{ fromJSON(needs.detect.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the root row can diff a PR against its base to
+          # compute affected targets (see "Determine build targets").
+          fetch-depth: 0
 
       # A subtree can be selected but not yet have its Bazel scaffold on
       # the mirror (its upstream OSS-flip MR is still open, or the
@@ -235,24 +257,117 @@ jobs:
       - name: Prepare remote cache
         if: steps.precheck.outputs.skip == 'false'
         run: |
+          upload=false
           if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
             printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
             # Upload results only from main pushes; every other trigger
             # (PRs) is read-only so it can never poison the cache.
-            if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-              echo "CACHE_UPLOAD=true" >> "$GITHUB_ENV"
+            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+              upload=true
+            fi
+            echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
+            # Make the mode visible in the log so a missing warm-write is never
+            # a silent guess: read-only PRs show upload=false, main pushes true.
+            if [ "$upload" = "true" ]; then
+              echo "remote cache ready: read-write (warming; upload=true)"
             else
-              echo "CACHE_UPLOAD=false" >> "$GITHUB_ENV"
+              echo "remote cache ready: read-only (upload=false)"
             fi
           else
             echo "CACHE_READY=0" >> "$GITHUB_ENV"
+            echo "remote cache unavailable (no token/endpoint): cacheless build"
           fi
 
-      - name: bazel build //...
+      # Write the target patterns to build/test into $RUNNER_TEMP/targets.txt.
+      # Default is the whole workspace (//...). On a PR, the root row -- which
+      # builds the full ~7k-target closure -- narrows to just the targets a
+      # modified Go source affects, so a PR touching a sliver of src/libraries
+      # does not rebuild everything even on a cold cache.
+      #
+      # Safety: narrow ONLY when every change is a modification (status M) to an
+      # existing .go file. Any add/delete/rename, any global file (MODULE.bazel,
+      # .bazelrc, *.bzl, go.work, ...), any non-Go file, or any query failure
+      # falls back to //.... The rdeps query runs WITHOUT --keep_going so an
+      # unresolvable label forces the full build instead of silently dropping a
+      # target. This can over-build (safe) but never under-build.
+      - name: Determine build targets
+        id: targets
+        if: steps.precheck.outputs.skip == 'false'
+        working-directory: ${{ matrix.subtree.path }}
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          SUBTREE_PATH: ${{ matrix.subtree.path }}
+        run: |
+          set -uo pipefail
+          tfile="$RUNNER_TEMP/targets.txt"
+          full() { printf '//...\n' > "$tfile"; echo "targets: //... (full build)"; }
+
+          # Only the root row on a pull_request is a narrowing candidate. Every
+          # other trigger (main push warms + uploads the whole closure; dispatch
+          # and schedule are full by intent) and every per-service row build the
+          # whole workspace.
+          if [ "$EVENT" != "pull_request" ] || [ "$SUBTREE_PATH" != "." ]; then
+            full; exit 0
+          fi
+
+          base="origin/$BASE_REF"
+          if ! git rev-parse --verify "$base" >/dev/null 2>&1; then
+            git fetch --no-tags --depth=1 origin "$BASE_REF" >/dev/null 2>&1 || true
+          fi
+          if ! git rev-parse --verify "$base" >/dev/null 2>&1; then
+            echo "base $base unavailable; full build"; full; exit 0
+          fi
+          if ! ns=$(git diff --name-status "$base...HEAD" 2>/dev/null); then
+            echo "diff vs $base failed; full build"; full; exit 0
+          fi
+          if [ -z "$ns" ]; then
+            echo "no changes vs base; nothing to build"; : > "$tfile"; exit 0
+          fi
+
+          labels=()
+          while IFS=$'\t' read -r status path _rest; do
+            [ -z "$status" ] && continue
+            # Anything other than a plain modification is structural (add,
+            # delete, rename, copy, type-change) -- fall back to full.
+            if [ "$status" != "M" ]; then
+              echo "non-modify change ($status $path); full build"; full; exit 0
+            fi
+            case "$path" in
+              MODULE.bazel|MODULE.bazel.lock|.bazelrc|.bazelversion|WORKSPACE|WORKSPACE.bazel|go.work|go.work.bazel|*.bzl)
+                echo "global file changed ($path); full build"; full; exit 0 ;;
+              *.go)
+                dir=$(dirname "$path"); bn=$(basename "$path")
+                if [ "$dir" = "." ]; then labels+=("//:$bn"); else labels+=("//$dir:$bn"); fi ;;
+              *)
+                echo "non-Go modification ($path); full build"; full; exit 0 ;;
+            esac
+          done <<< "$ns"
+
+          if [ "${#labels[@]}" -eq 0 ]; then
+            echo "no buildable changes; nothing to build"; : > "$tfile"; exit 0
+          fi
+
+          # Strict (no --keep_going): if any changed-file label does not resolve
+          # to a known source, the query fails and we fall back to full.
+          if ! affected=$(bazel query --noshow_progress --output=label \
+              "rdeps(//..., set(${labels[*]}))" 2>/dev/null); then
+            echo "rdeps query failed (unresolved label?); full build"; full; exit 0
+          fi
+          if [ -z "$affected" ]; then
+            echo "no affected targets; nothing to build"; : > "$tfile"; exit 0
+          fi
+          printf '%s\n' "$affected" > "$tfile"
+          echo "targets: $(printf '%s\n' "$affected" | grep -c .) affected (narrowed from //...)"
+
+      - name: bazel build
         if: steps.precheck.outputs.skip == 'false'
         working-directory: ${{ matrix.subtree.path }}
         run: |
+          if [ ! -s "$RUNNER_TEMP/targets.txt" ]; then
+            echo "no targets to build; skipping"; exit 0
+          fi
           # COMMON holds non-cache flags shared by both the cached attempt and
           # the cacheless retry, so any future non-cache flag is applied to both.
           # CACHE holds only the cache-specific flags.
@@ -273,10 +388,11 @@ jobs:
           # --remote_download_all or --remote_local_fallback cover -- retry once
           # with the cache fully off (same COMMON flags). A real build break
           # fails both attempts, so this never hides one.
-          if ! bazel build "${COMMON[@]}" "${CACHE[@]}" //...; then
+          TARGETS=(--target_pattern_file="$RUNNER_TEMP/targets.txt")
+          if ! bazel build "${COMMON[@]}" "${CACHE[@]}" "${TARGETS[@]}"; then
             [ "${CACHE_READY:-0}" = "1" ] || exit 1
             echo "::warning::remote cache build failed; retrying cacheless (local)"
-            bazel build "${COMMON[@]}" --remote_cache= //...
+            bazel build "${COMMON[@]}" --remote_cache= "${TARGETS[@]}"
           fi
 
       - name: bazel test //...
@@ -287,6 +403,30 @@ jobs:
         if: steps.precheck.outputs.skip == 'false' && !matrix.subtree.tests_skip
         working-directory: ${{ matrix.subtree.path }}
         run: |
+          if [ ! -s "$RUNNER_TEMP/targets.txt" ]; then
+            echo "no targets to test; skipping"; exit 0
+          fi
+          # Resolve the test targets to run. A full build pattern (//...) filters
+          # to tests automatically. A narrowed set is specific non-test labels, so
+          # select the test targets among them with tests(set(...)); a query
+          # failure falls back to the full test set (correctness over speed), and
+          # an empty result means the change affects no tests.
+          ttfile="$RUNNER_TEMP/test-targets.txt"
+          if grep -qx '//\.\.\.' "$RUNNER_TEMP/targets.txt"; then
+            cp "$RUNNER_TEMP/targets.txt" "$ttfile"
+          else
+            patterns=$(tr '\n' ' ' < "$RUNNER_TEMP/targets.txt")
+            tests=$(bazel query --noshow_progress --output=label "tests(set($patterns))" 2>/dev/null) || tests="__QFAIL__"
+            if [ "$tests" = "__QFAIL__" ]; then
+              echo "tests() query failed; falling back to full test set"
+              printf '//...\n' > "$ttfile"
+            elif [ -z "$tests" ]; then
+              echo "no affected test targets; skipping tests"; exit 0
+            else
+              printf '%s\n' "$tests" > "$ttfile"
+              echo "tests: $(grep -c . "$ttfile") affected test target(s)"
+            fi
+          fi
           COMMON=(--flaky_test_attempts=3)
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
@@ -301,10 +441,11 @@ jobs:
           # Same cacheless retry as the build step: cache flakiness must never
           # fail the matrix (see the build step for the rationale). COMMON keeps
           # the non-cache flags (--flaky_test_attempts) on both attempts.
-          if ! bazel test "${COMMON[@]}" "${CACHE[@]}" //...; then
+          TARGETS=(--target_pattern_file="$ttfile")
+          if ! bazel test "${COMMON[@]}" "${CACHE[@]}" "${TARGETS[@]}"; then
             [ "${CACHE_READY:-0}" = "1" ] || exit 1
             echo "::warning::remote cache test failed; retrying cacheless (local)"
-            bazel test "${COMMON[@]}" --remote_cache= //...
+            bazel test "${COMMON[@]}" --remote_cache= "${TARGETS[@]}"
           fi
 
   bazel-verification:

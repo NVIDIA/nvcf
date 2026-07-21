@@ -36,6 +36,8 @@ gazelle_test(
 # Transitional non-hermetic wrapper: this shells out to `go run` through the
 # shared golangci-lint runner. Keep cache-disabled tags until lint inputs are
 # declared in Bazel.
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 sh_test(
     name = "golangci_lint",
     timeout = "long",
