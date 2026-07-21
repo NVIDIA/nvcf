@@ -46,7 +46,7 @@ spec:
     # in place. Source image is the agent v0.0.20 — same restore-entrypoint
     # binary the production deploy will use.
     - name: get-criu
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.22
+      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.25
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "-c"]
       args:
