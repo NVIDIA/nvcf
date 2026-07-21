@@ -32,9 +32,7 @@ spec:
         # Roll pods when the auth config changes so the initContainer re-patches.
         checksum/cassandra-conf: {{ include (print $.Template.BasePath "/configmap-cassandra-conf.yaml") . | sha256sum }}
     spec:
-      {{- with .Values.cassandra.global.imagePullSecrets }}
-      imagePullSecrets: {{- toYaml . | nindent 8 }}
-      {{- end }}
+      {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
       securityContext:
         fsGroup: {{ .Values.cassandra.podSecurityContext.fsGroup }}
       initContainers:

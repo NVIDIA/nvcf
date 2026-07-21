@@ -334,12 +334,17 @@ if [ -n "${HOSTNAME:-}" ]; then
     # Extract the last character (number) from hostname
     POD_NUMBER="${HOSTNAME##*-}"
 
-    # Map pod numbers to rack names
+    # Map the pod ordinal to one of three racks (ordinal mod 3), so the rotation
+    # holds for any replica count. Non-numeric hostnames fall back to r1.
     case "${POD_NUMBER}" in
-        0|3|6) RACK_NAME="r1" ;;
-        1|4|7) RACK_NAME="r2" ;;
-        2|5|8) RACK_NAME="r3" ;;
-        *) RACK_NAME="r1" ;;  # Default fallback
+        ''|*[!0-9]*) RACK_NAME="r1" ;;
+        *)
+            case $((POD_NUMBER % 3)) in
+                0) RACK_NAME="r1" ;;
+                1) RACK_NAME="r2" ;;
+                2) RACK_NAME="r3" ;;
+            esac
+            ;;
     esac
 
     export CASSANDRA_RACK="${RACK_NAME}"

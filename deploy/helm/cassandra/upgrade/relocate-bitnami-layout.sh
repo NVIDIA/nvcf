@@ -49,14 +49,19 @@ if [ -d "$nested/data" ] && [ -d "$nested/commitlog" ]; then
   fi
 
   # Rename the nested parent first so its child data/ does not collide with the
-  # DATA_DIR/data target, then move each child up. Nothing is deleted; if a
-  # target already exists we abort with the contents preserved in the temp dir.
+  # DATA_DIR/data target. Preflight every destination before moving anything, so
+  # a collision aborts with all contents preserved in the temp dir and no
+  # partial move. Nothing is deleted.
   tmp="$DATA_DIR/.bitnami-relocate.$$"
   mv "$nested" "$tmp"
   for e in "$tmp"/* "$tmp"/.[!.]*; do
     [ -e "$e" ] || continue
     b="$(basename "$e")"
-    [ -e "$DATA_DIR/$b" ] && die "target $DATA_DIR/$b already exists; aborted (contents safe in $tmp)"
+    [ -e "$DATA_DIR/$b" ] && die "target $DATA_DIR/$b already exists; aborted before any move (contents safe in $tmp)"
+  done
+  for e in "$tmp"/* "$tmp"/.[!.]*; do
+    [ -e "$e" ] || continue
+    b="$(basename "$e")"
     mv "$e" "$DATA_DIR/$b"
   done
   rmdir "$tmp" 2>/dev/null || die "leftover files in $tmp after move; inspect manually"

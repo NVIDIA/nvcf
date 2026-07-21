@@ -154,6 +154,10 @@ fi
 
 # --- Record pre-migration probe row count -----------------------------------
 pre_count=""
+if { [ -n "${PROBE_KEYSPACE}" ] && [ -z "${PROBE_TABLE}" ]; } || \
+   { [ -z "${PROBE_KEYSPACE}" ] && [ -n "${PROBE_TABLE}" ]; }; then
+  die "--probe-keyspace and --probe-table must be provided together"
+fi
 if [ -n "${PROBE_KEYSPACE}" ] && [ -n "${PROBE_TABLE}" ]; then
   [ -n "${CQL_PASS}" ] || die "--cql-pass is required when probing"
   log "recording pre-migration row count for ${PROBE_KEYSPACE}.${PROBE_TABLE}"
@@ -187,11 +191,13 @@ if [ "${CONFIRM}" != "true" ]; then
 fi
 
 # --- Verify -----------------------------------------------------------------
-log "STEP: verify node reaches UN"
-if ! "${KC[@]}" exec "${RELEASE}-0" -c cassandra -- nodetool status 2>/dev/null | grep -qE '^UN'; then
-  die "post-upgrade: ${RELEASE}-0 is not UN. Data PVC ${PVC} is intact; investigate before retrying."
-fi
-log "node ${RELEASE}-0 is UN"
+log "STEP: verify all nodes reach UN"
+status="$("${KC[@]}" exec "${RELEASE}-0" -c cassandra -- nodetool status 2>/dev/null || true)"
+printf '%s\n' "${status}" | awk '
+  /^[UD][NLJM]/ { seen=1; if ($1 != "UN") bad=1 }
+  END { exit (!seen || bad) }
+' || die "post-upgrade: one or more nodes are not UN. Data PVC ${PVC} is intact; investigate before retrying."
+log "all ring members are UN"
 
 if [ -n "${pre_count}" ]; then
   post_count="$("${KC[@]}" exec "${RELEASE}-0" -c cassandra -- \
