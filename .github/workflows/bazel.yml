@@ -198,7 +198,7 @@ jobs:
       CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
       CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.8.0
+      image: ghcr.io/nvidia/nvcf/bazel-ci:0.11.0
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -304,7 +304,7 @@ jobs:
         working-directory: ${{ matrix.subtree.path }}
         env:
           EVENT: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           SUBTREE_PATH: ${{ matrix.subtree.path }}
         run: |
           set -uo pipefail
@@ -319,15 +319,16 @@ jobs:
             full; exit 0
           fi
 
-          base="origin/$BASE_REF"
-          if ! git rev-parse --verify "$base" >/dev/null 2>&1; then
-            git fetch --no-tags --depth=1 origin "$BASE_REF" >/dev/null 2>&1 || true
-          fi
-          if ! git rev-parse --verify "$base" >/dev/null 2>&1; then
-            echo "base $base unavailable; full build"; full; exit 0
+          # Diff against the PR base commit SHA. The base commit is present in
+          # history because the bazel-job checkout uses fetch-depth: 0. The
+          # symbolic origin/<branch> ref is not reliably created inside the
+          # container checkout, so resolve against the SHA directly.
+          base="$BASE_SHA"
+          if [ -z "$base" ] || ! git rev-parse --verify "$base^{commit}" >/dev/null 2>&1; then
+            echo "base sha unavailable; full build"; full; exit 0
           fi
           if ! ns=$(git diff --name-status "$base...HEAD" 2>/dev/null); then
-            echo "diff vs $base failed; full build"; full; exit 0
+            echo "diff vs base failed; full build"; full; exit 0
           fi
           if [ -z "$ns" ]; then
             echo "no changes vs base; nothing to build"; : > "$tfile"; exit 0
@@ -387,7 +388,17 @@ jobs:
                    --remote_cache_compression
                    --remote_download_all
                    --remote_timeout=120 --remote_retries=5)
-            [ "$CACHE_UPLOAD" = "true" ] || CACHE+=(--remote_upload_local_results=false)
+            # Force the upload flag explicitly. The root module's .bazelrc pins
+            # --config=remote, which sets --remote_upload_local_results=false
+            # (internal read-only dev cache). Without overriding it back to true
+            # on main pushes, root never warms the public cache, so every root
+            # build is cold forever. Service modules do not set --config=remote,
+            # so they are unaffected either way.
+            if [ "$CACHE_UPLOAD" = "true" ]; then
+              CACHE+=(--remote_upload_local_results=true)
+            else
+              CACHE+=(--remote_upload_local_results=false)
+            fi
           fi
           # Rock-solid cache: if the cached build fails for any cache-related
           # reason -- the TLS/GetCapabilities handshake, UNAVAILABLE, or a 502
@@ -455,7 +466,17 @@ jobs:
                    --remote_cache_compression
                    --remote_download_all
                    --remote_timeout=120 --remote_retries=5)
-            [ "$CACHE_UPLOAD" = "true" ] || CACHE+=(--remote_upload_local_results=false)
+            # Force the upload flag explicitly. The root module's .bazelrc pins
+            # --config=remote, which sets --remote_upload_local_results=false
+            # (internal read-only dev cache). Without overriding it back to true
+            # on main pushes, root never warms the public cache, so every root
+            # build is cold forever. Service modules do not set --config=remote,
+            # so they are unaffected either way.
+            if [ "$CACHE_UPLOAD" = "true" ]; then
+              CACHE+=(--remote_upload_local_results=true)
+            else
+              CACHE+=(--remote_upload_local_results=false)
+            fi
           fi
           # Same cacheless retry as the build step: cache flakiness must never
           # fail the matrix (see the build step for the rationale). COMMON keeps
