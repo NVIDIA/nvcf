@@ -36,6 +36,10 @@ if repo.lower() != "nvidia/nvcf":
     sys.exit(1)
 
 body = os.environ.get("PR_BODY", "")
+# GitHub stores PR bodies with CRLF line endings (web UI and bot edits), so
+# normalize to LF before matching; the ## Issues heading regex expects a bare
+# newline and would otherwise fail to find the section on a CRLF body.
+body = body.replace("\r\n", "\n").replace("\r", "\n")
 visible = re.sub(r"<!--.*?(?:-->|$)", "", body, flags=re.S)
 
 section_match = re.search(
