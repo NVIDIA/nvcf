@@ -60,9 +60,11 @@ cache:
   # to absorb backing-store latency: threads park on slow IO so worker event
   # loops never block on disk and health endpoints stay answerable.
   aioThreads: 64
-  # Concurrent-connection cap on the model-download server block. Excess
-  # requests fail fast with 503 (ranged download clients retry per chunk)
-  # instead of queuing on a storage-bound tier. 0 disables the cap.
+  # Concurrent-connection cap on the NGC file-serving (xfiles) server
+  # block. Excess requests fail fast with 503 (ranged download clients
+  # retry per chunk) instead of queuing on a storage-bound tier; sized
+  # well above normal concurrency so it only engages under herd load.
+  # 0 disables the cap.
   maxConnsPerServer: 512
 
 # Probe tuning for the nginx-proxy container. Liveness is a TCP accept on the

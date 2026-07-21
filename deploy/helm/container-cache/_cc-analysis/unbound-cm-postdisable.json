@@ -1,0 +1,78 @@
+{
+    "apiVersion": "v1",
+    "items": [
+        {
+            "apiVersion": "v1",
+            "data": {
+                "ca.crt": "-----BEGIN CERTIFICATE-----\nMIIDBTCCAe2gAwIBAgIIDrE5xdmnVpMwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE\nAxMKa3ViZXJuZXRlczAeFw0yNTEwMDIyMjQzMDRaFw0zNTA5MzAyMjQ4MDRaMBUx\nEzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK\nAoIBAQCd28osTjJ5lKdOL3dQyuZEZ7GEZFsRPww3RgLsYF3wguqJmAd5BTvczBjf\nyGEqd5joUz3Oa8g2J3p9r2jQSLOSXUV1ZNqzCL/gTQKLNz+Hro5XRP7xbOXDA4lk\nd0SOZGvwUYRciWSGhJ5u4EfzmpJfU0Cxqs2eb77FyNOcY4r3oV4z8i8tf9BCSPk6\n2s1dV9dk2Rwi/XMq1kBPqDM91rrV5ZbbpYbisKn1OasyeLkVTxLH2AIuUGmeLzEa\nOo6IykP+GwTVJN627gaHr0pp2otLGEhgXpFnJYDScMzAlygdl+MMiAPPtRSZRFrO\nmwR6+raRzHkvCwJZO4ZSBAJReFhdAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP\nBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBSle4sVdEC4giXQg/7WvyBtKBQm8zAV\nBgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQBuL2YVnB9G\nQ8qNgUfAuSzbHtxqIpw2Y8t2q/NzgQbzwVRqOvy0RWvMw+ukjfAfaTI+aXY6G0y3\ntVz057WaKQr62o8QkYlJAkHGxeJNoJ4/FnSnCd4rjw4UsKNEIlBSuFHCnkWYXkb0\nDBxp3TuKI6POc/LkORI/xMb+yestfnzjmdzAxvPX1osJCgIN1SA+XJ/f0tqTTzjh\n5b1f9tI4tTmDu3GrAP0i81MlMtMUraLyIn49WX35V27HDcvolmmEvgbt0vul1SJE\nExTN9AM4jd9hdxysE/dR1v/IRsv5GWnjwfs92XvI2wPwHCdKB8GjMfSOiwAGna0N\nU1WQevVss+IY\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIDBTCCAe2gAwIBAgIIDrE5xdmnVpMwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE\nAxMKa3ViZXJuZXRlczAeFw0yNTEwMDIyMjQzMDRaFw0zNTA5MzAyMjQ4MDRaMBUx\nEzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK\nAoIBAQCd28osTjJ5lKdOL3dQyuZEZ7GEZFsRPww3RgLsYF3wguqJmAd5BTvczBjf\nyGEqd5joUz3Oa8g2J3p9r2jQSLOSXUV1ZNqzCL/gTQKLNz+Hro5XRP7xbOXDA4lk\nd0SOZGvwUYRciWSGhJ5u4EfzmpJfU0Cxqs2eb77FyNOcY4r3oV4z8i8tf9BCSPk6\n2s1dV9dk2Rwi/XMq1kBPqDM91rrV5ZbbpYbisKn1OasyeLkVTxLH2AIuUGmeLzEa\nOo6IykP+GwTVJN627gaHr0pp2otLGEhgXpFnJYDScMzAlygdl+MMiAPPtRSZRFrO\nmwR6+raRzHkvCwJZO4ZSBAJReFhdAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP\nBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBSle4sVdEC4giXQg/7WvyBtKBQm8zAV\nBgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQBuL2YVnB9G\nQ8qNgUfAuSzbHtxqIpw2Y8t2q/NzgQbzwVRqOvy0RWvMw+ukjfAfaTI+aXY6G0y3\ntVz057WaKQr62o8QkYlJAkHGxeJNoJ4/FnSnCd4rjw4UsKNEIlBSuFHCnkWYXkb0\nDBxp3TuKI6POc/LkORI/xMb+yestfnzjmdzAxvPX1osJCgIN1SA+XJ/f0tqTTzjh\n5b1f9tI4tTmDu3GrAP0i81MlMtMUraLyIn49WX35V27HDcvolmmEvgbt0vul1SJE\nExTN9AM4jd9hdxysE/dR1v/IRsv5GWnjwfs92XvI2wPwHCdKB8GjMfSOiwAGna0N\nU1WQevVss+IY\n-----END CERTIFICATE-----\n"
+            },
+            "kind": "ConfigMap",
+            "metadata": {
+                "annotations": {
+                    "kubernetes.io/description": "Contains a CA bundle that can be used to verify the kube-apiserver when using internal endpoints such as the internal service IP or kubernetes.default.svc. No other usage is guaranteed across distributions of Kubernetes clusters."
+                },
+                "creationTimestamp": "2025-11-04T21:18:09Z",
+                "name": "kube-root-ca.crt",
+                "namespace": "dns-proxy",
+                "resourceVersion": "532688871",
+                "uid": "008ddc2a-3020-4f78-b139-55a2ab833f91"
+            }
+        },
+        {
+            "apiVersion": "v1",
+            "data": {
+                "unbound.conf": "remote-control:\ncontrol-enable: yes\ncontrol-interface: /opt/unbound/run/unbound.ctl\n\ndnstap:\ndnstap-enable: yes\ndnstap-socket-path: \"/opt/unbound/etc/unbound/dnstap/dnstap.sock\"\ndnstap-send-identity: no\ndnstap-send-version: no\ndnstap-log-resolver-query-messages: yes\ndnstap-log-resolver-response-messages: yes\ndnstap-log-client-query-messages: yes\ndnstap-log-client-response-messages: yes\ndnstap-log-forwarder-query-messages: yes\ndnstap-log-forwarder-response-messages: yes\n\nserver:\ncache-min-ttl: 60\ncache-max-ttl: 3600\ncache-max-negative-ttl: 7200\ninfra-host-ttl: 900\nnum-threads: 96\n\nprefetch: yes\nminimal-responses: yes\n\nverbosity: 1\nextended-statistics: yes\ndo-daemonize: no\nuse-syslog: no\nlog-time-ascii: yes\nlog-queries: no\nlog-replies: no\nlog-servfail: yes\nlog-tag-queryreply: no\nlog-local-actions: no\nval-log-level: 1\n\ninterface: 0.0.0.0\nport: 53\nprefer-ip6: no\nprefer-ip4: yes\ndo-ip4: yes\ndo-ip6: no\ndo-udp: yes\ndo-tcp: yes\naccess-control: 0.0.0.0/0 allow\ntcp-upstream: no\noutgoing-range: 8192\noutgoing-port-permit: \"49152-60999\"\noutgoing-num-tcp: 250\nincoming-num-tcp: 10\ntcp-mss: 0\noutgoing-tcp-mss: 0\ntcp-idle-timeout: 3000\nso-reuseport: yes\nmax-udp-size: 4096\nstream-wait-size: 4m\nmsg-buffer-size: 65552\nmsg-cache-size: 50m\nmsg-cache-slabs: 128\nnum-queries-per-thread: 4192\njostle-timeout: 200\ndelay-close: 376\nudp-connect: yes\noutbound-msg-retry: 5\nunknown-server-time-limit: 376\nrrset-cache-size: 100m\nrrset-cache-slabs: 128\ninfra-cache-min-rtt: 50\ninfra-keep-probing: no\ninfra-cache-slabs: 128\ninfra-cache-numhosts: 10000\nkey-cache-size: 4m\nkey-cache-slabs: 128\nneg-cache-size: 4m\nhide-version: yes\nhide-trustanchor: yes\nhide-http-user-agent: yes\ntarget-fetch-policy: \"3 2 1 0 0\"\nharden-short-bufsize: yes\nharden-large-queries: yes\nharden-glue: yes\nharden-dnssec-stripped: yes\nharden-below-nxdomain: yes\nharden-referral-path: no\nharden-algo-downgrade: yes\nqname-minimisation: yes\nqname-minimisation-strict: no\naggressive-nsec: yes\nuse-caps-for-id: no\nunwanted-reply-threshold: 10000000\ndo-not-query-localhost: yes\nserve-expired-client-timeout: 1800\n\nprivate-domain: \"cluster.local\"\ndomain-insecure: \"cluster.local\"\n\n# Set the working directory for the program.\ndirectory: \"/opt/unbound/etc/unbound\"\n# Drop user  privileges after  binding the port.\nusername: \"_unbound\"\n# File with trust anchor for  one  zone, which is tracked with RFC5011\n# probes.\n# Enable chroot (i.e, change apparent root directory for the current\n# running process and its children)\nchroot: \"\"\n#root-hints: \"/opt/unbound/etc/unbound/root.hints\"\n\ndomain-insecure: \"in-addr.arpa.\"\nlocal-zone: \"in-addr.arpa.\" always_nxdomain\nlocal-zone: \"amazonaws.com\" redirect\nlocal-data: \"amazonaws.com. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local\"\nlocal-zone: \"huggingface.co\" redirect\nlocal-data: \"huggingface.co. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local\"\nlocal-zone: \"hf.co\" redirect\nlocal-data: \"hf.co. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local\"\nlocal-zone: \"c3d-farm-renders-ap-northeast-1.s3.ap-northeast-1.amazonaws.com.\" transparent\n\nlocal-zone: \"nvcf-unbound.test.\" redirect\nlocal-data: \"nvcf-unbound.test. 10800 IN NS nvcf-unbound.test.\"\nlocal-data: \"nvcf-unbound.test. 10800 IN SOA nvcf-unbound.test. nobody.invalid. 1 3600 1200 604800 10800\"\nlocal-data: \"nvcf-unbound.test. 10800 IN A 127.0.0.1\"\nlocal-data: \"nvcf-unbound.test. 10800 IN AAAA ::1\"\n\n#include: /opt/unbound/etc/unbound/stub-zones.conf\nstub-zone:\n    name: \"cluster.local\"\n    stub-addr: 172.20.0.10\n    stub-first: no\n    stub-no-cache: no"
+            },
+            "kind": "ConfigMap",
+            "metadata": {
+                "annotations": {
+                    "argocd.argoproj.io/tracking-id": "nvcf-unbound:/ConfigMap:dns-proxy/nvcf-unbound-config",
+                    "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"v1\",\"data\":{\"unbound.conf\":\"remote-control:\\ncontrol-enable: yes\\ncontrol-interface: /opt/unbound/run/unbound.ctl\\n\\ndnstap:\\ndnstap-enable: yes\\ndnstap-socket-path: \\\"/opt/unbound/etc/unbound/dnstap/dnstap.sock\\\"\\ndnstap-send-identity: no\\ndnstap-send-version: no\\ndnstap-log-resolver-query-messages: yes\\ndnstap-log-resolver-response-messages: yes\\ndnstap-log-client-query-messages: yes\\ndnstap-log-client-response-messages: yes\\ndnstap-log-forwarder-query-messages: yes\\ndnstap-log-forwarder-response-messages: yes\\n\\nserver:\\ncache-min-ttl: 60\\ncache-max-ttl: 3600\\ncache-max-negative-ttl: 7200\\ninfra-host-ttl: 900\\nnum-threads: 96\\n\\nprefetch: yes\\nminimal-responses: yes\\n\\nverbosity: 1\\nextended-statistics: yes\\ndo-daemonize: no\\nuse-syslog: no\\nlog-time-ascii: yes\\nlog-queries: no\\nlog-replies: no\\nlog-servfail: yes\\nlog-tag-queryreply: no\\nlog-local-actions: no\\nval-log-level: 1\\n\\ninterface: 0.0.0.0\\nport: 53\\nprefer-ip6: no\\nprefer-ip4: yes\\ndo-ip4: yes\\ndo-ip6: no\\ndo-udp: yes\\ndo-tcp: yes\\naccess-control: 0.0.0.0/0 allow\\ntcp-upstream: no\\noutgoing-range: 8192\\noutgoing-port-permit: \\\"49152-60999\\\"\\noutgoing-num-tcp: 250\\nincoming-num-tcp: 10\\ntcp-mss: 0\\noutgoing-tcp-mss: 0\\ntcp-idle-timeout: 3000\\nso-reuseport: yes\\nmax-udp-size: 4096\\nstream-wait-size: 4m\\nmsg-buffer-size: 65552\\nmsg-cache-size: 50m\\nmsg-cache-slabs: 128\\nnum-queries-per-thread: 4192\\njostle-timeout: 200\\ndelay-close: 376\\nudp-connect: yes\\noutbound-msg-retry: 5\\nunknown-server-time-limit: 376\\nrrset-cache-size: 100m\\nrrset-cache-slabs: 128\\ninfra-cache-min-rtt: 50\\ninfra-keep-probing: no\\ninfra-cache-slabs: 128\\ninfra-cache-numhosts: 10000\\nkey-cache-size: 4m\\nkey-cache-slabs: 128\\nneg-cache-size: 4m\\nhide-version: yes\\nhide-trustanchor: yes\\nhide-http-user-agent: yes\\ntarget-fetch-policy: \\\"3 2 1 0 0\\\"\\nharden-short-bufsize: yes\\nharden-large-queries: yes\\nharden-glue: yes\\nharden-dnssec-stripped: yes\\nharden-below-nxdomain: yes\\nharden-referral-path: no\\nharden-algo-downgrade: yes\\nqname-minimisation: yes\\nqname-minimisation-strict: no\\naggressive-nsec: yes\\nuse-caps-for-id: no\\nunwanted-reply-threshold: 10000000\\ndo-not-query-localhost: yes\\nserve-expired-client-timeout: 1800\\n\\nprivate-domain: \\\"cluster.local\\\"\\ndomain-insecure: \\\"cluster.local\\\"\\n\\n# Set the working directory for the program.\\ndirectory: \\\"/opt/unbound/etc/unbound\\\"\\n# Drop user  privileges after  binding the port.\\nusername: \\\"_unbound\\\"\\n# File with trust anchor for  one  zone, which is tracked with RFC5011\\n# probes.\\n# Enable chroot (i.e, change apparent root directory for the current\\n# running process and its children)\\nchroot: \\\"\\\"\\n#root-hints: \\\"/opt/unbound/etc/unbound/root.hints\\\"\\n\\ndomain-insecure: \\\"in-addr.arpa.\\\"\\nlocal-zone: \\\"in-addr.arpa.\\\" always_nxdomain\\nlocal-zone: \\\"amazonaws.com\\\" redirect\\nlocal-data: \\\"amazonaws.com. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local\\\"\\nlocal-zone: \\\"huggingface.co\\\" redirect\\nlocal-data: \\\"huggingface.co. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local\\\"\\nlocal-zone: \\\"hf.co\\\" redirect\\nlocal-data: \\\"hf.co. CNAME nvcf-proxy-cache.container-caching.svc.cluster.local\\\"\\nlocal-zone: \\\"c3d-farm-renders-ap-northeast-1.s3.ap-northeast-1.amazonaws.com.\\\" transparent\\n\\nlocal-zone: \\\"nvcf-unbound.test.\\\" redirect\\nlocal-data: \\\"nvcf-unbound.test. 10800 IN NS nvcf-unbound.test.\\\"\\nlocal-data: \\\"nvcf-unbound.test. 10800 IN SOA nvcf-unbound.test. nobody.invalid. 1 3600 1200 604800 10800\\\"\\nlocal-data: \\\"nvcf-unbound.test. 10800 IN A 127.0.0.1\\\"\\nlocal-data: \\\"nvcf-unbound.test. 10800 IN AAAA ::1\\\"\\n\\n#include: /opt/unbound/etc/unbound/stub-zones.conf\\nstub-zone:\\n    name: \\\"cluster.local\\\"\\n    stub-addr: 172.20.0.10\\n    stub-first: no\\n    stub-no-cache: no\"},\"kind\":\"ConfigMap\",\"metadata\":{\"annotations\":{\"argocd.argoproj.io/tracking-id\":\"nvcf-unbound:/ConfigMap:dns-proxy/nvcf-unbound-config\"},\"labels\":{\"app\":\"nvcf-unbound\",\"app.kubernetes.io/instance\":\"nvcf-unbound\",\"app.kubernetes.io/managed-by\":\"Helm\",\"app.kubernetes.io/name\":\"nvcf-unbound\",\"app.kubernetes.io/version\":\"0.0.1\",\"helm.sh/chart\":\"nvcf-unbound-0.9.3\"},\"name\":\"nvcf-unbound-config\",\"namespace\":\"dns-proxy\"}}\n"
+                },
+                "creationTimestamp": "2025-11-13T14:18:38Z",
+                "labels": {
+                    "app": "nvcf-unbound",
+                    "app.kubernetes.io/instance": "nvcf-unbound",
+                    "app.kubernetes.io/managed-by": "Helm",
+                    "app.kubernetes.io/name": "nvcf-unbound",
+                    "app.kubernetes.io/version": "0.0.1",
+                    "helm.sh/chart": "nvcf-unbound-0.9.3"
+                },
+                "name": "nvcf-unbound-config",
+                "namespace": "dns-proxy",
+                "resourceVersion": "535396650",
+                "uid": "21ae8609-8791-43e3-a2e2-2cb64b1aaf5c"
+            }
+        },
+        {
+            "apiVersion": "v1",
+            "data": {
+                "stub-zones.conf": "stub-zone:\n    name: \"cluster.local\"\n    stub-addr: 172.20.0.10\n    stub-first: no\n    stub-no-cache: yes"
+            },
+            "kind": "ConfigMap",
+            "metadata": {
+                "annotations": {
+                    "argocd.argoproj.io/tracking-id": "nvcf-unbound:/ConfigMap:dns-proxy/nvcf-unbound-stub-config",
+                    "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"v1\",\"data\":{\"stub-zones.conf\":\"stub-zone:\\n    name: \\\"cluster.local\\\"\\n    stub-addr: 172.20.0.10\\n    stub-first: no\\n    stub-no-cache: yes\"},\"kind\":\"ConfigMap\",\"metadata\":{\"annotations\":{\"argocd.argoproj.io/tracking-id\":\"nvcf-unbound:/ConfigMap:dns-proxy/nvcf-unbound-stub-config\"},\"labels\":{\"app\":\"nvcf-unbound\",\"app.kubernetes.io/instance\":\"nvcf-unbound\",\"app.kubernetes.io/managed-by\":\"Helm\",\"app.kubernetes.io/name\":\"nvcf-unbound\",\"app.kubernetes.io/version\":\"0.0.1\",\"helm.sh/chart\":\"nvcf-unbound-0.9.3\"},\"name\":\"nvcf-unbound-stub-config\",\"namespace\":\"dns-proxy\"}}\n"
+                },
+                "creationTimestamp": "2025-11-13T14:18:38Z",
+                "labels": {
+                    "app": "nvcf-unbound",
+                    "app.kubernetes.io/instance": "nvcf-unbound",
+                    "app.kubernetes.io/managed-by": "Helm",
+                    "app.kubernetes.io/name": "nvcf-unbound",
+                    "app.kubernetes.io/version": "0.0.1",
+                    "helm.sh/chart": "nvcf-unbound-0.9.3"
+                },
+                "name": "nvcf-unbound-stub-config",
+                "namespace": "dns-proxy",
+                "resourceVersion": "483837736",
+                "uid": "3b26770a-75bc-453f-8ec3-1298133032d0"
+            }
+        }
+    ],
+    "kind": "List",
+    "metadata": {
+        "resourceVersion": ""
+    }
+}
