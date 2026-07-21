@@ -231,6 +231,7 @@ func NewNVCFWorker(ctx context.Context, zapLogger *logs.ZapLogger, config Config
 		Backend:                config.CloudProvider,
 		NcaId:                  config.NcaId,
 		BillingNcaId:           billingNcaId,
+		NspectId:               metering.NspectIdFromEnv(),
 		FunctionId:             config.FunctionId,
 		FunctionVersionId:      config.FunctionVersionId,
 		InstanceId:             config.InstanceId,
