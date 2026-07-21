@@ -125,7 +125,8 @@ func newLLMRouterClientContainer(
 		fmt.Sprintf("--stargate-address=%s", llmRequestRouterAddress),
 		fmt.Sprintf("--inference-server-id=%s", instanceID),
 		fmt.Sprintf("--auth-token-file=%s", llmWorkerTokenPath),
-		"--reverse-tunnel",
+		"--backend-connectivity=reverse",
+		"--initial-input-tps=100",
 	}
 	if tcfg.StargateQUICInsecure {
 		args = append(args, "--quic-insecure")
