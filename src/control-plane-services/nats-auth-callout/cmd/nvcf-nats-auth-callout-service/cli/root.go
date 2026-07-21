@@ -18,8 +18,8 @@ limitations under the License.
 package cli
 
 import (
-	"github.com/spf13/cobra"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/spf13/cobra"
 )
 
 // SetEmbeddedConfig sets the embedded default configuration

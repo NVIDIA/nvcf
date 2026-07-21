@@ -110,6 +110,7 @@ go_test(
         "smbcsidriver_test.go",
         "storage_request_api_test.go",
         "storagerequest_test.go",
+        "translate_workload_test.go",
         "types_test.go",
     ],
     data = ["//internal/envtest:crds"],

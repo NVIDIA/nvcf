@@ -18,13 +18,12 @@
 
 ## Issues
 <!--
-Required: link an associated issue. Enforced by the pr-issue-check job.
-Write ONE of the following on the line below this comment:
-  - a GitHub issue with an action keyword: "Closes #123", "Fixes #123",
-    "Resolves NVIDIA/nvcf#123", or "Relates to #123"
-  - a tracker key: "NVCF-1234"
-  - "NO-REF" if no issue genuinely applies (use sparingly, per AGENTS.md)
-Text inside HTML comments does not count, so replace the line below.
+Required: add a valid NVIDIA/nvcf issue reference below.
+Accepted: "Closes #123", "Fixes #123", "Resolves NVIDIA/nvcf#123",
+"Relates to #123", or last-resort "NO-REF".
+Do not use Jira/private tracker keys, private bug IDs, private URLs, title-only
+refs, other-repo refs, or commented-out template examples. If context is
+private, create a generic public issue without private details.
 -->
 
 

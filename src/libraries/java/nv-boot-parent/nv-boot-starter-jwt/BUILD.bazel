@@ -1,0 +1,48 @@
+load("//src/libraries/java/nv-boot-parent/tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test")
+
+JWT_COMPILE_DEPS = [
+    "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",
+    "@nv_third_party_deps//:com_github_ben_manes_caffeine_guava",
+    "@nv_third_party_deps//:com_google_guava_guava",
+    "@nv_third_party_deps//:com_nimbusds_nimbus_jose_jwt",
+    "@nv_third_party_deps//:io_opentelemetry_opentelemetry_api",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_bouncycastle_bcprov_jdk18on",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_jackson",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_core",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_jose",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_core",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_core",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
+    "@nv_third_party_deps//:tools_jackson_module_jackson_module_blackbird",
+]
+
+nv_boot_library(
+    name = "nv_boot_starter_jwt",
+    srcs = glob(["src/main/java/**/*.java"]),
+    resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-jwt/src/main/resources",
+    resources = glob(["src/main/resources/**"]),
+    visibility = ["//visibility:public"],
+    deps = JWT_COMPILE_DEPS,
+)
+
+nv_boot_library_test(
+    name = "tests",
+    srcs = glob(["src/test/java/**/*.java"]),
+    coverage_library = ":nv_boot_starter_jwt",
+    resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-jwt/src/test/resources",
+    resources = glob(["src/test/resources/**"]),
+    deps = [
+        ":nv_boot_starter_jwt",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+    ] + JWT_COMPILE_DEPS,
+)

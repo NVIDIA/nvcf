@@ -31,6 +31,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// testKeyID is the JWKS key ID used by every mock token this package issues.
+const testKeyID = "test-key-1"
+
 // CreateMockJWKSServer creates a mock JWKS server for testing OAuth JWT validation
 func CreateMockJWKSServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -38,13 +41,12 @@ func CreateMockJWKSServer(t *testing.T) *httptest.Server {
 	testRSAKey := getTestRSAKey()
 	jwksServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/jwks.json" {
-
 			jwks := map[string]any{
 				"keys": []map[string]any{
 					{
 						"kty": "RSA",
 						"use": "sig",
-						"kid": "test-key-1",
+						"kid": testKeyID,
 						"n":   testRSAKey.N,
 						"e":   testRSAKey.E,
 					},
@@ -115,7 +117,7 @@ func CreateValidJWT(t *testing.T, userID string, scopes []string) string {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = "test-key-1"
+	token.Header["kid"] = testKeyID
 
 	tokenString, err := token.SignedString(testPrivateKey)
 	if err != nil {
@@ -140,7 +142,7 @@ func CreateExpiredJWT(t *testing.T, userID string, scopes []string) string {
 		Scopes: scopes,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = "test-key-1"
+	token.Header["kid"] = testKeyID
 	tokenString, err := token.SignedString(testPrivateKey)
 	if err != nil {
 		t.Fatalf("Failed to sign JWT: %v", err)
@@ -164,7 +166,7 @@ func CreateJWTWithAudience(t *testing.T, userID string, scopes []string, audienc
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = "test-key-1"
+	token.Header["kid"] = testKeyID
 
 	tokenString, err := token.SignedString(testPrivateKey)
 	if err != nil {

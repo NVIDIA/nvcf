@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/hashicorp/go-retryablehttp"
@@ -41,6 +42,19 @@ type ReValClient interface {
 
 type tokenFetcher interface {
 	FetchToken(ctx context.Context) (string, error)
+}
+
+// redactedHelmChartURL strips userinfo and the query string from a Helm
+// chart URL so it is safe to log; neither is needed to identify the chart.
+func redactedHelmChartURL(raw string) string {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return "<unparseable>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 type revalClient struct {
@@ -92,7 +106,16 @@ func (c *revalClient) Render(ctx context.Context, input HelmReValRenderInput) (H
 	)
 
 	log.V(1).Info("Do ReVal request")
-	log.V(2).WithValues("input", input).Info("Payload")
+	// input.APIKey, input.HelmRegistryAuthConfig, and input.ImageRegistryAuthConfig
+	// carry credentials and must not be logged. HelmChartURL is redacted too, in
+	// case it embeds userinfo or a signed query string.
+	log.V(2).WithValues(
+		"helmChart", redactedHelmChartURL(input.HelmChartURL),
+		"releaseName", input.ReleaseName,
+		"instanceType", input.InstanceType,
+		"gpu", input.GPUName,
+		"k8sVersion", input.K8sVersion,
+	).Info("Payload")
 
 	// httpCode tracks the label value for the metric. It defaults to "error" (network failure),
 	// is set to stage-specific values on pre-call failures, and to the HTTP status code on success.
@@ -111,6 +134,7 @@ func (c *revalClient) Render(ctx context.Context, input HelmReValRenderInput) (H
 		return HelmReValRenderOutput{}, err
 	}
 
+	//nolint:gosec // input.APIKey belongs in this request body, sent to the ReVal service itself
 	payload, err := json.Marshal(input)
 	if err != nil {
 		httpCode = "marshal_error"

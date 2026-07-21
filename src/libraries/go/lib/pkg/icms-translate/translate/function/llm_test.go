@@ -18,6 +18,7 @@ limitations under the License.
 package function
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,6 +28,24 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
+
+func assertCanonicalPylonBootstrapArgs(t *testing.T, args []string) {
+	t.Helper()
+
+	var backendConnectivityArgs, initialInputTPSArgs []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--backend-connectivity=") {
+			backendConnectivityArgs = append(backendConnectivityArgs, arg)
+		}
+		if strings.HasPrefix(arg, "--initial-input-tps=") {
+			initialInputTPSArgs = append(initialInputTPSArgs, arg)
+		}
+		assert.False(t, strings.HasPrefix(arg, "--reverse-tunnel"))
+		assert.False(t, strings.HasPrefix(arg, "--do-calibration"))
+	}
+	assert.Equal(t, []string{"--backend-connectivity=reverse"}, backendConnectivityArgs)
+	assert.Equal(t, []string{"--initial-input-tps=100"}, initialInputTPSArgs)
+}
 
 func TestNewLLMRouterClientContainer(t *testing.T) {
 	type spec struct {
@@ -64,7 +83,7 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 				assert.Equal(t, "llm-router.example.com:443", envMap["STARGATE_ADDRESS"])
 				assert.Contains(t, c.Args, "--inference-server-id=inst-123")
 				assert.Contains(t, c.Args, "--auth-token-file=/var/run/llm/worker-token")
-				assert.Contains(t, c.Args, "--reverse-tunnel")
+				assertCanonicalPylonBootstrapArgs(t, c.Args)
 				assert.NotContains(t, c.Args, "--quic-insecure")
 			},
 		},

@@ -823,6 +823,8 @@ github.com/open-telemetry/opentelemetry-collector-contrib/exporter/azuremonitore
 github.com/open-telemetry/opentelemetry-collector-contrib/exporter/azuremonitorexporter v0.153.0/go.mod h1:B3DD+QqpXAv7/KelRpJvQS4ZF9lxyPHI4hv/Q42tm0Y=
 github.com/open-telemetry/opentelemetry-collector-contrib/exporter/datadogexporter v0.153.0 h1:BBmppD58DikPVc4Qbe7LLQGcJ16Garp7eDj2hXciiNY=
 github.com/open-telemetry/opentelemetry-collector-contrib/exporter/datadogexporter v0.153.0/go.mod h1:qAcTyFamjbP9DB8orjBnn4/1sqNf482+fRi3/aGVlxA=
+github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusexporter v0.153.0 h1:f5SoWPkFx0w0ypTWMVhlOZCYQn4LX9/MuiH0nBuFxq0=
+github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusexporter v0.153.0/go.mod h1:1tueNSD8qlts25XBria7K+I/boqV0LFGFMGp+JOQubk=
 github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter v0.153.0 h1:5SPL5A2wZmNpjgbJLYJs7RwstUjPeF6zLu563XeTYUE=
 github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter v0.153.0/go.mod h1:HeB2i3y+yUSJgaxI8xGV2OTykzRM07rXHOCQgZi/+NA=
 github.com/open-telemetry/opentelemetry-collector-contrib/exporter/splunkhecexporter v0.153.0 h1:fcRUge6lGz8NSFPtmgFPeddaIjxzQaQG1fzCyum9hZg=

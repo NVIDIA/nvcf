@@ -7,9 +7,9 @@ on:
     # migrations, and other non-code PRs skip the scan (the Go autobuild is
     # expensive). The weekly schedule still does a full unconditional scan.
     paths:
-      - "src/**"
       - "**/*.go"
       - "**/*.rs"
+      - "**/*.java"
       - "**/go.mod"
       - "**/go.sum"
       - "**/Cargo.toml"
@@ -18,9 +18,9 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "src/**"
       - "**/*.go"
       - "**/*.rs"
+      - "**/*.java"
       - "**/go.mod"
       - "**/go.sum"
       - "**/Cargo.toml"
@@ -40,20 +40,70 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Decide which languages to analyze. PR policy: only buildless languages scan
+  # pre-merge (today Rust; Java joins as build-mode none when it lands). Go is
+  # excluded on PRs: its traced autobuild compiles the whole umbrella (~20+ min)
+  # for advisory-only feedback (fail-on-findings is false). Go coverage comes
+  # from every push to main and the weekly schedule, which scan everything.
+  # Emits a dynamic matrix so no job-level `if` referencing `matrix` is needed
+  # (that context is not allowed in a job `if`). Uses the GitHub API, not a
+  # third-party action (org allowlist).
+  detect:
+    name: Detect changed languages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.f.outputs.matrix }}
+      any: ${{ steps.f.outputs.any }}
+    steps:
+      - name: Detect changed languages
+        id: f
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          go=false; rust=false; java=false
+          files=""
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            # Pushes to main and the weekly schedule scan everything, Go included.
+            go=true; rust=true; java=true
+          else
+            # Never silently skip: if the changed-file lookup fails, scan both
+            # languages instead of treating an empty result as "no code changed".
+            if ! files="$(gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --jq '.[].filename')"; then
+              echo "::warning::changed-file lookup failed; scanning all languages"
+              go=true; rust=true; java=true; files=""
+            fi
+            # gh api filenames are repo-relative with no leading slash, so anchor
+            # manifests with (^|/) to match root and nested files alike.
+            if printf '%s\n' "$files" | grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$'; then rust=true; fi
+            if printf '%s\n' "$files" | grep -qE '\.java$'; then java=true; fi
+            # A change to the scan config itself re-scans the PR-time languages.
+            if printf '%s\n' "$files" | grep -qE '(^|/)\.github/workflows/codeql\.yml$'; then rust=true; java=true; fi
+          fi
+          inc=""
+          if [ "$go" = true ];   then inc="${inc}{\"language\":\"go\",\"build-mode\":\"autobuild\"},"; fi
+          if [ "$rust" = true ]; then inc="${inc}{\"language\":\"rust\",\"build-mode\":\"none\"},"; fi
+          if [ "$java" = true ]; then inc="${inc}{\"language\":\"java-kotlin\",\"build-mode\":\"none\"},"; fi
+          inc="${inc%,}"
+          echo "matrix={\"include\":[${inc}]}" >> "$GITHUB_OUTPUT"
+          if [ -n "$inc" ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
+          echo "selected languages: go=$go rust=$rust java=$java"
+
   analyze:
     name: CodeQL (${{ matrix.language }})
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
     runs-on: ubuntu-latest
     strategy:
       # Keep one language's failure from cancelling the others.
       fail-fast: false
-      matrix:
-        include:
-          # Go is a traced language and does not support build-mode none, so it
-          # autobuilds. Rust has no autobuilder and uses buildless extraction.
-          - language: go
-            build-mode: autobuild
-          - language: rust
-            build-mode: none
+      # Only the languages detect selected. Go must autobuild (CodeQL 2.26
+      # confirmed Go does not support build-mode none); Rust uses buildless.
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

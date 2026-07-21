@@ -64,6 +64,15 @@ func build(t *testing.T, mutate func(c *configs.Config)) (*NVCTWorker, error) {
 	return NewNVCTWorker(context.Background(), testLogger(), cfg)
 }
 
+func TestNewNVCTWorker_NspectIdFromEnv(t *testing.T) {
+	// NspectId is sourced from the NVCF_NSPECT_ID env var and must propagate
+	// into the metering config so NVCT_Infrastructure events carry nspect_id.
+	t.Setenv(metering.EnvNspectId, "NSPECT-TASK-1234")
+	w, err := build(t, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "NSPECT-TASK-1234", w.meteringConfig.NspectId)
+}
+
 func TestNewNVCTWorker_ValidBaseline(t *testing.T) {
 	w, err := build(t, nil)
 	require.NoError(t, err)
