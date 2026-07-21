@@ -15,6 +15,30 @@ reviews:
     drafts: false
     base_branches:
       - main
+  # Pre-merge checks consolidate PR-metadata policy into CodeRabbit's single
+  # status, replacing the standalone pr-title-check and pr-issue-check GitHub
+  # Actions. Warning mode: they nudge the author, they do not block the merge
+  # queue (raise to "error" to gate). The title check does both the Conventional
+  # Commit format and the semantic "type matches the change" judgment a regex
+  # cannot make.
+  pre_merge_checks:
+    title:
+      mode: warning
+      requirements: >-
+        The title must be a valid Conventional Commit (type(scope): subject)
+        with a single type prefix (no compound "type1+type2(scope):"), and the
+        <type> must accurately reflect the primary nature of the diff, not merely
+        be a valid type. Flag mismatches: a docs-only change (only *.md or
+        docs/**) titled chore or fix should be docs; a CI/workflow-only change
+        (.github/**, .gitlab-ci.yml, tools/ci/**) titled chore should be ci; and
+        especially a bug fix or feature mislabeled as chore/docs/refactor, which
+        would wrongly hide a customer-facing change from the release notes (feat,
+        fix, and perf appear in release notes; docs, chore, ci, build, test,
+        refactor, style do not). Do not flag PRs that legitimately span multiple
+        types where the chosen type reflects the most significant change. See
+        AGENTS.md commit conventions.
+    issue_assessment:
+      mode: warning
   # Skip generated, vendored, and binary-ish files so review focuses on
   # human-authored source.
   path_filters:
