@@ -71,7 +71,7 @@ func (in *AgentConfig) DeepCopyInto(out *AgentConfig) {
 	in.BYOOResources.DeepCopyInto(&out.BYOOResources)
 	in.BYOOFluentBitResources.DeepCopyInto(&out.BYOOFluentBitResources)
 	in.BYOOLogChunking.DeepCopyInto(&out.BYOOLogChunking)
-	in.BYOOMetricSubset.DeepCopyInto(&out.BYOOMetricSubset)
+	out.BYOOMetricSubset = in.BYOOMetricSubset
 	if in.BYOOWorkloadMetricsDropLabels != nil {
 		in, out := &in.BYOOWorkloadMetricsDropLabels, &out.BYOOWorkloadMetricsDropLabels
 		*out = make([]string, len(*in))
