@@ -4,9 +4,9 @@ Container-based functions require building and pushing a Cloud Functions compati
 
 ## Resources
 
-- Example containers can be found [in the examples repository](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples).
+- Example containers can be found [in the examples directory](https://github.com/NVIDIA/nvcf/tree/main/examples).
 
-- The repository also contains [helper functions](https://github.com/NVIDIA/nv-cloud-function-helpers/blob/main/helper_library/nv_cloud_function_helpers/nvcf_container/helpers.py) that are useful when authoring your container, including:
+- The repository also contains [helper functions](https://github.com/NVIDIA/nvcf/blob/main/src/libraries/python/nv-cloud-function-helpers/nv_cloud_function_helpers/nvcf_container/helpers.py) that are useful when authoring your container, including:
 
   - Helpers that parse Cloud Functions-specific parameters on invocation
   - Helpers that can be used to instrument your container with Cloud Functions compatible logs

@@ -48,7 +48,7 @@ For LLM functions, see [LLM Gateway](./llm-gateway.md#function-configuration) fo
 
 The following is a reference of available variables via the headers of the invocation message (auto-populated by Cloud Functions), accessible within the container.
 
-For examples of how to extract and use some of these variables, see [NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples).
+For examples of how to extract and use some of these variables, see [NVCF Container Helper Functions](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/python/nv-cloud-function-helpers).
 
 | Name                         | Description                                             |
 | ---------------------------- | ------------------------------------------------------- |

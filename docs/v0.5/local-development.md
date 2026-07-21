@@ -23,10 +23,10 @@ and adjust the pull secret configuration accordingly. See [self-hosted-image-mir
 for details on mirroring artifacts to other registries.
 
 <Tip>
-A ready-to-use k3d configuration and setup script is available in the
-[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples)
-repository. Clone it and run `./setup.sh` to create the cluster with all prerequisites,
-then skip to [Deploy the NVCF Stack].
+A ready-to-use k3d configuration and Makefile is available in
+[tools/ncp-local-cluster](https://github.com/NVIDIA/nvcf/tree/main/tools/ncp-local-cluster)
+in the NVCF repository. Clone the repo, then run `make` from that directory to create
+the cluster with all prerequisites, then skip to [Deploy the NVCF Stack].
 
 </Tip>
 
