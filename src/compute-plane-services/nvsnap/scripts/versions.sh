@@ -42,8 +42,8 @@ NVSNAP_CRIU_SRC="${NVSNAP_CRIU_SRC:-}"
 
 # Core images — all on a fresh v0.0.1 baseline. Bump per CLAUDE.md
 # rule 19 (never reuse a tag on rebuild).
-NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.14}"
-NVSNAP_APP_VERSION="${NVSNAP_APP_VERSION:-v0.2.25}"
+NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.15}"
+NVSNAP_APP_VERSION="${NVSNAP_APP_VERSION:-v0.2.26}"
 NVSNAP_SERVER_VERSION="${NVSNAP_SERVER_VERSION:-v0.0.31}"
 NVSNAP_BLOBSTORE_VERSION="${NVSNAP_BLOBSTORE_VERSION:-v0.0.1}"
 NVSNAP_L2WAIT_VERSION="${NVSNAP_L2WAIT_VERSION:-v0.0.1}"
@@ -67,7 +67,7 @@ NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
 # rings survive C/R, so libuv/uvloop servers restore with UV_USE_IO_URING=1)
 # for reproducible OSS builds. Bump when the fork advances.
 # Consumed by build-agent.sh (clean-checkout auto-clone) and ci/build-image.sh.
-NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-1e926fa4da5c1309c3029bedbeef103c1459438d}"
+NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-31d90a8a847219812185232fd93e8bee55c2a443}"
 NVSNAP_LIBZMQ_REPO="${NVSNAP_LIBZMQ_REPO:-https://github.com/balajinvda/libzmq.git}"
 NVSNAP_LIBZMQ_REF="${NVSNAP_LIBZMQ_REF:-checkpoint-restore-v1}"
 NVSNAP_LIBUV_REPO="${NVSNAP_LIBUV_REPO:-https://github.com/balajinvda/libuv.git}"

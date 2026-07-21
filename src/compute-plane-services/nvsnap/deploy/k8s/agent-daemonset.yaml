@@ -107,7 +107,7 @@ spec:
         - name: nvsnap-pull-secret
       containers:
         - name: agent
-          image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.25
+          image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.26
           imagePullPolicy: Always
           args:
             - --cuda-checkpoint-path=/criu-bundle/cuda-checkpoint
@@ -140,7 +140,7 @@ spec:
             - nvcr.io/0651155215864979/ncp-dev/uvloop-builder:v0.0.1
             - nvcr.io/0651155215864979/ncp-dev/libuv-builder:v0.0.1
             - nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
-            - nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.25
+            - nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.26
           securityContext:
             privileged: true  # Required for CRIU and containerd access
           env:
