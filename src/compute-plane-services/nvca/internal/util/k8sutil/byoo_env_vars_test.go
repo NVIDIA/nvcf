@@ -30,12 +30,12 @@ func TestAddBYOOEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) 
 	envs := []corev1.EnvVar{
 		{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
 		{Name: nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
-		{Name: nvcaconfig.BYOOSREMetricsEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
 	}
 	expectedEnv := []corev1.EnvVar{
 		{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
 		{Name: nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
-		{Name: nvcaconfig.BYOOSREMetricsEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
 	}
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{

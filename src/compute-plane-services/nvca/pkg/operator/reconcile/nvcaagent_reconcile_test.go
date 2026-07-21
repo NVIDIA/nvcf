@@ -2841,10 +2841,10 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 				DryRun:                    true,
 				ExporterBatchMaxSizeBytes: ptr.To[int64](1000000),
 			},
-			BYOOSREMetrics: nvcaconfig.BYOOSREMetricsConfig{
+			BYOOMetricSubset: nvcaconfig.BYOOMetricSubsetConfig{
 				Enabled:                   true,
 				FilterConfig:              "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
-				CustomerMetricsDropLabels: []string{"sre_metrics_enabled", "custom_label"},
+				CustomerMetricsDropLabels: []string{"metric_subset_enabled", "custom_label"},
 			},
 		},
 	}
@@ -2862,9 +2862,9 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 	assert.True(t, got.Agent.BYOOLogChunking.DryRun)
 	require.NotNil(t, got.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
 	assert.Equal(t, int64(1000000), *got.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
-	assert.True(t, got.Agent.BYOOSREMetrics.Enabled)
-	assert.Contains(t, got.Agent.BYOOSREMetrics.FilterConfig, "metric.name")
-	assert.Equal(t, []string{"sre_metrics_enabled", "custom_label"}, got.Agent.BYOOSREMetrics.CustomerMetricsDropLabels)
+	assert.True(t, got.Agent.BYOOMetricSubset.Enabled)
+	assert.Contains(t, got.Agent.BYOOMetricSubset.FilterConfig, "metric.name")
+	assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, got.Agent.BYOOMetricSubset.CustomerMetricsDropLabels)
 }
 
 func TestAgentHostOverrideConfig_ClearsReValHostForSelfHostedColocatedService(t *testing.T) {

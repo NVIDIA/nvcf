@@ -397,24 +397,24 @@ agent:
 		assert.Equal(t, ":8080", cfg.Agent.SvcAddress)
 	})
 
-	t.Run("byoo_sre_metrics", func(t *testing.T) {
+	t.Run("byoo_metric_subset", func(t *testing.T) {
 		data := []byte(`
 agent:
-  byooSREMetrics:
+  byooMetricSubset:
     enabled: true
     filterConfig: |
       error_mode: ignore
       metric_conditions:
         - 'metric.name == "drop"'
     customerMetricsDropLabels:
-      - sre_metrics_enabled
+      - metric_subset_enabled
       - custom_label
 `)
 		cfg, err := DecodeConfig(data)
 		require.NoError(t, err)
-		assert.True(t, cfg.Agent.BYOOSREMetrics.Enabled)
-		assert.Contains(t, cfg.Agent.BYOOSREMetrics.FilterConfig, "metric.name")
-		assert.Equal(t, []string{"sre_metrics_enabled", "custom_label"}, cfg.Agent.BYOOSREMetrics.CustomerMetricsDropLabels)
+		assert.True(t, cfg.Agent.BYOOMetricSubset.Enabled)
+		assert.Contains(t, cfg.Agent.BYOOMetricSubset.FilterConfig, "metric.name")
+		assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.Agent.BYOOMetricSubset.CustomerMetricsDropLabels)
 	})
 
 	t.Run("duration_parsing", func(t *testing.T) {

@@ -101,18 +101,18 @@ agentConfig:
   #   agent:
   #     logLevel: debug
   #
-  # BYOO SRE metrics example:
+  # BYOO metric subset example:
   #
   # mergeConfig: |
   #   agent:
-  #     byooSREMetrics:
+  #     byooMetricSubset:
   #       enabled: true
   #       filterConfig: |
   #         error_mode: ignore
   #         metric_conditions:
   #           - 'metric.name == "BpsInstrument"'
   #       customerMetricsDropLabels:
-  #         - sre_metrics_enabled
+  #         - metric_subset_enabled
   #         - custom_label
 ## @section resources Resource requests and limits for the nvca-operator container
 ## @param resources.limits.cpu CPU limit for the nvca-operator container

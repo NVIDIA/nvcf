@@ -733,20 +733,20 @@ pod and merged with the generated config at runtime.
        logLevel: debug
 ```
 
-BYOO SRE metrics example:
+BYOO metric subset example:
 
 ```yaml
  agentConfig:
    mergeConfig: |
      agent:
-       byooSREMetrics:
+       byooMetricSubset:
          enabled: true
          filterConfig: |
            error_mode: ignore
            metric_conditions:
              - 'metric.name == "BpsInstrument"'
          customerMetricsDropLabels:
-           - sre_metrics_enabled
+           - metric_subset_enabled
            - custom_label
 ```
 

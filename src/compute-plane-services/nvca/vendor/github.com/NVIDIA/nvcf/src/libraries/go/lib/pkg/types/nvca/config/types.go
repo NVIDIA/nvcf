@@ -59,10 +59,10 @@ const (
 	BYOOLogChunkDryRunEnv = "BYOO_LOG_CHUNK_DRY_RUN"
 	// BYOOLogExporterBatchMaxSizeBytesEnv is the BYOO collector env var for exporterhelper byte batch splitting.
 	BYOOLogExporterBatchMaxSizeBytesEnv = "BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES"
-	// BYOOSREMetricsEnabledEnv is the BYOO collector env var that enables the SRE metrics pipeline.
-	BYOOSREMetricsEnabledEnv = "BYOO_SRE_METRICS_ENABLED"
-	// BYOOSREMetricsFilterConfigEnv is the BYOO collector env var for SRE metrics filter config YAML.
-	BYOOSREMetricsFilterConfigEnv = "BYOO_SRE_METRICS_FILTER_CONFIG"
+	// BYOOMetricSubsetEnabledEnv is the BYOO collector env var that enables the metric subset pipeline.
+	BYOOMetricSubsetEnabledEnv = "BYOO_METRIC_SUBSET_ENABLED"
+	// BYOOMetricSubsetFilterConfigEnv is the BYOO collector env var for metric subset filter config YAML.
+	BYOOMetricSubsetFilterConfigEnv = "BYOO_METRIC_SUBSET_FILTER_CONFIG"
 	// BYOOCustomerMetricsDropLabelsEnv is the BYOO collector env var for customer metrics resource labels to drop.
 	BYOOCustomerMetricsDropLabelsEnv = "BYOO_CUSTOMER_METRICS_DROP_LABELS"
 
@@ -117,28 +117,28 @@ func BYOOLogChunkingEnvVars(config BYOOLogChunkingConfig) []corev1.EnvVar {
 	return config.EnvVars()
 }
 
-type BYOOSREMetricsConfig struct {
+type BYOOMetricSubsetConfig struct {
 	Enabled                   bool     `yaml:"enabled,omitempty"`
 	FilterConfig              string   `yaml:"filterConfig,omitempty"`
 	CustomerMetricsDropLabels []string `yaml:"customerMetricsDropLabels,omitempty"`
 }
 
-func (c BYOOSREMetricsConfig) IsZero() bool {
+func (c BYOOMetricSubsetConfig) IsZero() bool {
 	return !c.Enabled && c.FilterConfig == "" && len(c.CustomerMetricsDropLabels) == 0
 }
 
-// EnvVars returns BYOO collector env vars for the supplied SRE metrics config.
-func (c BYOOSREMetricsConfig) EnvVars() []corev1.EnvVar {
+// EnvVars returns BYOO collector env vars for the supplied metric subset config.
+func (c BYOOMetricSubsetConfig) EnvVars() []corev1.EnvVar {
 	envs := []corev1.EnvVar{}
 	if c.Enabled {
 		envs = append(envs, corev1.EnvVar{
-			Name:  BYOOSREMetricsEnabledEnv,
+			Name:  BYOOMetricSubsetEnabledEnv,
 			Value: strconv.FormatBool(c.Enabled),
 		})
 	}
 	if c.FilterConfig != "" {
 		envs = append(envs, corev1.EnvVar{
-			Name:  BYOOSREMetricsFilterConfigEnv,
+			Name:  BYOOMetricSubsetFilterConfigEnv,
 			Value: c.FilterConfig,
 		})
 	}
@@ -382,8 +382,8 @@ type AgentConfig struct {
 	// BYOOLogChunking contains BYOO OTel collector log chunking and exporter batch settings.
 	BYOOLogChunking BYOOLogChunkingConfig `yaml:",omitempty"`
 
-	// BYOOSREMetrics contains BYOO OTel collector SRE metrics pipeline settings.
-	BYOOSREMetrics BYOOSREMetricsConfig `yaml:"byooSREMetrics,omitempty"`
+	// BYOOMetricSubset contains BYOO OTel collector metric subset pipeline settings.
+	BYOOMetricSubset BYOOMetricSubsetConfig `yaml:"byooMetricSubset,omitempty"`
 }
 
 func (t AgentConfig) Complete(env Environment) AgentConfig {
@@ -399,7 +399,7 @@ func (t AgentConfig) Complete(env Environment) AgentConfig {
 // BYOOOTelCollectorEnvVars returns env vars that must be set only on the BYOO OTel collector container.
 func (t AgentConfig) BYOOOTelCollectorEnvVars() []corev1.EnvVar {
 	envs := t.BYOOLogChunking.EnvVars()
-	return append(envs, t.BYOOSREMetrics.EnvVars()...)
+	return append(envs, t.BYOOMetricSubset.EnvVars()...)
 }
 
 const (

@@ -47,7 +47,7 @@ type TemplateConfig struct {
 	InstanceID        string
 	ZoneName          string
 	LogChunking       LogChunkingConfig
-	SREMetrics        SREMetricsConfig
+	MetricSubset      MetricSubsetConfig
 	// LogExporterBatchMaxSizeBytes configures exporterhelper byte batching for logs.
 	// Zero uses the default selected for BYOO.
 	LogExporterBatchMaxSizeBytes int
@@ -58,7 +58,7 @@ type LogChunkingConfig struct {
 	DryRun       bool
 }
 
-type SREMetricsConfig struct {
+type MetricSubsetConfig struct {
 	Enabled                   bool
 	FilterConfig              map[string]interface{}
 	CustomerMetricsDropLabels []string
