@@ -32,13 +32,13 @@ for high-throughput benchmarking and includes:
 - Built-in OpenTelemetry tracing
 
 The source, build instructions, and registry push examples are in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/load-tester-supreme)
+[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/load-tester-supreme)
 repository. Build and push the image to whichever container registry your
 cluster has credentials for:
 
 ```bash
-git clone https://github.com/NVIDIA/nvcf/tree/main/examples.git
-cd nv-cloud-function-helpers/examples/function_samples/load_tester_supreme
+git clone https://github.com/NVIDIA/nvcf.git
+cd nvcf/examples/function-samples/load-tester-supreme
 
 # Build (multi-arch)
 docker buildx build --platform linux/amd64,linux/arm64 -t load_tester_supreme .
@@ -162,7 +162,7 @@ you want a steady, predictable load.
 
 <Note>
 The latest version of this script is maintained in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nvcf/tree/main/examples)
+[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples)
 repository.
 
 </Note>

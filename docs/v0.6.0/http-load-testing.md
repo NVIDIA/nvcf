@@ -29,13 +29,13 @@ for high-throughput benchmarking and includes:
 - Built-in OpenTelemetry tracing
 
 The source, build instructions, and registry push examples are in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/load-tester-supreme)
+[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/load-tester-supreme)
 repository. Build and push the image to whichever container registry your
 cluster has credentials for:
 
 ```bash
-git clone https://github.com/NVIDIA/nvcf/tree/main/examples.git
-cd nv-cloud-function-helpers/examples/function_samples/load_tester_supreme
+git clone https://github.com/NVIDIA/nvcf.git
+cd nvcf/examples/function-samples/load-tester-supreme
 
 # Build
 docker build --platform linux/amd64 -t load_tester_supreme .
@@ -100,8 +100,8 @@ k3d, Docker Desktop) it is typically `localhost` or `127.0.0.1`.
 ## Clone the load test scripts
 
 ```bash
-git clone https://github.com/NVIDIA/nvcf/tree/main/examples.git
-cd nv-cloud-function-helpers/examples/load-tests
+git clone https://github.com/NVIDIA/nvcf.git
+cd nvcf/examples/load-tests
 ```
 
 ## Install k6

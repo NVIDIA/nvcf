@@ -24,7 +24,7 @@ for details on mirroring artifacts to other registries.
 
 <Tip>
 A ready-to-use k3d configuration and setup script is available in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples)
+[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples)
 repository. Clone it and run `./setup.sh` to create the cluster with all prerequisites,
 then skip to [Deploy the NVCF Stack].
 
