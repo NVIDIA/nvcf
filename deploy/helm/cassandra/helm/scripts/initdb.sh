@@ -123,8 +123,8 @@ initialize_db() {
   # templates/hook-pre-01-initdb-configmap.yaml) and mounted by the
   # StatefulSet at /opt/nvcf/cassandra/cql (see templates/statefulset.yaml).
   #
-  if ! kubectl exec ${statefulset}-0 -c cassandra -n ${namespace} -- \
-    cqlsh -u "${CASSANDRA_USER}" -p "${CASSANDRA_PASSWORD}" localhost -f /opt/nvcf/cassandra/cql/keyspace.cql; then
+  if ! run_cqlsh "${statefulset}-0" "${CASSANDRA_USER}" "${CASSANDRA_PASSWORD}" \
+    localhost -f /opt/nvcf/cassandra/cql/keyspace.cql; then
     echo "Failed to successfully execute CQL"
     return 1
   fi

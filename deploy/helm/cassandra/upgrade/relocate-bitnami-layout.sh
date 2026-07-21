@@ -48,17 +48,21 @@ if [ -d "$nested/data" ] && [ -d "$nested/commitlog" ]; then
     exit 0
   fi
 
-  # Rename the nested parent first so its child data/ does not collide with the
-  # DATA_DIR/data target. Preflight every destination before moving anything, so
-  # a collision aborts with all contents preserved in the temp dir and no
-  # partial move. Nothing is deleted.
-  tmp="$DATA_DIR/.bitnami-relocate.$$"
-  mv "$nested" "$tmp"
-  for e in "$tmp"/* "$tmp"/.[!.]*; do
+  # Preflight every destination BEFORE touching the volume, so a collision
+  # aborts with the volume untouched and a rerun is still idempotent. The child
+  # data/ is the one exception: its destination is DATA_DIR/data, which IS the
+  # nested parent renamed out of the way below, so it is never a real collision.
+  for e in "$nested"/* "$nested"/.[!.]*; do
     [ -e "$e" ] || continue
     b="$(basename "$e")"
-    [ -e "$DATA_DIR/$b" ] && die "target $DATA_DIR/$b already exists; aborted before any move (contents safe in $tmp)"
+    [ "$DATA_DIR/$b" = "$nested" ] && continue
+    [ -e "$DATA_DIR/$b" ] && die "target $DATA_DIR/$b already exists; aborted before touching the volume"
   done
+
+  # Rename the nested parent so its child data/ does not collide with the
+  # DATA_DIR/data target, then move each child up. Nothing is deleted.
+  tmp="$DATA_DIR/.bitnami-relocate.$$"
+  mv "$nested" "$tmp"
   for e in "$tmp"/* "$tmp"/.[!.]*; do
     [ -e "$e" ] || continue
     b="$(basename "$e")"

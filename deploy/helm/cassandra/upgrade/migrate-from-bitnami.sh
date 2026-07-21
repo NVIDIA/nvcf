@@ -141,8 +141,8 @@ fi
 log "PVC retention on delete: ${when_deleted:-Retain (default)} - safe to orphan-delete"
 
 # --- Backup: nodetool snapshot ----------------------------------------------
-pods="$("${KC[@]}" get pods -l app.kubernetes.io/name=cassandra -o name 2>/dev/null || true)"
-[ -n "${pods}" ] || pods="pod/${RELEASE}-0"
+pods="$("${KC[@]}" get pods -l "app.kubernetes.io/name=cassandra,app.kubernetes.io/instance=${RELEASE}" -o name)"
+[ -n "${pods}" ] || die "no Cassandra pods found for release '${RELEASE}'; refusing to continue"
 if [ "${SKIP_SNAPSHOT}" = "true" ]; then
   warn "skipping nodetool snapshot (--skip-snapshot). No backup will be taken."
 else
@@ -191,12 +191,20 @@ if [ "${CONFIRM}" != "true" ]; then
 fi
 
 # --- Verify -----------------------------------------------------------------
-log "STEP: verify all nodes reach UN"
-status="$("${KC[@]}" exec "${RELEASE}-0" -c cassandra -- nodetool status 2>/dev/null || true)"
-printf '%s\n' "${status}" | awk '
-  /^[UD][NLJM]/ { seen=1; if ($1 != "UN") bad=1 }
-  END { exit (!seen || bad) }
-' || die "post-upgrade: one or more nodes are not UN. Data PVC ${PVC} is intact; investigate before retrying."
+log "STEP: verify all nodes reach UN (waiting up to ~10m)"
+un_ok=false
+for _ in $(seq 1 60); do
+  status="$("${KC[@]}" exec "${RELEASE}-0" -c cassandra -- nodetool status 2>/dev/null || true)"
+  if printf '%s\n' "${status}" | awk '
+      /^[UD][NLJM]/ { seen=1; if ($1 != "UN") bad=1 }
+      END { exit (!seen || bad) }
+    '; then
+    un_ok=true
+    break
+  fi
+  sleep 10
+done
+[ "${un_ok}" = "true" ] || die "post-upgrade: one or more nodes are not UN after waiting. Data PVC ${PVC} is intact; investigate before retrying."
 log "all ring members are UN"
 
 if [ -n "${pre_count}" ]; then
