@@ -7,7 +7,6 @@ on:
     # migrations, and other non-code PRs skip the scan (the Go autobuild is
     # expensive). The weekly schedule still does a full unconditional scan.
     paths:
-      - "src/**"
       - "**/*.go"
       - "**/*.rs"
       - "**/go.mod"
@@ -18,7 +17,6 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "src/**"
       - "**/*.go"
       - "**/*.rs"
       - "**/go.mod"
@@ -65,19 +63,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            files="$(gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --jq '.[].filename' || true)"
-          else
-            files=""
-          fi
           go=false; rust=false
+          files=""
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             # Pushes to main and the weekly schedule scan everything, Go included.
             go=true; rust=true
           else
-            if printf '%s\n' "$files" | grep -qE '(\.rs|/Cargo\.toml|/Cargo\.lock)$'; then rust=true; fi
+            # Never silently skip: if the changed-file lookup fails, scan both
+            # languages instead of treating an empty result as "no code changed".
+            if ! files="$(gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --jq '.[].filename')"; then
+              echo "::warning::changed-file lookup failed; scanning all languages"
+              go=true; rust=true; files=""
+            fi
+            # gh api filenames are repo-relative with no leading slash, so anchor
+            # manifests with (^|/) to match root and nested files alike.
+            if printf '%s\n' "$files" | grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$'; then rust=true; fi
             # A change to the scan config itself re-scans the PR-time languages.
-            if printf '%s\n' "$files" | grep -qE '\.github/workflows/codeql\.yml$';    then rust=true; fi
+            if printf '%s\n' "$files" | grep -qE '(^|/)\.github/workflows/codeql\.yml$'; then rust=true; fi
           fi
           inc=""
           if [ "$go" = true ];   then inc="${inc}{\"language\":\"go\",\"build-mode\":\"autobuild\"},"; fi
