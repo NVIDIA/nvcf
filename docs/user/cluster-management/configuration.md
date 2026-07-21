@@ -866,9 +866,10 @@ agentConfig:
           error_mode: ignore
           metric_conditions:
             - 'metric.name == "BpsInstrument"'
-      byooWorkloadMetricsDropLabels:
-        - metric_subset_enabled
-        - custom_label
+      byooWorkloadMetrics:
+        dropLabels:
+          - metric_subset_enabled
+          - custom_label
 ```
 
 Apply via Helm:

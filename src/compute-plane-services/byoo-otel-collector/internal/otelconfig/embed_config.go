@@ -38,17 +38,17 @@ func init() {
 }
 
 type TemplateConfig struct {
-	BackendType               BackendType
-	WorkloadType              WorkloadType
-	Namespace                 string
-	FunctionID                string
-	FunctionVersionID         string
-	TaskID                    string
-	InstanceID                string
-	ZoneName                  string
-	LogChunking               LogChunkingConfig
-	MetricSubset              MetricSubsetConfig
-	WorkloadMetricsDropLabels []string
+	BackendType       BackendType
+	WorkloadType      WorkloadType
+	Namespace         string
+	FunctionID        string
+	FunctionVersionID string
+	TaskID            string
+	InstanceID        string
+	ZoneName          string
+	LogChunking       LogChunkingConfig
+	MetricSubset      MetricSubsetConfig
+	WorkloadMetrics   WorkloadMetricsConfig
 	// LogExporterBatchMaxSizeBytes configures exporterhelper byte batching for logs.
 	// Zero uses the default selected for BYOO.
 	LogExporterBatchMaxSizeBytes int
@@ -57,6 +57,10 @@ type TemplateConfig struct {
 type LogChunkingConfig struct {
 	MaxBodyBytes int
 	DryRun       bool
+}
+
+type WorkloadMetricsConfig struct {
+	DropLabels []string
 }
 
 type MetricSubsetConfig struct {

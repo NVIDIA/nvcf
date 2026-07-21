@@ -98,12 +98,15 @@ func TestBYOOMetricSubsetConfig_EnvVars(t *testing.T) {
 	}, cfg.EnvVars())
 }
 
-func TestBYOOWorkloadMetricsDropLabelsEnvVars(t *testing.T) {
+func TestBYOOWorkloadMetricsConfig_EnvVars(t *testing.T) {
+	cfg := BYOOWorkloadMetricsConfig{
+		DropLabels: []string{"metric_subset_enabled", "custom_label"},
+	}
 	assert.Equal(t, []corev1.EnvVar{{
 		Name:  BYOOWorkloadMetricsDropLabelsEnv,
 		Value: "metric_subset_enabled,custom_label",
-	}}, BYOOWorkloadMetricsDropLabelsEnvVars([]string{"metric_subset_enabled", "custom_label"}))
-	assert.Nil(t, BYOOWorkloadMetricsDropLabelsEnvVars(nil))
+	}}, cfg.EnvVars())
+	assert.Nil(t, BYOOWorkloadMetricsConfig{}.EnvVars())
 }
 
 func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
@@ -116,7 +119,9 @@ func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
 		BYOOMetricSubset: BYOOMetricSubsetConfig{
 			Enabled: true,
 		},
-		BYOOWorkloadMetricsDropLabels: []string{"metric_subset_enabled"},
+		BYOOWorkloadMetrics: BYOOWorkloadMetricsConfig{
+			DropLabels: []string{"metric_subset_enabled"},
+		},
 	}
 
 	assert.Equal(t, []corev1.EnvVar{

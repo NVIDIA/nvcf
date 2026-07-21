@@ -80,16 +80,16 @@ func TestDeepCopy_BYOOMetricSubsetConfig(t *testing.T) {
 	assert.Equal(t, orig.FilterConfig, out.FilterConfig)
 }
 
-func TestDeepCopy_AgentConfig_BYOOWorkloadMetricsDropLabels(t *testing.T) {
-	orig := &AgentConfig{
-		BYOOWorkloadMetricsDropLabels: []string{"metric_subset_enabled", "custom_label"},
+func TestDeepCopy_BYOOWorkloadMetricsConfig(t *testing.T) {
+	orig := &BYOOWorkloadMetricsConfig{
+		DropLabels: []string{"metric_subset_enabled", "custom_label"},
 	}
 	out := orig.DeepCopy()
 	require.NotNil(t, out)
-	assert.Equal(t, orig.BYOOWorkloadMetricsDropLabels, out.BYOOWorkloadMetricsDropLabels)
+	assert.Equal(t, orig.DropLabels, out.DropLabels)
 
-	orig.BYOOWorkloadMetricsDropLabels[0] = "changed"
-	assert.Equal(t, "metric_subset_enabled", out.BYOOWorkloadMetricsDropLabels[0])
+	orig.DropLabels[0] = "changed"
+	assert.Equal(t, "metric_subset_enabled", out.DropLabels[0])
 }
 
 func TestDeepCopy_AllowedExtraKubernetesTypeConfig(t *testing.T) {

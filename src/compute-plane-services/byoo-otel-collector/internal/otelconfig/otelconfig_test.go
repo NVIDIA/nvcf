@@ -138,7 +138,7 @@ func TestGetTemplateConfig(t *testing.T) {
 						`metric.name == "drop"`,
 					},
 				}, cfg.MetricSubset.FilterConfig)
-				assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.WorkloadMetricsDropLabels)
+				assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.WorkloadMetrics.DropLabels)
 			},
 		},
 		{

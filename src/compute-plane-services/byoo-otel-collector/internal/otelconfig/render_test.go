@@ -112,7 +112,9 @@ func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
 				Enabled:      true,
 				FilterConfig: defaultMetricSubsetFilterConfig(),
 			},
-			WorkloadMetricsDropLabels: defaultWorkloadMetricsDropLabels,
+			WorkloadMetrics: WorkloadMetricsConfig{
+				DropLabels: defaultWorkloadMetricsDropLabels,
+			},
 		},
 	)
 
@@ -152,7 +154,9 @@ func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
 				Enabled:      true,
 				FilterConfig: defaultMetricSubsetFilterConfig(),
 			},
-			WorkloadMetricsDropLabels: defaultWorkloadMetricsDropLabels,
+			WorkloadMetrics: WorkloadMetricsConfig{
+				DropLabels: defaultWorkloadMetricsDropLabels,
+			},
 		},
 	)
 	if err != nil {
@@ -518,7 +522,9 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 			Enabled:      true,
 			FilterConfig: filterConfig,
 		},
-		WorkloadMetricsDropLabels: []string{"metric_subset_enabled"},
+		WorkloadMetrics: WorkloadMetricsConfig{
+			DropLabels: []string{"metric_subset_enabled"},
+		},
 	})
 
 	assert.NoError(t, err)
@@ -582,8 +588,10 @@ func TestGenerateExportersAndServiceAddsWorkloadMetricsDropLabelsWithoutMetricSu
 	initializeConfigMaps(otelConfig)
 
 	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
-		Namespace:                 "test-namespace",
-		WorkloadMetricsDropLabels: []string{"workload_label"},
+		Namespace: "test-namespace",
+		WorkloadMetrics: WorkloadMetricsConfig{
+			DropLabels: []string{"workload_label"},
+		},
 	})
 
 	assert.NoError(t, err)

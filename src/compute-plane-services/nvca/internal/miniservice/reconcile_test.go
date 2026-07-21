@@ -264,7 +264,9 @@ func TestReconcile_Function(t *testing.T) {
 		Enabled:      true,
 		FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
 	}
-	r.cfg.Agent.BYOOWorkloadMetricsDropLabels = []string{"metric_subset_enabled", "custom_label"}
+	r.cfg.Agent.BYOOWorkloadMetrics = nvcaconfig.BYOOWorkloadMetricsConfig{
+		DropLabels: []string{"metric_subset_enabled", "custom_label"},
+	}
 	err := k8sutil.SetConfigDefaultResources(&r.cfg)
 	require.NoError(t, err)
 	r.cfg.Workload.Tolerations = []corev1.Toleration{configuredToleration}

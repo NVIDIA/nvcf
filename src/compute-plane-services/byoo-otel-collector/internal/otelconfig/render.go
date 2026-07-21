@@ -815,7 +815,7 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
 		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource"}
-		if processorID := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetricsDropLabels); processorID != "" {
+		if processorID := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetrics.DropLabels); processorID != "" {
 			metricPipeline.Processors = append(metricPipeline.Processors, processorID)
 		}
 		metricPipeline.Processors = append(metricPipeline.Processors, "metrics_transform", "batch")

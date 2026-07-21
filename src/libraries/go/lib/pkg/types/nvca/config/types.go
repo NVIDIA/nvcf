@@ -144,13 +144,21 @@ func (c BYOOMetricSubsetConfig) EnvVars() []corev1.EnvVar {
 	return envs
 }
 
-func BYOOWorkloadMetricsDropLabelsEnvVars(labels []string) []corev1.EnvVar {
-	if len(labels) == 0 {
+type BYOOWorkloadMetricsConfig struct {
+	DropLabels []string `yaml:"dropLabels,omitempty"`
+}
+
+func (c BYOOWorkloadMetricsConfig) IsZero() bool {
+	return len(c.DropLabels) == 0
+}
+
+func (c BYOOWorkloadMetricsConfig) EnvVars() []corev1.EnvVar {
+	if len(c.DropLabels) == 0 {
 		return nil
 	}
 	return []corev1.EnvVar{{
 		Name:  BYOOWorkloadMetricsDropLabelsEnv,
-		Value: strings.Join(labels, ","),
+		Value: strings.Join(c.DropLabels, ","),
 	}}
 }
 
@@ -388,8 +396,8 @@ type AgentConfig struct {
 	// BYOOMetricSubset contains BYOO OTel collector metric subset pipeline settings.
 	BYOOMetricSubset BYOOMetricSubsetConfig `yaml:"byooMetricSubset,omitempty"`
 
-	// BYOOWorkloadMetricsDropLabels contains workload metrics resource labels to drop from the generated metrics pipeline.
-	BYOOWorkloadMetricsDropLabels []string `yaml:"byooWorkloadMetricsDropLabels,omitempty"`
+	// BYOOWorkloadMetrics contains settings for the generated workload metrics pipeline.
+	BYOOWorkloadMetrics BYOOWorkloadMetricsConfig `yaml:"byooWorkloadMetrics,omitempty"`
 }
 
 func (t AgentConfig) Complete(env Environment) AgentConfig {
@@ -406,7 +414,7 @@ func (t AgentConfig) Complete(env Environment) AgentConfig {
 func (t AgentConfig) BYOOOTelCollectorEnvVars() []corev1.EnvVar {
 	envs := t.BYOOLogChunking.EnvVars()
 	envs = append(envs, t.BYOOMetricSubset.EnvVars()...)
-	return append(envs, BYOOWorkloadMetricsDropLabelsEnvVars(t.BYOOWorkloadMetricsDropLabels)...)
+	return append(envs, t.BYOOWorkloadMetrics.EnvVars()...)
 }
 
 const (

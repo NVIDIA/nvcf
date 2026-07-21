@@ -87,7 +87,7 @@ func getTemplateConfig() (TemplateConfig, error) {
 		Enabled:      env.ByooMetricSubsetEnabled,
 		FilterConfig: metricSubsetFilterConfig,
 	}
-	tcgf.WorkloadMetricsDropLabels = resolvedWorkloadMetricsDropLabels(env.ByooWorkloadMetricsDropLabels, env.ByooMetricSubsetEnabled)
+	tcgf.WorkloadMetrics.DropLabels = resolvedWorkloadMetricsDropLabels(env.ByooWorkloadMetricsDropLabels, env.ByooMetricSubsetEnabled)
 
 	functionID := env.NvcfFunctionID
 	functionVersionID := env.NvcfFunctionVersionID
