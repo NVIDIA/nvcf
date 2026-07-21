@@ -104,7 +104,7 @@ Exposed Ports:
 - 14358: OTLP HTTP receiver
 - 13133: `/health?verbose` endpoint to get detailed health status of collector (healthcheck v2 extension)
 - 19090: `/metrics` endpoint for the byoo-otel-collector metrics
-- 19091: `/metrics` endpoint for optional SRE user metrics
+- 19091: `/metrics` endpoint for optional metric subset user metrics
 
 ### nvcf-otel-collector Image
 
@@ -129,9 +129,9 @@ Chunking is disabled by default. Configure it with:
 - `BYOO_LOG_CHUNK_MAX_BODY_BYTES`: maximum log body size in bytes before chunking. `0` disables the processor. Enabled values must be at least `4` bytes so chunks can preserve UTF-8 rune boundaries. Use `983040` bytes for normal BYOO deployments to leave room for log attributes and exporter envelope overhead under a `1000000` byte backend entry limit.
 - `BYOO_LOG_CHUNK_DRY_RUN`: records oversized-log metrics and warnings without mutating log payloads. Dry-run metric datapoints use `mode=dry_run`.
 - `BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES`: serialized log export request batch size used for exporterhelper byte splitting. `0` or unset uses the default `1000000` bytes.
-- `BYOO_SRE_METRICS_ENABLED`: enables an additional OTLP-only metrics pipeline that exposes filtered user metrics through a Prometheus exporter on port `19091`. Disabled by default.
-- `BYOO_SRE_METRICS_FILTER_CONFIG`: optional YAML filter processor config for the SRE metrics pipeline. If unset, the default drops every metric except `BpsInstrument`, `FpsInstrument`, `RtdInstrument`, and `StageOpenDuration`, and drops datapoints/resources explicitly labeled `sre_metrics_enabled=false` or `sre_enabled_metrics=false`.
-- `BYOO_CUSTOMER_METRICS_DROP_LABELS`: comma-separated resource attribute names removed from the customer metrics pipeline when SRE metrics are enabled. If unset, defaults to `sre_metrics_enabled,sre_enabled_metrics`.
+- `BYOO_METRIC_SUBSET_ENABLED`: enables an additional OTLP-only metrics pipeline that exposes filtered user metrics through a Prometheus exporter on port `19091`. Disabled by default.
+- `BYOO_METRIC_SUBSET_FILTER_CONFIG`: optional YAML filter processor config for the metric subset pipeline. If unset, the default drops every metric except `BpsInstrument`, `FpsInstrument`, `RtdInstrument`, and `StageOpenDuration`, and drops datapoints/resources explicitly labeled `metric_subset_enabled=false`.
+- `BYOO_WORKLOAD_METRICS_DROP_LABELS`: comma-separated resource attribute names removed from the generated workload `metrics` pipeline. If unset, defaults to `metric_subset_enabled` only when the metric subset pipeline is enabled.
 
 When chunking is enabled, each emitted chunk preserves the original log metadata and adds these attributes so chunks can be grouped in the backend:
 

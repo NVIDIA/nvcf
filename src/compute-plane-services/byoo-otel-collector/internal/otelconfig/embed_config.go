@@ -47,7 +47,8 @@ type TemplateConfig struct {
 	InstanceID        string
 	ZoneName          string
 	LogChunking       LogChunkingConfig
-	SREMetrics        SREMetricsConfig
+	MetricSubset      MetricSubsetConfig
+	WorkloadMetrics   WorkloadMetricsConfig
 	// LogExporterBatchMaxSizeBytes configures exporterhelper byte batching for logs.
 	// Zero uses the default selected for BYOO.
 	LogExporterBatchMaxSizeBytes int
@@ -58,10 +59,13 @@ type LogChunkingConfig struct {
 	DryRun       bool
 }
 
-type SREMetricsConfig struct {
-	Enabled                   bool
-	FilterConfig              map[string]interface{}
-	CustomerMetricsDropLabels []string
+type WorkloadMetricsConfig struct {
+	DropLabels []string
+}
+
+type MetricSubsetConfig struct {
+	Enabled      bool
+	FilterConfig map[string]interface{}
 }
 
 func ExecuteTemplate(w io.Writer, tcfg TemplateConfig) error {
