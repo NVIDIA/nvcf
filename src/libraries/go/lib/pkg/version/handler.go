@@ -23,26 +23,27 @@ import (
 	"runtime/debug"
 )
 
-// Info holds the resolved build version metadata returned by the /version endpoint.
+// Info holds the resolved build metadata returned by the GET /info endpoint.
 type Info struct {
+	Service string `json:"service"`
 	Version string `json:"version"`
 	Commit  string `json:"commit"`
 }
 
-// Handler returns an http.Handler that serves build version info as JSON.
-// Version and Commit are resolved from the package-level ldflags vars
-// (Version, GitHash), with buildinfo used as a fallback for Commit
+// Handler returns an http.Handler that serves build info as JSON.
+// Service, Version, and Commit are resolved from the package-level ldflags vars
+// (Service, Version, GitHash), with buildinfo used as a fallback for Commit
 // when GitHash is empty.
 func Handler() http.Handler {
-	return HandlerFor(Version, GitHash)
+	return HandlerFor(Service, Version, GitHash)
 }
 
-// HandlerFor returns an http.Handler using the provided version and commit
-// values, falling back to buildinfo for commit when commit is empty.
+// HandlerFor returns an http.Handler using the provided service, version, and
+// commit values, falling back to buildinfo for commit when commit is empty.
 // Use this for services that maintain their own ldflags vars rather than
 // pointing directly at this package.
-func HandlerFor(ver, commit string) http.Handler {
-	info := resolve(ver, commit)
+func HandlerFor(service, ver, commit string) http.Handler {
+	info := resolve(service, ver, commit)
 	body, _ := json.Marshal(info)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -50,11 +51,14 @@ func HandlerFor(ver, commit string) http.Handler {
 	})
 }
 
-// resolve builds an Info by combining the given ver/commit,
+// resolve builds an Info by combining the given service/ver/commit,
 // falling back to runtime buildinfo for commit when empty.
-func resolve(ver, commit string) Info {
+func resolve(service, ver, commit string) Info {
 	if commit == "" {
 		commit = commitFromBuildInfo()
+	}
+	if service == "" {
+		service = "unknown"
 	}
 	if ver == "" {
 		ver = "unknown"
@@ -62,7 +66,7 @@ func resolve(ver, commit string) Info {
 	if commit == "" {
 		commit = "unknown"
 	}
-	return Info{Version: ver, Commit: commit}
+	return Info{Service: service, Version: ver, Commit: commit}
 }
 
 // commitFromBuildInfo reads the VCS revision from Go's embedded build info
