@@ -26,6 +26,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Common authorization errors.
@@ -34,6 +36,10 @@ var (
 	ErrForbidden          = errors.New("forbidden: principal lacks permission for the requested action")
 	ErrAuthorizerInternal = errors.New("internal authorizer error")
 )
+
+// maxWebhookResponseBytes limits how many bytes are read from a webhook response body.
+// This prevents a faulty or hostile endpoint from consuming unbounded memory.
+const maxWebhookResponseBytes = 4096
 
 // Action represents the permission or operation being requested.
 // Consuming services should define their own Action constants in their own packages.
@@ -122,16 +128,19 @@ func WithHTTPClient(client *http.Client) WebhookOption {
 
 // NewWebhookAuthorizer initializes a WebhookAuthorizer targeting the provided endpoint URL.
 // It returns an error if endpointURL is empty, any option is nil, or the resolved HTTP client is nil.
+// The default HTTP client is instrumented with OpenTelemetry and configured to refuse redirects.
 func NewWebhookAuthorizer(endpointURL string, opts ...WebhookOption) (*WebhookAuthorizer, error) {
 	if endpointURL == "" {
 		return nil, errors.New("webhook endpoint URL must not be empty")
 	}
+	defaultClient := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: noRedirectPolicy,
+	}
+	defaultClient.Transport = otelhttp.NewTransport(defaultClient.Transport)
 	w := &WebhookAuthorizer{
 		endpointURL: endpointURL,
-		client: &http.Client{
-			Timeout:       10 * time.Second,
-			CheckRedirect: noRedirectPolicy,
-		},
+		client:      defaultClient,
 	}
 	for _, opt := range opts {
 		if opt == nil {
@@ -150,6 +159,8 @@ func NewWebhookAuthorizer(endpointURL string, opts ...WebhookOption) (*WebhookAu
 }
 
 // Authorize posts the authorization request to the webhook endpoint and decodes the result.
+// It propagates the W3C Trace Context from ctx via the OTEL-instrumented transport and records
+// transport errors and non-OK HTTP responses on the resulting span.
 func (w *WebhookAuthorizer) Authorize(ctx context.Context, req *AuthRequest) (*AuthResult, error) {
 	if req == nil {
 		return nil, ErrUnauthorized
@@ -172,7 +183,9 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, req *AuthRequest) (*A
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// Limit body reads to maxWebhookResponseBytes to guard against unbounded memory use
+	// from a faulty or hostile webhook endpoint.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxWebhookResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to read webhook response body: %w", ErrAuthorizerInternal, err)
 	}

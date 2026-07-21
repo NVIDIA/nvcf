@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -249,5 +250,56 @@ func TestWebhookAuthorizer(t *testing.T) {
 		authorizer, err := NewWebhookAuthorizer("http://127.0.0.1:0", WithHTTPClient(customClient))
 		require.NoError(t, err)
 		assert.Equal(t, customClient, authorizer.client)
+	})
+
+	t.Run("transport failure returns ErrAuthorizerInternal", func(t *testing.T) {
+		// Point at a port with no listener so the TCP dial fails immediately.
+		authorizer, err := NewWebhookAuthorizer("http://127.0.0.1:1",
+			WithHTTPClient(&http.Client{
+				Timeout:       50 * time.Millisecond,
+				CheckRedirect: noRedirectPolicy,
+			}),
+		)
+		require.NoError(t, err)
+
+		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: testActionRead})
+		require.ErrorIs(t, err, ErrAuthorizerInternal)
+		assert.Nil(t, res)
+	})
+
+	t.Run("oversized response body returns ErrAuthorizerInternal", func(t *testing.T) {
+		// Respond with a body larger than maxWebhookResponseBytes to verify the
+		// size limit is enforced. io.LimitReader truncates cleanly so the read
+		// itself does not error; the status is non-200 to exercise the error path.
+		oversized := strings.Repeat("x", maxWebhookResponseBytes+1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(oversized))
+		}))
+		defer server.Close()
+
+		authorizer, err := NewWebhookAuthorizer(server.URL)
+		require.NoError(t, err)
+
+		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: testActionRead})
+		require.ErrorIs(t, err, ErrAuthorizerInternal)
+		// The error must not contain more than maxWebhookResponseBytes of body text.
+		assert.LessOrEqual(t, len(err.Error()), maxWebhookResponseBytes+256)
+		assert.Nil(t, res)
+	})
+
+	t.Run("malformed JSON on 200 returns ErrAuthorizerInternal", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("not-valid-json"))
+		}))
+		defer server.Close()
+
+		authorizer, err := NewWebhookAuthorizer(server.URL)
+		require.NoError(t, err)
+
+		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: testActionRead})
+		require.ErrorIs(t, err, ErrAuthorizerInternal)
+		assert.Nil(t, res)
 	})
 }
