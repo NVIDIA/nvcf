@@ -25,6 +25,7 @@ go_binary(
     visibility = ["//visibility:public"],
     # Mirrors the legacy Dockerfile ldflags: -X version.{Version,GitHash,ReleaseTag}.
     x_defs = {
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-helm-reval-api",
         "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
         "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
         "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",

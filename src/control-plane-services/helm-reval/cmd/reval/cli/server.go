@@ -169,7 +169,7 @@ func serveManagementRoutes(logger *zap.Logger, loggerAtomicLevel *zap.AtomicLeve
 		}
 	})
 
-	router.Handle("/version", nvcfversion.Handler())
+	router.Handle("/info", nvcfversion.Handler())
 
 	router.Get("/log_level", loggerAtomicLevel.ServeHTTP)
 
