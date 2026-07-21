@@ -733,7 +733,7 @@ pod and merged with the generated config at runtime.
        logLevel: debug
 ```
 
-**BYOO SRE metrics example:**
+BYOO SRE metrics example:
 
 ```yaml
  agentConfig:
