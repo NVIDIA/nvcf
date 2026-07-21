@@ -1,9 +1,0 @@
-build --enable_bzlmod
-build --java_language_version=25
-build --tool_java_language_version=25
-build --java_runtime_version=remotejdk_25
-build --tool_java_runtime_version=remotejdk_25
-build --java_header_compilation=false
-build --javacopt=-Xlint:deprecation
-
-test --test_output=errors

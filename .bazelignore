@@ -37,7 +37,6 @@ src/libraries/python
 # goes native again.
 src/libraries/rust/stargate
 src/libraries/ts
-src/libraries/java
 deploy
 docs
 fern

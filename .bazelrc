@@ -71,10 +71,11 @@ build --nostamp
 # Java: build and run against a hermetic remotejdk 21 regardless of the host
 # JDK, so Java service builds are reproducible on any developer machine and in
 # CI. Language version 21 is the current Spring Boot 3.x baseline.
-build --java_language_version=21
-build --java_runtime_version=remotejdk_21
-build --tool_java_language_version=21
-build --tool_java_runtime_version=remotejdk_21
+build --java_language_version=25
+build --java_runtime_version=remotejdk_25
+build --tool_java_language_version=25
+build --tool_java_runtime_version=remotejdk_25
+build --java_header_compilation=false
 
 test --test_output=errors
 # Bazel's sandbox strips HOME, but a lot of Go code (cobra/viper config,

@@ -1,5 +1,5 @@
 load("@rules_java//java:defs.bzl", "java_library")
-load("//tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
+load("//src/libraries/java/nv-boot-parent/tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
 
 AUDIT_REQUIRED_DEPS = [
     "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",
@@ -40,7 +40,7 @@ java_library(
 nv_boot_library(
     name = "nv_boot_starter_audit",
     srcs = glob(["src/main/java/**/*.java"]),
-    resource_strip_prefix = "nv-boot-starter-audit/src/main/resources",
+    resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-audit/src/main/resources",
     resources = glob(["src/main/resources/**"]),
     visibility = ["//visibility:public"],
     deps = AUDIT_REQUIRED_DEPS + [":optional_compile_deps"],

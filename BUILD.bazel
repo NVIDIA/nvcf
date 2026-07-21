@@ -20,6 +20,18 @@ exports_files(
     visibility = ["//src/libraries/go/lib:__pkg__"],
 )
 
+# Root module identity + third-party lock + NOTICE index, consumed by the
+# nv-boot-parent NOTICE generation/verification tooling now that its Maven
+# closure is owned by the root module.
+exports_files(
+    [
+        "MODULE.bazel",
+        "NOTICE",
+        "maven_install.json",
+    ],
+    visibility = ["//src/libraries/java/nv-boot-parent:__subpackages__"],
+)
+
 # Phase 1 scope: only the native Go subtrees listed in go.work.bazel are
 # managed by Bazel.
 # Everything else is excluded so Gazelle does not descend into vendored

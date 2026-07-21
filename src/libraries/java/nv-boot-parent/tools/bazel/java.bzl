@@ -7,11 +7,11 @@ NV_JAVA_JAVACOPTS = [
 ]
 
 NV_LOMBOK_COMPILE_DEPS = [
-    "//tools/bazel:lombok_annotations",
+    "//src/libraries/java/nv-boot-parent/tools/bazel:lombok_annotations",
 ]
 
 NV_LOMBOK_PLUGINS = [
-    "//tools/bazel:lombok_plugin",
+    "//src/libraries/java/nv-boot-parent/tools/bazel:lombok_plugin",
 ]
 
 NV_JUNIT5_ARGS = [
@@ -184,13 +184,13 @@ def nv_boot_library_test(
 
     _sh_test(
         name = name,
-        srcs = ["//tools/bazel:jacoco_test_runner.sh"],
+        srcs = ["//src/libraries/java/nv-boot-parent/tools/bazel:jacoco_test_runner.sh"],
         args = [
             "$(location :%s)" % junit_runner,
             "$(location %s)" % coverage_library,
             coverage_source_root if coverage_sourcefiles else "",
             native.package_name(),
-            "$(location //tools/bazel:jacoco_cli)",
+            "$(location //src/libraries/java/nv-boot-parent/tools/bazel:jacoco_cli)",
         ] + NV_JUNIT5_ARGS + [
             "--class-path=$(location :%s.jar)" % junit_runner,
             "--scan-classpath=$(location :%s.jar)" % junit_runner,
@@ -202,7 +202,7 @@ def nv_boot_library_test(
             ":" + junit_runner,
             ":%s.jar" % junit_runner,
             coverage_library,
-            "//tools/bazel:jacoco_cli",
+            "//src/libraries/java/nv-boot-parent/tools/bazel:jacoco_cli",
         ] + coverage_sourcefiles,
         size = size,
         tags = tags,
