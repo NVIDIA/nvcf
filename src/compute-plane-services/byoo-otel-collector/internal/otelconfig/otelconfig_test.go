@@ -127,7 +127,7 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCF_ZONE_NAME":                    "zone-1",
 				"BYOO_METRIC_SUBSET_ENABLED":        "true",
 				"BYOO_METRIC_SUBSET_FILTER_CONFIG":  "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
-				"BYOO_CUSTOMER_METRICS_DROP_LABELS": "metric_subset_enabled, custom_label, metric_subset_enabled",
+				"BYOO_WORKLOAD_METRICS_DROP_LABELS": "metric_subset_enabled, custom_label, metric_subset_enabled",
 			},
 			expectErr: false,
 			expect: func(t *testing.T, cfg TemplateConfig) {
@@ -138,7 +138,7 @@ func TestGetTemplateConfig(t *testing.T) {
 						`metric.name == "drop"`,
 					},
 				}, cfg.MetricSubset.FilterConfig)
-				assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.MetricSubset.CustomerMetricsDropLabels)
+				assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.WorkloadMetricsDropLabels)
 			},
 		},
 		{
@@ -242,7 +242,7 @@ func TestGetTemplateConfig(t *testing.T) {
 				"BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES",
 				"BYOO_METRIC_SUBSET_ENABLED",
 				"BYOO_METRIC_SUBSET_FILTER_CONFIG",
-				"BYOO_CUSTOMER_METRICS_DROP_LABELS",
+				"BYOO_WORKLOAD_METRICS_DROP_LABELS",
 			}
 			backup := map[string]*string{}
 			for _, k := range envKeys {

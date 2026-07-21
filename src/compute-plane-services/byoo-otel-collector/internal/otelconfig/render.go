@@ -70,11 +70,11 @@ const (
 	metricSubsetExporterID               = "prometheus/user-metrics"
 	metricSubsetFilterProcessorID        = "filter/metric_subset"
 	metricSubsetBatchProcessorID         = "batch/metric_subset"
-	customerMetricsDropLabelsProcessorID = "resource/customer_metrics"
+	workloadMetricsDropLabelsProcessorID = "resource/workload_metrics_drop_labels"
 	defaultMetricSubsetPort              = 19091
 )
 
-var defaultCustomerMetricsDropLabels = []string{
+var defaultWorkloadMetricsDropLabels = []string{
 	"metric_subset_enabled",
 }
 
@@ -222,9 +222,12 @@ func mapFromConfigValue(value interface{}, field string) (map[string]interface{}
 	return configMap, nil
 }
 
-func resolvedCustomerMetricsDropLabels(configured string) []string {
+func resolvedWorkloadMetricsDropLabels(configured string, metricSubsetEnabled bool) []string {
 	if strings.TrimSpace(configured) == "" {
-		return append([]string(nil), defaultCustomerMetricsDropLabels...)
+		if !metricSubsetEnabled {
+			return nil
+		}
+		return append([]string(nil), defaultWorkloadMetricsDropLabels...)
 	}
 
 	seen := map[string]struct{}{}
@@ -497,7 +500,7 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 	return exporterId, nil
 }
 
-func addCustomerMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labels []string) string {
+func addWorkloadMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labels []string) string {
 	if len(labels) == 0 {
 		return ""
 	}
@@ -509,10 +512,10 @@ func addCustomerMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labe
 			"action": "delete",
 		})
 	}
-	otelConfig.Processors[customerMetricsDropLabelsProcessorID] = map[string]interface{}{
+	otelConfig.Processors[workloadMetricsDropLabelsProcessorID] = map[string]interface{}{
 		"attributes": actions,
 	}
-	return customerMetricsDropLabelsProcessorID
+	return workloadMetricsDropLabelsProcessorID
 }
 
 func addMetricSubsetExporter(otelConfig *OpenTelemetryConfig) {
@@ -812,10 +815,8 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
 		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource"}
-		if tmplConfig.MetricSubset.Enabled {
-			if processorID := addCustomerMetricsDropLabelsProcessor(otelConfig, tmplConfig.MetricSubset.CustomerMetricsDropLabels); processorID != "" {
-				metricPipeline.Processors = append(metricPipeline.Processors, processorID)
-			}
+		if processorID := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetricsDropLabels); processorID != "" {
+			metricPipeline.Processors = append(metricPipeline.Processors, processorID)
 		}
 		metricPipeline.Processors = append(metricPipeline.Processors, "metrics_transform", "batch")
 		otelConfig.Service.Pipelines["metrics"] = metricPipeline

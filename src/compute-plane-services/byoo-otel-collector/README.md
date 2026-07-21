@@ -131,7 +131,7 @@ Chunking is disabled by default. Configure it with:
 - `BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES`: serialized log export request batch size used for exporterhelper byte splitting. `0` or unset uses the default `1000000` bytes.
 - `BYOO_METRIC_SUBSET_ENABLED`: enables an additional OTLP-only metrics pipeline that exposes filtered user metrics through a Prometheus exporter on port `19091`. Disabled by default.
 - `BYOO_METRIC_SUBSET_FILTER_CONFIG`: optional YAML filter processor config for the metric subset pipeline. If unset, the default drops every metric except `BpsInstrument`, `FpsInstrument`, `RtdInstrument`, and `StageOpenDuration`, and drops datapoints/resources explicitly labeled `metric_subset_enabled=false`.
-- `BYOO_CUSTOMER_METRICS_DROP_LABELS`: comma-separated resource attribute names removed from the customer metrics pipeline when metric subset is enabled. If unset, defaults to `metric_subset_enabled`.
+- `BYOO_WORKLOAD_METRICS_DROP_LABELS`: comma-separated resource attribute names removed from the generated workload `metrics` pipeline. If unset, defaults to `metric_subset_enabled` only when the metric subset pipeline is enabled.
 
 When chunking is enabled, each emitted chunk preserves the original log metadata and adds these attributes so chunks can be grouped in the backend:
 

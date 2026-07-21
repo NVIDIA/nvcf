@@ -406,15 +406,15 @@ agent:
       error_mode: ignore
       metric_conditions:
         - 'metric.name == "drop"'
-    customerMetricsDropLabels:
-      - metric_subset_enabled
-      - custom_label
+  byooWorkloadMetricsDropLabels:
+    - metric_subset_enabled
+    - custom_label
 `)
 		cfg, err := DecodeConfig(data)
 		require.NoError(t, err)
 		assert.True(t, cfg.Agent.BYOOMetricSubset.Enabled)
 		assert.Contains(t, cfg.Agent.BYOOMetricSubset.FilterConfig, "metric.name")
-		assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.Agent.BYOOMetricSubset.CustomerMetricsDropLabels)
+		assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.Agent.BYOOWorkloadMetricsDropLabels)
 	})
 
 	t.Run("duration_parsing", func(t *testing.T) {

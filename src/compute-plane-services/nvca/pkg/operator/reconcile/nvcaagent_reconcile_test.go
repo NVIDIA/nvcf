@@ -2842,10 +2842,10 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 				ExporterBatchMaxSizeBytes: ptr.To[int64](1000000),
 			},
 			BYOOMetricSubset: nvcaconfig.BYOOMetricSubsetConfig{
-				Enabled:                   true,
-				FilterConfig:              "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
-				CustomerMetricsDropLabels: []string{"metric_subset_enabled", "custom_label"},
+				Enabled:      true,
+				FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
 			},
+			BYOOWorkloadMetricsDropLabels: []string{"metric_subset_enabled", "custom_label"},
 		},
 	}
 
@@ -2864,7 +2864,7 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 	assert.Equal(t, int64(1000000), *got.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
 	assert.True(t, got.Agent.BYOOMetricSubset.Enabled)
 	assert.Contains(t, got.Agent.BYOOMetricSubset.FilterConfig, "metric.name")
-	assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, got.Agent.BYOOMetricSubset.CustomerMetricsDropLabels)
+	assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, got.Agent.BYOOWorkloadMetricsDropLabels)
 }
 
 func TestAgentHostOverrideConfig_ClearsReValHostForSelfHostedColocatedService(t *testing.T) {

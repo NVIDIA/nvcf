@@ -90,17 +90,20 @@ func TestBYOOMetricSubsetConfig_EnvVars(t *testing.T) {
 	cfg := BYOOMetricSubsetConfig{
 		Enabled:      true,
 		FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
-		CustomerMetricsDropLabels: []string{
-			"metric_subset_enabled",
-			"custom_label",
-		},
 	}
 
 	assert.Equal(t, []corev1.EnvVar{
 		{Name: BYOOMetricSubsetEnabledEnv, Value: "true"},
 		{Name: BYOOMetricSubsetFilterConfigEnv, Value: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n"},
-		{Name: BYOOCustomerMetricsDropLabelsEnv, Value: "metric_subset_enabled,custom_label"},
 	}, cfg.EnvVars())
+}
+
+func TestBYOOWorkloadMetricsDropLabelsEnvVars(t *testing.T) {
+	assert.Equal(t, []corev1.EnvVar{{
+		Name:  BYOOWorkloadMetricsDropLabelsEnv,
+		Value: "metric_subset_enabled,custom_label",
+	}}, BYOOWorkloadMetricsDropLabelsEnvVars([]string{"metric_subset_enabled", "custom_label"}))
+	assert.Nil(t, BYOOWorkloadMetricsDropLabelsEnvVars(nil))
 }
 
 func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
@@ -111,16 +114,16 @@ func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
 			ExporterBatchMaxSizeBytes: &exporterBatchMaxSizeBytes,
 		},
 		BYOOMetricSubset: BYOOMetricSubsetConfig{
-			Enabled:                   true,
-			CustomerMetricsDropLabels: []string{"metric_subset_enabled"},
+			Enabled: true,
 		},
+		BYOOWorkloadMetricsDropLabels: []string{"metric_subset_enabled"},
 	}
 
 	assert.Equal(t, []corev1.EnvVar{
 		{Name: BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
 		{Name: BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
 		{Name: BYOOMetricSubsetEnabledEnv, Value: "true"},
-		{Name: BYOOCustomerMetricsDropLabelsEnv, Value: "metric_subset_enabled"},
+		{Name: BYOOWorkloadMetricsDropLabelsEnv, Value: "metric_subset_enabled"},
 	}, cfg.BYOOOTelCollectorEnvVars())
 }
 

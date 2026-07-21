@@ -261,10 +261,10 @@ func TestReconcile_Function(t *testing.T) {
 		ExporterBatchMaxSizeBytes: &exporterBatchMaxSizeBytes,
 	}
 	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{
-		Enabled:                   true,
-		FilterConfig:              "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
-		CustomerMetricsDropLabels: []string{"metric_subset_enabled", "custom_label"},
+		Enabled:      true,
+		FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
 	}
+	r.cfg.Agent.BYOOWorkloadMetricsDropLabels = []string{"metric_subset_enabled", "custom_label"}
 	err := k8sutil.SetConfigDefaultResources(&r.cfg)
 	require.NoError(t, err)
 	r.cfg.Workload.Tolerations = []corev1.Toleration{configuredToleration}
@@ -821,7 +821,7 @@ rules:
 	assert.Equal(t, "1000000", otelCollectorEnv[nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv])
 	assert.Equal(t, "true", otelCollectorEnv[nvcaconfig.BYOOMetricSubsetEnabledEnv])
 	assert.Contains(t, otelCollectorEnv[nvcaconfig.BYOOMetricSubsetFilterConfigEnv], "metric.name")
-	assert.Equal(t, "metric_subset_enabled,custom_label", otelCollectorEnv[nvcaconfig.BYOOCustomerMetricsDropLabelsEnv])
+	assert.Equal(t, "metric_subset_enabled,custom_label", otelCollectorEnv[nvcaconfig.BYOOWorkloadMetricsDropLabelsEnv])
 	assert.Equal(t, nodefeatures.UniformInstanceTypeLabelKey, msMeta.NodeAffinityKey)
 	assert.Equal(t, []corev1.Toleration{configuredToleration}, msMeta.Tolerations)
 

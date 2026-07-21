@@ -113,11 +113,11 @@ exporters:
     resource_to_telemetry_conversion:
       enabled: true
     send_timestamps: true
-  prometheusremotewrite/PROMETHEUS-customer-metrics-metrics:
-    endpoint: https://customer-metrics.example.invalid/api/v1/write
+  prometheusremotewrite/PROMETHEUS-workload-metrics-metrics:
+    endpoint: https://workload-metrics.example.invalid/api/v1/write
     tls:
-      cert_file: /etc/byoo-otel-collector/secrets/customer-metrics-clientCert
-      key_file: /etc/byoo-otel-collector/secrets/customer-metrics-clientKey
+      cert_file: /etc/byoo-otel-collector/secrets/workload-metrics-clientCert
+      key_file: /etc/byoo-otel-collector/secrets/workload-metrics-clientKey
 processors:
   attributes/add-metadata:
     actions:
@@ -206,7 +206,7 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
-  resource/customer_metrics:
+  resource/workload_metrics_drop_labels:
     attributes:
       - action: delete
         key: metric_subset_enabled
@@ -270,12 +270,12 @@ service:
         - otlp
         - prometheus
       exporters:
-        - prometheusremotewrite/PROMETHEUS-customer-metrics-metrics
+        - prometheusremotewrite/PROMETHEUS-workload-metrics-metrics
       processors:
         - memory_limiter
         - filter/metrics
         - resource
-        - resource/customer_metrics
+        - resource/workload_metrics_drop_labels
         - metrics_transform
         - batch
     metrics/metric_subset:

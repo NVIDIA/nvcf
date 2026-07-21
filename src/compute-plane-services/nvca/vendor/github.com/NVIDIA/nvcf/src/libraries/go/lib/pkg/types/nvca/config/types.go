@@ -63,8 +63,8 @@ const (
 	BYOOMetricSubsetEnabledEnv = "BYOO_METRIC_SUBSET_ENABLED"
 	// BYOOMetricSubsetFilterConfigEnv is the BYOO collector env var for metric subset filter config YAML.
 	BYOOMetricSubsetFilterConfigEnv = "BYOO_METRIC_SUBSET_FILTER_CONFIG"
-	// BYOOCustomerMetricsDropLabelsEnv is the BYOO collector env var for customer metrics resource labels to drop.
-	BYOOCustomerMetricsDropLabelsEnv = "BYOO_CUSTOMER_METRICS_DROP_LABELS"
+	// BYOOWorkloadMetricsDropLabelsEnv is the BYOO collector env var for workload metrics resource labels to drop.
+	BYOOWorkloadMetricsDropLabelsEnv = "BYOO_WORKLOAD_METRICS_DROP_LABELS"
 
 	// DefaultBYOOLogExporterBatchMaxSizeBytes keeps serialized exporter batches near the backend limit.
 	DefaultBYOOLogExporterBatchMaxSizeBytes int64 = 1000000
@@ -118,13 +118,12 @@ func BYOOLogChunkingEnvVars(config BYOOLogChunkingConfig) []corev1.EnvVar {
 }
 
 type BYOOMetricSubsetConfig struct {
-	Enabled                   bool     `yaml:"enabled,omitempty"`
-	FilterConfig              string   `yaml:"filterConfig,omitempty"`
-	CustomerMetricsDropLabels []string `yaml:"customerMetricsDropLabels,omitempty"`
+	Enabled      bool   `yaml:"enabled,omitempty"`
+	FilterConfig string `yaml:"filterConfig,omitempty"`
 }
 
 func (c BYOOMetricSubsetConfig) IsZero() bool {
-	return !c.Enabled && c.FilterConfig == "" && len(c.CustomerMetricsDropLabels) == 0
+	return !c.Enabled && c.FilterConfig == ""
 }
 
 // EnvVars returns BYOO collector env vars for the supplied metric subset config.
@@ -142,13 +141,17 @@ func (c BYOOMetricSubsetConfig) EnvVars() []corev1.EnvVar {
 			Value: c.FilterConfig,
 		})
 	}
-	if len(c.CustomerMetricsDropLabels) > 0 {
-		envs = append(envs, corev1.EnvVar{
-			Name:  BYOOCustomerMetricsDropLabelsEnv,
-			Value: strings.Join(c.CustomerMetricsDropLabels, ","),
-		})
-	}
 	return envs
+}
+
+func BYOOWorkloadMetricsDropLabelsEnvVars(labels []string) []corev1.EnvVar {
+	if len(labels) == 0 {
+		return nil
+	}
+	return []corev1.EnvVar{{
+		Name:  BYOOWorkloadMetricsDropLabelsEnv,
+		Value: strings.Join(labels, ","),
+	}}
 }
 
 func (r *ResourceRequirements) ToK8sResourceRequirements() corev1.ResourceRequirements {
@@ -384,6 +387,9 @@ type AgentConfig struct {
 
 	// BYOOMetricSubset contains BYOO OTel collector metric subset pipeline settings.
 	BYOOMetricSubset BYOOMetricSubsetConfig `yaml:"byooMetricSubset,omitempty"`
+
+	// BYOOWorkloadMetricsDropLabels contains workload metrics resource labels to drop from the generated metrics pipeline.
+	BYOOWorkloadMetricsDropLabels []string `yaml:"byooWorkloadMetricsDropLabels,omitempty"`
 }
 
 func (t AgentConfig) Complete(env Environment) AgentConfig {
@@ -399,7 +405,8 @@ func (t AgentConfig) Complete(env Environment) AgentConfig {
 // BYOOOTelCollectorEnvVars returns env vars that must be set only on the BYOO OTel collector container.
 func (t AgentConfig) BYOOOTelCollectorEnvVars() []corev1.EnvVar {
 	envs := t.BYOOLogChunking.EnvVars()
-	return append(envs, t.BYOOMetricSubset.EnvVars()...)
+	envs = append(envs, t.BYOOMetricSubset.EnvVars()...)
+	return append(envs, BYOOWorkloadMetricsDropLabelsEnvVars(t.BYOOWorkloadMetricsDropLabels)...)
 }
 
 const (
