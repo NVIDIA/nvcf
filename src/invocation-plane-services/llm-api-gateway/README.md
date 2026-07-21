@@ -155,6 +155,36 @@ Useful overrides:
 - `OTEL_TRACES_EXPORTER=otlp|stdout|none` to enable trace export
 - `OTEL_METRICS_EXPORTER=otlp|none` to enable metric export
 
+## Metrics
+
+Request-facing metrics include a `function_id` label. The value comes from the
+request routing key. Requests without a function, such as health checks, use
+`function_id="none"`.
+
+The label is present on HTTP request, upstream request, token usage, provider
+time, first-token time, and stream duration metrics. Infrastructure metrics for
+authentication, pub/sub, rate-limit synchronization, and Olric remain
+function-independent.
+
+Example request-rate query:
+
+```promql
+sum by (function_id) (
+  rate(llm_api_gateway_http_requests_total[5m])
+)
+```
+
+Example p95 request-latency query:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le, function_id) (
+    rate(llm_api_gateway_http_request_duration_seconds_bucket[5m])
+  )
+)
+```
+
 ## Tooling and Tasks
 
 Common tasks:

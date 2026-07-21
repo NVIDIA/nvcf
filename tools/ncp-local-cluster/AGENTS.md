@@ -20,8 +20,8 @@ make test-multicluster-make
 ```
 
 Cluster lifecycle targets require local tools such as `k3d`, `kubectl`, `helm`, and Docker.
-For detailed local k3d workflow and cleanup safety, use
-`.cursor/skills/nvcf-self-hosted-local-dev/SKILL.md` from the repo root.
+For detailed local k3d workflow and cleanup safety, see
+`docs/dev/local-development.md` from the repo root.
 
 ## Ownership
 

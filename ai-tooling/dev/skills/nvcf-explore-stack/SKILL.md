@@ -104,7 +104,7 @@ Assume the user is onboarding to the stack. Be concise. Always include the chart
 After exploring, suggest the next skill when applicable:
 
 - `nvcf-self-managed-installation` for installing, upgrading, or tearing down the stack
-- `nvcf-self-hosted-local-dev` for k3d / local cluster work
+- `docs/dev/local-development.md` for k3d / local cluster work
 - `nvcf-self-managed-cli` for `nvcf-cli` usage against an installed stack
 - `docs/AGENTS.md` and `fern/versions/main.yml` for routing the user to a published docs page
 - `tools/ci/check-doc-version-sync` for keeping the documentation manifest in sync with the docs version catalog

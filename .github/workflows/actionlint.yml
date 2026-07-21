@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Lint the GitHub Actions workflows themselves. These workflows live only on
+# the GitHub mirror (the GitLab umbrella is frozen), so nothing else validates
+# them before they run; a bad expression or context reference otherwise
+# surfaces as a live startup_failure. actionlint checks workflow YAML,
+# expression syntax and context availability, and runs shellcheck over run:
+# blocks. The binary is downloaded directly with a pinned version and sha256
+# (no third-party action, per the org actions allowlist).
+name: actionlint
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+
+concurrency:
+  group: actionlint-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download actionlint (pinned, checksum-verified)
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar xzf actionlint.tar.gz actionlint
+
+      - name: Run actionlint
+        env:
+          # Gate on shellcheck warnings and errors; info/style-level notes
+          # (e.g. SC2016 on the intentionally literal '$oauthtoken' helm
+          # username) are not worth failing CI over.
+          SHELLCHECK_OPTS: "--severity=warning"
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/actionlint" -color

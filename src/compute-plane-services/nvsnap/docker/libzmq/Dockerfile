@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # libzmq builder image for NVSNAP
 #
 # Builds our forked libzmq with CRIU checkpoint/restore support:

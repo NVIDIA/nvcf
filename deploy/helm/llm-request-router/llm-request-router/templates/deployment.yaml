@@ -94,6 +94,7 @@ spec:
             - --quic-request-timeout-ms={{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}
             - --metrics-port={{ .Values.llmRequestRouter.service.metricsPort }}
             {{- if .Values.llmRequestRouter.transport.reverseTunnelListenAddr }}
+            - --backend-connectivity=reverse
             - --reverse-tunnel-listen-addr={{ .Values.llmRequestRouter.transport.reverseTunnelListenAddr }}
             {{- end }}
             {{- if and .Values.llmRequestRouter.transport.reverseTunnelListenAddr (gt $replicaCount 1) }}

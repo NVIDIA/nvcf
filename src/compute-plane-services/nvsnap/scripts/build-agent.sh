@@ -150,11 +150,13 @@ build_base() {
     mkdir -p "${BUILD_CTX}/criu-src"
     git -C "${CRIU_SRC}" archive HEAD | tar -x -C "${BUILD_CTX}/criu-src"
 
-    # Copy cuda-checkpoint (required by Dockerfile.base)
-    if [ -f "${PROJECT_ROOT}/docker/agent/cuda-checkpoint" ]; then
-        cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint" "${BUILD_CTX}/cuda-checkpoint"
+    # nvsnap-cuda-checkpoint source (required by Dockerfile.base's
+    # cuda-cli-builder stage — built from source for x86-64/arm64, replacing
+    # the previously committed NVIDIA prebuilt binary).
+    if [ -f "${PROJECT_ROOT}/docker/agent/nvsnap-cuda-checkpoint.c" ]; then
+        cp "${PROJECT_ROOT}/docker/agent/nvsnap-cuda-checkpoint.c" "${BUILD_CTX}/nvsnap-cuda-checkpoint.c"
     else
-        echo "ERROR: cuda-checkpoint not found at ${PROJECT_ROOT}/docker/agent/cuda-checkpoint"
+        echo "ERROR: nvsnap-cuda-checkpoint.c not found at ${PROJECT_ROOT}/docker/agent/"
         exit 1
     fi
 
@@ -263,15 +265,9 @@ build_app() {
     # Copy intercept library source
     cp -r "${PROJECT_ROOT}/lib/nvsnap_intercept" "${BUILD_CTX}/lib/"
 
-    # Copy cuda-checkpoint binary and wrapper
-    if [ -f "${PROJECT_ROOT}/docker/agent/cuda-checkpoint" ]; then
-        cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint" "${BUILD_CTX}/"
-    elif [ -f "${PROJECT_ROOT}/bin/criu-bundle/cuda-checkpoint" ]; then
-        cp "${PROJECT_ROOT}/bin/criu-bundle/cuda-checkpoint" "${BUILD_CTX}/"
-    else
-        echo "ERROR: cuda-checkpoint not found!"
-        exit 1
-    fi
+    # cuda-checkpoint wrapper only: the real binary is built from source in
+    # the BASE image (Dockerfile.base cuda-cli-builder stage); Dockerfile.app
+    # just re-overlays the wrapper at /criu-bundle/cuda-checkpoint.
     cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint-wrapper.sh" "${BUILD_CTX}/"
 
     # Support NO_CACHE=1 environment variable to force rebuild

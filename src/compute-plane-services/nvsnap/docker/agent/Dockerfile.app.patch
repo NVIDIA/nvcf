@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 
 # Fix cuda-checkpoint wrapper: isolate from LD_PRELOAD intercept library.
 COPY cuda-checkpoint-wrapper.sh /criu-bundle/cuda-checkpoint

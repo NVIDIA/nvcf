@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +58,28 @@ func readTestdataFile(t *testing.T, fileName string) string {
 	b, err := testdataFiles.ReadFile(fileName)
 	require.NoError(t, err)
 	return string(b)
+}
+
+// stripSPDXHeaders removes the SPDX license header comment blocks that repo
+// license stamping adds to rendered template assets and testdata goldens. The
+// headers carry no semantic content (Kubernetes ignores YAML comments), appear
+// a different number of times on each side of a golden comparison (once per
+// stamped source file), and would otherwise churn every golden assertion each
+// time stamping changes.
+func stripSPDXHeaders(s string) string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "# SPDX-") {
+			// Swallow the blank line that closes a header block.
+			if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "" {
+				i++
+			}
+			continue
+		}
+		out = append(out, lines[i])
+	}
+	return strings.Join(out, "\n")
 }
 
 func TestValidateNVCFBackendParams(t *testing.T) {
@@ -2460,7 +2483,7 @@ func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 		io.WriteString(b, "---\n")
 		io.WriteString(b, got[k])
 	}
-	assert.Equal(t, readTestdataFile(t, filepath.Join("testdata", "netpols.yaml")), b.String())
+	assert.Equal(t, stripSPDXHeaders(readTestdataFile(t, filepath.Join("testdata", "netpols.yaml"))), stripSPDXHeaders(b.String()))
 }
 
 func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
@@ -2493,7 +2516,7 @@ func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
 		io.WriteString(b, "---\n")
 		io.WriteString(b, got[k])
 	}
-	assert.Equal(t, readTestdataFile(t, filepath.Join("testdata", "netpols_with_ddcs.yaml")), b.String())
+	assert.Equal(t, stripSPDXHeaders(readTestdataFile(t, filepath.Join("testdata", "netpols_with_ddcs.yaml"))), stripSPDXHeaders(b.String()))
 }
 
 func assertNetworkPolicyAllowsTCPPort(t *testing.T, policyYAML, policyName string, port int32) {
@@ -4626,7 +4649,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv_OAuthAuth(t *testing.T) {
 			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorOAuth2Client,
 		},
 		{
-			name: "Vault disabled - service API key bearer token authentication with placeholder OAuth env vars",
+			name: "Vault disabled - service API key bearer token authentication with empty OAuth client ID",
 			nb: &nvidiaiov1.NVCFBackend{
 				Spec: nvidiaiov1.NVCFBackendSpec{
 					NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
@@ -4642,7 +4665,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv_OAuthAuth(t *testing.T) {
 				},
 			},
 			envType:                 nvidiaiov1.EnvTypeProd,
-			expectedOAuthClientID:   NVCAOTelCollectorOAuthPlaceholderClientID,
+			expectedOAuthClientID:   "",
 			expectedOAuthSecretFile: "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
 			expectedOAuthTokenURL:   "",
 			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorBearerTokenAuth,

@@ -156,6 +156,7 @@ go_test(
     name = "nvca_test",
     srcs = [
         "agent_http_debug_test.go",
+        "agent_manager_test.go",
         "agent_metrics_test.go",
         "agent_self_destruct_test.go",
         "agent_test.go",
@@ -219,6 +220,7 @@ go_test(
         "//internal/util/k8sutil",
         "//internal/util/k8sutil/mock",
         "//internal/util/translate",
+        "//pkg/apis/nvca/v1:nvca",
         "//pkg/apis/nvca/v1alpha1",
         "//pkg/apis/nvca/v2beta1",
         "//pkg/client/clientset/versioned/fake",

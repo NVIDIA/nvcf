@@ -210,7 +210,9 @@ manually before finishing.
 ## GitLab CI for native subprojects
 
 The umbrella parent pipeline (`.gitlab-ci.yml`) is not where native service
-build, test, helm-lint, or release validation jobs go.
+build, test, helm-lint, or release validation jobs go. `.gitlab-ci.yml` and
+`tools/ci/generated-release-jobs.yml` are internal GitLab CI config not
+present in this public snapshot.
 
 | Job kind | Where to declare it |
 |---|---|

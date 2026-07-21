@@ -33,6 +33,7 @@ func endpointLabel(c *GatewayContext) string {
 func (m observabilityMetrics) recordLLMUsage(
 	ctx context.Context,
 	endpoint string,
+	functionID string,
 	usage *models.ChatCompletionUsage,
 	stream bool,
 ) {
@@ -52,6 +53,7 @@ func (m observabilityMetrics) recordLLMUsage(
 			attribute.String("endpoint", endpoint),
 			attribute.String("token_type", tokenType),
 			attribute.String("stream", streamValue),
+			telemetry.FunctionIDAttribute(functionID),
 		)
 	}
 	addTokens("prompt", usage.PromptTokens)
@@ -69,6 +71,7 @@ func (m observabilityMetrics) recordLLMUsage(
 			attribute.String("endpoint", endpoint),
 			attribute.String("phase", phase),
 			attribute.String("stream", streamValue),
+			telemetry.FunctionIDAttribute(functionID),
 		)
 	}
 	if usage.QueueTime != nil {
@@ -77,6 +80,13 @@ func (m observabilityMetrics) recordLLMUsage(
 	recordProviderTime("prompt", usage.PromptTime)
 	recordProviderTime("completion", usage.CompletionTime)
 	recordProviderTime("total", usage.TotalTime)
+}
+
+func requestFunctionID(c *GatewayContext) string {
+	if c == nil || c.RequestContext() == nil {
+		return ""
+	}
+	return c.RequestContext().RoutingKey
 }
 
 func boolLabel(value bool) string {

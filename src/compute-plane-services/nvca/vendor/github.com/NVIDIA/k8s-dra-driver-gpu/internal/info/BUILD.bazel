@@ -6,6 +6,12 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/internal/info",
     importpath = "github.com/NVIDIA/k8s-dra-driver-gpu/internal/info",
     visibility = ["//vendor/github.com/NVIDIA/k8s-dra-driver-gpu:__subpackages__"],
+    # The dra-driver's featuregates init() panics unless a real version is
+    # stamped over the "unknown" default. Upstream sets this with go build
+    # -ldflags -X (see this module's Makefile); mirror it here so every test
+    # and binary that transitively links this package starts. The relative key
+    # lets rules_go qualify it against importmap for vendored builds.
+    x_defs = {"version": "v25.8.0"},
 )
 
 alias(

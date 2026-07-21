@@ -91,6 +91,35 @@ case "$WORKLOAD" in
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-small.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-small-restore.yaml"
         ;;
+    vllm-mp)
+        # E0 multi-GPU ladder: TinyLlama TP=1, multi-process EngineCore.
+        POD_NAME="vllm-mp"
+        CONTAINER_NAME="vllm"
+        RESTORE_POD_NAME="vllm-mp-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-mp.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-mp-restore.yaml"
+        ;;
+    vllm-tp2)
+        # E1 multi-GPU ladder: TinyLlama TP=2 eager. Force the CRIU engine
+        # with CAPTURE_PATH=criu-v2 (multi-GPU otherwise defaults to rootfs).
+        POD_NAME="vllm-tp2"
+        CONTAINER_NAME="vllm"
+        RESTORE_POD_NAME="vllm-tp2-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-tp2.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-tp2-restore.yaml"
+        ;;
     vllm-8b)
         POD_NAME="vllm-8b"
         CONTAINER_NAME="vllm"
@@ -433,6 +462,7 @@ import json, subprocess, sys
 need = int(sys.argv[1])
 nodes = json.loads(subprocess.check_output(["kubectl","get","nodes","-o","json"]))["items"]
 pods  = json.loads(subprocess.check_output(["kubectl","get","pods","-A","-o","json"]))["items"]
+candidates = []
 for n in nodes:
     if n["spec"].get("unschedulable"):
         continue  # skip cordoned nodes — pods with nodeName bypass the scheduler but cordon usually signals "do not place here"
@@ -451,8 +481,16 @@ for n in nodes:
             if v: used += int(v)
     free = alloc - used
     if free >= need:
-        print(n["metadata"]["name"])
-        sys.exit(0)
+        candidates.append((free, n["metadata"]["name"]))
+# Most-free-GPUs first, not first-fit: the restore placeholder is created
+# right after the source pod is deleted on the SAME node (nodeName pin). On a
+# barely-fitting node that delete->recreate hits the kubelet device-release
+# race (UnexpectedAdmissionError), and other tenants can eat the slack
+# mid-test. Headroom makes both failure modes vanish.
+if candidates:
+    candidates.sort(reverse=True)
+    print(candidates[0][1])
+    sys.exit(0)
 sys.exit(1)
 PY
 )

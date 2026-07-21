@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # nvsnap-blobstore Dockerfile — minimal Go binary, distroless runtime.
 #
 # Build context is the repo root: `docker build -f docker/nvsnap-blobstore/Dockerfile .`

@@ -31,10 +31,6 @@ otelconfig validation. Do not add a subtree `.gitlab-ci.yml`.
 
 ## Collector Version Updates
 
-Agents that can read Cursor project skills should load
-`.cursor/skills/update-otel-collector-version/SKILL.md` before changing
-collector versions.
-
 Use the script instead of editing version strings by hand:
 
 ```bash
@@ -45,8 +41,7 @@ Use the script instead of editing version strings by hand:
 
 The script updates version references in `otel-collector-build.yaml`,
 `AGENTS.md`, `README.md`, `Makefile`, `Dockerfile`,
-`Dockerfile.nvcf-otel-collector`, `scripts/regenerate-otelcol.sh`,
-`../../../ai-tooling/dev/skills/update-otel-collector-version/SKILL.md`, and
+`Dockerfile.nvcf-otel-collector`, `scripts/regenerate-otelcol.sh`, and
 `VERSION`. It also updates `.gitlab-ci.yml` when that file exists. Run it from
 the BYOO collector root. You can pass versions with or without the `v` prefix
 (for example, `v0.153.0` or `0.153.0`). Pass the optional `v1.x.y` provider

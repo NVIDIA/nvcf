@@ -6,6 +6,8 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "storage",
     srcs = [
+        "cachebackend.go",
+        "cachebackend_samba.go",
         "controller.go",
         "controller_modelcache.go",
         "modelcache.go",
@@ -37,6 +39,7 @@ go_library(
         "//pkg/nodefeatures",
         "//pkg/nvca/enforce/kaischeduler",
         "//pkg/nvca/health",
+        "//pkg/storage/cacheprobe",
         "//pkg/types",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
@@ -71,7 +74,6 @@ go_library(
         "//vendor/k8s.io/apimachinery/pkg/util/runtime",
         "//vendor/k8s.io/apimachinery/pkg/util/sets",
         "//vendor/k8s.io/apimachinery/pkg/util/strategicpatch",
-        "//vendor/k8s.io/apimachinery/pkg/util/wait",
         "//vendor/k8s.io/client-go/tools/record",
         "//vendor/k8s.io/client-go/util/retry",
         "//vendor/sigs.k8s.io/controller-runtime",
@@ -95,6 +97,8 @@ alias(
 go_test(
     name = "storage_test",
     srcs = [
+        "cachebackend_samba_test.go",
+        "cachebackend_test.go",
         "controller_test.go",
         "modelcache_cleanup_test.go",
         "modelcache_nvmesh_encrypt_test.go",
@@ -135,6 +139,7 @@ go_test(
         "//pkg/featureflag",
         "//pkg/featureflag/mock",
         "//pkg/nodefeatures",
+        "//pkg/storage/cacheprobe",
         "//pkg/types",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
@@ -166,6 +171,8 @@ go_test(
         "//vendor/sigs.k8s.io/controller-runtime",
         "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
         "//vendor/sigs.k8s.io/controller-runtime/pkg/client/fake",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/client/interceptor",
+        "//vendor/sigs.k8s.io/controller-runtime/pkg/config",
         "//vendor/sigs.k8s.io/controller-runtime/pkg/log",
         "//vendor/sigs.k8s.io/controller-runtime/pkg/manager",
         "//vendor/sigs.k8s.io/controller-runtime/pkg/reconcile",

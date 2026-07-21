@@ -98,7 +98,7 @@ func buildControllerModelCache(r *Reconciler, mgr ctrl.Manager, _ ControllerOpti
 		return acceptEvent
 	}))
 	fanOutEventHandler := handler.TypedEnqueueRequestsFromMapFunc(getModelCacheFanOutEventHandlerMapFunc(mgr.GetClient()))
-	return builder.
+	err := builder.
 		ControllerManagedBy(mgr).
 		Named(string(storageReqType)).
 		For(&nvcav1new.StorageRequest{}, fanOutPredicateOption).
@@ -108,6 +108,8 @@ func buildControllerModelCache(r *Reconciler, mgr ctrl.Manager, _ ControllerOpti
 		Watches(&coordv1.Lease{}, fanOutEventHandler).
 		Watches(&corev1.PersistentVolume{}, fanOutEventHandler).
 		Complete(r)
+	logf.Log.Info("buildControllerModelCache: controller registration complete", "type", string(storageReqType), "error", err)
+	return err
 }
 
 func checkModelCacheFanOutEvent(obj client.Object) (

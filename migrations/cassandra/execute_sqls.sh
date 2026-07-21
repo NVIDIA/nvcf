@@ -54,6 +54,10 @@ echo "Pre-processing SQL files with environment variable substitution..."
 echo "Allowed variables: ${ENVSUBST_VARS}"
 
 for keyspace_dir in /app/keyspaces/*; do
+  # Only directories are keyspaces. keyspaces/ also holds README.md, which would
+  # otherwise become a keyspace named README.md and fail the migrate call below.
+  [ -d "$keyspace_dir" ] || continue
+
   keyspace_name=$(basename "$keyspace_dir")
   mkdir -p "$TEMP_KEYSPACES/$keyspace_name"
 
@@ -73,6 +77,8 @@ echo "SQL files pre-processed successfully"
 #
 for each in $TEMP_KEYSPACES/*
 do
+  [ -d "${each}" ] || continue
+
   migration_table_name=`basename ${each}`
   echo "Applying ${each}"
   migrate \

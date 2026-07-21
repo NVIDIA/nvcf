@@ -134,12 +134,10 @@ build:remote --experimental_remote_cache_compression_threshold=100
 # In-memory Merkle tree cache. Subsequent action lookups for inputs we
 # have already hashed reuse the result instead of recomputing. Pure
 # latency win on warm Bazel servers; no correctness impact.
-build:remote --experimental_remote_merkle_tree_cache
 # Default size is 1000 entries, which we blow through on cold protobuf
 # / cross-compiled-Go builds (~1100 actions per arch). 10000 keeps the
 # whole graph resident; cost is a few MB of JVM heap (well under our
 # -Xmx4g budget).
-build:remote --experimental_remote_merkle_tree_cache_size=10000
 
 # Re-lease cache entries Bazel has already seen during a long build.
 # bb-storage evicts blobs by LRU/TTL; without this flag a build that
@@ -246,3 +244,8 @@ build:release --strip=always
 # endpoint, etc.
 try-import %workspace%/user.bazelrc
 try-import %user.home%/.bazelrc.user
+
+# Bazel 9.1.1 bumps the protobuf module to 33.x while toolchains_protoc 0.6.1
+# only ships up to v29 protoc; allow the version-skew (descriptor gen is
+# wire-compatible). Revisit when toolchains_protoc ships a v33 protoc.
+common --@com_google_protobuf//bazel/toolchains:allow_nonstandard_protoc

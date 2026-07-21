@@ -30,6 +30,7 @@ module(
 )
 
 bazel_dep(name = "rules_python", version = "1.4.1")
+bazel_dep(name = "rules_shell", version = "0.8.0")
 
 # ============================================================================
 # OCI containers (multi-arch). Used by go_oci_image for nvcf-cli.
@@ -61,14 +62,19 @@ python.toolchain(
 # and registers a proto_toolchain that points at it. The C++ build of
 # protoc is no longer reachable from any of our targets.
 #
-# Pinned alongside the protobuf module version (29.x) we resolve to.
+# Prebuilt protoc pin. Bazel 9.1.1 resolves the protobuf module to 33.4;
+# toolchains_protoc 0.6.1 (latest) ships v33.0 but not the 33.4 patch, so we pin
+# protoc v33.0 (same major, compiles 33.4's protos) and allow the 33.0-vs-33.4
+# skew via --allow_nonstandard_protoc in .bazelrc. protobuf is declared directly
+# with repo_name com_google_protobuf so that .bazelrc flag reference resolves.
 # ============================================================================
 bazel_dep(name = "toolchains_protoc", version = "0.6.1")
+bazel_dep(name = "protobuf", version = "33.4", repo_name = "com_google_protobuf")
 
 protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
 protoc.toolchain(
     google_protobuf = "com_google_protobuf",
-    version = "v29.0",
+    version = "v33.0",
 )
 
 # ============================================================================
@@ -154,8 +160,8 @@ use_repo(
 # repo here; see rules/java/README.md.
 # ============================================================================
 bazel_dep(name = "rules_java", version = "8.14.0")
-bazel_dep(name = "rules_jvm_external", version = "6.7")
-bazel_dep(name = "contrib_rules_jvm", version = "0.27.0")
+bazel_dep(name = "rules_jvm_external", version = "7.0")
+bazel_dep(name = "contrib_rules_jvm", version = "0.33.0")
 
 maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
 maven.install(
@@ -170,13 +176,14 @@ maven.install(
     ],
     lock_file = "//:maven_install.json",
     repositories = [
-        # Resolve through the internal Artifactory mirror, not public
-        # repo1.maven.org: the shared CI runner IP is rate-limited (429) on
-        # public Central, which fails go-lib-bazel-build-test on every MR.
-        # urm/artifactory/maven is the Central proxy + NVIDIA artifacts; the
-        # google mirror is a fallback.
-        "https://urm.nvidia.com/artifactory/maven",
+        # Public Central mirrors only. This is the public GitHub mirror; its
+        # hosted runners cannot resolve the internal Artifactory host, so the
+        # pinned closure must fetch from public repositories. The Google-hosted
+        # Central mirror is primary (not IP-rate-limited like repo1.maven.org);
+        # Maven Central is the fallback. Internal builds that need NVIDIA
+        # artifacts add the Artifactory virtual repo in their own overlay.
         "https://maven-central.storage-download.googleapis.com/maven2",
+        "https://repo.maven.apache.org/maven2",
     ],
 )
 use_repo(maven, "maven")

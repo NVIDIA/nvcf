@@ -49,6 +49,7 @@ type MetadataInput struct {
 	EnvVars                       []corev1.EnvVar
 	OTelCollectorEnvVars          []corev1.EnvVar
 	TerminationGracePeriodSeconds *int64
+	ModelCacheInitEnv             map[string]string
 }
 
 // buildMiniserviceMetadata constructs a MiniserviceMetadata from the controller's
@@ -84,6 +85,7 @@ func (r *Reconciler) buildMiniserviceMetadata(
 		Tolerations:                   r.cfg.Workload.Tolerations,
 		ImagePullSecretNames:          secretNames,
 		TerminationGracePeriodSeconds: in.TerminationGracePeriodSeconds,
+		ModelCacheInitEnv:             in.ModelCacheInitEnv,
 	}
 
 	meta.Labels, meta.Annotations = newGeneralObjectLabelsAndAnnotations(

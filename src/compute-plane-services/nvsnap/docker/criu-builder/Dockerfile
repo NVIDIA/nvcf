@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Build CRIU with compatible glibc
 # Ubuntu 22.04 has glibc 2.35 which works in most modern containers
 FROM ubuntu:22.04 AS builder

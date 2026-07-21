@@ -50,7 +50,12 @@ func TestNewK8sClient(t *testing.T) {
 			kcPath:      "",
 			currContext: "",
 			setupEnv: func() {
-				os.Setenv(clientcmd.RecommendedConfigPathEnvVar, "")
+				// Point at a path that cannot exist rather than "": an empty
+				// KUBECONFIG makes client-go fall back to ~/.kube/config, so on
+				// a machine with a real kubeconfig the client unexpectedly
+				// builds and the test fails. A nonexistent path keeps the
+				// intent (no usable kubeconfig) hermetic everywhere.
+				os.Setenv(clientcmd.RecommendedConfigPathEnvVar, "/nonexistent/kubeconfig")
 			},
 			cleanupEnv: func() {
 				os.Unsetenv(clientcmd.RecommendedConfigPathEnvVar)
