@@ -28,6 +28,15 @@ die() { printf '[relocate][error] %s\n' "$*" >&2; exit 1; }
 
 nested="$DATA_DIR/data"
 
+# Guard against an interrupted prior relocation: a leftover temp dir means a
+# previous run was cut off mid-move and the volume is half-relocated. Refuse
+# rather than silently reporting "nothing to do" (the nested parent may already
+# have been renamed away, so the detection below would miss it).
+for d in "$DATA_DIR"/.bitnami-relocate.*; do
+  [ -e "$d" ] || continue
+  die "detected interrupted relocation state at $d; resolve it before rerunning"
+done
+
 # Signature of the Bitnami nested layout: a data volume mounted at DATA_DIR
 # whose data/ subdirectory itself contains data/ and commitlog/. The OSS layout
 # has keyspace directories under data/ and never a data/commitlog or data/data.
@@ -40,7 +49,7 @@ if [ -d "$nested/data" ] && [ -d "$nested/commitlog" ]; then
 
   log "detected Bitnami nested layout under $nested"
   if [ "$DRY_RUN" = "true" ]; then
-    for e in "$nested"/*; do
+    for e in "$nested"/* "$nested"/.[!.]*; do
       [ -e "$e" ] || continue
       log "would move: $e -> $DATA_DIR/$(basename "$e")"
     done
