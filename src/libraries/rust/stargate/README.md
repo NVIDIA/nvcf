@@ -18,7 +18,9 @@ Two backend connectivity configurations are first-class:
 
 Set the same `--backend-connectivity=direct|reverse` topology on Stargate and
 pylon. The [local quickstart](docs/getting-started/local-quickstart.md) uses the
-Edge/direct path.
+Edge/direct path. On Stargate, a reverse listener
+(`--reverse-tunnel-listen-addr`) requires `--backend-connectivity=reverse`; the
+mismatched combination is rejected at startup.
 
 Pylon model membership is either an explicit repeatable `--model-name` set or,
 when that flag is omitted, a continuously discovered Dynamo `GET /v1/models`
