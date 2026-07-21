@@ -81,9 +81,10 @@ jobs:
         run: |
           set -euo pipefail
           # id|path|tests_skip. tests_skip notes:
-          #  root: //src/libraries/go/lib test issues
-          #    (icms-translate env-flaky, core_test goroutine leak) -- nvcf-go
-          #    team owns the test-layer cleanup.
+          #  root: tests run. Two known-flaky go-lib areas (pkg/core goroutine
+          #    leak, pkg/icms-translate env-flaky) are quarantined via
+          #    .github/bazel-root-test-quarantine.txt rather than skipping the
+          #    whole row; nvcf-go owns the test-layer fix (NVIDIA/nvcf#284).
           #  nvca: tests run. The failures tracked in NVIDIA/nvcf#238 were all
           #    test-layer and are fixed: the vendored dra-driver version stamp
           #    (x_defs on vendor/.../internal/info, mirroring the module
@@ -96,7 +97,7 @@ jobs:
           #    its own private agent image (not publicly pullable), so it is not
           #    externally buildable and is built only by its own internal CI.
           #    Excluded from the public build pending a public base (NVIDIA/nvcf#39).
-          ROWS='root|.|true
+          ROWS='root|.|false
           grpc-proxy|src/invocation-plane-services/grpc-proxy|false
           nats-auth-callout|src/control-plane-services/nats-auth-callout|false
           ratelimiter|src/invocation-plane-services/ratelimiter|false
@@ -426,6 +427,18 @@ jobs:
               printf '%s\n' "$tests" > "$ttfile"
               echo "tests: $(grep -c . "$ttfile") affected test target(s)"
             fi
+          fi
+          # Root test quarantine: subtract known-flaky packages (nvcf-go owns the
+          # test-layer fix; see the file header and NVIDIA/nvcf#284) from the root
+          # row's test set. Negative patterns are appended after the positive
+          # patterns so Bazel removes them from the resolved set. The file lives at
+          # the repo root, so it is present only for the root row (whose working
+          # directory is the repo root); other rows have no such file.
+          qfile=".github/bazel-root-test-quarantine.txt"
+          if [ -f "$qfile" ]; then
+            n=$(grep -cE '^[[:space:]]*-//' "$qfile" || true)
+            grep -E '^[[:space:]]*-//' "$qfile" | sed -E 's/^[[:space:]]+//' >> "$ttfile"
+            echo "quarantine: subtracted ${n:-0} pattern(s) from the root test set"
           fi
           COMMON=(--flaky_test_attempts=3)
           CACHE=(--remote_cache=)
