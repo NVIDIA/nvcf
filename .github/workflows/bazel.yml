@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           # id|path|tests_skip. tests_skip notes:
-          #  umbrella-phase1: //src/libraries/go/lib test issues
+          #  root: //src/libraries/go/lib test issues
           #    (icms-translate env-flaky, core_test goroutine leak) -- nvcf-go
           #    team owns the test-layer cleanup.
           #  nvca: tests run. The failures tracked in NVIDIA/nvcf#238 were all
@@ -95,7 +95,7 @@ jobs:
           #    its own private agent image (not publicly pullable), so it is not
           #    externally buildable and is built only by its own internal CI.
           #    Excluded from the public build pending a public base (NVIDIA/nvcf#39).
-          ROWS='umbrella-phase1|.|true
+          ROWS='root|.|true
           grpc-proxy|src/invocation-plane-services/grpc-proxy|false
           nats-auth-callout|src/control-plane-services/nats-auth-callout|false
           ratelimiter|src/invocation-plane-services/ratelimiter|false
@@ -107,9 +107,9 @@ jobs:
           image-credential-helper|src/compute-plane-services/image-credential-helper|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
           helm-reval|src/control-plane-services/helm-reval|false'
-          # Paths that affect the umbrella-phase1 workspace build (native
-          # Phase 1 roots plus the shared Bazel scaffold).
-          UMBRELLA_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/)
+          # Paths that affect the root-module workspace build (native
+          # root subtrees, Go and Java, plus the shared Bazel scaffold).
+          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/)
 
           run_all=false
           changed=""
@@ -142,7 +142,7 @@ jobs:
             if [ "$run_all" = "true" ]; then
               hit=true
             elif [ "$path" = "." ]; then
-              for g in "${UMBRELLA_GLOBS[@]}"; do
+              for g in "${ROOT_GLOBS[@]}"; do
                 # Fixed-string, start-of-line prefix test via awk index()==1:
                 # avoids treating the dots in .bazelrc/MODULE.bazel as regex
                 # wildcards and avoids any shell glob expansion of the token.
