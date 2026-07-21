@@ -117,7 +117,7 @@ jobs:
           helm-reval|src/control-plane-services/helm-reval|false'
           # Paths that affect the root-module workspace build (native
           # root subtrees, Go and Java, plus the shared Bazel scaffold).
-          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/)
+          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
