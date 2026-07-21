@@ -107,6 +107,12 @@ jobs:
           nvca|src/compute-plane-services/nvca|false
           ess-agent|src/compute-plane-services/ess-agent|false
           image-credential-helper|src/compute-plane-services/image-credential-helper|false
+          byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false
+          nvcf-unbound|src/compute-plane-services/nvcf-unbound|false
+          worker-init|src/compute-plane-services/worker-init|false
+          worker-llm-credentials|src/compute-plane-services/worker-llm-credentials|false
+          worker-task|src/compute-plane-services/worker-task|false
+          worker-utils|src/compute-plane-services/worker-utils|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
           helm-reval|src/control-plane-services/helm-reval|false'
           # Paths that affect the root-module workspace build (native
