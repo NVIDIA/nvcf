@@ -21,7 +21,7 @@ The cluster agent and operator emit Prometheus-style metrics. The following metr
 | nvca_cluster_group | The NVCA cluster group           |
 | nvca_version       | The NVCA version                 |
 
-Cluster maintainers can scrape the available metrics. See a full example of how to do this with an OpenTelemetry Collector in the cluster [here](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/cluster_monitoring_sample).
+Cluster maintainers can scrape the available metrics. See a full example of how to do this with an OpenTelemetry Collector in the cluster [here](https://github.com/NVIDIA/nvcf/tree/main/examples/cluster-monitoring-sample).
 
 Use the following examples of a PodMonitor for NVCA Operator and ServiceMonitor for NVCA for reference:
 

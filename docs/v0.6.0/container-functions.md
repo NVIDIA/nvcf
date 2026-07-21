@@ -43,7 +43,7 @@ Cloud Functions also expects the following directories in the container to remai
 
 ## Composing a FastAPI Container
 
-It's possible to use any container with Cloud Functions as long as it implements a server with the above endpoints. The below is an example of a FastAPI-based container compatible with Cloud Functions. Clone the [FastAPI echo example](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/function_samples/fastapi_echo_sample).
+It's possible to use any container with Cloud Functions as long as it implements a server with the above endpoints. The below is an example of a FastAPI-based container compatible with Cloud Functions. Clone the [FastAPI echo example](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/fastapi-echo-sample).
 
 ### Create the "requirements.txt" File
 
@@ -289,7 +289,7 @@ Create the function via the NVCF API. In this example, we defined the inference 
 
 ### Additional Examples
 
-See more examples of containers that are Cloud Functions compatible [in the function samples directory](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/function_samples/).
+See more examples of containers that are Cloud Functions compatible [in the function samples directory](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/).
 
 ## Creating gRPC-based Functions
 
@@ -300,7 +300,7 @@ Cloud Functions supports function invocation via gRPC. During function creation,
 - The function container must implement a gRPC port, endpoint and health check. The health check is expected to be served by the gRPC inference port, there is no need to define a separate health endpoint path.
 
   - See [gRPC health checking](https://grpc.io/docs/guides/health-checking/).
-  - See an [example container](https://github.com/NVIDIA/nv-cloud-function-helpers/blob/main/examples/function_samples/grpc_echo_sample/grpc_echo_server.py) with a gRPC server that is Cloud Functions compatible.
+  - See an [example container](https://github.com/NVIDIA/nvcf/blob/main/examples/function-samples/grpc-echo-sample/grpc_echo_server.py) with a gRPC server that is Cloud Functions compatible.
 
 ### gRPC Function Creation via API
 

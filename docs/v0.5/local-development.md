@@ -24,7 +24,7 @@ for details on mirroring artifacts to other registries.
 
 <Tip>
 A ready-to-use k3d configuration and setup script is available in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/self_hosted_local_development)
+[nv-cloud-function-helpers](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples)
 repository. Clone it and run `./setup.sh` to create the cluster with all prerequisites,
 then skip to [Deploy the NVCF Stack].
 
@@ -160,7 +160,7 @@ k3d handles LoadBalancer services automatically via its built-in `klipper-lb`.
 ## Step 2 (Environment file)
 
 Create a local development environment file from the template below
-([local-dev-env.yaml](samples/configs/local-dev-env.yaml)).
+([local-dev-env.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/local-dev-env.yaml)).
 Save it as `environments/<name>.yaml` (e.g., `environments/my-local.yaml`) in your
 `nvcf-self-managed-stack` directory.
 

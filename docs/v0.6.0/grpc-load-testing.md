@@ -37,12 +37,12 @@ The `grpc_echo_sample` from the same repository shares the
 </Note>
 
 The source, build instructions, and registry push examples are in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/function_samples/load_tester_supreme)
+[nv-cloud-function-helpers](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/load-tester-supreme)
 repository. Build and push the image to whichever container registry your
 cluster has credentials for:
 
 ```bash
-git clone https://github.com/NVIDIA/nv-cloud-function-helpers.git
+git clone https://github.com/NVIDIA/nvcf/tree/main/examples.git
 cd nv-cloud-function-helpers/examples/function_samples/load_tester_supreme
 
 # Build
@@ -115,7 +115,7 @@ The CLI saves the function and version IDs automatically. Run
 ## Clone the load test scripts
 
 ```bash
-git clone https://github.com/NVIDIA/nv-cloud-function-helpers.git
+git clone https://github.com/NVIDIA/nvcf/tree/main/examples.git
 cd nv-cloud-function-helpers/examples/load-tests
 ```
 

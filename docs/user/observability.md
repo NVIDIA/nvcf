@@ -295,7 +295,7 @@ Dashboards are provided in native Grafana JSON format for [file-provisioning](ht
 Load dashboards into Grafana by placing them in `/etc/grafana/provisioning/dashboards/` on startup.
 
 Published dashboards will be available in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers) public GitHub repository.
+[nv-cloud-function-helpers](https://github.com/NVIDIA/nvcf/tree/main/examples) public GitHub repository.
 
 ## Troubleshooting
 
