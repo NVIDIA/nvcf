@@ -29,6 +29,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testActionRead  Action = "test.resource.read"
+	testActionWrite Action = "test.resource.write"
+)
+
 func TestNoopAuthorizer(t *testing.T) {
 	authorizer := NewNoopAuthorizer()
 	ctx := context.Background()
@@ -42,7 +47,7 @@ func TestNoopAuthorizer(t *testing.T) {
 	t.Run("valid request is allowed", func(t *testing.T) {
 		req := &AuthRequest{
 			PrincipalID: "test-user",
-			Action:      ActionReadEvents,
+			Action:      testActionRead,
 			ResourceID:  "ledger-1",
 		}
 		res, err := authorizer.Authorize(ctx, req)
@@ -55,7 +60,7 @@ func TestNoopAuthorizer(t *testing.T) {
 
 	t.Run("empty principal defaults to anonymous", func(t *testing.T) {
 		req := &AuthRequest{
-			Action: ActionWriteEvents,
+			Action: testActionWrite,
 		}
 		res, err := authorizer.Authorize(ctx, req)
 		require.NoError(t, err)
@@ -74,6 +79,18 @@ func TestWebhookAuthorizer(t *testing.T) {
 		assert.Nil(t, authorizer)
 	})
 
+	t.Run("nil option returns error", func(t *testing.T) {
+		authorizer, err := NewWebhookAuthorizer("http://example.com", nil)
+		require.Error(t, err)
+		assert.Nil(t, authorizer)
+	})
+
+	t.Run("nil HTTP client returns error", func(t *testing.T) {
+		authorizer, err := NewWebhookAuthorizer("http://example.com", WithHTTPClient(nil))
+		require.Error(t, err)
+		assert.Nil(t, authorizer)
+	})
+
 	t.Run("successful allowed authorization", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, http.MethodPost, r.Method)
@@ -82,7 +99,7 @@ func TestWebhookAuthorizer(t *testing.T) {
 			var req AuthRequest
 			err := json.NewDecoder(r.Body).Decode(&req)
 			require.NoError(t, err)
-			assert.Equal(t, ActionReadEvents, req.Action)
+			assert.Equal(t, testActionRead, req.Action)
 
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(AuthResult{
@@ -96,7 +113,7 @@ func TestWebhookAuthorizer(t *testing.T) {
 		authorizer, err := NewWebhookAuthorizer(server.URL)
 		require.NoError(t, err)
 
-		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: ActionReadEvents})
+		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: testActionRead})
 		require.NoError(t, err)
 		require.NotNil(t, res)
 		assert.True(t, res.Allowed)
@@ -113,12 +130,12 @@ func TestWebhookAuthorizer(t *testing.T) {
 		authorizer, err := NewWebhookAuthorizer(server.URL)
 		require.NoError(t, err)
 
-		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: ActionReadEvents})
+		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: testActionRead})
 		require.ErrorIs(t, err, ErrUnauthorized)
 		assert.Nil(t, res)
 	})
 
-	t.Run("webhook returns forbidden status", func(t *testing.T) {
+	t.Run("webhook returns forbidden status with empty body", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 		}))
@@ -127,29 +144,108 @@ func TestWebhookAuthorizer(t *testing.T) {
 		authorizer, err := NewWebhookAuthorizer(server.URL)
 		require.NoError(t, err)
 
-		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: ActionReadEvents})
+		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: testActionRead})
 		require.NoError(t, err)
 		require.NotNil(t, res)
 		assert.False(t, res.Allowed)
 		assert.Equal(t, "forbidden by policy", res.Reason)
 	})
 
-	t.Run("webhook returns unexpected status code", func(t *testing.T) {
+	t.Run("webhook returns forbidden status with body", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("policy: read access denied for org"))
 		}))
 		defer server.Close()
 
 		authorizer, err := NewWebhookAuthorizer(server.URL)
 		require.NoError(t, err)
 
-		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: ActionReadEvents})
+		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: testActionRead})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.False(t, res.Allowed)
+		assert.Equal(t, "policy: read access denied for org", res.Reason)
+	})
+
+	t.Run("webhook returns unexpected status code with body", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("upstream unavailable"))
+		}))
+		defer server.Close()
+
+		authorizer, err := NewWebhookAuthorizer(server.URL)
+		require.NoError(t, err)
+
+		res, err := authorizer.Authorize(ctx, &AuthRequest{Action: testActionRead})
+		require.ErrorIs(t, err, ErrAuthorizerInternal)
+		assert.Contains(t, err.Error(), "upstream unavailable")
+		assert.Nil(t, res)
+	})
+
+	t.Run("307 redirect does not replay POST to redirect target", func(t *testing.T) {
+		redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// A replay reaching here would be a credential leak.
+			t.Error("redirect target must never receive the POST")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer redirectTarget.Close()
+
+		primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, redirectTarget.URL, http.StatusTemporaryRedirect)
+		}))
+		defer primary.Close()
+
+		authorizer, err := NewWebhookAuthorizer(primary.URL)
+		require.NoError(t, err)
+
+		res, err := authorizer.Authorize(ctx, &AuthRequest{
+			Action:     testActionRead,
+			Credential: "secret-token",
+		})
+		// The no-redirect policy causes the client to return the redirect response
+		// directly, which is neither 200/401/403, so we expect ErrAuthorizerInternal.
 		require.ErrorIs(t, err, ErrAuthorizerInternal)
 		assert.Nil(t, res)
 	})
 
+	t.Run("308 redirect does not replay POST to redirect target", func(t *testing.T) {
+		redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("redirect target must never receive the POST")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer redirectTarget.Close()
+
+		primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, redirectTarget.URL, http.StatusPermanentRedirect)
+		}))
+		defer primary.Close()
+
+		authorizer, err := NewWebhookAuthorizer(primary.URL)
+		require.NoError(t, err)
+
+		res, err := authorizer.Authorize(ctx, &AuthRequest{
+			Action:     testActionRead,
+			Credential: "secret-token",
+		})
+		require.ErrorIs(t, err, ErrAuthorizerInternal)
+		assert.Nil(t, res)
+	})
+
+	t.Run("injected client without redirect policy gets no-redirect applied", func(t *testing.T) {
+		// A client with no CheckRedirect set should have noRedirectPolicy applied by the constructor.
+		injected := &http.Client{Timeout: 5 * time.Second}
+		authorizer, err := NewWebhookAuthorizer("http://127.0.0.1:0", WithHTTPClient(injected))
+		require.NoError(t, err)
+		assert.NotNil(t, authorizer.client.CheckRedirect)
+	})
+
 	t.Run("custom HTTP client configuration", func(t *testing.T) {
-		customClient := &http.Client{Timeout: 1 * time.Millisecond}
+		customClient := &http.Client{
+			Timeout:       1 * time.Millisecond,
+			CheckRedirect: noRedirectPolicy,
+		}
 		authorizer, err := NewWebhookAuthorizer("http://127.0.0.1:0", WithHTTPClient(customClient))
 		require.NoError(t, err)
 		assert.Equal(t, customClient, authorizer.client)

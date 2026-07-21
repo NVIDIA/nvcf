@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -35,13 +36,8 @@ var (
 )
 
 // Action represents the permission or operation being requested.
+// Consuming services should define their own Action constants in their own packages.
 type Action string
-
-const (
-	ActionReadEvents  Action = "eventledger.events.read"
-	ActionWriteEvents Action = "eventledger.events.write"
-	ActionAdmin       Action = "eventledger.admin"
-)
 
 // AuthRequest encapsulates the identity, action, and target resource for an authorization check.
 type AuthRequest struct {
@@ -100,6 +96,13 @@ func (a *NoopAuthorizer) Authorize(ctx context.Context, req *AuthRequest) (*Auth
 	}, nil
 }
 
+// noRedirectPolicy is an http.Client.CheckRedirect function that refuses all redirects.
+// This prevents 307/308 responses from replaying a POST carrying AuthRequest.Credential
+// to an unintended redirect target.
+func noRedirectPolicy(_ *http.Request, _ []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
 // WebhookAuthorizer implements Authorizer by delegating access evaluation to an external HTTP service.
 type WebhookAuthorizer struct {
 	client      *http.Client
@@ -110,6 +113,7 @@ type WebhookAuthorizer struct {
 type WebhookOption func(*WebhookAuthorizer)
 
 // WithHTTPClient sets a custom HTTP client for the webhook authorizer.
+// The provided client must not be nil.
 func WithHTTPClient(client *http.Client) WebhookOption {
 	return func(w *WebhookAuthorizer) {
 		w.client = client
@@ -117,6 +121,7 @@ func WithHTTPClient(client *http.Client) WebhookOption {
 }
 
 // NewWebhookAuthorizer initializes a WebhookAuthorizer targeting the provided endpoint URL.
+// It returns an error if endpointURL is empty, any option is nil, or the resolved HTTP client is nil.
 func NewWebhookAuthorizer(endpointURL string, opts ...WebhookOption) (*WebhookAuthorizer, error) {
 	if endpointURL == "" {
 		return nil, errors.New("webhook endpoint URL must not be empty")
@@ -124,11 +129,22 @@ func NewWebhookAuthorizer(endpointURL string, opts ...WebhookOption) (*WebhookAu
 	w := &WebhookAuthorizer{
 		endpointURL: endpointURL,
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:       10 * time.Second,
+			CheckRedirect: noRedirectPolicy,
 		},
 	}
 	for _, opt := range opts {
+		if opt == nil {
+			return nil, errors.New("webhook option must not be nil")
+		}
 		opt(w)
+	}
+	if w.client == nil {
+		return nil, errors.New("webhook HTTP client must not be nil")
+	}
+	// Enforce no-redirect policy on injected clients that do not set one.
+	if w.client.CheckRedirect == nil {
+		w.client.CheckRedirect = noRedirectPolicy
 	}
 	return w, nil
 }
@@ -141,34 +157,43 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, req *AuthRequest) (*A
 
 	bodyBytes, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to marshal auth request: %v", ErrAuthorizerInternal, err)
+		return nil, fmt.Errorf("%w: failed to marshal auth request: %w", ErrAuthorizerInternal, err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, w.endpointURL, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to create HTTP request: %v", ErrAuthorizerInternal, err)
+		return nil, fmt.Errorf("%w: failed to create HTTP request: %w", ErrAuthorizerInternal, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := w.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("%w: webhook request failed: %v", ErrAuthorizerInternal, err)
+		return nil, fmt.Errorf("%w: webhook request failed: %w", ErrAuthorizerInternal, err)
 	}
 	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read webhook response body: %w", ErrAuthorizerInternal, err)
+	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, ErrUnauthorized
 	}
 	if resp.StatusCode == http.StatusForbidden {
-		return &AuthResult{Allowed: false, Reason: "forbidden by policy"}, nil
+		reason := "forbidden by policy"
+		if len(respBody) > 0 {
+			reason = string(respBody)
+		}
+		return &AuthResult{Allowed: false, Reason: reason}, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: unexpected status code %d from webhook", ErrAuthorizerInternal, resp.StatusCode)
+		return nil, fmt.Errorf("%w: unexpected status %d from webhook: %s", ErrAuthorizerInternal, resp.StatusCode, respBody)
 	}
 
 	var result AuthResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("%w: failed to decode webhook response: %v", ErrAuthorizerInternal, err)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("%w: failed to decode webhook response: %w", ErrAuthorizerInternal, err)
 	}
 
 	return &result, nil
