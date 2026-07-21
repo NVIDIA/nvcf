@@ -240,7 +240,9 @@ jobs:
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
             # Upload results only from main pushes; every other trigger
             # (PRs) is read-only so it can never poison the cache.
-            if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            # TEMP(cache-warm proof): also upload from this test branch so we can
+            # confirm a root warm-write persists and a re-run hits. Revert before merge.
+            if { [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; } || [ "${{ github.head_ref }}" = "ci/rename-root-matrix-row" ]; then
               echo "CACHE_UPLOAD=true" >> "$GITHUB_ENV"
             else
               echo "CACHE_UPLOAD=false" >> "$GITHUB_ENV"
