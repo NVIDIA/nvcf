@@ -8,6 +8,7 @@ regenerate this file by running:
 
 The following third-party licenses are included in this repository:
 
+    deploy/helm/cassandra/NOTICE
     deploy/helm/container-cache/NOTICE
     deploy/helm/nats/NOTICE
     deploy/helm/openbao/NOTICE
