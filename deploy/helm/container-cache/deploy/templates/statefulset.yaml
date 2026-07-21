@@ -163,8 +163,11 @@ spec:
             # transfer load it times out and kubelet kills a proxy that is
             # merely busy - aborting every in-flight transfer and amplifying
             # the load into a restart loop. A TCP accept is completed by the
-            # kernel as long as nginx holds the listener, so liveness fails
-            # only when the process is actually dead or wedged.
+            # kernel while nginx holds the listener, so this probe detects
+            # only a dead process or closed listener. A proxy that is busy
+            # (or even internally wedged but still listening) is deliberately
+            # not restarted: restarts cannot fix overload, and readiness
+            # below isolates such a pod from new traffic instead.
             tcpSocket:
               port: http
             timeoutSeconds: {{ ((.Values.probes).liveness).timeoutSeconds | default 5 }}

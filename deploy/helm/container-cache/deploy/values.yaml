@@ -69,9 +69,11 @@ cache:
 # healthz port: HTTP liveness is answered by the same worker processes that
 # serve the data plane, and under sustained heavy transfer load it times out
 # and restarts a proxy that is merely busy, aborting all in-flight transfers
-# and amplifying load into a restart loop. TCP fails only when the listener is
-# gone (process dead or wedged). Readiness stays HTTP on /healthz so an
-# overloaded pod sheds new traffic (degrade) without being killed (crash).
+# and amplifying load into a restart loop. The TCP probe detects only a dead
+# process or closed listener - a busy (or even wedged-but-listening) proxy is
+# deliberately not restarted, because restarts cannot fix overload. Readiness
+# stays HTTP on /healthz so an overloaded pod sheds new traffic (degrades)
+# without being killed (crashes).
 probes:
   liveness:
     timeoutSeconds: 5
