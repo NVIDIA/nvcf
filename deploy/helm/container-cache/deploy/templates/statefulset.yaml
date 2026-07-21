@@ -158,8 +158,14 @@ spec:
               containerPort: 9145
               protocol: TCP
           livenessProbe:
-            httpGet:
-              path: /healthz
+            # TCP, not HTTP: an HTTP probe is answered by the same worker
+            # processes that serve the data plane, so under sustained heavy
+            # transfer load it times out and kubelet kills a proxy that is
+            # merely busy - aborting every in-flight transfer and amplifying
+            # the load into a restart loop. A TCP accept is completed by the
+            # kernel as long as nginx holds the listener, so liveness fails
+            # only when the process is actually dead or wedged.
+            tcpSocket:
               port: http
             timeoutSeconds: {{ ((.Values.probes).liveness).timeoutSeconds | default 5 }}
             periodSeconds: {{ ((.Values.probes).liveness).periodSeconds | default 10 }}

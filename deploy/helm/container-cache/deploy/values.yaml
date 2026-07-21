@@ -57,20 +57,22 @@ cache:
   # tripped the liveness probe.
   workerConnection: 16384
 
-# Liveness/readiness probe tuning for the nginx-proxy container. /healthz is
-# served on a dedicated port but by the same worker processes, so under heavy
-# load a 1s timeout can fail and restart the pod mid-transfer. Liveness is kept
-# lenient so only a wedged proxy is restarted; readiness is tighter so an
-# overloaded pod can shed traffic without being killed.
+# Probe tuning for the nginx-proxy container. Liveness is a TCP accept on the
+# healthz port: HTTP liveness is answered by the same worker processes that
+# serve the data plane, and under sustained heavy transfer load it times out
+# and restarts a proxy that is merely busy, aborting all in-flight transfers
+# and amplifying load into a restart loop. TCP fails only when the listener is
+# gone (process dead or wedged). Readiness stays HTTP on /healthz so an
+# overloaded pod sheds new traffic (degrade) without being killed (crash).
 probes:
   liveness:
     timeoutSeconds: 5
     periodSeconds: 10
     failureThreshold: 6
   readiness:
-    timeoutSeconds: 3
+    timeoutSeconds: 5
     periodSeconds: 10
-    failureThreshold: 3
+    failureThreshold: 5
 
 # Resource requests/limits for nginx-proxy container.
 resources:
