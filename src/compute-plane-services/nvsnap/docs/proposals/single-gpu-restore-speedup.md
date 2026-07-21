@@ -5,7 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 # Single-GPU restore speedup (target: -80%)
 
 Status: Lever A is implemented, measured, and merged (see MEASURED below).
-Levers B and C are proposed, not yet implemented. The decision to build A+B and
+Lever B's combined "resume" invocation (restore+unlock in one cuda-checkpoint
+spawn) is implemented and measured; eliminating get-restore-tid via a /proc scan
+is remaining medium work, and per-pid context parallelization is deferred hard
+work. Lever C is proposed, not implemented. The decision to build A+B and
 defer C is locked (see Decision). Numbers are measured on aws-dev1 (driver
 580.126, p5 H100, criu-v2 engine).
 
@@ -155,9 +158,10 @@ investigation (see open questions) rather than block A+B on it.
 1. Instrument (planned): OTel spans for pages-restore vs per-pid cuda-restore so
    the split is a dashboard number, not a one-off log parse (extends #114-#116).
 2. Lever A (madvise huge pages) in the CRIU fork -- DONE, merged, regression-gated.
-3. Lever B (parallelize + de-latency the plugin) -- planned; measure real GPU
-   overlap first; keep the handshake-latency removal even if context creation
-   serializes.
+3. Lever B (parallelize + de-latency the plugin) -- resume-coalesce (restore +
+   unlock in one spawn) DONE and shipped; get-restore-tid /proc scan and per-pid
+   context parallelization still remaining. Measure real GPU overlap first; keep
+   the handshake-latency removal even if context creation serializes.
 4. Lever C only if the target is same-node -- deferred; larger, touches agent
    lifecycle (donor freeze/thaw, standby accounting) and NVCA (warm-pool
    semantics).

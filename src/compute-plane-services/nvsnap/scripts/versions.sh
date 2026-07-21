@@ -40,8 +40,8 @@ if [ -z "${NVSNAP_CRIU_SRC:-}" ]; then
 fi
 NVSNAP_CRIU_SRC="${NVSNAP_CRIU_SRC:-}"
 
-# Core images — all on a fresh v0.0.1 baseline. Bump per CLAUDE.md
-# rule 19 (never reuse a tag on rebuild).
+# Core images — reset to a v0.0.1 baseline on 2026-05-21 and bumped from
+# there per CLAUDE.md rule 19 (never reuse a tag on rebuild).
 NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.15}"
 NVSNAP_APP_VERSION="${NVSNAP_APP_VERSION:-v0.2.26}"
 NVSNAP_SERVER_VERSION="${NVSNAP_SERVER_VERSION:-v0.0.31}"

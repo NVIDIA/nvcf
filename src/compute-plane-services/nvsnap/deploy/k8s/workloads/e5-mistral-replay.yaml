@@ -41,10 +41,11 @@ spec:
     - name: nvcr-regcred
 
   initContainers:
-    # Bundle staging via init container (legacy pattern) so this
-    # manifest doesn't depend on the v0.0.20 DaemonSet hostPath being
-    # in place. Source image is the agent v0.0.20 — same restore-entrypoint
-    # binary the production deploy will use.
+    # Bundle staging via init container (legacy pattern) so this manifest
+    # doesn't depend on the agent DaemonSet hostPath being in place. Source
+    # image is the nvsnap-agent tag below (kept current by
+    # scripts/sync-versions.sh) — same restore-entrypoint binary the
+    # production deploy uses.
     - name: get-criu
       image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.26
       imagePullPolicy: IfNotPresent
