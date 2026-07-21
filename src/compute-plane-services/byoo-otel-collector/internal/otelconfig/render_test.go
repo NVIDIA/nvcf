@@ -18,9 +18,9 @@ limitations under the License.
 package otelconfig
 
 import (
-	"testing"
-
 	"fmt"
+	"os"
+	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
@@ -94,6 +94,99 @@ func TestRenderOtelConfig(t *testing.T) {
 				t.Errorf("Expected config, got none")
 			}
 		})
+	}
+}
+
+func TestRenderOtelConfigWithSREMetricsPipeline(t *testing.T) {
+	gotCfg, err := RenderOtelConfigFromBytes(
+		[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "example-metrics"}}}`),
+		TemplateConfig{
+			BackendType:       K8s,
+			WorkloadType:      Container,
+			Namespace:         "sr-fake-namespace",
+			FunctionID:        "fake-function-id",
+			FunctionVersionID: "fake-function-version-id",
+			InstanceID:        "fake-instance-id",
+			ZoneName:          "fake-zone-name",
+			SREMetrics: SREMetricsConfig{
+				Enabled:                   true,
+				FilterConfig:              defaultSREMetricsFilterConfig(),
+				CustomerMetricsDropLabels: defaultCustomerMetricsDropLabels,
+			},
+		},
+	)
+
+	assert.NoError(t, err)
+
+	otelConfig := &OpenTelemetryConfig{}
+	err = yaml.Unmarshal(gotCfg, otelConfig)
+	assert.NoError(t, err)
+	assert.Contains(t, otelConfig.Exporters, sreMetricsExporterID)
+	assert.Contains(t, otelConfig.Processors, sreMetricsFilterProcessorID)
+	assert.Contains(t, otelConfig.Processors, sreMetricsBatchProcessorID)
+	assert.Equal(t, []string{"otlp"}, otelConfig.Service.Pipelines["metrics/sre"].Receivers)
+	assert.Equal(t, []string{sreMetricsExporterID}, otelConfig.Service.Pipelines["metrics/sre"].Exporters)
+	assert.Equal(t, []string{
+		"memory_limiter",
+		sreMetricsFilterProcessorID,
+		"resource",
+		"metrics_transform",
+		sreMetricsBatchProcessorID,
+	}, otelConfig.Service.Pipelines["metrics/sre"].Processors)
+}
+
+func TestRenderOtelConfigWithSREMetricsPipelineMatchesExample(t *testing.T) {
+	t.Setenv("ESS_SECRETS_PATH", "")
+
+	gotCfg, err := RenderOtelConfigFromBytes(
+		[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://customer-metrics.example.invalid/api/v1/write", "name": "customer-metrics"}}}`),
+		TemplateConfig{
+			BackendType:       K8s,
+			WorkloadType:      Container,
+			Namespace:         "sr-fake-namespace",
+			FunctionID:        "fake-function-id",
+			FunctionVersionID: "fake-function-version-id",
+			InstanceID:        "fake-instance-id",
+			ZoneName:          "fake-zone-name",
+			SREMetrics: SREMetricsConfig{
+				Enabled:                   true,
+				FilterConfig:              defaultSREMetricsFilterConfig(),
+				CustomerMetricsDropLabels: defaultCustomerMetricsDropLabels,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("failed to render SRE metrics config: %v", err)
+	}
+
+	const examplePath = "../../examples/otelconfigs/k8s/config_function_container_sre_metrics.yaml"
+	if os.Getenv("UPDATE_SRE_METRICS_EXAMPLE") == "true" {
+		if err := os.WriteFile(examplePath, gotCfg, 0o644); err != nil {
+			t.Fatalf("failed to update SRE metrics example config: %v", err)
+		}
+	}
+
+	expectedCfg, err := os.ReadFile(examplePath)
+	if err != nil {
+		t.Fatalf("failed to read SRE metrics example config: %v", err)
+	}
+
+	assertYAMLConfigEqual(t, expectedCfg, gotCfg)
+}
+
+func assertYAMLConfigEqual(t *testing.T, expectedYAML, actualYAML []byte) {
+	t.Helper()
+
+	var actualMap, expectedMap map[string]interface{}
+	if err := yaml.Unmarshal(actualYAML, &actualMap); err != nil {
+		t.Fatalf("failed to unmarshal actual YAML to map: %v", err)
+	}
+	if err := yaml.Unmarshal(expectedYAML, &expectedMap); err != nil {
+		t.Fatalf("failed to unmarshal expected YAML to map: %v", err)
+	}
+
+	if !assert.Equal(t, expectedMap, actualMap) {
+		t.Errorf("transformed OtelConfig mismatch:\nExpected OtelConfig YAML:\n%s\n\nActual OtelConfigYAML:\n%s", string(expectedYAML), string(actualYAML))
 	}
 }
 
@@ -392,6 +485,113 @@ func TestGenerateExportersAndServiceUsesCustomLogExporterBatchMaxSize(t *testing
 			"max_size":      2_000_000,
 		},
 	}, exporter["sending_queue"])
+}
+
+func TestGenerateExportersAndServiceAddsSREMetricsPipeline(t *testing.T) {
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Metrics: &Telemetry{
+				Name:     "example-metrics",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderPrometheus,
+				Endpoint: "https://metrics.example.invalid/api/v1/write",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+	otelConfig.Processors["batch"] = map[string]interface{}{
+		"send_batch_size":     4096,
+		"timeout":             "400ms",
+		"send_batch_max_size": 8192,
+	}
+	filterConfig := map[string]interface{}{
+		"error_mode": "ignore",
+		"metric_conditions": []string{
+			`metric.name != "RtdInstrument"`,
+		},
+	}
+
+	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
+		Namespace: "test-namespace",
+		SREMetrics: SREMetricsConfig{
+			Enabled:                   true,
+			FilterConfig:              filterConfig,
+			CustomerMetricsDropLabels: []string{"sre_metrics_enabled"},
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, map[string]interface{}{
+		"endpoint": "${env:OTEL_POD_IP:-0.0.0.0}:19091",
+		"resource_to_telemetry_conversion": map[string]interface{}{
+			"enabled": true,
+		},
+		"send_timestamps":     true,
+		"metric_expiration":   "5m",
+		"enable_open_metrics": true,
+	}, otelConfig.Exporters[sreMetricsExporterID])
+	assert.Equal(t, filterConfig, otelConfig.Processors[sreMetricsFilterProcessorID])
+	assert.Equal(t, otelConfig.Processors["batch"], otelConfig.Processors[sreMetricsBatchProcessorID])
+
+	customerMetricsPipeline := otelConfig.Service.Pipelines["metrics"]
+	assert.Equal(t, []string{"otlp", "prometheus"}, customerMetricsPipeline.Receivers)
+	assert.Equal(t, []string{"prometheusremotewrite/PROMETHEUS-example-metrics-metrics"}, customerMetricsPipeline.Exporters)
+	assert.Equal(t, []string{
+		"memory_limiter",
+		"filter/metrics",
+		"resource",
+		customerMetricsDropLabelsProcessorID,
+		"metrics_transform",
+		"batch",
+	}, customerMetricsPipeline.Processors)
+	assert.NotContains(t, customerMetricsPipeline.Processors, sreMetricsFilterProcessorID)
+	assert.Equal(t, map[string]interface{}{
+		"attributes": []map[string]interface{}{
+			{
+				"key":    "sre_metrics_enabled",
+				"action": "delete",
+			},
+		},
+	}, otelConfig.Processors[customerMetricsDropLabelsProcessorID])
+
+	sreMetricsPipeline := otelConfig.Service.Pipelines["metrics/sre"]
+	assert.Equal(t, []string{"otlp"}, sreMetricsPipeline.Receivers)
+	assert.Equal(t, []string{sreMetricsExporterID}, sreMetricsPipeline.Exporters)
+	assert.Equal(t, []string{
+		"memory_limiter",
+		sreMetricsFilterProcessorID,
+		"resource",
+		"metrics_transform",
+		sreMetricsBatchProcessorID,
+	}, sreMetricsPipeline.Processors)
+}
+
+func TestGenerateExportersAndServiceDoesNotAddSREMetricsPipelineWithoutCustomerMetrics(t *testing.T) {
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Logs: &Telemetry{
+				Name:     "example-logs",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderSplunk,
+				Endpoint: "https://splunk.example.invalid",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+
+	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
+		Namespace: "test-namespace",
+		SREMetrics: SREMetricsConfig{
+			Enabled: true,
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.NotContains(t, otelConfig.Exporters, sreMetricsExporterID)
+	assert.NotContains(t, otelConfig.Processors, sreMetricsFilterProcessorID)
+	assert.NotContains(t, otelConfig.Service.Pipelines, "metrics/sre")
 }
 
 // Test_exporterMetrics_Datadog_KeepsFirstCumulativeSample is a regression test

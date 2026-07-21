@@ -7,6 +7,7 @@ go 1.25.0
 require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/azuremonitorexporter v0.153.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/datadogexporter v0.153.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusexporter v0.153.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter v0.153.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/splunkhecexporter v0.153.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/extension/basicauthextension v0.153.0
