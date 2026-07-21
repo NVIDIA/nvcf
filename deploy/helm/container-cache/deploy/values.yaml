@@ -56,6 +56,14 @@ cache:
   # under heavy concurrent large transfers, which starved even /healthz and
   # tripped the liveness probe.
   workerConnection: 16384
+  # Size of the nginx "default" thread pool (aio threads / aio_write). Sized
+  # to absorb backing-store latency: threads park on slow IO so worker event
+  # loops never block on disk and health endpoints stay answerable.
+  aioThreads: 64
+  # Concurrent-connection cap on the model-download server block. Excess
+  # requests fail fast with 503 (ranged download clients retry per chunk)
+  # instead of queuing on a storage-bound tier. 0 disables the cap.
+  maxConnsPerServer: 512
 
 # Probe tuning for the nginx-proxy container. Liveness is a TCP accept on the
 # healthz port: HTTP liveness is answered by the same worker processes that
