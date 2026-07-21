@@ -115,6 +115,34 @@ agentConfig:
   # mergeConfig: |
   #   agent:
   #     logLevel: debug
+  #     byooLogChunking:
+  #       enabled: true
+  #     byooDebugMode:
+  #       enabled: true
+  #     byooOtelCollector:
+  #       exporterHelper:
+  #         timeout: 30s
+  #         sendingQueue:
+  #           batch:
+  #             flushTimeout: 200ms
+  #             sizer: bytes
+  #             minSize: 1000000
+  #             maxSize: 1000000
+  #
+  # BYOO metric subset example:
+  #
+  # mergeConfig: |
+  #   agent:
+  #     byooMetricSubset:
+  #       enabled: true
+  #       filterConfig: |
+  #         error_mode: ignore
+  #         metric_conditions:
+  #           - 'metric.name != "BpsInstrument"'
+  #     byooWorkloadMetrics:
+  #       dropLabels:
+  #         - metric_subset_enabled
+  #         - custom_label
 
 ## @section resources Resource requests and limits for the nvca-operator container
 ## @param resources.limits.cpu CPU limit for the nvca-operator container

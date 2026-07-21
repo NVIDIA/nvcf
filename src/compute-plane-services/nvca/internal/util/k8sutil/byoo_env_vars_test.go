@@ -26,15 +26,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-func TestAddBYOOEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) {
+func TestAddBYOOOTelCollectorEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) {
 	envs := []corev1.EnvVar{
+		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
-		{Name: nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
+		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
 	}
 	expectedEnv := []corev1.EnvVar{
 		{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
-		{Name: nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
+		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
 	}
 	pod := &corev1.Pod{
@@ -51,7 +53,7 @@ func TestAddBYOOEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) 
 		},
 	}
 
-	AddBYOOEnvVarsToPodSpec(&pod.Spec, envs)
+	AddBYOOOTelCollectorEnvVarsToPodSpec(&pod.Spec, envs)
 
 	assert.Equal(t, expectedEnv, pod.Spec.Containers[0].Env)
 	assert.Empty(t, pod.Spec.Containers[1].Env)

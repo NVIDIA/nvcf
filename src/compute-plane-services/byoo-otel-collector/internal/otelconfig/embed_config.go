@@ -49,12 +49,12 @@ type TemplateConfig struct {
 	LogChunking       LogChunkingConfig
 	MetricSubset      MetricSubsetConfig
 	WorkloadMetrics   WorkloadMetricsConfig
-	// LogExporterBatchMaxSizeBytes configures exporterhelper byte batching for logs.
-	// Zero uses the default selected for BYOO.
-	LogExporterBatchMaxSizeBytes int
+	OTelCollector     OTelCollectorConfig
+	DebugMode         bool
 }
 
 type LogChunkingConfig struct {
+	Enabled      bool
 	MaxBodyBytes int
 	DryRun       bool
 }

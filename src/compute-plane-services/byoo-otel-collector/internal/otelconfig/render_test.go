@@ -137,6 +137,31 @@ func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
 	}, otelConfig.Service.Pipelines["metrics/metric_subset"].Processors)
 }
 
+func TestRenderOtelConfigWithDebugMode(t *testing.T) {
+	gotCfg, err := RenderOtelConfigFromBytes(
+		[]byte(`{"telemetries": {"logsTelemetry": {"protocol": "HTTP", "provider": "SPLUNK", "endpoint": "https://logs.example.invalid", "name": "example-logs"}, "metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "example-metrics"}}}`),
+		TemplateConfig{
+			BackendType:       K8s,
+			WorkloadType:      Container,
+			Namespace:         "sr-fake-namespace",
+			FunctionID:        "fake-function-id",
+			FunctionVersionID: "fake-function-version-id",
+			DebugMode:         true,
+		},
+	)
+
+	assert.NoError(t, err)
+
+	otelConfig := &OpenTelemetryConfig{}
+	err = yaml.Unmarshal(gotCfg, otelConfig)
+	assert.NoError(t, err)
+	assert.Contains(t, otelConfig.Exporters, "debug")
+	assert.Equal(t, "debug", otelConfig.Service.Telemetry["logs"]["level"])
+	assert.Equal(t, true, otelConfig.Service.Telemetry["logs"]["development"])
+	assert.Contains(t, otelConfig.Service.Pipelines["logs"].Exporters, "debug")
+	assert.Contains(t, otelConfig.Service.Pipelines["metrics"].Exporters, "debug")
+}
+
 func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
 	t.Setenv("ESS_SECRETS_PATH", "")
 
@@ -448,16 +473,10 @@ func TestGenerateExportersAndServiceAddsLogChunkProcessor(t *testing.T) {
 		"enabled":       true,
 		"num_consumers": 10,
 		"queue_size":    1000,
-		"batch": map[string]interface{}{
-			"flush_timeout": "200ms",
-			"sizer":         "bytes",
-			"min_size":      defaultLogExporterBatchMaxSizeBytes,
-			"max_size":      defaultLogExporterBatchMaxSizeBytes,
-		},
 	}, exporter["sending_queue"])
 }
 
-func TestGenerateExportersAndServiceUsesCustomLogExporterBatchMaxSize(t *testing.T) {
+func TestGenerateExportersAndServiceAddsLogChunkDefaultsWhenEnabled(t *testing.T) {
 	cfg := TelemetryConfig{
 		Telemetries: Telemetries{
 			Logs: &Telemetry{
@@ -472,8 +491,51 @@ func TestGenerateExportersAndServiceUsesCustomLogExporterBatchMaxSize(t *testing
 	initializeConfigMaps(otelConfig)
 
 	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
-		Namespace:                    "test-namespace",
-		LogExporterBatchMaxSizeBytes: 2_000_000,
+		Namespace: "test-namespace",
+		LogChunking: LogChunkingConfig{
+			Enabled: true,
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, map[string]interface{}{
+		"max_body_bytes": defaultLogChunkMaxBodyBytes,
+		"dry_run":        false,
+	}, otelConfig.Processors["logchunk/byoo"])
+	exporter := otelConfig.Exporters["splunk_hec/SPLUNK-example-logs-logs"]
+	assert.NotContains(t, exporter["sending_queue"].(map[string]interface{}), "batch")
+}
+
+func TestGenerateExportersAndServiceUsesExporterHelperQueueBatchConfig(t *testing.T) {
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Logs: &Telemetry{
+				Name:     "example-logs",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderSplunk,
+				Endpoint: "https://splunk.example.invalid",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+
+	minSize := int64(2_000_000)
+	maxSize := int64(2_000_000)
+	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
+		Namespace: "test-namespace",
+		OTelCollector: OTelCollectorConfig{
+			ExporterHelper: ExporterHelperConfig{
+				SendingQueue: SendingQueueConfig{
+					Batch: SendingQueueBatchConfig{
+						FlushTimeout: "200ms",
+						Sizer:        "bytes",
+						MinSize:      &minSize,
+						MaxSize:      &maxSize,
+					},
+				},
+			},
+		},
 	})
 
 	assert.NoError(t, err)
@@ -485,10 +547,136 @@ func TestGenerateExportersAndServiceUsesCustomLogExporterBatchMaxSize(t *testing
 		"batch": map[string]interface{}{
 			"flush_timeout": "200ms",
 			"sizer":         "bytes",
-			"min_size":      2_000_000,
-			"max_size":      2_000_000,
+			"min_size":      int64(2_000_000),
+			"max_size":      int64(2_000_000),
 		},
 	}, exporter["sending_queue"])
+}
+
+func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Logs: &Telemetry{
+				Name:     "example-logs",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderSplunk,
+				Endpoint: "https://splunk.example.invalid",
+			},
+			Metrics: &Telemetry{
+				Name:     "example-metrics",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderDatadog,
+				Endpoint: "datadoghq.com",
+			},
+			Traces: &Telemetry{
+				Name:     "example-traces",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderServiceNow,
+				Endpoint: "otel.example.invalid:4317",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+
+	retryEnabled := true
+	queueConsumers := int64(3)
+	queueSize := int64(2048)
+	queueBatchMinSize := int64(123)
+	queueBatchMaxSize := int64(456)
+	memoryLimitMiB := int64(512)
+	memorySpikeLimitMiB := int64(128)
+	batchSendSize := int64(100)
+	batchSendMaxSize := int64(200)
+	logBatchSendSize := int64(340)
+	logBatchSendMaxSize := int64(340)
+
+	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
+		Namespace: "test-namespace",
+		OTelCollector: OTelCollectorConfig{
+			ExporterHelper: ExporterHelperConfig{
+				Timeout: "30s",
+				RetryOnFailure: RetryOnFailureConfig{
+					Enabled:         &retryEnabled,
+					InitialInterval: "1s",
+					MaxInterval:     "10s",
+					MaxElapsedTime:  "2m",
+				},
+				SendingQueue: SendingQueueConfig{
+					NumConsumers: &queueConsumers,
+					QueueSize:    &queueSize,
+					Batch: SendingQueueBatchConfig{
+						FlushTimeout: "500ms",
+						Sizer:        "bytes",
+						MinSize:      &queueBatchMinSize,
+						MaxSize:      &queueBatchMaxSize,
+					},
+				},
+			},
+			MemoryLimiter: MemoryLimiterConfig{
+				CheckInterval: "2s",
+				LimitMiB:      &memoryLimitMiB,
+				SpikeLimitMiB: &memorySpikeLimitMiB,
+			},
+			Batch: BatchConfig{
+				Timeout:          "1s",
+				SendBatchSize:    &batchSendSize,
+				SendBatchMaxSize: &batchSendMaxSize,
+			},
+			LogBatch: BatchConfig{
+				Timeout:          "400ms",
+				SendBatchSize:    &logBatchSendSize,
+				SendBatchMaxSize: &logBatchSendMaxSize,
+			},
+		},
+	})
+
+	assert.NoError(t, err)
+
+	for _, exporterID := range []string{
+		"splunk_hec/SPLUNK-example-logs-logs",
+		"datadog/DATADOG-example-metrics-metrics",
+		"otlp/SERVICENOW-example-traces-traces",
+	} {
+		exporter := otelConfig.Exporters[exporterID]
+		assert.Equal(t, "30s", exporter["timeout"], exporterID)
+		assert.Equal(t, map[string]interface{}{
+			"enabled":          true,
+			"initial_interval": "1s",
+			"max_interval":     "10s",
+			"max_elapsed_time": "2m",
+		}, exporter["retry_on_failure"], exporterID)
+		assert.Equal(t, map[string]interface{}{
+			"enabled":       true,
+			"num_consumers": int64(3),
+			"queue_size":    int64(2048),
+			"batch": map[string]interface{}{
+				"flush_timeout": "500ms",
+				"sizer":         "bytes",
+				"min_size":      int64(123),
+				"max_size":      int64(456),
+			},
+		}, exporter["sending_queue"], exporterID)
+	}
+
+	assert.Equal(t, map[string]interface{}{
+		"check_interval":  "2s",
+		"limit_mib":       int64(512),
+		"spike_limit_mib": int64(128),
+	}, otelConfig.Processors["memory_limiter"])
+	assert.Equal(t, map[string]interface{}{
+		"send_batch_size":     int64(100),
+		"timeout":             "1s",
+		"send_batch_max_size": int64(200),
+	}, otelConfig.Processors["batch"])
+	assert.Equal(t, map[string]interface{}{
+		"send_batch_size":     int64(340),
+		"timeout":             "400ms",
+		"send_batch_max_size": int64(340),
+	}, otelConfig.Processors["batch/logs"])
+	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
+	assert.Equal(t, []string{"memory_limiter", "filter/metrics", "resource", "metrics_transform", "batch"}, otelConfig.Service.Pipelines["metrics"].Processors)
+	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
 }
 
 func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {

@@ -100,6 +100,19 @@ agentConfig:
   # mergeConfig: |
   #   agent:
   #     logLevel: debug
+  #     byooLogChunking:
+  #       enabled: true
+  #     byooDebugMode:
+  #       enabled: true
+  #     byooOtelCollector:
+  #       exporterHelper:
+  #         timeout: 30s
+  #         sendingQueue:
+  #           batch:
+  #             flushTimeout: 200ms
+  #             sizer: bytes
+  #             minSize: 1000000
+  #             maxSize: 1000000
   #
   # BYOO metric subset example:
   #
