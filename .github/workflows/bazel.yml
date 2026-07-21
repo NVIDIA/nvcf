@@ -172,9 +172,6 @@ jobs:
     env:
       CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
       CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
-      # TEMP(cache-warm proof): passed as an env var (never interpolated into the
-      # shell) so an attacker-controlled branch name can't inject commands.
-      HEAD_REF: ${{ github.head_ref }}
     container:
       image: ghcr.io/nvidia/nvcf/bazel-ci:0.8.0
       credentials:
@@ -243,9 +240,7 @@ jobs:
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
             # Upload results only from main pushes; every other trigger
             # (PRs) is read-only so it can never poison the cache.
-            # TEMP(cache-warm proof): also upload from this test branch so we can
-            # confirm a root warm-write persists and a re-run hits. Revert before merge.
-            if { [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; } || [ "$HEAD_REF" = "ci/rename-root-matrix-row" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
               echo "CACHE_UPLOAD=true" >> "$GITHUB_ENV"
             else
               echo "CACHE_UPLOAD=false" >> "$GITHUB_ENV"
