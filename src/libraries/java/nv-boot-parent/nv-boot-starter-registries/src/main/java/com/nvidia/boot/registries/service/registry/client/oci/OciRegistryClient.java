@@ -78,7 +78,7 @@ public abstract class OciRegistryClient {
      * - oci://{registryHost}/{name}:{tag} or oci://{registryHost}/{name}@{digest}
      */
     private static final Pattern OCI_ARTIFACT_URL_PATTERN = Pattern.compile(
-            "^(?:oci://)?(?<registryHost>[^/]+(?:\\.[^/]+)*)/(?<name>(?:[^/:@]+/)*[^/:@]+)(?::(?<tag>[^@]+)|@(?<digest>sha256:[a-f0-9]{64}))?$"
+            "^(?:oci://)?(?<registryHost>[^/.]+(?:\\.[^/.]+)*)/(?<name>(?:[^/:@]+/)*[^/:@]+)(?::(?<tag>[^@]+)|@(?<digest>sha256:[a-f0-9]{64}))?$"
     );
 
     private final OciRegistryStubService ociRegistryStubService;

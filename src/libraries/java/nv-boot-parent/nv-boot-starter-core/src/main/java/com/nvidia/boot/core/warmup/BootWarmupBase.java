@@ -98,7 +98,7 @@ public abstract class BootWarmupBase
     @Override
     public void onApplicationEvent(ApplicationReadyEvent event) {
         var start = Instant.now();
-        int totalSuccesses = 0;
+        long totalSuccesses = 0;
         int total = 0;
         var runnables = this.createWarmupTasks();
         var map = runnables.stream().collect(Collectors.groupingBy(WarmupRunnable::getOrder));
