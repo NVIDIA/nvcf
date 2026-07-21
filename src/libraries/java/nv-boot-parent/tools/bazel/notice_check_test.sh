@@ -46,8 +46,12 @@ find_workspace() {
 }
 
 workspace="$(find_workspace)"
+# nv-boot-parent is a subtree of the monorepo, not the workspace root, so its
+# notice tooling and its own NOTICE live under this prefix rather than at the
+# repo root. The Maven lock, however, is the single root maven_install.json.
+nvboot="${workspace}/src/libraries/java/nv-boot-parent"
 
-PYTHONPATH="${workspace}/tools/bazel" python3 - <<'PY'
+PYTHONPATH="${nvboot}/tools/bazel" python3 - <<'PY'
 import pathlib
 import tempfile
 import zipfile
@@ -96,9 +100,9 @@ with tempfile.TemporaryDirectory() as directory:
         raise AssertionError("Runtime NOTICE accepted a stale lockfile version")
 PY
 
-exec python3 "${workspace}/tools/bazel/generate_notice.py" \
+exec python3 "${nvboot}/tools/bazel/generate_notice.py" \
     --maven-install "${workspace}/maven_install.json" \
-    --metadata "${workspace}/tools/bazel/notice_metadata.json" \
-    --notice "${workspace}/NOTICE" \
-    --root-manifest "${workspace}/tools/bazel/notice_roots.json" \
+    --metadata "${nvboot}/tools/bazel/notice_metadata.json" \
+    --notice "${nvboot}/NOTICE" \
+    --root-manifest "${nvboot}/tools/bazel/notice_roots.json" \
     --check
