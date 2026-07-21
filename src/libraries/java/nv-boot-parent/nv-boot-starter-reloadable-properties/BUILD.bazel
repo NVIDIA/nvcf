@@ -1,0 +1,53 @@
+load("//src/libraries/java/nv-boot-parent/tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_workspace_runfiles")
+
+RELOADABLE_PROPERTIES_COMPILE_DEPS = [
+    "@nv_third_party_deps//:com_github_ben_manes_caffeine_guava",
+    "@nv_third_party_deps//:com_google_guava_guava",
+    "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_starter_bootstrap",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_core",
+]
+
+filegroup(
+    name = "test_resource_files",
+    srcs = glob(["src/test/resources/**"]),
+)
+
+nv_boot_workspace_runfiles(
+    name = "reloadable_properties_test_resources",
+    srcs = [":test_resource_files"],
+    strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties/",
+)
+
+nv_boot_library(
+    name = "nv_boot_starter_reloadable_properties",
+    srcs = glob(["src/main/java/**/*.java"]),
+    resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties/src/main/resources",
+    resources = glob(["src/main/resources/**"]),
+    visibility = ["//visibility:public"],
+    deps = RELOADABLE_PROPERTIES_COMPILE_DEPS,
+)
+
+nv_boot_library_test(
+    name = "tests",
+    srcs = glob(["src/test/java/**/*.java"]),
+    coverage_library = ":nv_boot_starter_reloadable_properties",
+    data = [":reloadable_properties_test_resources"],
+    junit_classpath = ["src/test/resources"],
+    resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties/src/test/resources",
+    resources = glob(["src/test/resources/**"]),
+    deps = [
+        ":nv_boot_starter_reloadable_properties",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_jackson",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+        "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
+    ] + RELOADABLE_PROPERTIES_COMPILE_DEPS,
+)
