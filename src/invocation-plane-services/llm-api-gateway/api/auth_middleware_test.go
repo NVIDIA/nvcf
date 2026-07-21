@@ -110,98 +110,122 @@ func TestNVCFAuthMiddlewareEnrichesRequestContext(t *testing.T) {
 	}
 }
 
+// The auth middleware is registered globally, so priority propagation is
+// path-independent; exercise every LLM entry that forwards X-Priority.
+var priorityMiddlewarePaths = []struct {
+	path string
+	body string
+}{
+	{
+		path: "/v1/chat/completions",
+		body: `{"model":"fn-chat/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`,
+	},
+	{
+		path: "/v1/responses",
+		body: `{"model":"fn-chat/company-name/model-name","input":"hello"}`,
+	},
+	{
+		path: "/v1/embeddings",
+		body: `{"model":"fn-chat/company-name/model-name","input":"hello"}`,
+	},
+}
+
 func TestNVCFAuthMiddlewarePropagatesResolvedPriority(t *testing.T) {
 	t.Parallel()
 
-	wantPriority := uint32(3)
-	authClient := &stubInvocationAuthClient{
-		authResponse: &nvcf.InvocationAuthResponse{
-			RoutingKey:   "fn-chat",
-			ClientAuthID: "subject-123",
-			AuthContext:  map[string]string{"ncaId": "nca-456"},
-			RateLimitKey: "nca-456",
-			Priority:     &wantPriority,
-		},
-	}
+	for _, tc := range priorityMiddlewarePaths {
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
 
-	cfg := config.Default()
+			wantPriority := uint32(3)
+			authClient := &stubInvocationAuthClient{
+				authResponse: &nvcf.InvocationAuthResponse{
+					RoutingKey:   "fn-chat",
+					ClientAuthID: "subject-123",
+					AuthContext:  map[string]string{"ncaId": "nca-456"},
+					RateLimitKey: "nca-456",
+					Priority:     &wantPriority,
+				},
+			}
 
-	e := echo.New()
-	e.Use(NewContextMiddleware(cfg))
-	e.Use(NewNVCFAuthMiddleware(authClient))
-	e.POST("/v1/chat/completions", func(ec echo.Context) error {
-		gc := ec.(*GatewayContext)
-		reqCtx := gc.RequestContext()
-		if reqCtx == nil {
-			t.Fatal("request context was not set")
-		}
-		if reqCtx.Priority == nil {
-			t.Fatal("priority was not propagated to request context")
-		}
-		if *reqCtx.Priority != 3 {
-			t.Fatalf("priority = %d, want 3", *reqCtx.Priority)
-		}
-		return gc.NoContent(http.StatusNoContent)
-	})
+			cfg := config.Default()
 
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/v1/chat/completions",
-		strings.NewReader(`{"model":"fn-chat/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`),
-	)
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	req.Header.Set(echo.HeaderAuthorization, "Bearer sk-live")
-	rec := httptest.NewRecorder()
+			e := echo.New()
+			e.Use(NewContextMiddleware(cfg))
+			e.Use(NewNVCFAuthMiddleware(authClient))
+			e.POST(tc.path, func(ec echo.Context) error {
+				gc := ec.(*GatewayContext)
+				reqCtx := gc.RequestContext()
+				if reqCtx == nil {
+					t.Fatal("request context was not set")
+				}
+				if reqCtx.Priority == nil {
+					t.Fatal("priority was not propagated to request context")
+				}
+				if *reqCtx.Priority != 3 {
+					t.Fatalf("priority = %d, want 3", *reqCtx.Priority)
+				}
+				return gc.NoContent(http.StatusNoContent)
+			})
 
-	e.ServeHTTP(rec, req)
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			req.Header.Set(echo.HeaderAuthorization, "Bearer sk-live")
+			rec := httptest.NewRecorder()
 
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+			}
+		})
 	}
 }
 
 func TestNVCFAuthMiddlewareLeavesPriorityUnsetWhenAbsent(t *testing.T) {
 	t.Parallel()
 
-	authClient := &stubInvocationAuthClient{
-		authResponse: &nvcf.InvocationAuthResponse{
-			RoutingKey:   "fn-chat",
-			ClientAuthID: "subject-123",
-			AuthContext:  map[string]string{"ncaId": "nca-456"},
-			RateLimitKey: "nca-456",
-		},
-	}
+	for _, tc := range priorityMiddlewarePaths {
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
 
-	cfg := config.Default()
+			authClient := &stubInvocationAuthClient{
+				authResponse: &nvcf.InvocationAuthResponse{
+					RoutingKey:   "fn-chat",
+					ClientAuthID: "subject-123",
+					AuthContext:  map[string]string{"ncaId": "nca-456"},
+					RateLimitKey: "nca-456",
+				},
+			}
 
-	e := echo.New()
-	e.Use(NewContextMiddleware(cfg))
-	e.Use(NewNVCFAuthMiddleware(authClient))
-	e.POST("/v1/chat/completions", func(ec echo.Context) error {
-		gc := ec.(*GatewayContext)
-		reqCtx := gc.RequestContext()
-		if reqCtx == nil {
-			t.Fatal("request context was not set")
-		}
-		if reqCtx.Priority != nil {
-			t.Fatalf("priority = %d, want unset", *reqCtx.Priority)
-		}
-		return gc.NoContent(http.StatusNoContent)
-	})
+			cfg := config.Default()
 
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/v1/chat/completions",
-		strings.NewReader(`{"model":"fn-chat/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`),
-	)
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	req.Header.Set(echo.HeaderAuthorization, "Bearer sk-live")
-	rec := httptest.NewRecorder()
+			e := echo.New()
+			e.Use(NewContextMiddleware(cfg))
+			e.Use(NewNVCFAuthMiddleware(authClient))
+			e.POST(tc.path, func(ec echo.Context) error {
+				gc := ec.(*GatewayContext)
+				reqCtx := gc.RequestContext()
+				if reqCtx == nil {
+					t.Fatal("request context was not set")
+				}
+				if reqCtx.Priority != nil {
+					t.Fatalf("priority = %d, want unset", *reqCtx.Priority)
+				}
+				return gc.NoContent(http.StatusNoContent)
+			})
 
-	e.ServeHTTP(rec, req)
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			req.Header.Set(echo.HeaderAuthorization, "Bearer sk-live")
+			rec := httptest.NewRecorder()
 
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+			}
+		})
 	}
 }
 
