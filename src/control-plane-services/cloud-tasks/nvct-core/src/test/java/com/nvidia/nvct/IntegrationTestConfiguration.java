@@ -218,7 +218,13 @@ public class IntegrationTestConfiguration {
                     continue;
                 }
 
-                var dest = extractRoot.resolve(name.substring(prefix.length()));
+                var dest = extractRoot.resolve(name.substring(prefix.length())).normalize();
+                // Zip-slip guard: a crafted entry name (e.g. containing "..") must
+                // never resolve outside the extraction root.
+                if (!dest.startsWith(extractRoot)) {
+                    throw new IOException(
+                            "Refusing to extract entry outside the target directory: " + name);
+                }
                 Files.createDirectories(dest.getParent());
                 try (var in = jarFile.getInputStream(entry)) {
                     Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);

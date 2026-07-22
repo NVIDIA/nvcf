@@ -40,7 +40,12 @@ public class SecurityConfiguration {
             AuthenticationManagerResolver<HttpServletRequest> authenticationManagerResolver,
             ExceptionHandlerFilter exceptionHandlerFilter) {
         http
-                .csrf(csrf -> csrf.disable())
+                // CSRF protection is intentionally disabled: this is a stateless
+                // (SessionCreationPolicy.STATELESS) OAuth2 resource server authenticated by
+                // JWT / api-key bearer tokens, with no cookies or server-side sessions. CSRF is
+                // a cookie/session-auth attack and does not apply here; enabling it would break
+                // the token-only API without adding any protection.
+                .csrf(csrf -> csrf.disable()) // codeql[java/spring-disabled-csrf-protection]
                 .sessionManagement(session -> session.sessionCreationPolicy(STATELESS))
                 // Reuse the ValidationAwareExceptionHandler to handle the exception inside
                 // the filters,especially for the  custom authentication resolver exceptions.
