@@ -43,7 +43,7 @@ chmod +x files/migrate-arm64
 
 ## Building the container
 
-The `Dockerfile` defaults to the `bitnami/cassandra:5.0.6` base image. Override the FROM via your own build pipeline if you need a different base.
+The `Dockerfile` defaults to the official `cassandra:5.0.8` base image. Override the FROM via your own build pipeline if you need a different base.
 
 ```bash
 docker build \
