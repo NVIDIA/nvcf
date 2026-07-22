@@ -1,4 +1,4 @@
-module github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout
+module github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout
 
 go 1.25.0
 

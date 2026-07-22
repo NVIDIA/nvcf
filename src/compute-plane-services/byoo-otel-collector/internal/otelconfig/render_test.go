@@ -18,9 +18,9 @@ limitations under the License.
 package otelconfig
 
 import (
-	"testing"
-
 	"fmt"
+	"os"
+	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
@@ -94,6 +94,103 @@ func TestRenderOtelConfig(t *testing.T) {
 				t.Errorf("Expected config, got none")
 			}
 		})
+	}
+}
+
+func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
+	gotCfg, err := RenderOtelConfigFromBytes(
+		[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "example-metrics"}}}`),
+		TemplateConfig{
+			BackendType:       K8s,
+			WorkloadType:      Container,
+			Namespace:         "sr-fake-namespace",
+			FunctionID:        "fake-function-id",
+			FunctionVersionID: "fake-function-version-id",
+			InstanceID:        "fake-instance-id",
+			ZoneName:          "fake-zone-name",
+			MetricSubset: MetricSubsetConfig{
+				Enabled:      true,
+				FilterConfig: defaultMetricSubsetFilterConfig(),
+			},
+			WorkloadMetrics: WorkloadMetricsConfig{
+				DropLabels: defaultWorkloadMetricsDropLabels,
+			},
+		},
+	)
+
+	assert.NoError(t, err)
+
+	otelConfig := &OpenTelemetryConfig{}
+	err = yaml.Unmarshal(gotCfg, otelConfig)
+	assert.NoError(t, err)
+	assert.Contains(t, otelConfig.Exporters, metricSubsetExporterID)
+	assert.Contains(t, otelConfig.Processors, metricSubsetFilterProcessorID)
+	assert.Contains(t, otelConfig.Processors, metricSubsetBatchProcessorID)
+	assert.Equal(t, []string{"otlp"}, otelConfig.Service.Pipelines["metrics/metric_subset"].Receivers)
+	assert.Equal(t, []string{metricSubsetExporterID}, otelConfig.Service.Pipelines["metrics/metric_subset"].Exporters)
+	assert.Equal(t, []string{
+		"memory_limiter",
+		metricSubsetFilterProcessorID,
+		"resource",
+		"metrics_transform",
+		metricSubsetBatchProcessorID,
+	}, otelConfig.Service.Pipelines["metrics/metric_subset"].Processors)
+}
+
+func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
+	t.Setenv("ESS_SECRETS_PATH", "")
+
+	gotCfg, err := RenderOtelConfigFromBytes(
+		[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://workload-metrics.example.invalid/api/v1/write", "name": "workload-metrics"}}}`),
+		TemplateConfig{
+			BackendType:       K8s,
+			WorkloadType:      Container,
+			Namespace:         "sr-fake-namespace",
+			FunctionID:        "fake-function-id",
+			FunctionVersionID: "fake-function-version-id",
+			InstanceID:        "fake-instance-id",
+			ZoneName:          "fake-zone-name",
+			MetricSubset: MetricSubsetConfig{
+				Enabled:      true,
+				FilterConfig: defaultMetricSubsetFilterConfig(),
+			},
+			WorkloadMetrics: WorkloadMetricsConfig{
+				DropLabels: defaultWorkloadMetricsDropLabels,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("failed to render metric subset config: %v", err)
+	}
+
+	const examplePath = "../../examples/otelconfigs/k8s/config_function_container_metric_subset.yaml"
+	if os.Getenv("UPDATE_METRIC_SUBSET_EXAMPLE") == "true" {
+		if err := os.WriteFile(examplePath, gotCfg, 0o644); err != nil {
+			t.Fatalf("failed to update metric subset example config: %v", err)
+		}
+	}
+
+	expectedCfg, err := os.ReadFile(examplePath)
+	if err != nil {
+		t.Fatalf("failed to read metric subset example config: %v", err)
+	}
+
+	assertYAMLConfigEqual(t, expectedCfg, gotCfg)
+}
+
+func assertYAMLConfigEqual(t *testing.T, expectedYAML, actualYAML []byte) {
+	t.Helper()
+
+	var actualMap, expectedMap map[string]interface{}
+	if err := yaml.Unmarshal(actualYAML, &actualMap); err != nil {
+		t.Fatalf("failed to unmarshal actual YAML to map: %v", err)
+	}
+	if err := yaml.Unmarshal(expectedYAML, &expectedMap); err != nil {
+		t.Fatalf("failed to unmarshal expected YAML to map: %v", err)
+	}
+
+	if !assert.Equal(t, expectedMap, actualMap) {
+		t.Errorf("transformed OtelConfig mismatch:\nExpected OtelConfig YAML:\n%s\n\nActual OtelConfigYAML:\n%s", string(expectedYAML), string(actualYAML))
 	}
 }
 
@@ -392,6 +489,150 @@ func TestGenerateExportersAndServiceUsesCustomLogExporterBatchMaxSize(t *testing
 			"max_size":      2_000_000,
 		},
 	}, exporter["sending_queue"])
+}
+
+func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Metrics: &Telemetry{
+				Name:     "example-metrics",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderPrometheus,
+				Endpoint: "https://metrics.example.invalid/api/v1/write",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+	otelConfig.Processors["batch"] = map[string]interface{}{
+		"send_batch_size":     4096,
+		"timeout":             "400ms",
+		"send_batch_max_size": 8192,
+	}
+	filterConfig := map[string]interface{}{
+		"error_mode": "ignore",
+		"metric_conditions": []string{
+			`metric.name != "RtdInstrument"`,
+		},
+	}
+
+	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
+		Namespace: "test-namespace",
+		MetricSubset: MetricSubsetConfig{
+			Enabled:      true,
+			FilterConfig: filterConfig,
+		},
+		WorkloadMetrics: WorkloadMetricsConfig{
+			DropLabels: []string{"metric_subset_enabled"},
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, map[string]interface{}{
+		"endpoint": "${env:OTEL_POD_IP:-0.0.0.0}:19091",
+		"resource_to_telemetry_conversion": map[string]interface{}{
+			"enabled": true,
+		},
+		"send_timestamps":     true,
+		"metric_expiration":   "5m",
+		"enable_open_metrics": true,
+	}, otelConfig.Exporters[metricSubsetExporterID])
+	assert.Equal(t, filterConfig, otelConfig.Processors[metricSubsetFilterProcessorID])
+	assert.Equal(t, otelConfig.Processors["batch"], otelConfig.Processors[metricSubsetBatchProcessorID])
+
+	workloadMetricsPipeline := otelConfig.Service.Pipelines["metrics"]
+	assert.Equal(t, []string{"otlp", "prometheus"}, workloadMetricsPipeline.Receivers)
+	assert.Equal(t, []string{"prometheusremotewrite/PROMETHEUS-example-metrics-metrics"}, workloadMetricsPipeline.Exporters)
+	assert.Equal(t, []string{
+		"memory_limiter",
+		"filter/metrics",
+		"resource",
+		workloadMetricsDropLabelsProcessorID,
+		"metrics_transform",
+		"batch",
+	}, workloadMetricsPipeline.Processors)
+	assert.NotContains(t, workloadMetricsPipeline.Processors, metricSubsetFilterProcessorID)
+	assert.Equal(t, map[string]interface{}{
+		"attributes": []map[string]interface{}{
+			{
+				"key":    "metric_subset_enabled",
+				"action": "delete",
+			},
+		},
+	}, otelConfig.Processors[workloadMetricsDropLabelsProcessorID])
+
+	metricSubsetPipeline := otelConfig.Service.Pipelines["metrics/metric_subset"]
+	assert.Equal(t, []string{"otlp"}, metricSubsetPipeline.Receivers)
+	assert.Equal(t, []string{metricSubsetExporterID}, metricSubsetPipeline.Exporters)
+	assert.Equal(t, []string{
+		"memory_limiter",
+		metricSubsetFilterProcessorID,
+		"resource",
+		"metrics_transform",
+		metricSubsetBatchProcessorID,
+	}, metricSubsetPipeline.Processors)
+}
+
+func TestGenerateExportersAndServiceAddsWorkloadMetricsDropLabelsWithoutMetricSubset(t *testing.T) {
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Metrics: &Telemetry{
+				Name:     "example-metrics",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderPrometheus,
+				Endpoint: "https://metrics.example.invalid/api/v1/write",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+
+	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
+		Namespace: "test-namespace",
+		WorkloadMetrics: WorkloadMetricsConfig{
+			DropLabels: []string{"workload_label"},
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.NotContains(t, otelConfig.Exporters, metricSubsetExporterID)
+	assert.NotContains(t, otelConfig.Service.Pipelines, "metrics/metric_subset")
+	assert.Equal(t, map[string]interface{}{
+		"attributes": []map[string]interface{}{
+			{
+				"key":    "workload_label",
+				"action": "delete",
+			},
+		},
+	}, otelConfig.Processors[workloadMetricsDropLabelsProcessorID])
+	assert.Contains(t, otelConfig.Service.Pipelines["metrics"].Processors, workloadMetricsDropLabelsProcessorID)
+}
+
+func TestGenerateExportersAndServiceDoesNotAddMetricSubsetPipelineWithoutMetricsTelemetry(t *testing.T) {
+	cfg := TelemetryConfig{
+		Telemetries: Telemetries{
+			Logs: &Telemetry{
+				Name:     "example-logs",
+				Protocol: ProtocolHTTP,
+				Provider: ProviderSplunk,
+				Endpoint: "https://splunk.example.invalid",
+			},
+		},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+
+	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
+		Namespace: "test-namespace",
+		MetricSubset: MetricSubsetConfig{
+			Enabled: true,
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.NotContains(t, otelConfig.Exporters, metricSubsetExporterID)
+	assert.NotContains(t, otelConfig.Processors, metricSubsetFilterProcessorID)
+	assert.NotContains(t, otelConfig.Service.Pipelines, "metrics/metric_subset")
 }
 
 // Test_exporterMetrics_Datadog_KeepsFirstCumulativeSample is a regression test

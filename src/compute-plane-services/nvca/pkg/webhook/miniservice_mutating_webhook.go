@@ -72,7 +72,7 @@ type miniserviceMutatingWebhook struct {
 	scheme  *runtime.Scheme
 	decoder runtime.Decoder
 
-	// Shim for shared storage mutating webhook that needed object annoations applied by this webhook.
+	// Shim for shared storage mutating webhook that needed object annotations applied by this webhook.
 	// Since NVCA cannot guarantee webhook execution order, its mutate() method is called here.
 	sharedStorageMutator *helmStorageMutatingWebhook
 
@@ -234,7 +234,7 @@ func (w *miniserviceMutatingWebhook) Handle(ctx context.Context, req admission.R
 	if pod, ok := obj.(*corev1.Pod); ok && pod.Name == translatecommon.UtilsPodName {
 		if isCreate {
 			// Shared storage mutation does not need metadata.
-			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj); err != nil {
+			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, nvcatypes.MiniserviceMetadata{}); err != nil {
 				return admission.Errored(http.StatusInternalServerError,
 					fmt.Errorf("mutate shared storage on utils pod: %w", err))
 			}
@@ -334,7 +334,7 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 				w.mutateNVLinkDRA(obj.GetNamespace(), t)
 			}
 
-			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj); err != nil {
+			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, meta); err != nil {
 				return fmt.Errorf("mutate shared storage: %w", err)
 			}
 		}
@@ -366,7 +366,7 @@ func (w *miniserviceMutatingWebhook) mutatePodSpec(ps *corev1.PodSpec, meta nvca
 	}
 	_ = translatecommon.AddMixedEnvsToContainers(overrideableEnvVars, ps.InitContainers, meta.EnvVars...)
 	_ = translatecommon.AddMixedEnvsToContainers(overrideableEnvVars, ps.Containers, meta.EnvVars...)
-	k8sutil.AddBYOOLogChunkingEnvVarsToPodSpec(ps, meta.OTelCollectorEnvVars)
+	k8sutil.AddBYOOEnvVarsToPodSpec(ps, meta.OTelCollectorEnvVars)
 
 	// If the pod is allowed k8s api access (ex. when an operator created it), and it has set a non-default service account,
 	// use it instead of the service account override.

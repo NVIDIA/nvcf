@@ -364,7 +364,7 @@ if __name__ == "__main__":
                 task_progress_gauge.set(dummy_percent_complete)
 
             logger.info(
-                f"Ouput result: {output_folder_name}, task progress: {dummy_percent_complete}%"
+                f"Output result: {output_folder_name}, task progress: {dummy_percent_complete}%"
             )
 
             time.sleep(DELAY_BETWEEN_RESULTS_IN_MINUTES * 60)

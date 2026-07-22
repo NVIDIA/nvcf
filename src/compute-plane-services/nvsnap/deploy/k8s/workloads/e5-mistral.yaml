@@ -62,7 +62,9 @@ spec:
         # RPC unix socket (what upstream CRIU couldn't restore). Must match restore.
         - { name: VLLM_ENABLE_V1_MULTIPROCESSING, value: "0" }
         - { name: USE_LIBUV, value: "1" }
-        - { name: UV_USE_IO_URING, value: "0" }
+        # io_uring is C/R-safe now (CRIU fork io-uring-cr restores the SQPOLL
+        # ring's SQ-array identity map). See vllm-small for detail. nvsnap#107.
+        - { name: UV_USE_IO_URING, value: "1" }
         - { name: HF_HUB_DISABLE_XET, value: "1" }
         - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
         - { name: VLLM_LOGGING_LEVEL, value: "INFO" }

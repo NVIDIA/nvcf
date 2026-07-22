@@ -550,7 +550,7 @@ func TestMutate_OverlayCoversAllVolumes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Both volumes must have been overlayed (one call each, in
+	// Both volumes must have been overlaid (one call each, in
 	// section order: hostPath first, then rootfs-extract).
 	if got, want := len(overlay.calls), 2; got != want {
 		t.Fatalf("PrepareOverlay calls = %d, want %d (vols=%+v)", got, want, overlay.calls)

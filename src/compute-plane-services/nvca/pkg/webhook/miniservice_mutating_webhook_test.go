@@ -1186,7 +1186,7 @@ func TestMiniserviceMutatePodSpec_BYOObservability(t *testing.T) {
 	}
 }
 
-func TestMiniserviceMutatePodSpec_BYOOLogChunkingEnvVarsOnlyCollector(t *testing.T) {
+func TestMiniserviceMutatePodSpec_BYOOOTelCollectorEnvVarsOnlyCollector(t *testing.T) {
 	meta := nvcatypes.MiniserviceMetadata{
 		EnvVars: []corev1.EnvVar{
 			{Name: "SHARED_ENV", Value: "shared"},
@@ -1194,6 +1194,7 @@ func TestMiniserviceMutatePodSpec_BYOOLogChunkingEnvVarsOnlyCollector(t *testing
 		OTelCollectorEnvVars: []corev1.EnvVar{
 			{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
 			{Name: nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
+			{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
 		},
 	}
 	ps := corev1.PodSpec{
@@ -1220,8 +1221,11 @@ func TestMiniserviceMutatePodSpec_BYOOLogChunkingEnvVarsOnlyCollector(t *testing
 	assert.Equal(t, "shared", collectorByName["SHARED_ENV"])
 	assert.NotContains(t, initByName, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
 	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
+	assert.NotContains(t, initByName, nvcaconfig.BYOOMetricSubsetEnabledEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOMetricSubsetEnabledEnv)
 	assert.Equal(t, "983040", collectorByName[nvcaconfig.BYOOLogChunkMaxBodyBytesEnv])
 	assert.Equal(t, "1000000", collectorByName[nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv])
+	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOOMetricSubsetEnabledEnv])
 }
 
 func envNames(envs []corev1.EnvVar) []string {

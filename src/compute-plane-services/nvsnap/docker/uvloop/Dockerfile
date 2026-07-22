@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # uvloop wheel builder for NvSnap — multi-Python (cp310/311/312/313)
 #
 # Builds our forked uvloop with CRIU checkpoint/restore support

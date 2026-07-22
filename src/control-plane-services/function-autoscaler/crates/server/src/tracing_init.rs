@@ -21,9 +21,11 @@ use crate::settings::{OtelResourceSettings, TracingSettings};
 use opentelemetry::trace::TracerProvider;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_otlp::WithHttpConfig;
+use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
+use tonic_otel::metadata::{Ascii, MetadataKey, MetadataMap, MetadataValue};
+use tonic_otel::transport::ClientTlsConfig;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Initialize tracing and return a guard that flushes on drop.
@@ -48,15 +50,31 @@ pub fn initialize_tracing(
 
     let resource = Resource::builder().with_attributes(resource_kvs).build();
 
-    let endpoint = build_otlp_http_endpoint(tracing_settings);
+    let endpoint = build_otlp_grpc_endpoint(tracing_settings);
 
     let mut exporter_builder = opentelemetry_otlp::SpanExporter::builder()
-        .with_http()
+        .with_tonic()
         .with_endpoint(&endpoint)
         .with_timeout(std::time::Duration::from_secs(10));
 
+    if endpoint.starts_with("https://") {
+        exporter_builder =
+            exporter_builder.with_tls_config(ClientTlsConfig::new().with_enabled_roots());
+    }
+
     if let Some(headers) = &tracing_settings.headers {
-        exporter_builder = exporter_builder.with_headers(headers.clone());
+        let mut metadata = MetadataMap::new();
+
+        for (key, value) in headers {
+            if let (Ok(key), Ok(value)) = (
+                key.parse::<MetadataKey<Ascii>>(),
+                value.parse::<MetadataValue<Ascii>>(),
+            ) {
+                metadata.insert(key, value);
+            }
+        }
+
+        exporter_builder = exporter_builder.with_metadata(metadata);
     }
 
     let exporter = exporter_builder.build().expect("OTLP span exporter build");
@@ -84,7 +102,7 @@ pub fn initialize_tracing(
     }
 }
 
-fn build_otlp_http_endpoint(tracing_settings: &TracingSettings) -> String {
+fn build_otlp_grpc_endpoint(tracing_settings: &TracingSettings) -> String {
     match tracing_settings.endpoint_ip.as_deref() {
         Some(host) => {
             let mut endpoint = normalize_endpoint_host(host);
@@ -92,12 +110,12 @@ fn build_otlp_http_endpoint(tracing_settings: &TracingSettings) -> String {
                 endpoint = format!(
                     "{}:{}",
                     endpoint,
-                    tracing_settings.endpoint_port.unwrap_or(4318)
+                    tracing_settings.endpoint_port.unwrap_or(4317)
                 );
             }
-            format!("{endpoint}/v1/traces")
+            endpoint
         }
-        _ => "http://127.0.0.1:4318/v1/traces".to_string(),
+        _ => "http://127.0.0.1:4317".to_string(),
     }
 }
 
@@ -129,7 +147,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_otlp_http_endpoint_preserves_https_scheme() {
+    fn build_otlp_grpc_endpoint_preserves_https_scheme() {
         let settings = TracingSettings {
             endpoint_ip: Some("https://otel.example.com".to_string()),
             endpoint_port: Some(8282),
@@ -137,27 +155,24 @@ mod tests {
         };
 
         assert_eq!(
-            build_otlp_http_endpoint(&settings),
-            "https://otel.example.com:8282/v1/traces"
+            build_otlp_grpc_endpoint(&settings),
+            "https://otel.example.com:8282"
         );
     }
 
     #[test]
-    fn build_otlp_http_endpoint_defaults_bare_hosts_to_http() {
+    fn build_otlp_grpc_endpoint_defaults_bare_hosts_to_http() {
         let settings = TracingSettings {
             endpoint_ip: Some("localhost".to_string()),
-            endpoint_port: Some(4318),
+            endpoint_port: Some(4317),
             ..Default::default()
         };
 
-        assert_eq!(
-            build_otlp_http_endpoint(&settings),
-            "http://localhost:4318/v1/traces"
-        );
+        assert_eq!(build_otlp_grpc_endpoint(&settings), "http://localhost:4317");
     }
 
     #[test]
-    fn build_otlp_http_endpoint_preserves_embedded_port_with_configured_port() {
+    fn build_otlp_grpc_endpoint_preserves_embedded_port_with_configured_port() {
         let settings = TracingSettings {
             endpoint_ip: Some("https://otel.example.com:8282".to_string()),
             endpoint_port: Some(8282),
@@ -165,13 +180,13 @@ mod tests {
         };
 
         assert_eq!(
-            build_otlp_http_endpoint(&settings),
-            "https://otel.example.com:8282/v1/traces"
+            build_otlp_grpc_endpoint(&settings),
+            "https://otel.example.com:8282"
         );
     }
 
     #[test]
-    fn build_otlp_http_endpoint_preserves_embedded_port_without_configured_port() {
+    fn build_otlp_grpc_endpoint_preserves_embedded_port_without_configured_port() {
         let settings = TracingSettings {
             endpoint_ip: Some("https://otel.example.com:8282".to_string()),
             endpoint_port: None,
@@ -179,19 +194,16 @@ mod tests {
         };
 
         assert_eq!(
-            build_otlp_http_endpoint(&settings),
-            "https://otel.example.com:8282/v1/traces"
+            build_otlp_grpc_endpoint(&settings),
+            "https://otel.example.com:8282"
         );
     }
 
     #[test]
-    fn build_otlp_http_endpoint_uses_local_default_without_host() {
+    fn build_otlp_grpc_endpoint_uses_local_default_without_host() {
         let settings = TracingSettings::default();
 
-        assert_eq!(
-            build_otlp_http_endpoint(&settings),
-            "http://127.0.0.1:4318/v1/traces"
-        );
+        assert_eq!(build_otlp_grpc_endpoint(&settings), "http://127.0.0.1:4317");
     }
 }
 

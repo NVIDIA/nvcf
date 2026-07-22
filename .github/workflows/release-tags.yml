@@ -5,20 +5,29 @@ name: release-tags
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'release-**/v*'
     tags:
       - '*-v*'
       - '**/v*'
   workflow_dispatch:
     inputs:
+      operation:
+        description: Release operation to run.
+        required: false
+        default: branch-cut
+        type: choice
+        options:
+          - branch-cut
+          - auto
       service:
-        description: Optional service id or service_name to dry-run/publish.
+        description: Optional service id or service_name for operation=auto. Branch-cut always cuts nvca.
         required: false
         type: string
 
 permissions:
-  contents: write
-  packages: read
+  contents: read
 
 concurrency:
   group: release-tags-${{ github.ref }}
@@ -38,8 +47,11 @@ env:
 jobs:
   service-release:
     name: service release automation
-    if: github.ref_type != 'tag'
+    if: github.ref_type != 'tag' && (github.event_name != 'workflow_dispatch' || inputs.operation == 'auto')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,15 +75,49 @@ jobs:
              [ "${NVCF_GITHUB_RELEASE_DRY_RUN}" = "false" ] && \
              [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
             echo "ERROR: set secret NV_GITHUB_TOKEN before enabling GitHub auto-tag publish mode." >&2
-            echo "The default GITHUB_TOKEN cannot trigger the follow-up tag workflow that publishes release artifacts." >&2
+            echo "The default GITHUB_TOKEN cannot trigger the release-branch/tag workflows that publish release artifacts." >&2
             exit 1
           fi
           ./tools/ci/github-release auto
+
+  release-branch-cut:
+    name: NVCA release branch cut
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'branch-cut'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+
+      - name: Cut release branch
+        env:
+          NVCF_GITHUB_RELEASE_SERVICE: nvca
+          NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
+            echo "ERROR: set secret NV_GITHUB_TOKEN before cutting a GitHub release branch." >&2
+            echo "The default GITHUB_TOKEN cannot trigger CI for the generated VERSION bump PR." >&2
+            exit 1
+          fi
+          if [ -z "${NVCF_GITHUB_RELEASE_SERVICE}" ]; then
+            echo "ERROR: service is required when operation=branch-cut." >&2
+            exit 1
+          fi
+          ./tools/ci/github-release branch-cut --service "${NVCF_GITHUB_RELEASE_SERVICE}"
 
   tag-release-notes:
     name: tag release notes
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:

@@ -60,7 +60,6 @@ var (
 	KAIScheduler                  = newFeatureFlag("KAIScheduler", newBool(false))
 	HelmCustomAnnotations         = newFeatureFlag("HelmCustomAnnotations", newBool(false))
 	MaxSQSBatchPull               = newFeatureFlag("MaxSQSBatchPull", newBool(true))
-	HelmCachingSupport            = newFeatureFlag("HelmCachingSupport", newBool(false))
 	CordonMaintenance             = newFeatureFlag("CordonMaintenance", newBool(false))
 	CordonAndDrainMaintenance     = newFeatureFlag("CordonAndDrainMaintenance", newBool(false))
 	// AckTaskRequestAfterPodsScheduled instructs the agent to only acknowledge ICMS requests with ICMS

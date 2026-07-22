@@ -81,6 +81,9 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 				attribute.String("url.path", routePath),
 				attribute.String("gateway.routing_key", routingKey),
 			)
+			if routingKey != "" {
+				span.SetAttributes(attribute.String("nvcf.function.id", routingKey))
+			}
 
 			logger := requestLogger(requestID, routingKey, targetRegion, gc.Request().Method, routePath)
 
@@ -92,6 +95,7 @@ func NewContextMiddleware(cfg *config.Config) echo.MiddlewareFunc {
 			metricAttrs := []attribute.KeyValue{
 				attribute.String("method", gc.Request().Method),
 				attribute.String("route", routePath),
+				telemetry.FunctionIDAttribute(routingKey),
 			}
 			telemetry.AddUpDownWithContext(ctx, activeRequests, 1, metricAttrs...)
 			defer telemetry.AddUpDownWithContext(context.WithoutCancel(ctx), activeRequests, -1, metricAttrs...)

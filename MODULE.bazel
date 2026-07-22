@@ -30,6 +30,7 @@ module(
 )
 
 bazel_dep(name = "rules_python", version = "1.4.1")
+bazel_dep(name = "rules_shell", version = "0.8.0")
 
 # ============================================================================
 # OCI containers (multi-arch). Used by go_oci_image for nvcf-cli.
@@ -61,14 +62,19 @@ python.toolchain(
 # and registers a proto_toolchain that points at it. The C++ build of
 # protoc is no longer reachable from any of our targets.
 #
-# Pinned alongside the protobuf module version (29.x) we resolve to.
+# Prebuilt protoc pin. Bazel 9.1.1 resolves the protobuf module to 33.4;
+# toolchains_protoc 0.6.1 (latest) ships v33.0 but not the 33.4 patch, so we pin
+# protoc v33.0 (same major, compiles 33.4's protos) and allow the 33.0-vs-33.4
+# skew via --allow_nonstandard_protoc in .bazelrc. protobuf is declared directly
+# with repo_name com_google_protobuf so that .bazelrc flag reference resolves.
 # ============================================================================
 bazel_dep(name = "toolchains_protoc", version = "0.6.1")
+bazel_dep(name = "protobuf", version = "33.4", repo_name = "com_google_protobuf")
 
 protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
 protoc.toolchain(
     google_protobuf = "com_google_protobuf",
-    version = "v29.0",
+    version = "v33.0",
 )
 
 # ============================================================================
@@ -153,30 +159,92 @@ use_repo(
 # Internal services that depend on nv-boot add the internal Artifactory virtual
 # repo here; see rules/java/README.md.
 # ============================================================================
-bazel_dep(name = "rules_java", version = "8.14.0")
-bazel_dep(name = "rules_jvm_external", version = "6.7")
-bazel_dep(name = "contrib_rules_jvm", version = "0.27.0")
+bazel_dep(name = "rules_java", version = "9.3.0")
+bazel_dep(name = "rules_jvm_external", version = "7.0")
+bazel_dep(name = "contrib_rules_jvm", version = "0.33.0")
 
 maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
 maven.install(
-    name = "maven",
+    name = "nv_third_party_deps",
     artifacts = [
-        "org.springframework.boot:spring-boot-starter-web:3.3.5",
-        "org.springframework.boot:spring-boot-starter-test:3.3.5",
-        "org.junit.jupiter:junit-jupiter-api:5.11.3",
-        "org.junit.jupiter:junit-jupiter-engine:5.11.3",
-        "org.junit.platform:junit-platform-launcher:1.11.3",
-        "org.junit.platform:junit-platform-reporting:1.11.3",
+        # nv-boot-parent third-party closure (Spring Boot 4 / Spring Cloud /
+        # OTel / Cassandra / Testcontainers). Root coordinates only: BOM-managed
+        # starters/modules, parent-owned explicit pins, and build/test tools.
+        "at.yawk.lz4:lz4-java:1.10.3",
+        "com.github.ben-manes.caffeine:guava",
+        "com.github.java-json-tools:json-patch:1.13",
+        "commons-codec:commons-codec",
+        "io.cloudevents:cloudevents-core:4.1.1",
+        "io.cloudevents:cloudevents-json-jackson:4.1.1",
+        "io.micrometer:micrometer-tracing-bridge-otel",
+        "io.nats:jnats:2.23.0",
+        "io.opentelemetry:opentelemetry-exporter-otlp",
+        "io.opentelemetry:opentelemetry-sdk-testing",
+        "jakarta.servlet:jakarta.servlet-api",
+        "org.apache.cassandra:java-driver-metrics-micrometer",
+        "org.apache.commons:commons-lang3:3.20.0",
+        "org.bouncycastle:bcprov-jdk18on:1.84",
+        "org.jacoco:org.jacoco.agent:jar:runtime:0.8.14",
+        "org.jacoco:org.jacoco.cli:0.8.14",
+        "org.junit.platform:junit-platform-console-standalone:6.0.3",
+        "org.ow2.asm:asm-analysis:9.9",
+        "org.ow2.asm:asm-util:9.9",
+        "org.projectlombok:lombok",
+        "org.springdoc:springdoc-openapi-starter-webflux-api:3.0.3",
+        "org.springdoc:springdoc-openapi-starter-webmvc-api:3.0.3",
+        "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry",
+        "org.springframework.boot:spring-boot-restclient",
+        "org.springframework.boot:spring-boot-starter",
+        "org.springframework.boot:spring-boot-starter-actuator",
+        "org.springframework.boot:spring-boot-starter-actuator-test",
+        "org.springframework.boot:spring-boot-starter-data-cassandra",
+        "org.springframework.boot:spring-boot-starter-data-cassandra-test",
+        "org.springframework.boot:spring-boot-starter-jackson",
+        "org.springframework.boot:spring-boot-starter-security-oauth2-client",
+        "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server",
+        "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server-test",
+        "org.springframework.boot:spring-boot-starter-test",
+        "org.springframework.boot:spring-boot-starter-validation",
+        "org.springframework.boot:spring-boot-starter-webflux",
+        "org.springframework.boot:spring-boot-starter-webflux-test",
+        "org.springframework.boot:spring-boot-starter-webmvc-test",
+        "org.springframework.boot:spring-boot-webclient",
+        "org.springframework.cloud:spring-cloud-commons",
+        "org.springframework.cloud:spring-cloud-context",
+        "org.springframework.cloud:spring-cloud-starter-bootstrap",
+        "org.springframework.security:spring-security-test",
+        "org.testcontainers:testcontainers-cassandra",
+        "org.testcontainers:testcontainers-junit-jupiter",
+        "org.wiremock:wiremock-standalone:3.13.2",
+        "software.amazon.awssdk:regions:2.40.1",
+        "tools.jackson.module:jackson-module-blackbird",
+        # examples/java-spring-boot-service (versions from the Spring Boot BOM).
+        "org.springframework.boot:spring-boot-starter-web",
+        "org.junit.jupiter:junit-jupiter-api",
+        "org.junit.jupiter:junit-jupiter-engine",
+        "org.junit.platform:junit-platform-launcher",
+        "org.junit.platform:junit-platform-reporting",
     ],
+    boms = [
+        "net.javacrumbs.shedlock:shedlock-bom:7.7.0",
+        "org.springframework.boot:spring-boot-dependencies:4.0.7",
+        "org.springframework.cloud:spring-cloud-dependencies:2025.1.2",
+        "org.testcontainers:testcontainers-bom:2.0.5",
+    ],
+    fail_on_missing_checksum = True,
+    fetch_sources = True,
+    known_contributing_modules = ["protobuf"],
     lock_file = "//:maven_install.json",
     repositories = [
-        # Resolve through the internal Artifactory mirror, not public
-        # repo1.maven.org: the shared CI runner IP is rate-limited (429) on
-        # public Central, which fails go-lib-bazel-build-test on every MR.
-        # urm/artifactory/maven is the Central proxy + NVIDIA artifacts; the
-        # google mirror is a fallback.
-        "https://urm.nvidia.com/artifactory/maven",
+        # Public Central mirrors only. This is the public GitHub mirror; its
+        # hosted runners cannot resolve the internal Artifactory host, so the
+        # pinned closure must fetch from public repositories. The Google-hosted
+        # Central mirror is primary (not IP-rate-limited like repo1.maven.org);
+        # Maven Central is the fallback. Internal builds that need NVIDIA
+        # artifacts add the Artifactory virtual repo in their own overlay.
         "https://maven-central.storage-download.googleapis.com/maven2",
+        "https://repo.maven.apache.org/maven2",
     ],
+    resolver = "maven",
 )
-use_repo(maven, "maven")
+use_repo(maven, "nv_third_party_deps")

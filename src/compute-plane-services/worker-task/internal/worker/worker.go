@@ -125,6 +125,7 @@ func NewNVCTWorker(ctx context.Context, zapLogger *logs.ZapLogger, config config
 		Backend:                config.CloudProvider,
 		NcaId:                  config.NcaId,
 		BillingNcaId:           billingNcaId,
+		NspectId:               metering.NspectIdFromEnv(),
 		InstanceId:             config.InstanceId,
 		InstanceType:           config.InstanceType,
 		ICMSEnvironment:        config.ICMSEnvironment,
@@ -441,7 +442,7 @@ func (w *NVCTWorker) workSession(ctx context.Context) error {
 }
 
 func (w *NVCTWorker) PreStopCheck(ctx context.Context) error {
-	zap.L().Info("Recived termination signal, checking progress file")
+	zap.L().Info("Received termination signal, checking progress file")
 	progressData, err := progress.ParseProgressFile(w.config.ProgressFilePath)
 	if err != nil {
 		w.handleWorkerTermination(ctx)

@@ -64,7 +64,7 @@ Key components and data flows:
 
 **Data Flow Channels:**
 
-- **Red Lines (Streaming Channel)** - WebRTC streaming data path from Browser application through load balancers and Straming Proxy to Worker Containers
+- **Red Lines (Streaming Channel)** - WebRTC streaming data path from Browser application through load balancers and Streaming Proxy to Worker Containers
 - **Blue Lines (Signaling Channel)** - WebSocket signaling data path connecting Browser application, Customer services, Load Balancers, NVCF Services, and Worker Containers
 
 ## Prerequisites
@@ -646,7 +646,7 @@ echo "=== Cleanup verification complete ==="
 | --- | --- | --- | --- |
 | Inbound | TCP | 30800 (NodePort) | NLB security group (health checks) |
 | Inbound | UDP | 30504 (NodePort) | NLB security group (streaming traffic) |
-| Inbound | UDP | 6004 | EKS Interal Node (streaming traffic) |
+| Inbound | UDP | 6004 | EKS Internal Node (streaming traffic) |
 | Inbound | UDP | 3478 | EKS Internal Node (Stun request) |
 | Inbound | TCP | 8000 | EKS Internal Node (API Request) |
 | Outbound | All | All | 0.0.0.0/0 |

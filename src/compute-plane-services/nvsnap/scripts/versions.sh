@@ -42,8 +42,8 @@ NVSNAP_CRIU_SRC="${NVSNAP_CRIU_SRC:-}"
 
 # Core images — all on a fresh v0.0.1 baseline. Bump per CLAUDE.md
 # rule 19 (never reuse a tag on rebuild).
-NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.7}"
-NVSNAP_APP_VERSION="${NVSNAP_APP_VERSION:-v0.2.17}"
+NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.11}"
+NVSNAP_APP_VERSION="${NVSNAP_APP_VERSION:-v0.2.21}"
 NVSNAP_SERVER_VERSION="${NVSNAP_SERVER_VERSION:-v0.0.31}"
 NVSNAP_BLOBSTORE_VERSION="${NVSNAP_BLOBSTORE_VERSION:-v0.0.1}"
 NVSNAP_L2WAIT_VERSION="${NVSNAP_L2WAIT_VERSION:-v0.0.1}"
@@ -62,10 +62,12 @@ NVSNAP_LIBUV_VERSION="${NVSNAP_LIBUV_VERSION:-v0.0.1}"
 # Leave a ref blank if it is not yet pinned — ci/build-image.sh errors
 # with the var name rather than guessing a branch.
 NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
-# Pinned SHA on the io-uring-cr branch (rebased on upstream criu-dev + LZ4
-# compression #2895) for reproducible OSS builds. Bump when the fork advances.
+# Pinned SHA on the io-uring-cr branch (upstream criu-dev + LZ4 compression
+# #2895 + the io_uring SQ-array identity-map restore fix that makes SQPOLL
+# rings survive C/R, so libuv/uvloop servers restore with UV_USE_IO_URING=1)
+# for reproducible OSS builds. Bump when the fork advances.
 # Consumed by build-agent.sh (clean-checkout auto-clone) and ci/build-image.sh.
-NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-a25eb7b8b139c52b3ebcbe5e88e2015592db54a8}"
+NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-1ddd5c9c3951f994598b540917be462c338b518d}"
 NVSNAP_LIBZMQ_REPO="${NVSNAP_LIBZMQ_REPO:-https://github.com/balajinvda/libzmq.git}"
 NVSNAP_LIBZMQ_REF="${NVSNAP_LIBZMQ_REF:-checkpoint-restore-v1}"
 NVSNAP_LIBUV_REPO="${NVSNAP_LIBUV_REPO:-https://github.com/balajinvda/libuv.git}"

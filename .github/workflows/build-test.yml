@@ -49,3 +49,14 @@ jobs:
 
       - name: Run go-lib codegen freshness check
         run: ./tools/ci/check-go-codegen src/libraries/go/lib --install k8s.io/code-generator/cmd/deepcopy-gen@v0.34.2 --command 'make codegen-update'
+
+  github-release-helper:
+    name: GitHub release helper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run release helper tests
+        run: python3 tools/ci/test-github-release.py

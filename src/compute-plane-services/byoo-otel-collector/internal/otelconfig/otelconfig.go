@@ -42,6 +42,9 @@ type envConfig struct {
 	ByooLogChunkMaxBodyBytes         int    `split_words:"true"`
 	ByooLogChunkDryRun               bool   `split_words:"true"`
 	ByooLogExporterBatchMaxSizeBytes int    `split_words:"true"`
+	ByooMetricSubsetEnabled          bool   `split_words:"true"`
+	ByooMetricSubsetFilterConfig     string `split_words:"true"`
+	ByooWorkloadMetricsDropLabels    string `split_words:"true"`
 }
 
 func processEnvConfig(env *envConfig) error {
@@ -76,6 +79,15 @@ func getTemplateConfig() (TemplateConfig, error) {
 		return TemplateConfig{}, fmt.Errorf("BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES: %w", err)
 	}
 	tcgf.LogExporterBatchMaxSizeBytes = logExporterBatchMaxSizeBytes
+	metricSubsetFilterConfig, err := resolvedMetricSubsetFilterConfig(env.ByooMetricSubsetFilterConfig)
+	if err != nil {
+		return TemplateConfig{}, fmt.Errorf("BYOO_METRIC_SUBSET_FILTER_CONFIG: %w", err)
+	}
+	tcgf.MetricSubset = MetricSubsetConfig{
+		Enabled:      env.ByooMetricSubsetEnabled,
+		FilterConfig: metricSubsetFilterConfig,
+	}
+	tcgf.WorkloadMetrics.DropLabels = resolvedWorkloadMetricsDropLabels(env.ByooWorkloadMetricsDropLabels, env.ByooMetricSubsetEnabled)
 
 	functionID := env.NvcfFunctionID
 	functionVersionID := env.NvcfFunctionVersionID

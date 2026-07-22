@@ -35,7 +35,7 @@ For LLM functions, see [LLM Gateway](./llm-gateway.md#function-configuration) fo
 ### Container Versioning
 
 - Ensure that any resources that you tag for deployment into production environments are not simply using "latest" and are following a standard version control convention.
-  - During autoscaling, a function scaling any additional instances will pull the same specificed container image and version. If version is set to "latest", and the "latest" container image is updated between instance scaling, this can lead to undefined behavior.
+  - During autoscaling, a function scaling any additional instances will pull the same specified container image and version. If version is set to "latest", and the "latest" container image is updated between instance scaling, this can lead to undefined behavior.
 
 - Function versions created are immutable, this means that the container image and version cannot be updated for a function without creating a new version of the function.
 

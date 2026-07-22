@@ -533,7 +533,7 @@ func (r *Reconciler) patchStorageRequest(ctx context.Context, oldObj, newObj *nv
 func (r *Reconciler) doCleanup(ctx context.Context, st *nvcav1new.StorageRequest) (res reconcile.Result, err error) {
 	switch st.Spec.Type {
 	case nvcav1new.ModelCacheRequest:
-		err = r.doCleanupModelCacheNVMesh(ctx, st)
+		res, err = r.doCleanupModelCacheNVMesh(ctx, st)
 		// Do not clean up primary PV. The periodic runner that invokes cleanupIdleModelCaches
 		// will handle those.
 	default:

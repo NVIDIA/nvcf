@@ -21,8 +21,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version"
 	"github.com/spf13/cobra"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/version"
 )
 
 // makeVersionCmd creates the version command

@@ -90,7 +90,7 @@ func (s *Secrets) load() error {
 	return nil
 }
 
-// Watch for updates in secret file and rotate them in memeory.
+// Watch for updates in secret file and rotate them in memory.
 func (s *Secrets) rotateSecrets(ctx context.Context) {
 	zap.L().Info("Starting to watch for secrets update")
 

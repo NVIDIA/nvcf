@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"time"
 
-	_ "github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/api"
+	_ "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/api"
 
 	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
@@ -156,7 +156,6 @@ func (r *Router) setupRoutes() {
 
 	// Swagger documentation
 	r.engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
-
 }
 
 // handlePing handle ping endpoint

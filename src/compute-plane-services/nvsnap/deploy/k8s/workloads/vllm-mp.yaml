@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# E0 multi-GPU ladder: vLLM TinyLlama-1.1B, single GPU, MULTI-PROCESS
+# (VLLM_ENABLE_V1_MULTIPROCESSING=1: APIServer + separate EngineCore proc,
+# ZMQ RPC between them). Isolates "multi-process" from "multi-GPU" for the
+# criu-v2 engine: the historical multi-proc blocker (cross-process RPC unix
+# socket, setns(mnt_ns) EINVAL) was an upstream-CRIU-from-outside problem;
+# criu-v2 restores in-namespace, so this probes whether that class is gone.
+# Identical to vllm-small.yaml except the multiprocessing flag.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-mp
+  namespace: nvsnap-system
+  labels:
+    app: vllm-mp
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/demo-name: "vLLM multi-proc"
+    nvsnap.io/desc: "TinyLlama 1.1B on vLLM, multi-process EngineCore (E0)"
+    nvsnap.io/model: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    nvsnap.io/port: "8000"
+    nvsnap.io/gpus: "1"
+    nvsnap.io/path: "criu"
+spec:
+  automountServiceAccountToken: false
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          ulimit -c unlimited
+          mkdir -p /var/run/vllm
+          # criu-v2 convention: workload in its own session via setsid; stdio
+          # to a rootfs file; bash stays pid1 to reap orphans. See vllm-small.
+          nohup setsid vllm serve \
+            --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --max-model-len 2048 \
+            --gpu-memory-utilization 0.3 > /vllm.out 2>&1 < /dev/null &
+          tail -F /vllm.out &
+          while true; do sleep 30; done
+      env:
+        - { name: LD_LIBRARY_PATH, value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PYTHONFAULTHANDLER, value: "1" }
+        - { name: PYTHONUNBUFFERED,   value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,     value: "3" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+        - { name: HF_HOME,            value: "/root/.cache/huggingface" }
+        # E0 experiment: multi-process ON (separate EngineCore proc + ZMQ RPC).
+        # vllm-small pins this to 0; flipping it is the single variable here.
+        - { name: VLLM_ENABLE_V1_MULTIPROCESSING, value: "1" }
+        - { name: USE_LIBUV, value: "1" }
+        # io_uring is C/R-safe (CRIU fork sq_array identity-map restore fix).
+        - { name: UV_USE_IO_URING, value: "1" }
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - { name: VLLM_LOGGING_LEVEL, value: "INFO" }
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 60
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+
+  restartPolicy: Never

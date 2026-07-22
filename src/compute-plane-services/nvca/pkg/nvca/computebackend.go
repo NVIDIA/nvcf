@@ -68,7 +68,7 @@ type K8sArtifactHelper interface {
 	GetICMSRequestUpdatesForCreatePodRequest(ctx context.Context,
 		st nvcav2beta1.InstanceStatus, req *nvcav2beta1.ICMSRequest) (types.ICMSRequestUpdateInfo, error)
 
-	// CreatePodArtifact creates a PodArtifact as specfied by the inputs podArt
+	// CreatePodArtifact creates a PodArtifact as specified by the inputs podArt
 	CreatePodArtifact(ctx context.Context, podArt function.LaunchArtifact, mf mutateFunc) error
 
 	// GetErroredPodLogs returns the pod logs of the failed instance container or the static error message for Utils / Init if one exists

@@ -27,12 +27,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/config"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/logger"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/router"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/service"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/tracing"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/version"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/logger"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/router"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/service"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/tracing"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"

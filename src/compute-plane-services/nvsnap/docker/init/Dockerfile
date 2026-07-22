@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Combined init container for NvSnap restore pods.
 # Replaces 5 separate init containers (uvloop, libuv, libzmq, pyzmq, criu)
 # with a single container that copies all dependencies in one step.

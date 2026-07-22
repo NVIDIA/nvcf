@@ -20,8 +20,8 @@ package cli
 import (
 	"fmt"
 
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
 	"github.com/spf13/cobra"
-	"github.com/NVIDIA/nvcf/src/invocation-plan-services/nats-auth-callout/internal/config"
 )
 
 func makeConfigCmd() *cobra.Command {

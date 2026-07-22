@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # NVSNAP Agent Container - Multi-Stage Build (LOCAL CRIU)
 #
 # This Dockerfile uses LOCAL criu-src instead of GitHub clone

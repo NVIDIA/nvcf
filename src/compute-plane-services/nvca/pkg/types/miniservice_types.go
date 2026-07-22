@@ -65,6 +65,11 @@ type MiniserviceMetadata struct {
 	ImagePullSecretNames          []string            `json:"imagePullSecretNames,omitempty"`
 	TerminationGracePeriodSeconds *int64              `json:"terminationGracePeriodSeconds,omitempty"`
 	SchedulerName                 string              `json:"schedulerName,omitempty"`
+
+	// ModelCacheInitEnv is the flattened launch environment (plus INSTANCE_ID)
+	// injected into the ephemeral model-cache-init container by the webhook.
+	// Set only when the ephemeral model-cache backend is selected.
+	ModelCacheInitEnv map[string]string `json:"modelCacheInitEnv,omitempty"`
 }
 
 // ToConfigMapData serializes m into ConfigMap-compatible flat string data.

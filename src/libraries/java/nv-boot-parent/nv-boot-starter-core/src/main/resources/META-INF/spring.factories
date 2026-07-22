@@ -1,0 +1,9 @@
+# Environment Post Processors
+org.springframework.boot.EnvironmentPostProcessor=\
+com.nvidia.boot.core.env.BootCoreEnvironmentPostProcessor,\
+com.nvidia.boot.core.env.ValidateEnvironmentPostProcessor
+
+# Bootstrap Configuration
+org.springframework.cloud.bootstrap.BootstrapConfiguration=\
+com.nvidia.boot.core.bootstrap.DnsCacheBootstrapConfiguration,\
+com.nvidia.boot.core.bootstrap.MiscBootstrapConfiguration

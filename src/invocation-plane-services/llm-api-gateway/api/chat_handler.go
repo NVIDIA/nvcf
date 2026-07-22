@@ -101,7 +101,13 @@ func (h *OpenAIChatHandlers) handleChatCompletionRequest(
 
 	if usageHasTokenCounts(&response.Usage) {
 		finalUsage = &response.Usage
-		h.handlers.observability.recordLLMUsage(c.UserContext(), endpointLabel(c), finalUsage, false)
+		h.handlers.observability.recordLLMUsage(
+			c.UserContext(),
+			endpointLabel(c),
+			requestFunctionID(c),
+			finalUsage,
+			false,
+		)
 	}
 	if responseModel != "" {
 		response.Model = responseModel
@@ -155,6 +161,7 @@ func (h *OpenAIChatHandlers) streamChatCompletionWithSender(
 		finalizeCtx,
 		c.UserContext(),
 		endpointLabel(c),
+		requestFunctionID(c),
 		request,
 		responseModel,
 		stream,
@@ -235,6 +242,7 @@ func (h *OpenAIChatHandlers) wrapStreamForFinalization(
 	finalizeCtx context.Context,
 	streamCtx context.Context,
 	endpoint string,
+	functionID string,
 	request *provider.NormalizedRequest,
 	responseModel string,
 	stream <-chan provider.StreamEvent,
@@ -250,6 +258,9 @@ func (h *OpenAIChatHandlers) wrapStreamForFinalization(
 		ctx, span := telemetry.Tracer().Start(streamCtx, "llm-api-gateway.stream")
 		defer span.End()
 		span.SetAttributes(attribute.String("endpoint", endpoint))
+		if functionID != "" {
+			span.SetAttributes(attribute.String("nvcf.function.id", functionID))
+		}
 
 		streamStart := time.Now()
 		firstTokenRecorded := false
@@ -258,6 +269,7 @@ func (h *OpenAIChatHandlers) wrapStreamForFinalization(
 			ctx:                context.WithoutCancel(ctx),
 			finalizeCtx:        finalizeCtx,
 			endpoint:           endpoint,
+			functionID:         functionID,
 			metrics:            h.handlers.observability,
 			request:            request,
 			firstTokenRecorded: &firstTokenRecorded,
@@ -272,6 +284,7 @@ func (h *OpenAIChatHandlers) wrapStreamForFinalization(
 				time.Since(streamStart).Seconds(),
 				attribute.String("endpoint", endpoint),
 				attribute.String("status", streamStatus),
+				telemetry.FunctionIDAttribute(functionID),
 			)
 		}()
 
@@ -292,6 +305,7 @@ type streamObservation struct {
 	ctx                context.Context
 	finalizeCtx        context.Context
 	endpoint           string
+	functionID         string
 	metrics            observabilityMetrics
 	request            *provider.NormalizedRequest
 	firstTokenRecorded *bool
@@ -302,8 +316,24 @@ type streamObservation struct {
 
 func (h *OpenAIChatHandlers) observeStreamEvent(obs streamObservation, event provider.StreamEvent) (string, bool) {
 	streamStatus, hasStatus := streamEventStatus(event.Err, obs.span)
-	recordFirstTokenIfNeeded(obs.ctx, obs.endpoint, obs.metrics, event.Chunk, obs.firstTokenRecorded, obs.streamStart)
-	h.finalizeStreamUsageIfNeeded(obs.ctx, obs.finalizeCtx, obs.endpoint, obs.request, event.Chunk, obs.state)
+	recordFirstTokenIfNeeded(
+		obs.ctx,
+		obs.endpoint,
+		obs.functionID,
+		obs.metrics,
+		event.Chunk,
+		obs.firstTokenRecorded,
+		obs.streamStart,
+	)
+	h.finalizeStreamUsageIfNeeded(
+		obs.ctx,
+		obs.finalizeCtx,
+		obs.endpoint,
+		obs.functionID,
+		obs.request,
+		event.Chunk,
+		obs.state,
+	)
 	return streamStatus, hasStatus
 }
 
@@ -328,6 +358,7 @@ func streamEventStatus(err error, span trace.Span) (string, bool) {
 func recordFirstTokenIfNeeded(
 	ctx context.Context,
 	endpoint string,
+	functionID string,
 	metrics observabilityMetrics,
 	chunk *models.ChatCompletionChunk,
 	firstTokenRecorded *bool,
@@ -342,6 +373,7 @@ func recordFirstTokenIfNeeded(
 		metrics.streamFirstToken,
 		time.Since(streamStart).Seconds(),
 		attribute.String("endpoint", endpoint),
+		telemetry.FunctionIDAttribute(functionID),
 	)
 }
 
@@ -349,6 +381,7 @@ func (h *OpenAIChatHandlers) finalizeStreamUsageIfNeeded(
 	ctx context.Context,
 	finalizeCtx context.Context,
 	endpoint string,
+	functionID string,
 	request *provider.NormalizedRequest,
 	chunk *models.ChatCompletionChunk,
 	state *streamFinalizationState,
@@ -356,7 +389,7 @@ func (h *OpenAIChatHandlers) finalizeStreamUsageIfNeeded(
 	if chunk == nil || !usageHasTokenCounts(chunk.Usage) || !state.MarkFinalized() {
 		return
 	}
-	h.handlers.observability.recordLLMUsage(ctx, endpoint, chunk.Usage, true)
+	h.handlers.observability.recordLLMUsage(ctx, endpoint, functionID, chunk.Usage, true)
 	h.handlers.finalizeTokenConsumption(finalizeCtx, request, chunk.Usage)
 }
 

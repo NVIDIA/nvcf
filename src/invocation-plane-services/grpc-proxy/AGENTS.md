@@ -25,7 +25,8 @@ bazel run //nvidia-internal:image_push_ncp_dev
 ```
 
 CI subproject id: `grpc-proxy`. Native Bazel validation and release wiring live
-in `tools/ci/subproject-validations.yaml`.
+in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
+present in this public snapshot.
 
 ## Local Gotchas
 

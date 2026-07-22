@@ -12,7 +12,7 @@ function main() {
   # Run tests
   goTest
 
-  # Remove unused dependecies
+  # Remove unused dependencies
   go mod tidy
 }
 

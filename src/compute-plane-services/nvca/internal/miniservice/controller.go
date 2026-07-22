@@ -415,7 +415,7 @@ func (r *Reconciler) newNVLinkOptMetricsRunnable(mgr ctrl.Manager) manager.Runna
 	})
 }
 
-// updateNVLinkOptMetrics is a helper for the NVLink opt metrics runnable that actuall updates metrics.
+// updateNVLinkOptMetrics is a helper for the NVLink opt metrics runnable that actually updates metrics.
 func (r *Reconciler) updateNVLinkOptMetrics(ctx context.Context) error {
 	log := logf.FromContext(ctx)
 

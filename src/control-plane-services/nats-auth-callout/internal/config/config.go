@@ -360,7 +360,7 @@ func DisplayConfigFields(fields []ConfigField) string {
 
 	for _, field := range fields {
 		nameWithColon := field.Name + ":"
-		result.WriteString(fmt.Sprintf("%-*s %s\n", maxNameLen+1, nameWithColon, field.Value))
+		fmt.Fprintf(&result, "%-*s %s\n", maxNameLen+1, nameWithColon, field.Value)
 	}
 
 	return result.String()

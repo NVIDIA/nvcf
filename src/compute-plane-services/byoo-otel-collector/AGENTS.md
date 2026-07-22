@@ -24,15 +24,12 @@ Run `make update-config-template` after changing templates under
 template source, generator logic, or supported backend examples.
 
 CI subproject id: `byoo-otel-collector`. The umbrella CI lane is declared in
-`tools/ci/subproject-validations.yaml`; current custom checks include
+`tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
+present in this public snapshot; current custom checks include
 `check-version-modified`, generated example drift, generated config drift, and
 otelconfig validation. Do not add a subtree `.gitlab-ci.yml`.
 
 ## Collector Version Updates
-
-Agents that can read Cursor project skills should load
-`.cursor/skills/update-otel-collector-version/SKILL.md` before changing
-collector versions.
 
 Use the script instead of editing version strings by hand:
 
@@ -44,8 +41,7 @@ Use the script instead of editing version strings by hand:
 
 The script updates version references in `otel-collector-build.yaml`,
 `AGENTS.md`, `README.md`, `Makefile`, `Dockerfile`,
-`Dockerfile.nvcf-otel-collector`, `scripts/regenerate-otelcol.sh`,
-`../../../ai-tooling/dev/skills/update-otel-collector-version/SKILL.md`, and
+`Dockerfile.nvcf-otel-collector`, `scripts/regenerate-otelcol.sh`, and
 `VERSION`. It also updates `.gitlab-ci.yml` when that file exists. Run it from
 the BYOO collector root. You can pass versions with or without the `v` prefix
 (for example, `v0.153.0` or `0.153.0`). Pass the optional `v1.x.y` provider
@@ -73,4 +69,3 @@ The root generated release config must keep `release.version_file: VERSION` and 
 - `README.md`
 - `generator/doc/README.md`
 - `validator/README.md`
-- `docs/Deployment.md`

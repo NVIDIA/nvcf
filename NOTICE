@@ -472,3 +472,4 @@ The following third-party licenses are included in this repository:
     src/libraries/go/lib/vendor/sigs.k8s.io/randfill/NOTICE
     src/libraries/go/lib/vendor/sigs.k8s.io/structured-merge-diff/v6/LICENSE
     src/libraries/go/lib/vendor/sigs.k8s.io/yaml/LICENSE
+    src/libraries/java/nv-boot-parent/NOTICE

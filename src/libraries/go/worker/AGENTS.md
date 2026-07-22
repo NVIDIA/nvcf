@@ -20,7 +20,8 @@ go build ./...
 ```
 
 CI subproject id: `go-worker`. The umbrella uses the `go-tool` profile in
-`tools/ci/subproject-validations.yaml`.
+`tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
+present in this public snapshot.
 
 ## Local Gotchas
 

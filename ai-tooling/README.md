@@ -6,15 +6,8 @@ Public agent skills for users and developers working with NVIDIA Cloud Functions
 
 | Skill | Description |
 |-------|-------------|
-| [bazel-go-gazelle](dev/skills/bazel-go-gazelle/SKILL.md) | Wire Go modules into Bazel with rules_go and Gazelle |
-| [bazel-gitlab-child-pipelines](dev/skills/bazel-gitlab-child-pipelines/SKILL.md) | Generic Bazel parent-child pipeline pattern. For nvcf/nvcf native subprojects, prefer `nvcf-gitlab-subproject-ci` |
-| [bazel-java-maven](dev/skills/bazel-java-maven/SKILL.md) | Wire Java and Spring Boot services into Bazel with Maven artifacts |
-| [bazel-monorepo-bootstrap](dev/skills/bazel-monorepo-bootstrap/SKILL.md) | Bootstrap Bazel in an existing polyglot monorepo |
-| [bazel-oci-images](dev/skills/bazel-oci-images/SKILL.md) | Build multi-arch OCI images from Bazel binaries |
-| [bazel-rust-crate-universe](dev/skills/bazel-rust-crate-universe/SKILL.md) | Wire Rust services into Bazel with crate_universe |
-| [documentation-style](dev/skills/documentation-style/SKILL.md) | NVCF documentation conventions for public repo prose |
+| [documentation-style](dev/skills/documentation-style/SKILL.md) | Public docs, AGENTS, and skill-writing style |
 | [nvcf-explore-stack](dev/skills/nvcf-explore-stack/SKILL.md) | Navigate the self-hosted stack topology, helmfile dependency graph, chart ownership, and deployment order |
-| [nvcf-gitlab-subproject-ci](dev/skills/nvcf-gitlab-subproject-ci/SKILL.md) | Maintain native subproject CI through `tools/ci/subproject-validations.yaml` and the generated child pipeline |
 | [nvcf-self-managed-installation](user/skills/nvcf-self-managed-installation/SKILL.md) | Install and deploy the nvcf-self-managed-stack helmfile bundle: installation, teardown, values overrides, pull secrets, debugging |
 | [nvcf-self-managed-cli](user/skills/nvcf-self-managed-cli/SKILL.md) | Standalone NVCF CLI (`nvcf-cli`) for self-managed/self-hosted deployments: install, status, add compute plane, teardown, function lifecycle, invocation, and API keys |
 | [nvcf-self-managed-prerequisite](user/skills/nvcf-self-managed-prerequisite/SKILL.md) | Install the cluster-level prerequisites NVCA needs: KAI Scheduler (with queue-quota patch) and the SMB CSI driver. Cloud-neutral helm installs pinned to NVCF-validated versions |

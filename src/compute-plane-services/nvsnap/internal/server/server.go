@@ -219,7 +219,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/checkpoints/register", s.registerCheckpoint).Methods("POST")
 	// nvsnap#59: content-addressed lookup. NVCA's Hook A POSTs the
 	// canonical workload identity (imageRef + modelID + flags +
-	// driverMajor) here to find a restoreable artifact across fvIDs.
+	// driverMajor) here to find a restorable artifact across fvIDs.
 	// Returns matches sorted freshest-first. Indexed by hash + image_ref
 	// in the catalog DB.
 	api.HandleFunc("/checkpoints/lookup", s.lookupCheckpoint).Methods("POST")

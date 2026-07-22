@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Restore placeholder for a criu-v2 checkpoint of vllm-tp2 (E1 TP=2 eager).
+# Same dumb-reaper convention as vllm-small-restore.yaml, sized for 2 GPUs.
+# Note: k8s may hand this pod a different physical GPU pair than the source
+# had; on p5 (NVSwitch, all-to-all NVLink) any pair is topologically
+# equivalent - device remap correctness is part of the E1 experiment.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-tp2-restored
+  namespace: nvsnap-system
+  labels:
+    app: vllm-tp2-restored
+    nvsnap.io/demo: "true"
+spec:
+  automountServiceAccountToken: false
+  nodeName: __NODE_NAME__
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: restore
+      image: vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          mkdir -p /var/run/vllm
+          echo 100000 > /proc/sys/kernel/ns_last_pid || echo "(ns_last_pid bump failed)"
+          touch /vllm.out
+          tail -F /vllm.out &
+          while true; do sleep 30; done
+      env:
+        - name: CHECKPOINT_ID
+          value: "__CHECKPOINT_ID__"
+        - { name: HF_HOME, value: "/root/.cache/huggingface" }
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 5
+        failureThreshold: 60
+      securityContext:
+        privileged: true
+      resources:
+        limits:
+          nvidia.com/gpu: "2"
+        requests:
+          nvidia.com/gpu: "2"
+      volumeMounts:
+        - { name: checkpoints, mountPath: /checkpoints }
+        - { name: dev-shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: checkpoints
+      hostPath:
+        path: /var/lib/containerd/nvsnap-checkpoints
+        type: Directory
+    - name: dev-shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+
+  restartPolicy: Never

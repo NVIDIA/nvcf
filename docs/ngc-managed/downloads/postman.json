@@ -1310,7 +1310,7 @@
 					]
 				}
 			],
-			"description": "Defines function pass-through invocation endpoints where the invocation payload  is passed as-is without any wrapper. All tne endpoints defined in this API  require either a bearer token or an api-key with 'invoke_function' scope in the  HTTP Authorization header. "
+			"description": "Defines function pass-through invocation endpoints where the invocation payload  is passed as-is without any wrapper. All the endpoints defined in this API  require either a bearer token or an api-key with 'invoke_function' scope in the  HTTP Authorization header. "
 		},
 		{
 			"name": "Asset Management",
@@ -2570,7 +2570,7 @@
 					]
 				}
 			],
-			"description": "Defines Function Management endpoints for Account Admins. All tne endpoints  defined in this API require a bearer token or an api-key with appropriate scope in  the HTTP Authorization header. "
+			"description": "Defines Function Management endpoints for Account Admins. All the endpoints  defined in this API require a bearer token or an api-key with appropriate scope in  the HTTP Authorization header. "
 		},
 		{
 			"name": "Function Deployment",
@@ -2998,7 +2998,7 @@
 					]
 				}
 			],
-			"description": "Defines Function Deployment endpoints for Account Admins. All tne endpoints defined  in this API require a bearer token with 'deploy_function' scope in the HTTP  Authorization header."
+			"description": "Defines Function Deployment endpoints for Account Admins. All the endpoints defined  in this API require a bearer token with 'deploy_function' scope in the HTTP  Authorization header."
 		},
 		{
 			"name": "JWT Token",

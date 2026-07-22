@@ -14,7 +14,7 @@
 -- limitations under the License.
 -- generate and cache an (expiring) CA bundle based on the
 -- intermediate CA we have from vault and our private key.
--- use it to MITM the incomming TLS connection and masquerade
+-- use it to MITM the incoming TLS connection and masquerade
 -- as which ever host the client asked for. this requires the
 -- client to accept the CA chain from vault.
 local ssl            = require "ngx.ssl"

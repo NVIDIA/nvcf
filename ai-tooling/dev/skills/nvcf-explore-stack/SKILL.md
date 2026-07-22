@@ -43,7 +43,6 @@ Read these from the monorepo root (the directory containing `imports.yaml`):
 
 Authoritative (always read first when answering):
 
-- `deploy/stacks/self-managed/helmfile.d/000-prepare.yaml.gotmpl`
 - `deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl`
 - `deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl`
 - `deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl`
@@ -104,7 +103,7 @@ Assume the user is onboarding to the stack. Be concise. Always include the chart
 After exploring, suggest the next skill when applicable:
 
 - `nvcf-self-managed-installation` for installing, upgrading, or tearing down the stack
-- `nvcf-self-hosted-local-dev` for k3d / local cluster work
+- `docs/dev/local-development.md` for k3d / local cluster work
 - `nvcf-self-managed-cli` for `nvcf-cli` usage against an installed stack
 - `docs/AGENTS.md` and `fern/versions/main.yml` for routing the user to a published docs page
 - `tools/ci/check-doc-version-sync` for keeping the documentation manifest in sync with the docs version catalog

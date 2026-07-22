@@ -1,0 +1,82 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration for NVIDIA/nvcf.
+# Docs: https://docs.coderabbit.ai/reference/configuration
+language: en-US
+early_access: false
+reviews:
+  # "chill" keeps the reviewer focused on substantive issues over nits.
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  # Pre-merge checks consolidate PR-metadata policy into CodeRabbit's single
+  # status, replacing the standalone pr-title-check and pr-issue-check GitHub
+  # Actions. Warning mode: they nudge the author, they do not block the merge
+  # queue (raise to "error" to gate). The title check does both the Conventional
+  # Commit format and the semantic "type matches the change" judgment a regex
+  # cannot make.
+  pre_merge_checks:
+    title:
+      mode: warning
+      requirements: >-
+        The title must follow Conventional Commits v1.0.0, grammar
+        `type[(scope)][!]: subject`, with exactly one type prefix (never a
+        compound like "type1+type2(scope):"). The scope and the breaking-change
+        `!` are optional, EXCEPT that the customer-impact types feat, fix, and
+        perf require a scope; docs, build, test, refactor, ci, chore, style, and
+        revert may omit it. Ignore a leading Draft:/[Draft]/[draft]:/WIP marker
+        when validating. Beyond format, the <type> must accurately reflect the
+        primary nature of the diff, not merely be a valid type. Flag mismatches:
+        a docs-only change (only *.md or
+        docs/**) titled chore or fix should be docs; a CI/workflow-only change
+        (.github/**, .gitlab-ci.yml, tools/ci/**) titled chore should be ci; and
+        especially a bug fix or feature mislabeled as chore/docs/refactor, which
+        would wrongly hide a customer-facing change from the release notes (feat,
+        fix, and perf appear in release notes; docs, chore, ci, build, test,
+        refactor, style do not). Do not flag PRs that legitimately span multiple
+        types where the chosen type reflects the most significant change. See
+        AGENTS.md commit conventions.
+    issue_assessment:
+      mode: warning
+  # Skip generated, vendored, and binary-ish files so review focuses on
+  # human-authored source.
+  path_filters:
+    - "!**/vendor/**"
+    - "!**/testdata/**"
+    - "!**/*.pb.go"
+    - "!**/zz_generated.*"
+    - "!**/*_generated.go"
+    - "!**/MODULE.bazel.lock"
+    - "!**/*.tgz"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!tools/ci/generated-release-jobs.yml"
+  path_instructions:
+    - path: "src/**/*.go"
+      instructions: >-
+        Check Go error wrapping (%w), structured logging with required context
+        fields (request/function/cluster/org id), and that request-handling
+        changes add logs, tracing, and RED metrics per AGENTS.md.
+    - path: "src/**/*.rs"
+      instructions: >-
+        Check error handling, tracing spans on cross-service calls, and that
+        no secrets or full request bodies are logged.
+    - path: "**/*.sql"
+      instructions: >-
+        Cassandra DDL migrations are forward-only and one keyspace per
+        subdirectory. Flag destructive statements and missing IF NOT EXISTS.
+  tools:
+    shellcheck:
+      enabled: true
+    yamllint:
+      enabled: true
+    golangci-lint:
+      enabled: true
+chat:
+  auto_reply: true

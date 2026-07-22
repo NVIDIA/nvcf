@@ -23,7 +23,8 @@ bazel test //... --flaky_test_attempts=3
 ```
 
 CI subproject id: `ratelimiter`. Native Bazel validation and release wiring
-live in `tools/ci/subproject-validations.yaml`.
+live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config
+not present in this public snapshot.
 
 ## Proto and Test Gotchas
 
