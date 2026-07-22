@@ -167,6 +167,46 @@ func TestSetResponsesProxyContextHeadersSetsTargetRegionCompatibilityHeaders(t *
 	}
 }
 
+func TestSetResponsesProxyContextHeadersForwardsResolvedPriority(t *testing.T) {
+	t.Parallel()
+
+	priority := uint32(3)
+	headers := http.Header{}
+	setResponsesProxyContextHeaders(headers, &requestctx.RequestContext{
+		Priority: &priority,
+	})
+
+	if got := headers.Get(headerResponsesPriority); got != "3" {
+		t.Fatalf("%s = %q, want 3", headerResponsesPriority, got)
+	}
+}
+
+func TestSetResponsesProxyContextHeadersOmitsUnsetPriority(t *testing.T) {
+	t.Parallel()
+
+	headers := http.Header{}
+	setResponsesProxyContextHeaders(headers, &requestctx.RequestContext{})
+
+	if got := headers.Get(headerResponsesPriority); got != "" {
+		t.Fatalf("%s = %q, want empty", headerResponsesPriority, got)
+	}
+}
+
+func TestSetResponsesProxyContextHeadersStripsClientSuppliedPriorityWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	// The responses path clones inbound client headers before applying
+	// context headers; a client-supplied X-Priority must be stripped when no
+	// priority resolved.
+	headers := http.Header{}
+	headers.Set(headerResponsesPriority, "9")
+	setResponsesProxyContextHeaders(headers, &requestctx.RequestContext{})
+
+	if got := headers.Get(headerResponsesPriority); got != "" {
+		t.Fatalf("%s = %q, want empty", headerResponsesPriority, got)
+	}
+}
+
 func TestCreateResponseReusesReturnedSessionIDForAffinity(t *testing.T) {
 	t.Parallel()
 
