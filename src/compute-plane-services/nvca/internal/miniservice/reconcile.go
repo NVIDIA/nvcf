@@ -739,7 +739,11 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		}
 		// Apply BYOO telemetry annotations to workload objects for Helm-rendered pods
 		metaInput.EnvVars = append(metaInput.EnvVars, byooEnvs...)
-		metaInput.OTelCollectorEnvVars = append(metaInput.OTelCollectorEnvVars, r.cfg.Agent.BYOOLogChunking.EnvVars()...)
+		collectorEnvs := r.cfg.Agent.BYOOOTelCollectorEnvVars()
+		metaInput.OTelCollectorEnvVars = append(metaInput.OTelCollectorEnvVars, collectorEnvs...)
+		// The webhook special-cases Helm utils pods and skips metadata-carried collector
+		// env injection, so inject the envs directly into the BYOO collector sidecar.
+		k8sutil.AddBYOOEnvVarsToPodSpec(&utilsPod.Spec, collectorEnvs)
 	}
 
 	// Task-specific mutators.

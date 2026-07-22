@@ -1,0 +1,78 @@
+load("@rules_java//java:defs.bzl", "java_library")
+load("//src/libraries/java/nv-boot-parent/tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
+
+CORE_REQUIRED_DEPS = [
+    "@nv_third_party_deps//:com_github_ben_manes_caffeine_guava",
+    "@nv_third_party_deps//:com_google_guava_guava",
+    "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_actuator_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_health",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_actuator",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_core",
+]
+
+# Maven optional/provided integrations must compile with the starter, but they
+# must not become runtime dependencies of every downstream Bazel application.
+CORE_OPTIONAL_COMPILE_DEPS = [
+    "@nv_third_party_deps//:io_swagger_core_v3_swagger_models_jakarta",
+    "@nv_third_party_deps//:jakarta_servlet_jakarta_servlet_api",
+    "@nv_third_party_deps//:org_springdoc_springdoc_openapi_starter_webflux_api",
+    "@nv_third_party_deps//:org_springdoc_springdoc_openapi_starter_webmvc_api",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:org_springframework_spring_webflux",
+    "@nv_third_party_deps//:org_springframework_spring_webmvc",
+]
+
+java_library(
+    name = "optional_compile_deps",
+    exports = CORE_OPTIONAL_COMPILE_DEPS,
+    neverlink = True,
+    visibility = ["//visibility:private"],
+)
+
+nv_boot_library(
+    name = "nv_boot_starter_core",
+    srcs = glob(["src/main/java/**/*.java"]),
+    resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-core/src/main/resources",
+    resources = glob(["src/main/resources/**"]),
+    visibility = ["//visibility:public"],
+    deps = CORE_REQUIRED_DEPS + [":optional_compile_deps"],
+)
+
+nv_boot_runtime_classpath_test(
+    name = "runtime_scope_test",
+    target = ":nv_boot_starter_core",
+    forbidden_artifacts = [
+        "jakarta.servlet-api",
+        "spring-web-",
+        "spring-webflux-",
+        "spring-webmvc-",
+        "springdoc-openapi-starter-webflux-api",
+        "springdoc-openapi-starter-webmvc-api",
+        "swagger-models-jakarta",
+    ],
+)
+
+nv_boot_library_test(
+    name = "tests",
+    srcs = glob(["src/test/java/**/*.java"]),
+    coverage_library = ":nv_boot_starter_core",
+    resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-core/src/test/resources",
+    resources = glob(["src/test/resources/**"]),
+    deps = [
+        ":nv_boot_starter_core",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_actuator_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webflux_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_webmvc_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_webtestclient",
+    ] + CORE_REQUIRED_DEPS + CORE_OPTIONAL_COMPILE_DEPS,
+)

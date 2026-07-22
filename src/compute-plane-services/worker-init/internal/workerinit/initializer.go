@@ -143,6 +143,7 @@ func NewInitializer(config configs.InitConfig) (Initializer, error) {
 		Backend:                backend,
 		NcaId:                  config.NcaId,
 		BillingNcaId:           billingNcaId,
+		NspectId:               metering.NspectIdFromEnv(),
 		InstanceId:             config.InstanceId,
 		InstanceType:           config.InstanceType,
 		ICMSEnvironment:        config.ICMSEnvironment,

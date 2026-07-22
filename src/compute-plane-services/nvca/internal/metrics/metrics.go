@@ -1063,6 +1063,7 @@ func (m *Metrics) RecordMiniServiceFailure(ncaID, reason string) {
 }
 
 // SetMiniServiceReadyStatus sets the ready status gauge for a MiniService.
+//
 // Deprecated: use RecordMiniServicePhaseTransition and RecordMiniServiceFailure instead.
 func (m *Metrics) SetMiniServiceReadyStatus(ncaID string, value float64) {
 	if m == nil {

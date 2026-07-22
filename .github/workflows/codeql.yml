@@ -9,6 +9,7 @@ on:
     paths:
       - "**/*.go"
       - "**/*.rs"
+      - "**/*.java"
       - "**/go.mod"
       - "**/go.sum"
       - "**/Cargo.toml"
@@ -19,6 +20,7 @@ on:
     paths:
       - "**/*.go"
       - "**/*.rs"
+      - "**/*.java"
       - "**/go.mod"
       - "**/go.sum"
       - "**/Cargo.toml"
@@ -63,31 +65,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go=false; rust=false
+          go=false; rust=false; java=false
           files=""
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             # Pushes to main and the weekly schedule scan everything, Go included.
-            go=true; rust=true
+            go=true; rust=true; java=true
           else
             # Never silently skip: if the changed-file lookup fails, scan both
             # languages instead of treating an empty result as "no code changed".
             if ! files="$(gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --jq '.[].filename')"; then
               echo "::warning::changed-file lookup failed; scanning all languages"
-              go=true; rust=true; files=""
+              go=true; rust=true; java=true; files=""
             fi
             # gh api filenames are repo-relative with no leading slash, so anchor
             # manifests with (^|/) to match root and nested files alike.
             if printf '%s\n' "$files" | grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$'; then rust=true; fi
+            if printf '%s\n' "$files" | grep -qE '\.java$'; then java=true; fi
             # A change to the scan config itself re-scans the PR-time languages.
-            if printf '%s\n' "$files" | grep -qE '(^|/)\.github/workflows/codeql\.yml$'; then rust=true; fi
+            if printf '%s\n' "$files" | grep -qE '(^|/)\.github/workflows/codeql\.yml$'; then rust=true; java=true; fi
           fi
           inc=""
           if [ "$go" = true ];   then inc="${inc}{\"language\":\"go\",\"build-mode\":\"autobuild\"},"; fi
           if [ "$rust" = true ]; then inc="${inc}{\"language\":\"rust\",\"build-mode\":\"none\"},"; fi
+          if [ "$java" = true ]; then inc="${inc}{\"language\":\"java-kotlin\",\"build-mode\":\"none\"},"; fi
           inc="${inc%,}"
           echo "matrix={\"include\":[${inc}]}" >> "$GITHUB_OUTPUT"
           if [ -n "$inc" ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
-          echo "selected languages: go=$go rust=$rust"
+          echo "selected languages: go=$go rust=$rust java=$java"
 
   analyze:
     name: CodeQL (${{ matrix.language }})

@@ -51,9 +51,9 @@ Coordinates are resolved by `rules_jvm_external` and pinned in
 
 1. Add the coordinate to `maven.install(artifacts = [...])` in the root
    `MODULE.bazel`.
-2. Re-pin: `bazel run @maven//:pin` (or `REPIN=1 bazel run @maven//:pin` when
+2. Re-pin: `bazel run @nv_third_party_deps//:pin` (or `REPIN=1 bazel run @nv_third_party_deps//:pin` when
    updating an existing set).
-3. Reference it as `@maven//:group_artifact` in `deps`. List every artifact your
+3. Reference it as `@nv_third_party_deps//:group_artifact` in `deps`. List every artifact your
    code imports directly, not just the aggregator starter, so the strict-deps
    header compiler resolves the symbols.
 

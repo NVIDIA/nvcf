@@ -125,7 +125,8 @@ func newLLMRouterClientContainer(
 		fmt.Sprintf("--stargate-address=%s", llmRequestRouterAddress),
 		fmt.Sprintf("--inference-server-id=%s", instanceID),
 		fmt.Sprintf("--auth-token-file=%s", llmWorkerTokenPath),
-		"--reverse-tunnel",
+		"--backend-connectivity=reverse",
+		"--initial-input-tps=100",
 	}
 	if tcfg.StargateQUICInsecure {
 		args = append(args, "--quic-insecure")
@@ -159,6 +160,13 @@ func newLLMRouterClientContainer(
 			{
 				Name:      "llm",
 				MountPath: llmDirMountPath,
+			},
+			// config-data backs SHARED_CONFIG_DIR, shared with the credential
+			// manager. Mount it so the nvcf client does not fail creating
+			// ConfigDirPath at startup.
+			{
+				Name:      "config-data",
+				MountPath: ConfigDirPath,
 			},
 		},
 	}
@@ -224,6 +232,12 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 			{
 				Name:      "llm",
 				MountPath: llmDirMountPath,
+			},
+			// config-data backs SHARED_CONFIG_DIR. The credential manager
+			// creates and caches the worker token here, so it must be mounted.
+			{
+				Name:      "config-data",
+				MountPath: ConfigDirPath,
 			},
 		},
 	}

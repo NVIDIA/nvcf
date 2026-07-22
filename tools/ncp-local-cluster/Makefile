@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: help clean build build-linux-amd64 test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-multicluster-make setup-gateway-api check-gateway-api deploy-sample wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
+.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-multicluster-make setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
 
 # === Cluster Configuration ===
 CLUSTER_NAME := ncp-local
@@ -21,7 +21,7 @@ K3D_CONFIG_FILE := k3d-config.yaml
 
 # Optional local overrides from tools/ncp-local-cluster/.env.
 # Command-line variables (make VAR=value) still win over this file;
-# shell-environment variables do NOT — use command-line overrides or remove
+# shell-environment variables do NOT; use command-line overrides or remove
 # the .env entry to unset a value.
 ifneq (,$(wildcard .env))
 include .env
