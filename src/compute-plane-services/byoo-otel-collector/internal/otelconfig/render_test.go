@@ -730,7 +730,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 
 	workloadMetricsPipeline := otelConfig.Service.Pipelines["metrics"]
 	assert.Equal(t, []string{"otlp", "prometheus"}, workloadMetricsPipeline.Receivers)
-	assert.Equal(t, []string{"prometheusremotewrite/PROMETHEUS-example-metrics-metrics"}, workloadMetricsPipeline.Exporters)
+	assert.Equal(t, []string{"prometheus_remote_write/PROMETHEUS-example-metrics-metrics"}, workloadMetricsPipeline.Exporters)
 	assert.Equal(t, []string{
 		"memory_limiter",
 		"filter/metrics",

@@ -415,7 +415,7 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 		otelConfig.Service.Extensions = append(otelConfig.Service.Extensions, extensionId)
 
 	case ProviderThanos, ProviderPrometheus:
-		exporterType = "prometheusremotewrite"
+		exporterType = "prometheus_remote_write"
 		exporterName = fmt.Sprintf("%s-%s-metrics", config.Telemetries.Metrics.Provider, config.Telemetries.Metrics.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 

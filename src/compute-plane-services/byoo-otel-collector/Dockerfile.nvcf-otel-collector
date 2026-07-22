@@ -40,7 +40,7 @@ RUN cd otelcol && \
 FROM nvcr.io/nvidia/distroless/go:v4.0.4 AS nvcf-otel-collector
 
 LABEL description="NVCF OpenTelemetry Collector - Custom build with curated components for NVCF services"
-LABEL version="0.153.0"
+LABEL version="0.157.0"
 
 COPY --from=builder-otelcol /app/output/otelcol-contrib /otelcol-contrib
 

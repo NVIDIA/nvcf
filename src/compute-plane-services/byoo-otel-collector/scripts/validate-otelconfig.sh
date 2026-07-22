@@ -84,6 +84,11 @@ run_with_timeout() {
 validate_otel_config() {
     local config_path="$1"
 
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        echo "Runtime startup validation skipped on non-Linux host"
+        return
+    fi
+
     set +e
     timeout_output=$(run_with_timeout 2 ./_output/bin/otelcol-contrib --config="$config_path" 2>&1)
     exit_code=$?
