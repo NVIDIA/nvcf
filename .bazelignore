@@ -28,7 +28,12 @@
 # with our bzlmod setup. Re-enable per-subtree as Phase B brings each subtree
 # native.
 src/compute-plane-services
-src/control-plane-services
+# src/control-plane-services is carved out per-subtree: cloud-tasks is native
+# (Phase B) and must stay loadable, while these siblings still carry nested
+# MODULE.bazel / WORKSPACE-style BUILD files that conflict with bzlmod.
+src/control-plane-services/function-autoscaler
+src/control-plane-services/helm-reval
+src/control-plane-services/nats-auth-callout
 src/invocation-plane-services
 src/libraries/python
 # stargate rolled back to authoritative_source: upstream in !413; its

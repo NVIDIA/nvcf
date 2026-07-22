@@ -1,0 +1,40 @@
+load("@rules_java//java:defs.bzl", "java_binary", "java_library", "java_plugin")
+load("@rules_proto_grpc//:defs.bzl", "proto_plugin")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "jacoco_test_runner.sh",
+    "notice_metadata.json",
+])
+
+proto_plugin(
+    name = "grpc_java_1_63_plugin",
+    out = "{name}_grpc.jar",
+    tool = select({
+        "@rules_proto_grpc//platforms:darwin_arm64": "@grpc_java_plugin_osx_aarch_64//file:protoc-gen-grpc-java.exe",
+        "@rules_proto_grpc//platforms:darwin_x86_64": "@grpc_java_plugin_osx_x86_64//file:protoc-gen-grpc-java.exe",
+        "@rules_proto_grpc//platforms:linux_aarch64": "@grpc_java_plugin_linux_aarch_64//file:protoc-gen-grpc-java.exe",
+        "@rules_proto_grpc//platforms:linux_x86_64": "@grpc_java_plugin_linux_x86_64//file:protoc-gen-grpc-java.exe",
+        "@rules_proto_grpc//platforms:windows_x86_64": "@grpc_java_plugin_windows_x86_64//file:protoc-gen-grpc-java.exe",
+    }),
+)
+
+java_plugin(
+    name = "lombok_plugin",
+    generates_api = True,
+    processor_class = "lombok.launch.AnnotationProcessorHider$AnnotationProcessor",
+    deps = ["@nv_third_party_deps//:org_projectlombok_lombok"],
+)
+
+java_binary(
+    name = "jacoco_cli",
+    main_class = "org.jacoco.cli.internal.Main",
+    runtime_deps = ["@nv_third_party_deps//:org_jacoco_org_jacoco_cli"],
+)
+
+java_library(
+    name = "lombok_annotations",
+    exports = ["@nv_third_party_deps//:org_projectlombok_lombok"],
+    neverlink = True,
+)

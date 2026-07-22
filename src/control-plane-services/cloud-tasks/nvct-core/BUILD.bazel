@@ -1,0 +1,257 @@
+load("@com_google_protobuf//bazel:proto_library.bzl", "proto_library")
+load("@contrib_rules_jvm//java:defs.bzl", "java_junit5_test")
+load("@rules_java//java:defs.bzl", "java_library")
+load("//rules/java:defs.bzl", "nvcf_java_library")
+load("//src/control-plane-services/cloud-tasks/tools/bazel:proto.bzl", "nvct_java_grpc_compile")
+
+package(default_visibility = ["//visibility:public"])
+
+# Error Prone runs in the default Bazel Java toolchain; keep the checks the
+# service opts out of and enable deprecation lints. --release matches the
+# hermetic remotejdk toolchain language level.
+NVCT_JAVACOPTS = [
+    "--release",
+    "25",
+    "-Xep:CheckReturnValue:OFF",
+    "-Xep:ImpossibleNullComparison:OFF",
+    "-Xep:OptionalOfRedundantMethod:OFF",
+    "-Xlint:deprecation",
+]
+
+# nvcf_java_library does not wire Lombok; add the annotation processor plugin
+# plus the neverlink annotations jar to every library that compiles Lombok
+# sources. Both targets already exist in tools/bazel.
+LOMBOK_PLUGINS = ["//src/control-plane-services/cloud-tasks/tools/bazel:lombok_plugin"]
+
+LOMBOK_DEPS = ["//src/control-plane-services/cloud-tasks/tools/bazel:lombok_annotations"]
+
+JUNIT5_RUNTIME_DEPS = [
+    "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_engine",
+    "@nv_third_party_deps//:org_junit_platform_junit_platform_launcher",
+    "@nv_third_party_deps//:org_junit_platform_junit_platform_reporting",
+]
+
+NVCT_CORE_TEST_SRCS = glob(["src/test/java/**/*.java"])
+
+NVCT_CORE_TEST_RESOURCES = glob(["src/test/resources/**"]) + [
+    "//src/control-plane-services/cloud-tasks:integration_local_env_files",
+]
+
+proto_library(
+    name = "nvct_proto",
+    srcs = ["src/main/proto/nvct.proto"],
+    deps = ["@com_google_protobuf//:timestamp_proto"],
+)
+
+nvct_java_grpc_compile(
+    name = "nvct_proto_java_grpc_srcs",
+    protos = [":nvct_proto"],
+)
+
+# rules_proto_grpc_java's convenience java_grpc_library macro hardcodes its
+# private @maven runtime hub. Owning this small wrapper keeps all application
+# runtime jars in the merged @nv_third_party_deps hub shared with nv-boot-parent.
+java_library(
+    name = "nvct_proto_java_grpc",
+    srcs = [":nvct_proto_java_grpc_srcs"],
+    deps = [
+        "@nv_third_party_deps//:com_google_guava_guava",
+        "@nv_third_party_deps//:com_google_protobuf_protobuf_java",
+        "@nv_third_party_deps//:com_google_protobuf_protobuf_java_util",
+        "@nv_third_party_deps//:io_grpc_grpc_api",
+        "@nv_third_party_deps//:io_grpc_grpc_protobuf",
+        "@nv_third_party_deps//:io_grpc_grpc_stub",
+        "@nv_third_party_deps//:javax_annotation_javax_annotation_api",
+    ],
+    exports = [
+        "@nv_third_party_deps//:com_google_guava_guava",
+        "@nv_third_party_deps//:com_google_protobuf_protobuf_java",
+        "@nv_third_party_deps//:com_google_protobuf_protobuf_java_util",
+        "@nv_third_party_deps//:io_grpc_grpc_api",
+        "@nv_third_party_deps//:io_grpc_grpc_protobuf",
+        "@nv_third_party_deps//:io_grpc_grpc_stub",
+        "@nv_third_party_deps//:javax_annotation_javax_annotation_api",
+    ],
+)
+
+nvcf_java_library(
+    name = "nvct_core",
+    srcs = glob(["src/main/java/**/*.java"]),
+    javacopts = NVCT_JAVACOPTS,
+    plugins = LOMBOK_PLUGINS,
+    deps = [
+        ":nvct_proto_java_grpc",
+        "@nv_third_party_deps//:com_bucket4j_bucket4j_jdk17_core",
+        "@nv_third_party_deps//:commons_codec_commons_codec",
+        "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",
+        "@nv_third_party_deps//:com_github_ben_manes_caffeine_caffeine",
+        "@nv_third_party_deps//:com_github_ben_manes_caffeine_guava",
+        "@nv_third_party_deps//:com_google_guava_guava",
+        "@nv_third_party_deps//:com_google_protobuf_protobuf_java",
+        "@nv_third_party_deps//:com_nimbusds_oauth2_oidc_sdk",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-audit:nv_boot_starter_audit",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-cassandra:nv_boot_starter_cassandra",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions:nv_boot_starter_exceptions",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-observability:nv_boot_starter_observability",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-registries:nv_boot_starter_registries",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties:nv_boot_starter_reloadable_properties",
+        "@nv_third_party_deps//:io_grpc_grpc_api",
+        "@nv_third_party_deps//:io_grpc_grpc_netty_shaded",
+        "@nv_third_party_deps//:io_grpc_grpc_stub",
+        "@nv_third_party_deps//:io_micrometer_micrometer_core",
+        "@nv_third_party_deps//:io_micrometer_micrometer_observation",
+        "@nv_third_party_deps//:io_micrometer_micrometer_registry_prometheus",
+        "@nv_third_party_deps//:io_micrometer_micrometer_tracing",
+        "@nv_third_party_deps//:io_swagger_core_v3_swagger_annotations_jakarta",
+        "@nv_third_party_deps//:io_swagger_core_v3_swagger_models_jakarta",
+        "@nv_third_party_deps//:io_netty_netty_transport",
+        "@nv_third_party_deps//:io_netty_netty_handler",
+        "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
+        "@nv_third_party_deps//:jakarta_servlet_jakarta_servlet_api",
+        "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+        "@nv_third_party_deps//:net_devh_grpc_server_spring_boot_starter",
+        "@nv_third_party_deps//:net_javacrumbs_shedlock_shedlock_core",
+        "@nv_third_party_deps//:net_javacrumbs_shedlock_shedlock_provider_cassandra",
+        "@nv_third_party_deps//:net_javacrumbs_shedlock_shedlock_spring",
+        "@nv_third_party_deps//:org_apache_cassandra_java_driver_metrics_micrometer",
+        "@nv_third_party_deps//:org_apache_cassandra_java_driver_core",
+        "@nv_third_party_deps//:org_apache_cassandra_java_driver_query_builder",
+        "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+        "@nv_third_party_deps//:org_apache_logging_log4j_log4j_api",
+        "@nv_third_party_deps//:org_hibernate_validator_hibernate_validator",
+        "@nv_third_party_deps//:org_jspecify_jspecify",
+        "@nv_third_party_deps//:org_slf4j_slf4j_api",
+        "@nv_third_party_deps//:org_springdoc_springdoc_openapi_starter_common",
+        "@nv_third_party_deps//:org_springdoc_springdoc_openapi_starter_webmvc_api",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_actuator",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_metrics",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_aspectj",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_security",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_security_oauth2_client",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_security_oauth2_resource_server",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_validation",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc",
+        "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
+        "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_starter_kubernetes_client_config",
+        "@nv_third_party_deps//:org_springframework_data_spring_data_cassandra",
+        "@nv_third_party_deps//:org_springframework_data_spring_data_commons",
+        "@nv_third_party_deps//:org_springframework_spring_aop",
+        "@nv_third_party_deps//:org_springframework_spring_beans",
+        "@nv_third_party_deps//:org_springframework_spring_context",
+        "@nv_third_party_deps//:org_springframework_spring_context_support",
+        "@nv_third_party_deps//:org_springframework_spring_core",
+        "@nv_third_party_deps//:org_springframework_spring_expression",
+        "@nv_third_party_deps//:org_springframework_spring_tx",
+        "@nv_third_party_deps//:org_springframework_spring_web",
+        "@nv_third_party_deps//:org_springframework_spring_webflux",
+        "@nv_third_party_deps//:org_springframework_spring_webmvc",
+        "@nv_third_party_deps//:org_springframework_retry_spring_retry",
+        "@nv_third_party_deps//:org_springframework_security_spring_security_config",
+        "@nv_third_party_deps//:org_springframework_security_spring_security_core",
+        "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_client",
+        "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_core",
+        "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_jose",
+        "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_resource_server",
+        "@nv_third_party_deps//:org_springframework_security_spring_security_web",
+        "@nv_third_party_deps//:io_projectreactor_reactor_core",
+        "@nv_third_party_deps//:io_projectreactor_netty_reactor_netty_core",
+        "@nv_third_party_deps//:io_projectreactor_netty_reactor_netty_http",
+        "@nv_third_party_deps//:tools_jackson_core_jackson_core",
+        "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
+        "@nv_third_party_deps//:tools_jackson_module_jackson_module_blackbird",
+    ] + LOMBOK_DEPS,
+)
+
+NVCT_CORE_TEST_DEPS = [
+    ":nvct_core",
+    ":nvct_proto_java_grpc",
+    "@nv_third_party_deps//:org_apache_cassandra_java_driver_core",
+    "@nv_third_party_deps//:org_apache_cassandra_java_driver_guava_shaded",
+    "@nv_third_party_deps//:com_google_guava_guava",
+    "@nv_third_party_deps//:com_google_protobuf_protobuf_java",
+    "@nv_third_party_deps//:com_nimbusds_nimbus_jose_jwt",
+    "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-audit:nv_boot_starter_audit",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions:nv_boot_starter_exceptions",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-observability:nv_boot_starter_observability",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-registries:nv_boot_starter_registries",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties:nv_boot_starter_reloadable_properties",
+    "@nv_third_party_deps//:io_grpc_grpc_api",
+    "@nv_third_party_deps//:io_grpc_grpc_stub",
+    "@nv_third_party_deps//:io_micrometer_micrometer_core",
+    "@nv_third_party_deps//:io_opentelemetry_opentelemetry_api",
+    "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_testing",
+    "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_trace",
+    "@nv_third_party_deps//:io_projectreactor_reactor_core",
+    "@nv_third_party_deps//:io_projectreactor_netty_reactor_netty_core",
+    "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
+    "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+    "@nv_third_party_deps//:net_minidev_json_smart",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_apache_logging_log4j_log4j_api",
+    "@nv_third_party_deps//:org_assertj_assertj_core",
+    "@nv_third_party_deps//:org_awaitility_awaitility",
+    "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_api",
+    "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_params",
+    "@nv_third_party_deps//:org_mockito_mockito_core",
+    "@nv_third_party_deps//:org_mockito_mockito_junit_jupiter",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_tracing",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_security",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_data_cassandra_test",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_test",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_test_autoconfigure",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_data_spring_data_cassandra",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_core",
+    "@nv_third_party_deps//:org_springframework_spring_test",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:org_springframework_spring_webflux",
+    "@nv_third_party_deps//:org_springframework_spring_webmvc",
+    "@nv_third_party_deps//:org_testcontainers_testcontainers",
+    "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_core",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
+    "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
+] + LOMBOK_DEPS
+
+# Compiled test classes, reused by the nvct-service integration test module.
+nvcf_java_library(
+    name = "nvct_core_test_fixtures",
+    testonly = True,
+    srcs = NVCT_CORE_TEST_SRCS,
+    javacopts = NVCT_JAVACOPTS,
+    plugins = LOMBOK_PLUGINS,
+    resources = NVCT_CORE_TEST_RESOURCES,
+    deps = NVCT_CORE_TEST_DEPS,
+)
+
+java_junit5_test(
+    name = "tests",
+    size = "large",
+    test_class = "com.nvidia.nvct.rest.task.TaskManagementControllerTest",
+    # Spring Framework 7 pauses cached contexts when switching configurations.
+    # The embedded gRPC server cannot reliably rebind its random port during
+    # that pause/restart cycle on Linux, so retain the pre-Spring-7 lifecycle.
+    jvm_flags = ["-Dspring.test.context.cache.pause=never"],
+    data = [
+        "//src/control-plane-services/cloud-tasks:integration_local_env",
+    ],
+    tags = [
+        "exclusive",
+        "requires-docker",
+    ],
+    timeout = "long",
+    runtime_deps = [":nvct_core_test_fixtures"] + JUNIT5_RUNTIME_DEPS,
+)

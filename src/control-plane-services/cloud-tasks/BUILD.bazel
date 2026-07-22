@@ -1,0 +1,35 @@
+load("//src/control-plane-services/cloud-tasks/tools/bazel:runfiles.bzl", "nvct_workspace_runfiles")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "NOTICE",
+])
+
+filegroup(
+    name = "integration_local_env_files",
+    srcs = [
+        "local_env/docker-compose.test.yml",
+    ] + glob([
+        "local_env/cassandra/**",
+        "local_env/vault/**",
+    ]),
+)
+
+nvct_workspace_runfiles(
+    name = "integration_local_env",
+    srcs = [":integration_local_env_files"],
+    # After the umbrella relocation the runfiles short_path carries the subtree
+    # prefix; strip it so integration tests still resolve local_env/... relative
+    # to the runfiles root (test config references local_env/vault/secrets.json).
+    strip_prefix = "src/control-plane-services/cloud-tasks/",
+)
+
+# NOTE: THIRD_PARTY_NOTICE generation (the former notice genrule, generate
+# binary, and tools/bazel notice check) read the Spring fat jar
+# (nvct-service app jar, BOOT-INF/lib/external/... layout). Converging onto
+# //rules/java's exploded-classpath image removes that fat jar, so the fat-jar
+# NOTICE mechanism no longer has an input. Reworking NOTICE generation for the
+# exploded classpath is tracked as follow-up; it needs a change to the shared
+# nv-boot generate_notice.py, which is out of scope for this build-wiring
+# convergence.

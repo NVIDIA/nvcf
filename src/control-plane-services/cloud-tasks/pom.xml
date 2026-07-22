@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+  SPDX-License-Identifier: Apache-2.0
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<project
+        xmlns="http://maven.apache.org/POM/4.0.0"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.nvidia.boot</groupId>
+        <artifactId>nv-boot-parent</artifactId>
+        <version>2.0.1</version>  <!-- Keep in sync with nv-boot.version defined below -->
+        <relativePath/>
+    </parent>
+
+    <groupId>com.nvidia.nvct</groupId>
+    <artifactId>cloud-tasks</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>NVCT API</name>
+    <description>NVIDIA Cloud Tasks — aggregator for core library and modules.</description>
+
+    <repositories>
+        <!-- Resolve parent from here -->
+        <repository>
+            <id>nvcf</id>
+            <url>https://urm.nvidia.com/artifactory/sw-nvcf-maven</url>
+        </repository>
+    </repositories>
+
+    <properties>
+        <root.dir>${project.basedir}</root.dir>
+        <nv-boot.version>2.0.1</nv-boot.version>  <!-- Keep in sync with parent version above  -->
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.nvidia.boot</groupId>
+                <artifactId>nv-boot-bom</artifactId>
+                <version>${nv-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <modules>
+        <module>nvct-core</module>
+        <module>nvct-service</module>
+    </modules>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- Default is 30s; nvct-core integration tests tear down many Spring -->
+                    <!-- contexts (gRPC + Tomcat graceful shutdown + reloadable props, etc.). -->
+                    <forkedProcessExitTimeoutInSeconds>120</forkedProcessExitTimeoutInSeconds>
+                    <workingDirectory>${root.dir}</workingDirectory>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>com/nvidia/nvct/proto/**</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            <!-- Regenerate the NOTICE file from the Maven reactor with: -->
+            <!--   mvn license:aggregate-add-third-party -->
+            <!-- The plugin writes directly to NOTICE at the repo root;  -->
+            <!-- commit the result alongside the dependency change.      -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>license-maven-plugin</artifactId>
+                <configuration>
+                    <!-- Don't exclude `provided` scope for tomcat-embed-* and its -->
+                    <!-- Apache-2.0 attribution must appear in NOTICE.             -->
+                    <excludedScopes>test</excludedScopes>
+                    <!-- Don't list this project's own modules or nv-boot libraries as third-party. -->
+                    <excludedGroups>^com\.nvidia\.(nvct|boot)</excludedGroups>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
