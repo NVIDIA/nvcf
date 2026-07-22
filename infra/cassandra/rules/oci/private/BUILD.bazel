@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Private OCI helpers. common.bzl is loaded by //rules/oci:defs.bzl.
+package(default_visibility = ["//rules:__subpackages__"])
+
+exports_files(["common.bzl"])

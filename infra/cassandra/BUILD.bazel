@@ -1,0 +1,106 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Public, OSS-safe Cassandra runtime image (Bazel port of the Dockerfile,
+# minus the metrics exporter, which is internal-only and layered in
+# nvidia-internal/). This target builds on the NVIDIA/nvcf GitHub mirror.
+
+load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "strip_prefix")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//rules/oci:defs.bzl", "JVM_ADD_OPENS", "create_oci_image")
+
+exports_files(["scripts/cassandra-env.sh"])
+
+# ----------------------------------------------------------------------------
+# yq layer: the pinned static binary at /usr/local/bin/yq. Per-arch selection
+# resolves under the image's platform transition, so the arm64 image gets the
+# arm64 yq and the amd64 image the amd64 yq. Mode 0755 (the chart's config
+# init container execs it). Dockerfile parity: `COPY --from=yq-downloader`.
+# ----------------------------------------------------------------------------
+pkg_files(
+    name = "yq_files",
+    srcs = select({
+        "@platforms//cpu:arm64": ["@yq_linux_arm64//file"],
+        "@platforms//cpu:x86_64": ["@yq_linux_amd64//file"],
+    }),
+    attributes = pkg_attributes(mode = "0755"),
+    prefix = "/usr/local/bin",
+    strip_prefix = strip_prefix.files_only(),
+)
+
+pkg_tar(
+    name = "yq_layer",
+    srcs = [":yq_files"],
+    # Reused by the nvidia-internal with-exporter variant.
+    visibility = ["//visibility:public"],
+)
+
+# ----------------------------------------------------------------------------
+# cassandra-env.sh layer: overwrites the base image's
+# /etc/cassandra/cassandra-env.sh with the NCP rack-from-pod variant. Sourced
+# (not executed) by /opt/cassandra/bin/cassandra, so mode 0644 matches the
+# base. Dockerfile parity: `COPY scripts/cassandra-env.sh`.
+# ----------------------------------------------------------------------------
+pkg_files(
+    name = "cassandra_env_files",
+    srcs = ["scripts/cassandra-env.sh"],
+    attributes = pkg_attributes(mode = "0644"),
+    prefix = "/etc/cassandra",
+    strip_prefix = strip_prefix.files_only(),
+)
+
+pkg_tar(
+    name = "env_layer",
+    srcs = [":cassandra_env_files"],
+    visibility = ["//visibility:public"],
+)
+
+# ----------------------------------------------------------------------------
+# The exporter agent reflects into JDK-internal com.sun.jmx classes; on the
+# JDK 17 runtime shipped in the official image those packages are not open to
+# unnamed modules by default. These --add-opens are harmless when no agent is
+# wired in, so they stay unconditional (matches the Dockerfile). The public
+# image sets NO -javaagent (no exporter jar); the with-exporter variant in
+# nvidia-internal/ prepends it. JVM_ADD_OPENS is shared from defs.bzl.
+# ----------------------------------------------------------------------------
+create_oci_image(
+    name = "image",
+    base = "@cassandra_base",
+    # EXPOSE 7000 9042 are already declared by the base; add 9500 for metrics
+    # scraping parity with the Dockerfile.
+    env = {"JVM_EXTRA_OPTS": JVM_ADD_OPENS},
+    exposed_ports = ["9500/tcp"],
+    tags = ["cassandra"],
+    tars = [
+        ":yq_layer",
+        ":env_layer",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Non-manual handle for the multi-arch image. create_oci_image tags every
+# target it emits `manual` (so `bazel run //...` never fires a push/load), but
+# that also excludes :image_index from `bazel build //...`. The CI matrix
+# (.github/workflows/bazel.yml) builds `//...`, so without a non-manual target
+# depending on the index, GHA would never build the image itself. This alias
+# pulls the multi-arch index into the wildcard build. Mirrors the
+# function-autoscaler `alias` handle for its binary.
+alias(
+    name = "cassandra",
+    actual = ":image_index",
+    visibility = ["//visibility:public"],
+)
+
+# yq exec-bit guard: fail the build if /usr/local/bin/yq is missing or not
+# executable in the assembled layer (rules_pkg pkg_files default-mode 0644
+# trap). Mirrors the stargate image_entrypoint_mode_test.
+sh_test(
+    name = "yq_exec_bit_test",
+    srcs = ["//tools/ci:image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :yq_layer)",
+        "/usr/local/bin/yq",
+    ],
+    data = [":yq_layer"],
+)

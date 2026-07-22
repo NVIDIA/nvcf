@@ -32,6 +32,39 @@ docker buildx build --platform linux/amd64,linux/arm64 -t <ref> infra/cassandra
 The `--platform=$BUILDPLATFORM` on the yq stage is intentional: it lets yq
 cross-download on the host arch without QEMU.
 
+## Bazel image (rules_oci)
+
+This subtree is also a self-contained Bazel module that builds the same image
+via `rules_oci`, so it ships and releases like every other NVCF image (no
+buildah). It is a nested module: the umbrella ignores it (root `.bazelignore`
+lists `infra/cassandra`), so run Bazel from this directory.
+
+```sh
+cd infra/cassandra
+
+# Public multi-arch image (amd64 + arm64), OSS-safe (no exporter jar).
+bazel build //:image_index      # or //:cassandra (non-manual alias)
+
+# yq exec-bit guard.
+bazel test //:yq_exec_bit_test
+```
+
+Translation of the Dockerfile:
+- `FROM cassandra:5.0.8` -> `oci.pull` of the Docker Hub manifest-list digest
+  in `MODULE.bazel` (the digest is the single Cassandra version source; bump it
+  by re-resolving the new tag's manifest-list digest).
+- pinned `yq` -> `http_file` per arch in `rules/repos.bzl` (same version +
+  sha256s as the Dockerfile), packaged at `/usr/local/bin/yq`.
+- `scripts/cassandra-env.sh` -> `pkg_tar` layer over `/etc/cassandra/`.
+- `--add-opens` JVM flags -> `JVM_EXTRA_OPTS` env, shared as `JVM_ADD_OPENS`
+  in `rules/oci/defs.bzl`.
+
+The exporter agent and NGC push destinations live in `nvidia-internal/`
+(excluded from the OSS mirror). That variant adds the exporter layer plus the
+`-javaagent` flag and pushes via the shared `//rules/oci-destinations` macro.
+It needs the exporter jar URL + sha256 filled into the `@cassandra_exporter_agent`
+placeholder in `rules/repos.bzl` before it builds; until then it analyzes only.
+
 ## Pairs with
 
 - Helm chart `deploy/helm/cassandra` deploys this image; its config init

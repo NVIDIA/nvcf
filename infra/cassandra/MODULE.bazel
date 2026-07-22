@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Bzlmod module definition for the NVCF Cassandra runtime image.
+
+Image-assembly only: no language toolchain. This is the Bazel rules_oci
+port of infra/cassandra/Dockerfile. It layers, on top of the official
+Apache Cassandra base:
+
+  - a pinned, checksum-verified `yq` binary at /usr/local/bin/yq (used by
+    the chart's config init container to deep-merge cassandra.yaml), and
+  - scripts/cassandra-env.sh at /etc/cassandra/cassandra-env.sh (rack from
+    pod-hostname suffix for GossipingPropertyFileSnitch).
+
+The public //:image_index target is OSS-safe: no metrics exporter jar and
+no tenant registry URLs. The with-exporter variant and the NGC push
+destinations live under nvidia-internal/ (excluded from the OSS mirror).
+
+The umbrella nvcf/nvcf lists infra/cassandra in .bazelignore, so this
+nested module is built on its own (cd infra/cassandra && bazel build ...),
+mirroring the function-autoscaler / stargate pattern.
+"""
+
+module(
+    name = "nvcf_cassandra_image",
+    version = "0.0.1",
+)
+
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_oci", version = "2.2.7")
+bazel_dep(name = "rules_pkg", version = "1.2.0")
+bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
+bazel_dep(name = "rules_python", version = "1.7.0")
+bazel_dep(name = "rules_shell", version = "0.8.0")
+
+# NVCF OCI image-push macro. Data-free module: destination URLs are inlined
+# at the nvidia-internal/ call-site, not here, so this override resolves on
+# both the private GitLab build and the public NVIDIA/nvcf GitHub mirror.
+bazel_dep(name = "nvcf_nvcr_destinations", version = "0.0.0")
+local_path_override(
+    module_name = "nvcf_nvcr_destinations",
+    path = "../../rules/oci-destinations",
+)
+
+# rules_pkg pulls a hermetic Python interpreter for its tar builder. That
+# interpreter refuses to run as root unless told otherwise, which the CI
+# container hits. ignore_root_user_error keeps `bazel build` green there.
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    ignore_root_user_error = True,
+    python_version = "3.11",
+)
+
+# ============================================================================
+# OCI base image: official Apache Cassandra (Docker Hub), pinned by the
+# multi-arch manifest-list digest for the 5.0.8 tag. The tag/digest is the
+# single source of truth for the Cassandra version (Dockerfile `FROM
+# cassandra:5.0.8`). Bump by re-resolving the manifest-list digest of the
+# new tag. Only linux/amd64 + linux/arm64 are selected; the list also
+# carries armv7/ppc64le/s390x, which we do not build.
+# ============================================================================
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+oci.pull(
+    name = "cassandra_base",
+    digest = "sha256:e52bb93c21f69cc5c2f5eb9e7d9736b10a047ad38bc7776480c7dbbf7d4e0ba7",
+    image = "index.docker.io/library/cassandra",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
+use_repo(
+    oci,
+    "cassandra_base",
+    "cassandra_base_linux_amd64",
+    "cassandra_base_linux_arm64_v8",
+)
+
+# ============================================================================
+# External artifacts fetched by digest: the pinned yq binaries (public,
+# OSS-safe) and the internal exporter-agent jar placeholder (see comment in
+# //rules:repos.bzl -- URL/sha still to be supplied).
+# ============================================================================
+artifacts = use_extension("//rules:repos.bzl", "external_artifacts")
+use_repo(
+    artifacts,
+    "cassandra_exporter_agent",
+    "yq_linux_amd64",
+    "yq_linux_arm64",
+)

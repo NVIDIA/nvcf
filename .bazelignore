@@ -44,6 +44,13 @@ deploy
 docs
 fern
 infra
+# infra/cassandra is a nested, self-contained Bazel module (its own
+# MODULE.bazel + rules_oci image graph, built via `cd infra/cassandra &&
+# bazel build //:image_index`). Listed explicitly so the intent survives if
+# the broad `infra` entry above is ever narrowed; keeps the root workspace
+# from trying to load the nested module. Mirrors the function-autoscaler /
+# stargate nested-module pattern.
+infra/cassandra
 migrations
 tools
 

@@ -115,7 +115,8 @@ jobs:
           worker-utils|src/compute-plane-services/worker-utils|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
           helm-reval|src/control-plane-services/helm-reval|false
-          stargate|src/libraries/rust/stargate|false'
+          stargate|src/libraries/rust/stargate|false
+          cassandra|infra/cassandra|false'
           # Paths that affect the root-module workspace build (native
           # root subtrees, Go and Java, plus the shared Bazel scaffold).
           ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/ .github/bazel-root-test-quarantine.txt)

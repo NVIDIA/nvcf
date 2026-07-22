@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The external-artifact module extension lives in repos.bzl, loaded from
+# MODULE.bazel as `//rules:repos.bzl`. This package is otherwise empty.
