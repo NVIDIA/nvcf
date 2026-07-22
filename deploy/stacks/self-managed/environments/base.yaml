@@ -303,7 +303,6 @@ ingress:
         hostnames: []
         routeAnnotations: {}
       nvcfUi:
-        enabled: false
         routeAnnotations: {}
       grpc:
         routeAnnotations: {}
