@@ -174,7 +174,10 @@ spec:
             timeoutSeconds: 15
           readinessProbe:
             exec:
-              command: ["/bin/sh", "-c", "nodetool status | grep -E '^UN'"]
+              # Scope to this pod's own node: an unscoped '^UN' matches any
+              # Up/Normal member (e.g. a seed), so a pod could report Ready
+              # before its own node has joined. POD_IP is set below via fieldRef.
+              command: ["/bin/sh", "-c", "nodetool status | grep -E \"^UN[[:space:]]+$POD_IP[[:space:]]\""]
             periodSeconds: 10
             timeoutSeconds: 15
           resources: {{- include "cassandra.resources" . | nindent 12 }}
