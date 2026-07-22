@@ -205,6 +205,9 @@ releases:
     needs:
       - nvcf/notary-service
       - api-keys/api-keys
+      {{- if dig "addons" "nvcfUi" "enabled" false .Values }}
+      - nvcf-ui/nvcf-ui
+      {{- end }}
     namespace: {{ .Values.ingress.gatewayApi.controllerNamespace }}
     condition: ingress.gatewayApi.enabled
     values:
