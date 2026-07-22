@@ -145,7 +145,8 @@ jobs:
             mkdir -p ci-ghcr
             printf 'load("@rules_oci//oci:defs.bzl", "oci_push")\n\noci_push(\n    name = "push",\n    image = "%s",\n    repository = "%s",\n    remote_tags = ["%s", "latest-dispatch"],\n)\n' \
               "$tgt" "$dest" "$TAG" > ci-ghcr/BUILD.bazel
-            bazel run --remote_cache= --disk_cache="${BAZEL_DISK_CACHE}" //ci-ghcr:push
+            # --config=release (-c opt): default fastbuild makes zig cc emit UBSan traps in C deps (jemalloc) that SIGTRAP at startup on arm64 (nvbug 6451362).
+            bazel run --config=release --remote_cache= --disk_cache="${BAZEL_DISK_CACHE}" //ci-ghcr:push
             rm -rf ci-ghcr
           done
           echo "Done: pushed ${#indexes[@]} image(s) under ${REGISTRY}/ at tag ${TAG}"
