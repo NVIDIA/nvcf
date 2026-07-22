@@ -341,24 +341,6 @@ api:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
-  service:
-    ports:
-      - name: http
-        port: 8080
-        targetPort: http
-        protocol: TCP
-      - name: grpc
-        port: 9090
-        targetPort: grpc
-        protocol: TCP
-      - name: management-port
-        port: 8181
-        targetPort: management-port
-        protocol: TCP
-      - name: metrics
-        port: 9464
-        targetPort: metrics
-        protocol: TCP
 
 invocation:
   fullnameOverride: invocation-service

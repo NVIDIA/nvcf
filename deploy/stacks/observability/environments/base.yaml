@@ -114,8 +114,6 @@ defaultMonitors:
   enabled: false
   commonLabels:
     nvcf.nvidia.com/observability-target: "true"
-  controlPlane:
-    enabled: true
   dcgm:
     enabled: false
     namespaceSelector:
