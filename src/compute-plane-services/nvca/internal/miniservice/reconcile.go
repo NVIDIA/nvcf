@@ -1875,8 +1875,8 @@ func decodeObjects(ctx context.Context, decoder runtime.Decoder, objsData []byte
 		// Extract the workload config ConfigMap. It must never be applied on-cluster,
 		// so drop it from the objects to create and status-check.
 		if cm, ok := cobj.(*corev1.ConfigMap); ok && cm.Name == featureflag.WorkloadConfigConfigMapName {
-			if workloadConfig, err = featureflag.DecodeWorkloadConfig(ctx, cm); err != nil {
-				return nil, nil, nil, err
+			if workloadConfig, err = featureflag.DecodeWorkloadConfig(ctx, log, cm); err != nil {
+				return nil, nil, nil, reconcile.TerminalError(fmt.Errorf("decode workload config: %w", err))
 			}
 			continue
 		}

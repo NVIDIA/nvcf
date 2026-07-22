@@ -1357,7 +1357,7 @@ func (c K8sComputeBackend) GetErroredPodLogs(ctx context.Context, pod *corev1.Po
 	sb.WriteString(prepend)
 	bytesWritten := int64(len(prepend))
 	if len(prepend) > 0 {
-		sb.WriteString("---\n")
+		sb.WriteString("\n---\n")
 	}
 	totalBytesWritten += bytesWritten
 	if writeMaxBytes >= bytesWritten {
