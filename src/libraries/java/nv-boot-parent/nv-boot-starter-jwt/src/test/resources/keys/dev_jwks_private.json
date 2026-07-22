@@ -1,0 +1,18 @@
+{
+  "keys": [
+    {
+      "kty": "EC",
+      "d": "rLsyH4_OoPNc5sV564IasD8-BSbVjsdt1bnYgp0-drg",
+      "crv": "P-256",
+      "kid": "dev-key-id",
+      "x": "ZgL92Pz3_JXtUvAd5OO9hMwtf1xcXBpY0aoBENwGriw",
+      "y": "LlmITADCxtBC_PabPR7mPPzzK7fB6yfd6_XvIgtwQ5M"
+    },
+    {
+      "kty": "oct",
+      "kid": "test-A256GCM-key",
+      "k": "4UmpACy38IBlbxiCGuspeA9pqp4UaCwtWhN2eCgkOQE",
+      "alg": "A256GCM"
+    }
+  ]
+}

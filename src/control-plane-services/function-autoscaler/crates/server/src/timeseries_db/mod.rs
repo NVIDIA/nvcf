@@ -17,9 +17,22 @@
 
 use backon::ExponentialBuilder;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 mod errors;
 pub mod timeseries_db_client;
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeseriesDbAuthMode {
+    /// Do not authenticate. Intended for local development only.
+    #[default]
+    None,
+    /// Authenticate through the legacy token gateway.
+    Token,
+    /// Authenticate directly to the tenant endpoint with a client certificate.
+    Mtls,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -32,9 +45,18 @@ pub struct TimeseriesDbSettings {
     pub env: String,
     /// Ignore filter for environment in TimeseriesDb queries
     pub ignore_env: bool,
-    /// Whether to disable authentication for API calls (for local development)
+    /// Authentication mechanism. When omitted, `disable_auth` retains its legacy behavior.
+    #[serde(default)]
+    pub auth_mode: Option<TimeseriesDbAuthMode>,
+    /// Deprecated compatibility setting. Prefer `auth_mode`.
     #[serde(default)]
     pub disable_auth: bool,
+    /// PEM client certificate chain used by `mtls` mode.
+    #[serde(default)]
+    pub client_certificate_path: Option<PathBuf>,
+    /// PEM client private key used by `mtls` mode.
+    #[serde(default)]
+    pub client_private_key_path: Option<PathBuf>,
     #[serde(default = "default_ts_http_timeout")]
     pub http_timeout_seconds: u64,
     #[serde(default = "default_ts_query_backoff")]
@@ -61,7 +83,10 @@ impl Default for TimeseriesDbSettings {
         Self {
             authn_url: "".to_string(),
             timeseries_db_url: "http://localhost:10903".to_string(),
+            auth_mode: None,
             disable_auth: true,
+            client_certificate_path: None,
+            client_private_key_path: None,
             env: "stg".to_string(),
             ignore_env: false,
             http_timeout_seconds: default_ts_http_timeout(),
@@ -69,5 +94,52 @@ impl Default for TimeseriesDbSettings {
             auth_backoff_max_delay_seconds: default_ts_auth_backoff(),
             backoff: None,
         }
+    }
+}
+
+impl TimeseriesDbSettings {
+    pub fn effective_auth_mode(&self) -> TimeseriesDbAuthMode {
+        self.auth_mode.unwrap_or(if self.disable_auth {
+            TimeseriesDbAuthMode::None
+        } else {
+            TimeseriesDbAuthMode::Token
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_auth_mode_takes_precedence_over_legacy_setting() {
+        let settings = TimeseriesDbSettings {
+            auth_mode: Some(TimeseriesDbAuthMode::Mtls),
+            disable_auth: true,
+            ..Default::default()
+        };
+
+        assert_eq!(settings.effective_auth_mode(), TimeseriesDbAuthMode::Mtls);
+    }
+
+    #[test]
+    fn legacy_auth_setting_remains_compatible() {
+        let token_settings = TimeseriesDbSettings {
+            disable_auth: false,
+            ..Default::default()
+        };
+        let local_settings = TimeseriesDbSettings {
+            disable_auth: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            token_settings.effective_auth_mode(),
+            TimeseriesDbAuthMode::Token
+        );
+        assert_eq!(
+            local_settings.effective_auth_mode(),
+            TimeseriesDbAuthMode::None
+        );
     }
 }

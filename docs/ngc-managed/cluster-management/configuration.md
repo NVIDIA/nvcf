@@ -733,6 +733,24 @@ pod and merged with the generated config at runtime.
        logLevel: debug
 ```
 
+BYOO metric subset example:
+
+```yaml
+ agentConfig:
+   mergeConfig: |
+     agent:
+       byooMetricSubset:
+         enabled: true
+         filterConfig: |
+           error_mode: ignore
+           metric_conditions:
+             - 'metric.name != "BpsInstrument"'
+       byooWorkloadMetrics:
+         dropLabels:
+           - metric_subset_enabled
+           - custom_label
+```
+
 **Apply via Helm:**
 
 ```bash

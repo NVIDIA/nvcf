@@ -81,9 +81,10 @@ jobs:
         run: |
           set -euo pipefail
           # id|path|tests_skip. tests_skip notes:
-          #  root: //src/libraries/go/lib test issues
-          #    (icms-translate env-flaky, core_test goroutine leak) -- nvcf-go
-          #    team owns the test-layer cleanup.
+          #  root: tests run. The few go-lib targets that fail in CI (a stale
+          #    Gazelle BUILD check and the icms-translate tests) are quarantined
+          #    per-target via .github/bazel-root-test-quarantine.txt rather than
+          #    skipping the whole row; nvcf-go owns the fix (NVIDIA/nvcf#284).
           #  nvca: tests run. The failures tracked in NVIDIA/nvcf#238 were all
           #    test-layer and are fixed: the vendored dra-driver version stamp
           #    (x_defs on vendor/.../internal/info, mirroring the module
@@ -96,7 +97,7 @@ jobs:
           #    its own private agent image (not publicly pullable), so it is not
           #    externally buildable and is built only by its own internal CI.
           #    Excluded from the public build pending a public base (NVIDIA/nvcf#39).
-          ROWS='root|.|true
+          ROWS='root|.|false
           grpc-proxy|src/invocation-plane-services/grpc-proxy|false
           nats-auth-callout|src/control-plane-services/nats-auth-callout|false
           ratelimiter|src/invocation-plane-services/ratelimiter|false
@@ -106,11 +107,17 @@ jobs:
           nvca|src/compute-plane-services/nvca|false
           ess-agent|src/compute-plane-services/ess-agent|false
           image-credential-helper|src/compute-plane-services/image-credential-helper|false
+          byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false
+          nvcf-unbound|src/compute-plane-services/nvcf-unbound|false
+          worker-init|src/compute-plane-services/worker-init|false
+          worker-llm-credentials|src/compute-plane-services/worker-llm-credentials|false
+          worker-task|src/compute-plane-services/worker-task|false
+          worker-utils|src/compute-plane-services/worker-utils|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
           helm-reval|src/control-plane-services/helm-reval|false'
           # Paths that affect the root-module workspace build (native
           # root subtrees, Go and Java, plus the shared Bazel scaffold).
-          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/)
+          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
@@ -191,7 +198,7 @@ jobs:
       CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
       CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.8.0
+      image: ghcr.io/nvidia/nvcf/bazel-ci:0.12.0
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -297,7 +304,7 @@ jobs:
         working-directory: ${{ matrix.subtree.path }}
         env:
           EVENT: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           SUBTREE_PATH: ${{ matrix.subtree.path }}
         run: |
           set -uo pipefail
@@ -312,15 +319,16 @@ jobs:
             full; exit 0
           fi
 
-          base="origin/$BASE_REF"
-          if ! git rev-parse --verify "$base" >/dev/null 2>&1; then
-            git fetch --no-tags --depth=1 origin "$BASE_REF" >/dev/null 2>&1 || true
-          fi
-          if ! git rev-parse --verify "$base" >/dev/null 2>&1; then
-            echo "base $base unavailable; full build"; full; exit 0
+          # Diff against the PR base commit SHA. The base commit is present in
+          # history because the bazel-job checkout uses fetch-depth: 0. The
+          # symbolic origin/<branch> ref is not reliably created inside the
+          # container checkout, so resolve against the SHA directly.
+          base="$BASE_SHA"
+          if [ -z "$base" ] || ! git rev-parse --verify "$base^{commit}" >/dev/null 2>&1; then
+            echo "base sha unavailable; full build"; full; exit 0
           fi
           if ! ns=$(git diff --name-status "$base...HEAD" 2>/dev/null); then
-            echo "diff vs $base failed; full build"; full; exit 0
+            echo "diff vs base failed; full build"; full; exit 0
           fi
           if [ -z "$ns" ]; then
             echo "no changes vs base; nothing to build"; : > "$tfile"; exit 0
@@ -380,7 +388,17 @@ jobs:
                    --remote_cache_compression
                    --remote_download_all
                    --remote_timeout=120 --remote_retries=5)
-            [ "$CACHE_UPLOAD" = "true" ] || CACHE+=(--remote_upload_local_results=false)
+            # Force the upload flag explicitly. The root module's .bazelrc pins
+            # --config=remote, which sets --remote_upload_local_results=false
+            # (internal read-only dev cache). Without overriding it back to true
+            # on main pushes, root never warms the public cache, so every root
+            # build is cold forever. Service modules do not set --config=remote,
+            # so they are unaffected either way.
+            if [ "$CACHE_UPLOAD" = "true" ]; then
+              CACHE+=(--remote_upload_local_results=true)
+            else
+              CACHE+=(--remote_upload_local_results=false)
+            fi
           fi
           # Rock-solid cache: if the cached build fails for any cache-related
           # reason -- the TLS/GetCapabilities handshake, UNAVAILABLE, or a 502
@@ -427,6 +445,18 @@ jobs:
               echo "tests: $(grep -c . "$ttfile") affected test target(s)"
             fi
           fi
+          # Root test quarantine: subtract known-flaky packages (nvcf-go owns the
+          # test-layer fix; see the file header and NVIDIA/nvcf#284) from the root
+          # row's test set. Negative patterns are appended after the positive
+          # patterns so Bazel removes them from the resolved set. The file lives at
+          # the repo root, so it is present only for the root row (whose working
+          # directory is the repo root); other rows have no such file.
+          qfile=".github/bazel-root-test-quarantine.txt"
+          if [ -f "$qfile" ]; then
+            n=$(grep -cE '^[[:space:]]*-//' "$qfile" || true)
+            grep -E '^[[:space:]]*-//' "$qfile" | sed -E 's/^[[:space:]]+//' >> "$ttfile"
+            echo "quarantine: subtracted ${n:-0} pattern(s) from the root test set"
+          fi
           COMMON=(--flaky_test_attempts=3)
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
@@ -436,7 +466,17 @@ jobs:
                    --remote_cache_compression
                    --remote_download_all
                    --remote_timeout=120 --remote_retries=5)
-            [ "$CACHE_UPLOAD" = "true" ] || CACHE+=(--remote_upload_local_results=false)
+            # Force the upload flag explicitly. The root module's .bazelrc pins
+            # --config=remote, which sets --remote_upload_local_results=false
+            # (internal read-only dev cache). Without overriding it back to true
+            # on main pushes, root never warms the public cache, so every root
+            # build is cold forever. Service modules do not set --config=remote,
+            # so they are unaffected either way.
+            if [ "$CACHE_UPLOAD" = "true" ]; then
+              CACHE+=(--remote_upload_local_results=true)
+            else
+              CACHE+=(--remote_upload_local_results=false)
+            fi
           fi
           # Same cacheless retry as the build step: cache flakiness must never
           # fail the matrix (see the build step for the rationale). COMMON keeps

@@ -94,14 +94,17 @@ ABS_OUT="$$(pwd)/$@"
 cd "$$WORK_DIR"
 """
 
+# -buildvcs=false: the genrule runs `go build` in Bazel's sandbox, which has no
+# .git, so Go's default VCS stamping fails with "error obtaining VCS status:
+# exit status 128". The collector binary does not need embedded VCS info.
 _CMD_GO_BUILD_AMD64 = """\
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \\
-    "$$GO_BIN" build -trimpath -o "$$ABS_OUT" .
+    "$$GO_BIN" build -trimpath -buildvcs=false -o "$$ABS_OUT" .
 """
 
 _CMD_GO_BUILD_ARM64 = """\
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \\
-    "$$GO_BIN" build -trimpath -o "$$ABS_OUT" .
+    "$$GO_BIN" build -trimpath -buildvcs=false -o "$$ABS_OUT" .
 """
 
 genrule(

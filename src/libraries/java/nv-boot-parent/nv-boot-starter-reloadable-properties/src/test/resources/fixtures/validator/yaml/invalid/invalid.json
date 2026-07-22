@@ -1,0 +1,16 @@
+{
+  "kv": {
+    "exampleSecret": {
+      "current": {
+        "id": "2020-08-13T18:04:25+00:00",
+        "value": {
+          "username": "myUser",
+          "password": "myPass"
+        }
+      }
+    }
+  }
+}
+{
+
+}

@@ -135,6 +135,7 @@ go_test(
         "status_karta_test.go",
         "status_test.go",
         "tokenfetcher_test.go",
+        "translate_workload_test.go",
         "transport_tls_test.go",
     ],
     data = ["//internal/envtest:crds"],
