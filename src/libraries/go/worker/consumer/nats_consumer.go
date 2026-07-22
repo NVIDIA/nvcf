@@ -343,7 +343,6 @@ func fetchMax(ctx context.Context, consumer jetstream.Consumer, maxReq int64) (<
 			var msg jetstream.Msg
 			select {
 			case msg = <-activeFetch.Messages():
-				break
 			case <-ctx.Done():
 				// sure wish we could cancel fetches. best we can do is nack.
 				// TODO https://github.com/nats-io/nats.go/issues/1651
@@ -369,7 +368,6 @@ func fetchMax(ctx context.Context, consumer jetstream.Consumer, maxReq int64) (<
 			zap.L().Debug("message fetched", zap.String("consumer", consumer.CachedInfo().Name))
 			select {
 			case retChan <- msg:
-				break
 			case <-ctx.Done():
 				zap.L().Debug("nacking message due to closed context", zap.String("subject", msg.Subject()))
 				_ = msg.Nak()
