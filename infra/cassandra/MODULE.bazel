@@ -90,13 +90,12 @@ use_repo(
 
 # ============================================================================
 # External artifacts fetched by digest: the pinned yq binaries (public,
-# OSS-safe) and the internal exporter-agent jar placeholder (see comment in
-# //rules:repos.bzl -- URL/sha still to be supplied).
+# OSS-safe). The internal exporter-agent jar is not declared here; the
+# with-exporter image is built in nvcf-internal (see //rules:repos.bzl).
 # ============================================================================
 artifacts = use_extension("//rules:repos.bzl", "external_artifacts")
 use_repo(
     artifacts,
-    "cassandra_exporter_agent",
     "yq_linux_amd64",
     "yq_linux_arm64",
 )

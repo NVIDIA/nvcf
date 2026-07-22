@@ -59,11 +59,12 @@ Translation of the Dockerfile:
 - `--add-opens` JVM flags -> `JVM_EXTRA_OPTS` env, shared as `JVM_ADD_OPENS`
   in `rules/oci/defs.bzl`.
 
-The exporter agent and NGC push destinations live in `nvidia-internal/`
-(excluded from the OSS mirror). That variant adds the exporter layer plus the
-`-javaagent` flag and pushes via the shared `//rules/oci-destinations` macro.
-It needs the exporter jar URL + sha256 filled into the `@cassandra_exporter_agent`
-placeholder in `rules/repos.bzl` before it builds; until then it analyzes only.
+The exporter agent and NGC push destinations are internal-only and do not
+live in this repo. The private release repo (nvcf-internal) owns the exporter
+jar and a `nvidia-internal/` overlay package; at release time it injects that
+overlay into this module (reusing the public `//:yq_layer` and `//:env_layer`
+targets), adds the exporter layer plus the `-javaagent` flag, and pushes the
+with-exporter image. Nothing exporter-related is declared in this OSS tree.
 
 ## Pairs with
 

@@ -3,18 +3,15 @@
 
 """Module extension declaring external artifacts fetched by digest.
 
-Two kinds of artifact:
-
   - yq (public GitHub release, OSS-safe): the per-arch static binary the
     chart's config init container uses to deep-merge cassandra.yaml. The
     pinned version and per-arch sha256s are the same ones the Dockerfile's
     yq-downloader stage verified.
 
-  - the Prometheus exporter-agent jar (internal only): NOT redistributed in
-    the OSS snapshot. The Dockerfile supplies it at build time via
-    `--build-arg EXPORTER_JAR`. Here it is a placeholder http_file so the
-    //nvidia-internal:image_index (with-exporter) variant analyzes cleanly;
-    the real URL + sha256 still have to be filled in (see TODO below).
+The Prometheus exporter-agent jar is internal-only and NOT redistributed in
+the OSS snapshot, so it is not declared here. The with-exporter image is
+built in the private release repo (nvcf-internal), which supplies the jar
+from its own overlay; see infra/cassandra/README.md.
 """
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
@@ -42,25 +39,6 @@ def _external_artifacts_impl(_ctx):
             downloaded_file_path = "yq",
             executable = True,
         )
-
-    # TODO(EXPORTER_JAR): the internal Prometheus exporter-agent jar is not
-    # redistributed in OSS. Fill in the internal artifact URL and its sha256
-    # to enable `bazel build //nvidia-internal:image_index`. Until then the
-    # with-exporter variant analyzes but does not build (the fetch of this
-    # placeholder URL fails, which is the single missing input). Do NOT
-    # commit a real internal URL to this OSS-mirrored file if it is sensitive;
-    # if the artifact lives behind an internal-only host, move this http_file
-    # declaration into a private overlay instead.
-    http_file(
-        name = "cassandra_exporter_agent",
-        urls = [
-            # Replace with the real internal artifact URL.
-            "https://EXPORTER-JAR-URL-TODO.invalid/cassandra-exporter-agent.jar",
-        ],
-        # Replace with the real sha256 once the URL is known:
-        # sha256 = "<fill in>",
-        downloaded_file_path = "cassandra-exporter-agent.jar",
-    )
 
 external_artifacts = module_extension(
     implementation = _external_artifacts_impl,

@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Public, OSS-safe Cassandra runtime image (Bazel port of the Dockerfile,
-# minus the metrics exporter, which is internal-only and layered in
-# nvidia-internal/). This target builds on the NVIDIA/nvcf GitHub mirror.
+# minus the metrics exporter, which is internal-only). This target builds on
+# the NVIDIA/nvcf GitHub mirror. The with-exporter image is produced by the
+# private release repo (nvcf-internal), which injects a nvidia-internal/
+# overlay package into this module at build time and reuses the public
+# layers below; that overlay and its jar never live in this repo.
 
 load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "strip_prefix")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
