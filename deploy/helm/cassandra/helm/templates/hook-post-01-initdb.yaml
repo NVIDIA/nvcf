@@ -19,13 +19,13 @@
 # - bash
 # - kubectl
 # - jq
-{{- $fullname := include "nvcf-cassandra.fullname" . }}
-{{- $cassandraFullname := include "nvcf-cassandra.cassandraFullname" . }}
+{{- if .Values.cassandra.hooks.initializeCluster.enabled }}
+{{- $fullname := include "cassandra.fullname" . }}
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ $fullname }}-initialize-cluster
-  namespace: {{ include "nvcf-cassandra.namespace" . }}
+  namespace: {{ include "cassandra.namespace" . }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-5"
@@ -38,7 +38,7 @@ spec:
         {{- toYaml . | nindent 8 }}
     {{- end }}
     spec:
-      {{- include "nvcf-cassandra.imagePullSecrets" . | nindent 6 }}
+      {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
       {{- with .Values.cassandra.hooks.initializeCluster.schedulingGates }}
       schedulingGates:
         {{- toYaml . | nindent 8 }}
@@ -52,7 +52,7 @@ spec:
           command: ["/bin/bash"]
           args:
             - -c
-            - /scripts/initdb.sh {{ include "nvcf-cassandra.namespace" . }} {{ $cassandraFullname }}
+            - /scripts/initdb.sh {{ include "cassandra.namespace" . }} {{ $fullname }}
           env:
             - name: CASSANDRA_USER
               value: {{ .Values.cassandra.dbUser.user | quote }}
@@ -76,7 +76,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cassandra-init-script
-  namespace: {{ include "nvcf-cassandra.namespace" . }}
+  namespace: {{ include "cassandra.namespace" . }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-6"
@@ -85,3 +85,4 @@ data:
   initdb.sh: |-
     {{- .Files.Get "scripts/initdb.sh" | nindent 4 }}
 ---
+{{- end }}

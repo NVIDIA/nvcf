@@ -166,7 +166,7 @@ After `init`, the credentials live in `~/.nvcf-cli.state`, so later commands wor
 | `nvcf-cli task results [taskId]` | List result artifacts for a completed task | Result upload not yet supported; returns empty list for `NONE` strategy |
 | `nvcf-cli task cancel [taskId]` | Cancel a queued or running task | |
 | `nvcf-cli task delete [taskId]` | Delete a task record | **Confirm with user.** |
-| `nvcf-cli task update-secrets [taskId] --secrets NAME=value` | Replace all secrets on a task (full replacement) | |
+| `nvcf-cli task update-secrets [taskId] --secrets NAME=value` | Update secrets on a task; supplied secrets are added or updated by name, existing secrets not in the request are preserved | |
 | `nvcf-cli task bulk --task-ids=ID1,ID2` | Fetch details for multiple tasks in one call | |
 
 > Registry credential propagation: after `registry-credential add`/`update`/`delete`, task creation can keep using the previous credential for up to about 5 minutes (NVCT caches account credentials at `nvct.nvcf.cache-ttl`, default `PT5M`), even though `registry-credential list`/`get` show the new value immediately. Wait about 5 minutes, or `kubectl -n nvcf rollout restart deployment/nvct-api` to apply immediately. See [reference/troubleshooting.md](reference/troubleshooting.md).
