@@ -492,49 +492,39 @@ jobs:
             bazel test "${COMMON[@]}" --remote_cache= "${TARGETS[@]}"
           fi
 
-  # Docker (DinD) integration lane. Runs only the "requires-docker"-tagged
-  # tests (Testcontainers suites) that the fast matrix cannot run because it has
-  # no Docker daemon. This is how integration tests stay ENABLED instead of
-  # being skipped. Ports the proven GitLab recipe: a docker:dind service, the
-  # test process pointed at it via DOCKER_HOST, and Testcontainers told to reach
-  # spawned containers at the "docker" alias rather than localhost.
+  # Docker integration lane. Runs only the "requires-docker"-tagged tests
+  # (Testcontainers suites) that the containerized fast matrix cannot run
+  # because it has no Docker daemon. This is how integration tests stay ENABLED
+  # instead of being skipped. Runs on the bare runner (not the bazel-ci
+  # container) because ubuntu-latest ships Docker running, so Testcontainers
+  # uses the host daemon directly -- no DinD, no host-override networking, and it
+  # avoids the container+service checkout fragility. bazelisk reads
+  # .bazelversion for the pinned Bazel.
   bazel-integration:
     name: bazel integration (docker)
     needs: detect
     if: needs.detect.outputs.any == 'true'
     runs-on: ubuntu-latest
-    env:
-      DOCKER_HOST: tcp://docker:2375
-      DOCKER_TLS_CERTDIR: ""
-      TESTCONTAINERS_HOST_OVERRIDE: docker
-      TESTCONTAINERS_RYUK_DISABLED: "true"
-    container:
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.12.0
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    services:
-      docker:
-        image: docker:27-dind
-        options: --privileged
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: bazel version
-        run: bazel version
+      - name: Install bazelisk
+        run: |
+          sudo curl -fsSLo /usr/local/bin/bazel \
+            https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64
+          sudo chmod +x /usr/local/bin/bazel
+          bazel version
       - name: bazel integration tests (requires-docker)
         run: |
-          # Run only the Testcontainers suites across the root workspace. If a
-          # change touches none, bazel exits 4 (no tests matched) which we treat
-          # as success. Nested-module subtrees are handled in a later fan-out.
+          # Run only the Testcontainers suites across the root workspace against
+          # the host Docker. If a change touches none, bazel exits 4 (no tests
+          # matched) which we treat as success. Nested-module subtrees are
+          # handled in a later fan-out.
           set +e
           bazel test //... \
             --build_tests_only \
             --test_tag_filters=requires-docker \
-            --test_env=DOCKER_HOST \
-            --test_env=TESTCONTAINERS_HOST_OVERRIDE \
-            --test_env=TESTCONTAINERS_RYUK_DISABLED \
             --test_output=errors \
             --flaky_test_attempts=2
           rc=$?
