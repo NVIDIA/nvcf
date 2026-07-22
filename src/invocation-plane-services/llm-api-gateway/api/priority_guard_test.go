@@ -147,3 +147,33 @@ func TestLLMRoutesRejectClientSuppliedPriority(t *testing.T) {
 		}
 	})
 }
+
+// A request without X-Priority must pass the guard untouched and reach the next
+// handler. Positive control: without this, a guard that rejected unconditionally
+// would still satisfy every rejection case above while breaking all legitimate
+// LLM traffic. The guard runs after authentication in the wired server, so its
+// only remaining job on a clean request is to forward it, which this asserts
+// directly rather than driving the full provider stack behind the LLM routes.
+func TestRejectClientSuppliedPriorityForwardsRequestWithoutHeader(t *testing.T) {
+	t.Parallel()
+
+	forwarded := false
+	next := func(c echo.Context) error {
+		forwarded = true
+		return c.NoContent(http.StatusNoContent)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	if err := rejectClientSuppliedPriority(next)(c); err != nil {
+		t.Fatalf("guard returned error for a request without X-Priority: %v", err)
+	}
+	if !forwarded {
+		t.Fatal("guard did not forward a request without X-Priority to the next handler")
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+}
