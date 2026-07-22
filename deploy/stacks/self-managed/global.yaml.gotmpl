@@ -798,6 +798,169 @@ vanityGateway:
     {{ . | toYaml | nindent 4 | trim }}
   {{- end }}
 
+{{- if dig "addons" "nvcfUi" "enabled" false .Values }}
+{{/* Shared backend coordinates for the services the nvcf-ui proxies to and
+     the control-plane health monitor probes. Read the same way gateway-routes
+     is fed — from ingress.gatewayApi.routes.<x>.backend — so the config URLs and
+     component endpoints track any operator override; the dict defaults fill the
+     usual case where a route pins no explicit backend. merge lets a partial
+     override (e.g. namespace only) keep the remaining default fields. */}}
+{{- $nvcfApiBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "nvcfApi" "backend" dict .Values)) (dict "name" "api" "namespace" "nvcf" "port" 8080) }}
+{{- $nvctApiBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "nvctApi" "backend" dict .Values)) (dict "name" "nvct-api" "namespace" "nvcf" "port" 8080) }}
+{{- $sisBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "sis" "backend" dict .Values)) (dict "name" "api" "namespace" "sis" "port" 8080) }}
+{{- $grpcBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "grpc" "backend" dict .Values)) (dict "name" "grpc" "namespace" "nvcf" "port" 10081) }}
+{{- $invocationBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "invocation" "backend" dict .Values)) (dict "name" "invocation" "namespace" "nvcf" "port" 8080) }}
+{{- $llmApiGatewayBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "llmInvocation" "backend" dict .Values)) (dict "name" "llm-api-gateway" "namespace" "nvcf" "port" 8080) }}
+{{- $vanityBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" dict .Values)) (dict "name" "vanity-gateway" "namespace" "nvcf" "port" 8080) }}
+{{- $essBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "ess" "backend" dict .Values)) (dict "name" "ess-api" "namespace" "ess" "port" 8080) }}
+{{- $apiKeysBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "apiKeys" "backend" dict .Values)) (dict "name" "api-keys" "namespace" "api-keys" "port" 8080) }}
+{{/* openbao-migrations image tag: 0.16.2 is the floor. An operator may pin a
+     newer tag via addons.nvcfUi.openbaoMigrations.image.tag, but anything older
+     than the floor is ignored (the migrations job needs >= 0.16.2). */}}
+{{- $nvcfUiOpenbaoMigrationsTag := "0.16.2" }}
+{{- $nvcfUiMigrationsTagOverride := dig "addons" "nvcfUi" "openbaoMigrations" "image" "tag" "" .Values }}
+{{- if and $nvcfUiMigrationsTagOverride (semverCompare ">=0.16.2" $nvcfUiMigrationsTagOverride) }}
+{{- $nvcfUiOpenbaoMigrationsTag = $nvcfUiMigrationsTagOverride }}
+{{- end }}
+nvcfUi:
+  fullnameOverride: nvcf-ui
+  image:
+    repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-ui
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  config:
+    nvcfUrl: {{ printf "%s.%s.svc.cluster.local:%v" $nvcfApiBackend.name $nvcfApiBackend.namespace $nvcfApiBackend.port | quote }}
+    nvctUrl: {{ printf "%s.%s.svc.cluster.local:%v" $nvctApiBackend.name $nvctApiBackend.namespace $nvctApiBackend.port | quote }}
+    sisUrl: {{ printf "%s.%s.svc.cluster.local:%v" $sisBackend.name $sisBackend.namespace $sisBackend.port | quote }}
+  openbaoMigrations:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations
+      tag: {{ $nvcfUiOpenbaoMigrationsTag | quote }}
+  # Components the control-plane health monitor probes. Built here (rather than
+  # taking the chart default) so the list matches what this stack actually
+  # deploys: route-backed services reuse the shared backend coordinates above,
+  # and the optional services are included only when their feature is enabled.
+  controlPlane:
+    components:
+      - name: api
+        namespace: {{ $nvcfApiBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $nvcfApiBackend.name $nvcfApiBackend.namespace $nvcfApiBackend.port }}
+      - name: nvct-api
+        namespace: {{ $nvctApiBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $nvctApiBackend.name $nvctApiBackend.namespace $nvctApiBackend.port }}
+      - name: notary-service
+        namespace: nvcf
+        endpoints:
+          - notary.nvcf.svc.cluster.local:8080/health
+      - name: grpc-proxy
+        namespace: {{ $grpcBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $grpcBackend.name $grpcBackend.namespace $grpcBackend.port }}
+      {{- if dig "rateLimiter" "enabled" false .Values }}
+      - name: ratelimiter
+        namespace: nvcf
+        endpoints:
+          - ratelimiter.nvcf.svc.cluster.local:8080/health
+      {{- end }}
+      {{- if dig "addons" "llm" "enabled" false .Values }}
+      - name: llm-api-gateway
+        namespace: {{ $llmApiGatewayBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/healthz" $llmApiGatewayBackend.name $llmApiGatewayBackend.namespace $llmApiGatewayBackend.port }}
+          - {{ printf "%s.%s.svc.cluster.local:%v/readyz" $llmApiGatewayBackend.name $llmApiGatewayBackend.namespace $llmApiGatewayBackend.port }}
+      - name: llm-request-router
+        namespace: nvcf
+        endpoints:
+          - llm-request-router-headless.nvcf.svc.cluster.local:8000/healthz
+          - llm-request-router-headless.nvcf.svc.cluster.local:8000/readyz
+      {{- end }}
+      - name: reval
+        namespace: nvcf
+        endpoints:
+          - reval.nvcf.svc.cluster.local:8082/healthz
+      - name: invocation-service
+        namespace: {{ $invocationBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $invocationBackend.name $invocationBackend.namespace $invocationBackend.port }}
+      {{- if dig "addons" "vanityGateway" "enabled" false .Values }}
+      - name: vanity-gateway
+        namespace: {{ $vanityBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $vanityBackend.name $vanityBackend.namespace $vanityBackend.port }}
+      {{- end }}
+      - name: sis
+        namespace: {{ $sisBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $sisBackend.name $sisBackend.namespace $sisBackend.port }}
+      - name: ess-api
+        namespace: {{ $essBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $essBackend.name $essBackend.namespace $essBackend.port }}
+      - name: api-keys
+        namespace: {{ $apiKeysBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $apiKeysBackend.name $apiKeysBackend.namespace $apiKeysBackend.port }}
+      - name: admin-issuer-proxy
+        namespace: api-keys
+        endpoints:
+          - admin-token-issuer-proxy.api-keys.svc.cluster.local:8080/healthz
+      - name: nats-auth-callout-service
+        namespace: nats-system
+        endpoints:
+          - nvcf-nats-auth-callout-service.nats-system.svc.cluster.local:8080/health
+      {{- if dig "nats" "enabled" true .Values }}
+      - name: nats
+        namespace: nats-system
+        endpoints:
+          - nats-headless.nats-system.svc.cluster.local:8222/healthz?js-server-only
+      {{- end }}
+      {{- if dig "openbao" "enabled" true .Values }}
+      - name: openbao-server
+        namespace: vault-system
+        endpoints:
+          - openbao-server.vault-system.svc.cluster.local:8200/v1/sys/health?standbyok=true
+        k8s_workloads:
+          - name: openbao-server-agent-injector
+            type: deployment
+      {{- end }}
+      {{- if dig "cassandra" "enabled" true .Values }}
+      - name: cassandra
+        namespace: cassandra-system
+        k8s_workloads:
+          - name: cassandra
+            type: statefulset
+      {{- end }}
+      {{- if dig "certManager" "enabled" true .Values }}
+      - name: cert-manager
+        namespace: cert-manager
+        k8s_workloads:
+          - name: cert-manager
+            type: deployment
+          - name: cert-manager-cainjector
+            type: deployment
+          - name: cert-manager-webhook
+            type: deployment
+      {{- end }}
+      {{- if dig "ingress" "gatewayApi" "enabled" false .Values }}
+      - name: envoy-gateway
+        namespace: envoy-gateway-system
+        k8s_workloads:
+          - name: envoy-gateway
+            type: deployment
+      {{- end }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+{{- end }}
+
 nvcfGatewayRoutes:
   {{- $natsRouteEnabled := dig "ingress" "gatewayApi" "routes" "nats" "enabled" false .Values }}
   {{- $essRouteEnabled := dig "ingress" "gatewayApi" "routes" "ess" "enabled" false .Values }}
@@ -858,6 +1021,13 @@ nvcfGatewayRoutes:
         port: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "port" 8080 .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    # NVCF UI route: created only when the nvcf-ui addon is installed. Backend and
+    # hostname come from the chart's routes.nvcfUi defaults (nvcf-ui Service in the
+    # nvcf-ui namespace, nvcf-ui.<domain>).
+    nvcfUi:
+      enabled: {{ dig "addons" "nvcfUi" "enabled" false .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpc:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}

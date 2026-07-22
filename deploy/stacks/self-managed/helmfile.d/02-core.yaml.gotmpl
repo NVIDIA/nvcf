@@ -188,10 +188,22 @@ releases:
     labels:
       release-group: services
 
+  - name: nvcf-ui
+    chart: nvcf/helm-nvcf-ui
+    version: 1.0.2
+    namespace: nvcf-ui
+    condition: addons.nvcfUi.enabled
+    values:
+      - ../global.yaml.gotmpl
+    needs:
+      - nvcf/invocation-service
+    labels:
+      release-group: services
+
   # --- Gateway API Ingress ---
   - name: ingress
     chart: nvcf/nvcf-gateway-routes
-    version: 1.13.4
+    version: 1.15.0
     needs:
       - nvcf/notary-service
       - api-keys/api-keys

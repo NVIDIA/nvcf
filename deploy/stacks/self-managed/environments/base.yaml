@@ -179,6 +179,7 @@ openbao:
               - ess
               - nats-system
               - nvcf
+              - nvcf-ui
               - sis
 
 addons:
@@ -260,6 +261,9 @@ addons:
     tolerations: []
     affinity: {}
 
+  nvcfUi:
+    enabled: false
+
 stateMetrics:
   enabled: false
   # Disable ServiceMonitor for environments without Prometheus Operator
@@ -296,6 +300,9 @@ ingress:
         routeAnnotations: {}
       vanityGateway:
         # Defaults to vanity.<global.domain>. Set a non-empty list to override.
+        hostnames: []
+        routeAnnotations: {}
+      nvcfUi:
         hostnames: []
         routeAnnotations: {}
       grpc:
