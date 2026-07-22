@@ -69,10 +69,9 @@ java_junit5_test(
         "//src/control-plane-services/cloud-tasks:integration_local_env",
     ],
     tags = [
-        # Full Spring context + Testcontainers integration test: needs a Docker
-        # daemon the GHA runners lack. "manual" drops it from the root row's
-        # `bazel test //...`; runnable on demand in a Docker-capable environment.
-        "manual",
+        # Full Spring context + Testcontainers integration test. Runs in the
+        # dedicated Docker (DinD) integration lane (selected by "requires-docker");
+        # the fast matrix excludes it via --test_tag_filters=-requires-docker.
         "exclusive",
         "requires-docker",
     ],

@@ -457,7 +457,11 @@ jobs:
             grep -E '^[[:space:]]*-//' "$qfile" | sed -E 's/^[[:space:]]+//' >> "$ttfile"
             echo "quarantine: subtracted ${n:-0} pattern(s) from the root test set"
           fi
-          COMMON=(--flaky_test_attempts=3)
+          # requires-docker tests (Testcontainers/DinD) run in the dedicated
+          # bazel-integration lane, not here; this matrix has no Docker daemon.
+          # They still compile in the build step; only their execution is
+          # deferred to that lane (see the bazel-integration job).
+          COMMON=(--flaky_test_attempts=3 --test_tag_filters=-requires-docker)
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
             CACHE=(--remote_cache="$CACHE_ENDPOINT"
@@ -488,9 +492,62 @@ jobs:
             bazel test "${COMMON[@]}" --remote_cache= "${TARGETS[@]}"
           fi
 
+  # Docker (DinD) integration lane. Runs only the "requires-docker"-tagged
+  # tests (Testcontainers suites) that the fast matrix cannot run because it has
+  # no Docker daemon. This is how integration tests stay ENABLED instead of
+  # being skipped. Ports the proven GitLab recipe: a docker:dind service, the
+  # test process pointed at it via DOCKER_HOST, and Testcontainers told to reach
+  # spawned containers at the "docker" alias rather than localhost.
+  bazel-integration:
+    name: bazel integration (docker)
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_HOST: tcp://docker:2375
+      DOCKER_TLS_CERTDIR: ""
+      TESTCONTAINERS_HOST_OVERRIDE: docker
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    container:
+      image: ghcr.io/nvidia/nvcf/bazel-ci:0.12.0
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    services:
+      docker:
+        image: docker:27-dind
+        options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: bazel version
+        run: bazel version
+      - name: bazel integration tests (requires-docker)
+        run: |
+          # Run only the Testcontainers suites across the root workspace. If a
+          # change touches none, bazel exits 4 (no tests matched) which we treat
+          # as success. Nested-module subtrees are handled in a later fan-out.
+          set +e
+          bazel test //... \
+            --build_tests_only \
+            --test_tag_filters=requires-docker \
+            --test_env=DOCKER_HOST \
+            --test_env=TESTCONTAINERS_HOST_OVERRIDE \
+            --test_env=TESTCONTAINERS_RYUK_DISABLED \
+            --test_output=errors \
+            --flaky_test_attempts=2
+          rc=$?
+          set -e
+          if [ "$rc" -eq 4 ]; then
+            echo "no requires-docker tests matched; nothing to run"
+            exit 0
+          fi
+          exit "$rc"
+
   bazel-verification:
     name: bazel verification
-    needs: [detect, bazel]
+    needs: [detect, bazel, bazel-integration]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -498,6 +555,7 @@ jobs:
         env:
           DETECT_RESULT: ${{ needs.detect.result }}
           BAZEL_RESULT: ${{ needs.bazel.result }}
+          INTEGRATION_RESULT: ${{ needs.bazel-integration.result }}
           BAZEL_ANY: ${{ needs.detect.outputs.any }}
         run: |
           set -euo pipefail
@@ -518,5 +576,11 @@ jobs:
 
           if [ "${BAZEL_RESULT}" != "success" ]; then
             echo "one or more Bazel matrix rows failed, were cancelled, or were skipped"
+            exit 1
+          fi
+
+          echo "integration result: ${INTEGRATION_RESULT}"
+          if [ "${INTEGRATION_RESULT}" != "success" ] && [ "${INTEGRATION_RESULT}" != "skipped" ]; then
+            echo "the bazel integration (docker) lane failed or was cancelled"
             exit 1
           fi
