@@ -19,6 +19,7 @@
 # - bash
 # - kubectl
 # - jq
+{{- if .Values.cassandra.hooks.initializeCluster.enabled }}
 {{- $fullname := include "cassandra.fullname" . }}
 apiVersion: batch/v1
 kind: Job
@@ -84,3 +85,4 @@ data:
   initdb.sh: |-
     {{- .Files.Get "scripts/initdb.sh" | nindent 4 }}
 ---
+{{- end }}

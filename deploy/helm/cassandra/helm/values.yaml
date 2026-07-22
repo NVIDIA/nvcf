@@ -138,8 +138,20 @@ cassandra:
   # leave room for off-heap and page cache.
   resources: {}
 
+  # Pod scheduling, passed through to the StatefulSet pod template unchanged.
+  # Empty by default; the stack or operator sets these to pin Cassandra to
+  # specific nodes, tolerate taints, or spread across zones.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
   hooks:
     initializeCluster:
+      # Set false to skip the post-install keyspace-init job. Used when joining
+      # a new datacenter to an existing cluster: the schema arrives through
+      # gossip, so re-running init against the new datacenter is unnecessary and
+      # can race the existing schema. See the datacenter-expansion upgrade guide.
+      enabled: true
       podAnnotations: {}
       schedulingGates: []
       resources:
@@ -150,6 +162,12 @@ cassandra:
           cpu: 250m
           memory: 256Mi
     migrations:
+      # Set false to skip the post-install schema-migration job, for the same
+      # datacenter-expansion reason as initializeCluster above. The migrations
+      # include destructive ALTER statements, so running them against a new
+      # datacenter that is not yet in every keyspace's replication can re-apply
+      # them from an earlier version. Leave true for normal installs.
+      enabled: true
       podAnnotations: {}
       schedulingGates: []
       resources:

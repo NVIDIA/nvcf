@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- if .Values.cassandra.hooks.migrations.enabled }}
 {{- $fullname := include "cassandra.fullname" . }}
 apiVersion: batch/v1
 kind: Job
@@ -56,3 +57,4 @@ spec:
               value: {{ .Values.cassandra.replicaCount | quote }}
           resources:
             {{- toYaml .Values.cassandra.hooks.migrations.resources | nindent 12 }}
+{{- end }}

@@ -35,6 +35,15 @@ spec:
       {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
       securityContext:
         fsGroup: {{ .Values.cassandra.podSecurityContext.fsGroup }}
+      {{- with .Values.cassandra.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.cassandra.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.cassandra.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
       initContainers:
         # Copy the image's /etc/cassandra into a shared emptyDir and enable
         # authentication in the copied cassandra.yaml. The main container mounts
