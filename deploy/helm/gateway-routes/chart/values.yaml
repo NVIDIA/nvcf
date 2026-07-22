@@ -175,6 +175,19 @@ nvcfGatewayRoutes:
         port: 8080
       routeAnnotations: {}
 
+    # NVCF UI HTTPRoute
+    # Disabled by default; opt in for deployments that install the nvcf-ui addon
+    nvcfUi:
+      enabled: false
+      name: nvcf-ui
+      hostnames:
+        - "nvcf-ui.{{ .Values.nvcfGatewayRoutes.domain }}"
+      backend:
+        name: nvcf-ui
+        namespace: nvcf-ui
+        port: 8300
+      routeAnnotations: {}
+
     # SIS (Service Identity Service) HTTPRoute
     # Exposes SIS outside the cluster so tools like `nvcf-cli cluster register`
     # can reach it without a kubectl port-forward workaround.

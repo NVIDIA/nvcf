@@ -64,7 +64,7 @@ Task commands require `NVCF_API_KEY` set to a task-scoped key and `NVCF_BASE_NVC
 | `task results [taskId]` | List result artifacts for a completed task | Returns empty list when `resultHandlingStrategy` is `NONE`; result upload not yet supported |
 | `task cancel [taskId]` | Cancel a running task | No-op if already in terminal state |
 | `task delete [taskId]` | Delete a task record | **Confirm with user** |
-| `task update-secrets [taskId] --secrets NAME=value` | Replace all secrets on a task (full replacement, not a merge) | Values are encrypted at rest |
+| `task update-secrets [taskId] --secrets NAME=value` | Update secrets on a task; supplied secrets are added or updated by name, existing secrets not in the request are preserved | Values are encrypted at rest |
 | `task bulk --task-ids=ID1[,ID2,…]` | Fetch details for multiple tasks in one request | |
 
 ## Auth

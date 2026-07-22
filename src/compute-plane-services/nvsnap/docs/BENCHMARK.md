@@ -1,29 +1,36 @@
 # NVSNAP Checkpoint/Restore Benchmarks
 
-## Huge-page CRIU restore (Lever A), July 2026
+## Faster criu-v2 restore (Levers A + B), July 2026
 
 Cluster: aws-dev1, H100 80GB (single GPU), driver 580.126, criu-v2 engine.
-The CRIU fork now `madvise(MADV_HUGEPAGE)`s the premapped private-VMA arena
-before faulting in the process image, so the CPU-side memory installs as 2MB
-pages instead of ~800k 4KB pages. Matched agent-restore time, before (app
-v0.2.20) vs after (app v0.2.21, base v0.0.11, criu fork `1ddd5c9c3`):
+Two restore-path optimizations, measured as matched agent-restore time.
 
-| Workload | Checkpoint | Before | After | Delta |
-|---|---:|---:|---:|---:|
-| vllm-small (TinyLlama 1.1B) | 3.2G | 44.3 s | 32.2 s | -27% |
-| vllm-8b (Llama-3.1-8B) | 18G | 58.9 s | 38.5 s | -35% |
-| e5-mistral-7b | 15G | 84.0 s | 40.8 s | -51% |
-| vllm-qwen32b (Qwen2.5-32B) | 64G | 77.4 s | 48.5 s | -37% |
+Lever A (base v0.0.11 / app v0.2.21, criu fork `1ddd5c9c3`): the CRIU fork
+`madvise(MADV_HUGEPAGE)`s the premapped private-VMA arena before faulting in the
+process image, so the CPU-side memory installs as 2MB pages instead of ~800k 4KB
+pages.
 
-All four tested single-GPU workloads restore faster; larger CPU-side footprints
-generally benefit, although the improvement is not monotonic in this sample.
-Phase split from the vllm-small `-v4` restore.log:
-the CPU pages-restore phase dropped 13.5 s to 3.8 s (-72%); the cuda_plugin GPU
-restore phase (~27 s) is unchanged. No lasting memory cost: `AnonHugePages` is 0
-in the final restored process because the huge pages exist only transiently in
-the CRIU staging arena during population and split on the remap to final
-addresses. Best-effort and safe: on a non-THP node the madvise is a no-op and
-restore proceeds unchanged. Design: `docs/proposals/single-gpu-restore-speedup.md`.
+Lever B (base v0.0.12 / app v0.2.22, criu fork `1e926fa4d`): each cuda-checkpoint
+spawn pays a fixed ~2.7 s cuInit driver-attach. On the common restore path a
+process needs both a restore and an unlock; the plugin now issues them as one
+combined "resume" invocation (one cuInit instead of two), so the win scales with
+the GPU pid count.
+
+| Workload | Checkpoint | Baseline (v0.2.20) | + A (v0.2.21) | + A+B (v0.2.22) | Total |
+|---|---:|---:|---:|---:|---:|
+| vllm-small (TinyLlama 1.1B) | 3.2G | 44.3 s | 32.2 s | 25.8 s | -42% |
+| vllm-8b (Llama-3.1-8B) | 18G | 58.9 s | 38.5 s | 32.4 s | -45% |
+| e5-mistral-7b | 15G | 84.0 s | 40.8 s | 36.6 s | -56% |
+| vllm-qwen32b (Qwen2.5-32B) | 64G | 77.4 s | 48.5 s | 44.3 s | -43% |
+
+Every single-GPU workload restores faster at both steps; the A win grows with
+the process's CPU-side memory footprint, the B win with the GPU pid count.
+Phase split from the vllm-small `-v4` restore.log: A cut the CPU pages-restore
+phase 13.5 s to 3.8 s (-72%); B cut the cuda_plugin GPU restore phase by one
+cuInit per pid (~2.7 s x 2 pids). Both are best-effort and correctness-neutral:
+A is a no-op on a non-THP node, B issues the same driver operations in the same
+order. 5/5 single-GPU e2e PASS on the A+B build. Design:
+`docs/proposals/single-gpu-restore-speedup.md`.
 
 ## Warm cache restore (cachedir), June 2026
 

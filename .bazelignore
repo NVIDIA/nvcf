@@ -28,13 +28,21 @@
 # with our bzlmod setup. Re-enable per-subtree as Phase B brings each subtree
 # native.
 src/compute-plane-services
-src/control-plane-services
+# src/control-plane-services is carved out per-subtree: cloud-tasks is native
+# (Phase B) and must stay loadable, while these siblings still carry nested
+# MODULE.bazel / WORKSPACE-style BUILD files that conflict with bzlmod.
+src/control-plane-services/function-autoscaler
+src/control-plane-services/helm-reval
+src/control-plane-services/nats-auth-callout
 src/invocation-plane-services
 src/libraries/python
-# stargate rolled back to authoritative_source: upstream in !413; its
-# BUILD files load @rules_rust which the umbrella's Phase-1
-# MODULE.bazel does not declare. Re-include this line when stargate
-# goes native again.
+# stargate is a nested Bazel module (own MODULE.bazel under
+# src/libraries/rust/stargate), built via a dedicated CI matrix row with
+# working-directory set to the subtree, the same model as
+# function-autoscaler under the ignored src/control-plane-services tree.
+# The root module keeps it ignored so its crate BUILD files (which load
+# @stargate_crates from the nested module) do not resolve against the
+# umbrella root MODULE.bazel.
 src/libraries/rust/stargate
 src/libraries/ts
 deploy
@@ -42,7 +50,16 @@ docs
 fern
 infra
 migrations
-tools
+
+# Note: tools/ is not ignored here so //tools/bazel/java (the root-owned Java
+# build helpers) is loadable. Gazelle is still kept out of tools/ via the
+# gazelle:exclude directive in the root BUILD.bazel.
+
+# The Java subtrees (src/libraries/java/nv-boot-parent and
+# src/control-plane-services/cloud-tasks) are part of the single root module:
+# plain source dirs with BUILD.bazel only, no nested MODULE.bazel. They are
+# intentionally loadable so root labels traverse them. Gazelle is kept out via
+# the root BUILD.bazel gazelle:exclude directives.
 
 # Vendored dependencies inside the two Phase 1 subtrees. Bazel resolves these
 # from MODULE.bazel via Gazelle's go_deps extension, not from on-disk vendor.

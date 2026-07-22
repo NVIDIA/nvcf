@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+# build.rs uses tonic-prost-build to compile proto/*.proto. The compile
+# plan lives in src/build_plan.rs, pulled in via `#[path = ...]`, so it
+# has to be listed as a build-script source. Override the bundled protoc
+# with the hermetic @protobuf//:protoc that the bzlmod protoc extension
+# fetches.
+cargo_build_script(
+    name = "build_script",
+    srcs = [
+        "build.rs",
+        "src/build_plan.rs",
+    ],
+    crate_root = "build.rs",
+    build_script_env = {
+        "PROTOC": "$(execpath @protobuf//:protoc)",
+        # cargo_build_script runs from _main/crates/proto/, so the
+        # well-known-type include dir resolves via three parent hops.
+        "PROTOC_WKT_DIR": "../../../protobuf+/src",
+    },
+    data = glob(["proto/**/*.proto"]) + [
+        "@protobuf//:well_known_type_protos",
+    ],
+    tools = [
+        "@protobuf//:protoc",
+    ],
+    # tonic-prost-build is listed in both [dev-dependencies] and
+    # [build-dependencies]; crate_universe collapses the duplicate to a
+    # dev-dep, leaving all_crate_deps(build=True) empty. Add the crate
+    # label explicitly so build.rs can link it.
+    deps = all_crate_deps(build = True) + [
+        "@stargate_crates//:tonic-prost-build",
+    ],
+)
+
+rust_library(
+    name = "stargate-proto",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "stargate_proto",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":build_script"] + all_crate_deps(normal = True),
+)

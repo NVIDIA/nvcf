@@ -279,6 +279,8 @@ spec:
     volumeMounts:
     - mountPath: /var/run/llm
       name: llm
+    - mountPath: /config/shared
+      name: config-data
   - env:
     - name: FUNCTION_ID
       value: 5a3d4a7e-9ee3-4762-8d37-d3b40a6f84c6
@@ -343,6 +345,8 @@ spec:
     volumeMounts:
     - mountPath: /var/run/llm
       name: llm
+    - mountPath: /config/shared
+      name: config-data
   imagePullSecrets:
   - name: workload-sr-887518b9-0ae0-4481-a273-56c86638bd71-regcred-0
   - name: worker-sr-887518b9-0ae0-4481-a273-56c86638bd71-regcred-0

@@ -61,7 +61,7 @@ chart currently route PathPrefix /, so duplicate hostnames are ambiguous.
 {{- define "nvcf-gateway.validateUniqueRootHTTPRouteHostnames" -}}
 {{- if .Values.nvcfGatewayRoutes.enabled -}}
 {{- $seenHostnames := dict -}}
-{{- $httpRouteKeys := list "nvcfApi" "nvctApi" "apiKeys" "invocation" "llmApiGateway" "llmInvocation" "vanityGateway" "sis" -}}
+{{- $httpRouteKeys := list "nvcfApi" "nvctApi" "apiKeys" "invocation" "llmApiGateway" "llmInvocation" "vanityGateway" "sis" "nvcfUi" -}}
 {{- range $routeKey := $httpRouteKeys -}}
   {{- $route := index $.Values.nvcfGatewayRoutes.routes $routeKey -}}
   {{- if and $route $route.enabled -}}

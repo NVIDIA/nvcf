@@ -1,44 +1,45 @@
 # Bazel Developer Guide
 
-This repository supports Bazel alongside Maven during migration. Maven remains
-the canonical build and publish path until the team explicitly cuts over.
+nv-boot lives inside the `NVIDIA/nvcf` monorepo. Run every command in this
+guide from the monorepo root. Maven remains available during coexistence, but
+Bazel configuration, dependencies, locks, and CI are owned by the monorepo
+root.
 
 ## Tooling
 
-- Bazel: 9.1.1, via `.bazelversion`
+- Bazel: 9.1.1 through Bazelisk honoring the root `.bazelversion`
 - Dependency mode: Bzlmod with `rules_jvm_external`
 - Java: 25
 - Python: 3.11 through `rules_python` for Bazel NOTICE actions
 - Docker: required for Testcontainers-backed tests such as Cassandra tests
 
-The Bazel build/test path uses Bazel-managed Java tooling for compilation and
-tests. The CI image does not need `java` or `jar` on `PATH` for the opt-in
-Bazel build/test job.
+The root `.bazelrc` selects the local Java 25 JDK. The GitHub build-container
+lane gets Temurin 25 from its pinned CI image; the Docker-host lane uses
+`actions/setup-java`.
 
 Local command examples use one portable cache location. Set it once per shell:
 
 ```bash
-export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nv-boot-parent-bazel-cache"
+export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
 ```
 
 ## Understanding the Dependency Files
 
-Bazel uses three top-level files for dependency declarations and locking. A
+Bazel uses three monorepo-root files for dependency declarations and locking. A
 simple way to remember their responsibilities is:
 
 ```text
-MODULE.bazel       = what this repository wants
+MODULE.bazel       = what the whole monorepo wants
 maven_install.json = exact third-party Java artifacts that were resolved
 MODULE.bazel.lock  = exact Bazel modules and module extensions that were resolved
 ```
 
 ### `MODULE.bazel`
 
-Developers edit this file. It declares the repository as a Bazel module and
-contains inputs such as:
+Developers edit the root `MODULE.bazel`. nv-boot does not have a nested module
+file. The root file contains inputs such as:
 
 - `bazel_dep` entries for Bazel rules and tooling;
-- overrides for Bazel source modules when needed;
 - Maven-compatible BOMs and third-party Java dependency roots supplied to
   `rules_jvm_external`;
 - the shared `nv_third_party_deps` hub configuration.
@@ -65,7 +66,7 @@ Maven build, publish nv-boot artifacts, or make the Bazel outputs
 Maven-shaped. Maven does not normally have a direct checked-in equivalent to
 this dependency lockfile.
 
-After changing BOMs, third-party roots, or versions in `MODULE.bazel`,
+After changing BOMs, third-party roots, or versions in the root `MODULE.bazel`,
 regenerate it with:
 
 ```bash
@@ -101,24 +102,22 @@ uses `asm-analysis` and `asm-util`. Those two unmanaged modules are explicitly
 aligned to 9.9 in `MODULE.bazel` so the shared hub does not contain a partially
 upgraded ASM runtime.
 
-The commands below reuse `BAZEL_OUTPUT_USER_ROOT` so local builds do not fight
-with other workspaces. `${TMPDIR:-/tmp}` works on macOS and Linux; the stable
-project-specific suffix prevents cache collisions with other repositories.
+The root `.bazel_downloader_config` maps external downloads to approved
+mirrors. Bazel applies it through `.bazelrc`; nv-boot does not define a
+subtree-specific downloader configuration.
 
 ## Shared Neutral Dependency Hub
 
-`nv-boot-parent` exposes public Bazel source targets whose third-party labels
-refer to one shared dependency repository:
+nv-boot exposes Bazel source targets whose third-party labels refer to the
+monorepo's one shared dependency repository:
 
 ```text
 @nv_third_party_deps
 ```
 
-The exact configured name is `nv_third_party_deps`, with underscores. Every
-Bazel application that consumes nv-boot targets must use this same name for its
-`rules_jvm_external` install. A different name, including
-`nv-third-party-deps`, creates a different repository and does not satisfy the
-labels exposed by nv-boot.
+The exact configured name is `nv_third_party_deps`, with underscores. The root
+`MODULE.bazel` defines it once. No library or application subtree defines
+another `maven.install`.
 
 The name is intentionally neutral:
 
@@ -127,38 +126,16 @@ The name is intentionally neutral:
 - it does not contain nv-boot libraries or application-owned libraries;
 - nv-boot and application code remain first-party Bazel source targets.
 
-A downstream application's `MODULE.bazel` should follow this shape:
-
-```python
-maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
-maven.install(
-    name = "nv_third_party_deps",
-    artifacts = [
-        # Application-owned third-party roots only.
-    ],
-    boms = [
-        # Application-owned BOMs, including the Spring Boot BOM as needed.
-    ],
-    known_contributing_modules = [
-        "nv_boot_parent",
-        # Other Bazel modules that contribute to this same hub.
-    ],
-    lock_file = "//:maven_install.json",
-    ...
-)
-use_repo(maven, "nv_third_party_deps")
-```
-
-Bzlmod and `rules_jvm_external` then merge the upstream and application
-contributions into one resolved graph. If an application creates a second hub,
-its executable jar can contain duplicate or version-skewed libraries. Cloud
-Tasks demonstrated this failure mode with an incompatible gRPC mix and a
-218 MB two-hub app; the single shared hub produced the expected 142 MB app.
+`rules_jvm_external` resolves the root Java dependency graph and exposes jar
+targets through this hub. A coordinate in the hub is merely available; only a
+BUILD dependency edge places it on a library or application's compile/runtime
+classpath. This is how unrelated service dependencies stay out of nv-boot
+targets even though the root lock contains all Java services.
 
 After changing third-party roots or versions, repin the shared hub:
 
 ```bash
-REPIN=1 bazel --output_user_root="${TMPDIR:-/tmp}/<application>-bazel-cache" \
+REPIN=1 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
   run @nv_third_party_deps//:pin
 ```
 
@@ -173,30 +150,31 @@ whole cache.
 
 ## Build
 
-Build the entire repository:
+Build the entire nv-boot subtree:
 
 ```bash
-bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" build //...
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build //src/libraries/java/nv-boot-parent/...
 ```
 
 Build one module:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //nv-boot-starter-core:all
+  build //src/libraries/java/nv-boot-parent/nv-boot-starter-core:all
 ```
 
 Build one module's Bazel-native Java library target:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //nv-boot-starter-core:nv_boot_starter_core
+  build //src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core
 ```
 
 The compiled library jar is written under `bazel-bin/<module>/`, for example:
 
 ```text
-bazel-bin/nv-boot-starter-core/libnv_boot_starter_core.jar
+bazel-bin/src/libraries/java/nv-boot-parent/nv-boot-starter-core/libnv_boot_starter_core.jar
 ```
 
 The Bazel path does not generate POMs, Maven-named jars, sources jars for Maven
@@ -208,7 +186,7 @@ Run all tests without reusing cached test results:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //... \
+  test //src/libraries/java/nv-boot-parent/... \
   --cache_test_results=no \
   --test_output=errors
 ```
@@ -217,7 +195,7 @@ Run all tests and stream logs to the terminal:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //... \
+  test //src/libraries/java/nv-boot-parent/... \
   --cache_test_results=no \
   --test_output=streamed
 ```
@@ -226,7 +204,7 @@ Run one module's tests:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //nv-boot-starter-core:tests \
+  test //src/libraries/java/nv-boot-parent/nv-boot-starter-core:tests \
   --cache_test_results=no \
   --test_output=errors
 ```
@@ -235,7 +213,7 @@ Run one test class:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //nv-boot-starter-core:tests \
+  test //src/libraries/java/nv-boot-parent/nv-boot-starter-core:tests \
   --cache_test_results=no \
   --test_output=streamed \
   --test_arg='--exclude-classname=^(?!com\.nvidia\.boot\.core\.env\.BootCoreEnvironmentPostProcessorTest$).*'
@@ -245,7 +223,7 @@ Run one test method:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //nv-boot-starter-core:tests \
+  test //src/libraries/java/nv-boot-parent/nv-boot-starter-core:tests \
   --cache_test_results=no \
   --test_output=streamed \
   --test_arg='--exclude-classname=^(?!com\.nvidia\.boot\.core\.env\.BootCoreEnvironmentPostProcessorTest$).*' \
@@ -261,13 +239,15 @@ test macro runs JUnit ConsoleLauncher directly.
 Test logs are under:
 
 ```text
-bazel-testlogs/<module>/tests/test.log
-bazel-testlogs/<module>/tests/test.outputs/junit/TEST-junit-jupiter.xml
+bazel-testlogs/src/libraries/java/nv-boot-parent/<module>/tests/test.log
+bazel-testlogs/src/libraries/java/nv-boot-parent/<module>/tests/test.outputs/junit/TEST-junit-jupiter.xml
 ```
 
 The Jupiter XML contains the real Java testcases and is the report published by
-GitLab. The nearby `bazel-testlogs/<module>/tests/test.xml` describes Bazel's
-single outer `sh_test` wrapper and must not be used as the JUnit report.
+GitHub Actions. The nearby
+`bazel-testlogs/src/libraries/java/nv-boot-parent/<module>/tests/test.xml`
+describes Bazel's single outer `sh_test` wrapper and must not be used as the
+JUnit report.
 
 ## Coverage
 
@@ -280,7 +260,7 @@ Run one module's tests and generate its JaCoCo report:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //nv-boot-starter-core:tests \
+  test //src/libraries/java/nv-boot-parent/nv-boot-starter-core:tests \
   --cache_test_results=no \
   --test_output=errors
 ```
@@ -288,21 +268,21 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
 Open the generated HTML report:
 
 ```text
-bazel-testlogs/nv-boot-starter-core/tests/test.outputs/index.html
+bazel-testlogs/src/libraries/java/nv-boot-parent/nv-boot-starter-core/tests/test.outputs/index.html
 ```
 
 The same test output directory also contains:
 
 ```text
-bazel-testlogs/nv-boot-starter-core/tests/test.outputs/jacoco.xml
-bazel-testlogs/nv-boot-starter-core/tests/test.outputs/jacoco.exec
+bazel-testlogs/src/libraries/java/nv-boot-parent/nv-boot-starter-core/tests/test.outputs/jacoco.xml
+bazel-testlogs/src/libraries/java/nv-boot-parent/nv-boot-starter-core/tests/test.outputs/jacoco.exec
 ```
 
 Run all module tests and generate one JaCoCo report per test target:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //... \
+  test //src/libraries/java/nv-boot-parent/... \
   --cache_test_results=no \
   --test_output=errors
 ```
@@ -310,10 +290,10 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
 Per-module reports are written under each test target's output directory:
 
 ```text
-bazel-testlogs/<module>/tests/test.outputs/junit/TEST-junit-jupiter.xml
-bazel-testlogs/<module>/tests/test.outputs/index.html
-bazel-testlogs/<module>/tests/test.outputs/jacoco.xml
-bazel-testlogs/<module>/tests/test.outputs/jacoco.exec
+bazel-testlogs/src/libraries/java/nv-boot-parent/<module>/tests/test.outputs/junit/TEST-junit-jupiter.xml
+bazel-testlogs/src/libraries/java/nv-boot-parent/<module>/tests/test.outputs/index.html
+bazel-testlogs/src/libraries/java/nv-boot-parent/<module>/tests/test.outputs/jacoco.xml
+bazel-testlogs/src/libraries/java/nv-boot-parent/<module>/tests/test.outputs/jacoco.exec
 ```
 
 For CI/Sonar Java coverage, publish the generated `jacoco.xml` files and pass
@@ -333,11 +313,11 @@ standard Bazel `java_test` targets. In that case, run:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  coverage //... \
+  coverage //src/libraries/java/nv-boot-parent/... \
   --cache_test_results=no \
   --test_output=errors \
   --combined_report=lcov \
-  --instrumentation_filter=//nv-boot
+  --instrumentation_filter=//src/libraries/java/nv-boot-parent
 ```
 
 For standard `java_test` targets, the combined LCOV report is written to:
@@ -349,7 +329,7 @@ bazel-out/_coverage/_coverage_report.dat
 Convert the combined LCOV report to SonarQube generic coverage XML:
 
 ```bash
-python3 tools/bazel/lcov_to_sonar_generic.py \
+python3 tools/bazel/java/lcov_to_sonar_generic.py \
   --input bazel-out/_coverage/_coverage_report.dat \
   --output "${TMPDIR:-/tmp}/nv-boot-parent-sonar-coverage.xml"
 ```
@@ -363,100 +343,190 @@ sonar.coverageReportPaths=<path-to-sonar-generic-coverage.xml>
 
 ## License And Notice
 
-During Maven/Bazel coexistence, the root `NOTICE` file remains the canonical
-third-party notice artifact. It is generated by Bazel-native tooling from:
+The monorepo has two NOTICE levels:
 
-- explicit production dependency roots in `tools/bazel/notice_roots.json`;
-- the resolved dependency graph in `maven_install.json`;
-- checked-in upstream artifact metadata in
-  `tools/bazel/notice_metadata.json`.
+1. nv-boot's Bazel target generates and checks the complete third-party NOTICE
+   for the nv-boot libraries.
+2. The existing root `tools/scripts/collect-notices` process records the
+   nv-boot NOTICE path in the monorepo's top-level `NOTICE`.
 
-The root list intentionally excludes test-only and provided dependencies. The
-generator excludes first-party `com.nvidia.boot` artifacts and does not call
-Maven, `license-maven-plugin`, or read project `pom.xml` files.
+The root owns the shared implementation:
 
-Bazel invokes the generator through the `//tools/bazel:generate_notice_tool`
-`py_binary`, so build actions use the Bazel-declared Python runtime instead of
-looking up host `python3`. Explicit roots missing from `maven_install.json` are
-errors. Application runtime scans also reject a packaged jar when its path
-version differs from the lockfile version.
-
-Refresh `NOTICE` and the checked-in artifact metadata after dependency changes:
-
-```bash
-bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  run //:generate_notice -- --update-metadata --write
+```text
+//rules/java:notice.bzl
+//tools/bazel/java:generate_notice_tool
 ```
 
-The `--update-metadata` path reads upstream artifact POMs from the local Maven
-cache first, then from the repositories configured in `maven_install.json` when
-needed. Commit both `NOTICE` and `tools/bazel/notice_metadata.json` after a
-refresh.
+nv-boot owns three component files:
 
-Run a developer check without changing files:
-
-```bash
-bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  run //:generate_notice -- --check
+```text
+src/libraries/java/nv-boot-parent/NOTICE
+src/libraries/java/nv-boot-parent/notice_roots.json
+src/libraries/java/nv-boot-parent/notice_metadata.json
 ```
 
-Validate the checked-in `NOTICE` file:
+Their roles are deliberately different:
+
+- `NOTICE` is the complete, human-readable generated result checked into Git.
+- `notice_roots.json` lists the production dependency entry points for the
+  nv-boot library collection. It is required because nv-boot has no single
+  executable jar whose contents represent every public starter.
+- `notice_metadata.json` contains the reusable name, URL, and license metadata
+  for nv-boot's third-party runtime dependencies. OSS services reuse this
+  shared metadata instead of copying it.
+
+The generator is Bazel-native. Normal generation reads the root
+`maven_install.json`, not project POM files, and does not run Maven or
+`license-maven-plugin`.
+
+Regenerate the checked-in nv-boot NOTICE:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //tools/bazel:notice_check_test \
+  run //src/libraries/java/nv-boot-parent:generate_notice -- --write
+```
+
+When a new runtime dependency lacks metadata, refresh the component-owned
+metadata and NOTICE together:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  run //src/libraries/java/nv-boot-parent:generate_notice -- \
+  --update-metadata --write
+```
+
+The metadata-update mode may read an upstream dependency POM from the local
+Maven cache or configured artifact repository to obtain its published name,
+URL, and license declaration. That is metadata discovery only; it does not run
+a Maven project build.
+
+Check for drift exactly as CI does:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  test //src/libraries/java/nv-boot-parent:notice_check_test \
   --cache_test_results=no \
   --test_output=errors
 ```
 
-Build a Bazel output copy for CI artifact collection:
+Build the machine-readable nv-boot runtime inventory:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //:third_party_notice
+  build //src/libraries/java/nv-boot-parent:nv_boot_runtime_inventory
+
+cat bazel-bin/src/libraries/java/nv-boot-parent/runtime_inventory.json
 ```
 
-The generated copy is written to:
+The nv-boot inventory is the input for its OSRB comparison. An
+`nv_boot_osrb_dependency_delta` target is intentionally not defined yet
+because the monorepo does not have a checked-in approved-baseline inventory to
+subtract. Do not compare nv-boot with an empty baseline and describe every
+dependency as newly introduced. Once OSRB establishes the approved public
+baseline, add that inventory as the explicit baseline and generate nv-boot's
+license-grouped delta from the exact versioned-coordinate difference.
 
-```text
-bazel-bin/THIRD_PARTY_NOTICE
-```
-
-This is not a `rules_license` integration. The build and test path is stable
-because the human-readable license/name/homepage metadata is checked in, while
-the explicit refresh command updates that metadata from upstream Maven artifact
-POMs when dependencies change.
-
-## CI Opt-In
-
-Maven remains the default CI build and publish path during coexistence. Bazel CI
-is opt-in with:
-
-```yaml
-variables:
-  ENABLE_BAZEL_BUILD: "true"
-```
-
-The CI handoff and GitLab job shape are documented in
-`bazel-enablement/ci-bazel-handoff.md`. This branch also has a project-local
-`.gitlab-ci.yml` trial job named `bazel-build-test` guarded by that flag.
-Bazel CI builds and tests the Bazel target graph; it does not publish
-Maven-shaped artifacts to URM/Artifactory.
-
-For CI jobs that run Testcontainers-backed tests, pass Docker environment
-variables into Bazel's restricted test environment:
+After component NOTICE files are updated, validate the existing monorepo root
+rollup:
 
 ```bash
-bazel --output_user_root=/tmp/nv-boot-parent-bazel-cache \
-  test \
-  --cache_test_results=no \
-  --test_output=errors \
-  --test_env=DOCKER_HOST \
-  --test_env=DOCKER_TLS_VERIFY \
-  --test_env=DOCKER_TLS_CERTDIR \
-  --test_env=DOCKER_CERT_PATH \
-  //...
+./tools/ci/check-license
 ```
+
+`check-license` requires Bash 4 or newer. To intentionally refresh the
+top-level path rollup, run `./tools/scripts/update-license`.
+
+## GitHub CI
+
+The monorepo uses `.github/workflows/bazel.yml`; there is no GitLab
+`ENABLE_BAZEL_BUILD` variable for this subtree. Its detector models nv-boot,
+shared Java tooling, root dependency, and consumer relationships. Current
+policy deliberately runs the full matrix on every PR and push. If
+change-aware scheduling is restored later, the detector selects:
+
+- the build-container lane for tests that do not require a Docker daemon;
+- the Docker-host lane for complete Testcontainers scopes; and
+- reverse-dependency consumer validation, including Cloud Tasks when nv-boot
+  changes.
+
+GitHub CI builds and tests Bazel source targets. It does not publish
+Maven-shaped nv-boot artifacts.
+
+The component-local `bazel-java-ci.json` registers nv-boot with the root
+workflow. The detector infers the component path from that file and reads:
+
+```text
+id
+ci_lane
+component_kind
+tests_skip
+```
+
+`component_kind: java-framework` makes framework changes select every
+discovered `java-service`. Shared root Java configuration, rules, and tools
+select every discovered Java component. Do not add parallel component-name
+lists to `.github/workflows/bazel.yml`.
+
+### CI Execution Environments
+
+The `ci_lane` descriptor field chooses where GitHub Actions executes Bazel:
+
+- `build-container`: the job runs inside the pinned
+  `ghcr.io/nvidia/nvcf/bazel-ci` image. Java, Bazelisk, and other build tools
+  are already installed. The host Docker daemon is not exposed there, so this
+  lane cannot run Testcontainers tests or build Docker images.
+- `docker-host`: the job runs directly on GitHub's `ubuntu-latest` virtual
+  machine. The workflow installs Java and Bazelisk, and the host Docker daemon
+  is available to Testcontainers and Docker commands.
+
+This is CI routing, not a Maven-versus-Bazel difference. Local Maven and Bazel
+commands both use Docker Desktop when their tests need containers. nv-boot uses
+`docker-host` because its complete test scope includes Testcontainers tests. A
+future Java component without such tests may use `build-container`. Under the
+current one-lane-per-component policy, even one `requires-docker` test routes
+the component's complete suite to `docker-host`.
+
+### Bazel Scope
+
+Every discovered Java component is part of the monorepo root Bazel module.
+The workflow runs Bazel from the repository root and uses a scoped target such
+as:
+
+```text
+//src/libraries/java/nv-boot-parent/...
+```
+
+The first version of the descriptor called this `scope_mode: root`. The field
+was removed because there is no supported alternative for Java components.
+Some existing non-Java components are independent nested Bazel modules and run
+from their own directories with `//...`, but imported Java frameworks and
+services must not create nested `MODULE.bazel` files.
+
+### Downloading CI Reports
+
+Open the completed GitHub Actions workflow run and download:
+
+```text
+bazel-nv-boot-parent-verification-<run-attempt>
+```
+
+The artifact is retained for 14 days and contains:
+
+```text
+generated/THIRD_PARTY_NOTICE
+generated/runtime_inventory.json
+testlogs/<module>/tests/test.log
+testlogs/<module>/tests/test.outputs/junit/TEST-junit-jupiter.xml
+testlogs/<module>/tests/test.outputs/jacoco.exec
+testlogs/<module>/tests/test.outputs/jacoco.xml
+testlogs/<module>/tests/test.outputs/index.html
+```
+
+Use the XML under `test.outputs/junit`; Bazel's outer `test.xml` describes the
+shell test wrapper rather than the individual JUnit tests. The root-owned
+`tools/ci/stage-bazel-java-artifacts` helper copies through Bazel's `bazel-bin`
+and `bazel-testlogs` symlinks so the download contains real files after the CI
+runner is destroyed.
 
 ## Build And Test Like `mvn clean install`
 
@@ -466,17 +536,16 @@ For a Maven-like local validation loop:
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" clean
 
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //... \
+  test //src/libraries/java/nv-boot-parent/... \
   --cache_test_results=no \
   --test_output=errors
 
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //...
+  build //src/libraries/java/nv-boot-parent/...
 ```
 
-`bazel test //...` runs tests and builds what those tests need. Run
-`bazel build //...` when you also want all non-test Bazel outputs, including
-the module library jars and generated third-party NOTICE.
+`bazel test` builds what the tests need. Run the scoped `bazel build` when you
+also want non-test library outputs.
 
 ## Maven Coexistence
 
@@ -488,9 +557,21 @@ During coexistence:
 
 - Maven remains the canonical remote publish path for Maven consumers.
 - Bazel build/test remains the canonical path for Bazel consumers.
-- Downstream Bazel applications should consume `nv-boot-parent` through Bzlmod
-  source dependencies, such as `git_override`, not through URM Maven artifacts.
+- Applications in this monorepo consume nv-boot through direct labels under
+  `//src/libraries/java/nv-boot-parent/...`.
 - Bazel does not generate, install, or publish Maven-shaped project artifacts.
+
+Run the independent Maven reactor from the nv-boot subtree:
+
+```bash
+(
+  cd src/libraries/java/nv-boot-parent
+  mvn clean install
+)
+```
+
+Maven writes under the subtree's `target` directories. It does not consume
+`bazel-bin`, and the Bazel build does not consume Maven `target` outputs.
 
 ## Dependency Updates
 
@@ -498,11 +579,12 @@ When a module needs a new external dependency:
 
 1. Add the dependency close to the module that uses it, in that module's
    `BUILD.bazel`.
-2. Add the coordinate to `MODULE.bazel` if Bazel does not already resolve it.
+2. Add the coordinate to the root `MODULE.bazel` if Bazel does not already
+   resolve it.
 3. Prefer versionless coordinates when a BOM manages the version.
 4. Add an explicit version only for intentional pins or CVE overrides.
-5. If the dependency is shipped by a starter, add its direct production root
-   to `tools/bazel/notice_roots.json`.
+5. If the dependency is shipped by a starter, update the nv-boot NOTICE roots
+   and metadata as part of the same change.
 6. Repin and validate:
 
 ```bash
@@ -510,7 +592,7 @@ REPIN=1 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
   run @nv_third_party_deps//:pin
 
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //tools/bazel:notice_check_test \
+  test //src/libraries/java/nv-boot-parent/... \
   --cache_test_results=no \
   --test_output=errors
 ```
@@ -523,75 +605,36 @@ unrelated transitive path.
 
 For a new nv-boot module during coexistence:
 
-1. Add the Maven module to root `pom.xml`.
+1. Add the Maven module to
+   `src/libraries/java/nv-boot-parent/pom.xml`.
 2. Add the module's Maven `pom.xml`.
 3. Add the module to `nv-boot-bom/pom.xml` if downstream apps should get its
    version through the BOM.
-4. Add `new-module/BUILD.bazel`.
+4. Add
+   `src/libraries/java/nv-boot-parent/new-module/BUILD.bazel`.
 5. Add `nv_boot_library(...)`.
 6. Add `nv_boot_library_test(...)` if the module has tests, with
    `coverage_library` set to the module's `nv_boot_library(...)` target.
-7. Add any new shipped third-party roots to
-   `tools/bazel/notice_roots.json`.
-8. Update migration docs or release docs if they list modules explicitly.
+7. Update the nv-boot NOTICE roots and metadata.
+8. Update architecture or release docs if they list modules explicitly.
 
 For an internal-only Maven module, skip the Maven BOM entry. Its Bazel target
 is still an ordinary source library target.
 
 ## Reusable Bazel Enablement Skills
 
-The reusable Codex Bazel enablement skills are versioned in this repo at:
-
-```text
-bazel-enablement/skills/maven-parent-bazel-enablement
-bazel-enablement/skills/spring-boot-app-bazel-enablement
-```
-
-Keep these repo-owned copies centralized in `nv-boot-parent`. Application
-repositories should reference the appropriate skill in their handoff docs,
-but should not duplicate the skill directory.
-
-Use `maven-parent-bazel-enablement` for parent/aggregator and shared-library
-repositories such as nv-boot-parent or nv-boot-managed-parent. Use
-`spring-boot-app-bazel-enablement` for application reactors such as Cloud Tasks
-or cloud-functions that must build/test libraries, package an executable app,
-generate runtime NOTICE, and validate Docker/CI.
-
-Codex loads the installed runtime copy from:
+The imported monorepo subtree deliberately does not contain
+`bazel-enablement` history or skill files. The authoritative skill source
+remains in the standalone nv-boot repository, with installed copies at:
 
 ```text
 $HOME/.codex/skills/maven-parent-bazel-enablement
 $HOME/.codex/skills/spring-boot-app-bazel-enablement
 ```
 
-Treat the repo copy as the source of truth. After updating and committing the
-repo copy, sync it into the installed skill location:
-
-```bash
-rsync -a --delete \
-  bazel-enablement/skills/maven-parent-bazel-enablement/ \
-  "${HOME}/.codex/skills/maven-parent-bazel-enablement/"
-
-rsync -a --delete \
-  bazel-enablement/skills/spring-boot-app-bazel-enablement/ \
-  "${HOME}/.codex/skills/spring-boot-app-bazel-enablement/"
-```
-
-Verify the two copies are aligned:
-
-```bash
-diff -ru \
-  bazel-enablement/skills/maven-parent-bazel-enablement \
-  "${HOME}/.codex/skills/maven-parent-bazel-enablement"
-
-diff -ru \
-  bazel-enablement/skills/spring-boot-app-bazel-enablement \
-  "${HOME}/.codex/skills/spring-boot-app-bazel-enablement"
-```
-
-Until this is automated, periodically sync repo to installed copy after skill
-changes so future Bazel enablement work, such as `nv-boot-managed-parent`, uses
-the latest validated workflow.
+Use `spring-boot-app-bazel-enablement` with its GitHub monorepo profile for
+other OSS/self-hosted Spring Boot subtrees. Do not recreate skill directories
+inside this monorepo.
 
 ## Bazel-Native Status
 
@@ -605,9 +648,8 @@ Most of the migration work is Bazel-native:
 - build and test use Bazel Java targets and `nv_boot_library_test`, not
   `maven-surefire-plugin`;
 - coverage is generated by the Bazel test wrapper, not `jacoco-maven-plugin`;
-- License/NOTICE generation uses `tools/bazel/notice_roots.json`,
-  `maven_install.json`, and `tools/bazel/notice_metadata.json`, not
-  `license-maven-plugin`;
+- NOTICE generation is Bazel-native and uses the layered monorepo workflow,
+  not `license-maven-plugin`;
 - module library jars are ordinary Bazel Java outputs;
 - POM generation, Maven-shaped artifact creation, local Maven installation,
   and remote Maven deployment are absent from the Bazel toolchain.
@@ -627,7 +669,7 @@ toolchain code:
 - the Bazel test wrapper preserves the JUnit exit status and then invokes the
   JaCoCo CLI to generate HTML and XML reports;
 - reports remain under
-  `bazel-testlogs/<module>/tests/test.outputs`;
+  `bazel-testlogs/src/libraries/java/nv-boot-parent/<module>/tests/test.outputs`;
 - focused test selection and ordinary console logging continue to use the
   JUnit Platform Console Launcher.
 
@@ -647,17 +689,15 @@ separate cutover decision. Do not recreate it inside Bazel.
 ## Current Gaps
 
 - Maven remains the canonical publishing path during coexistence.
-- Downstream Maven consumption from URM has been validated with `cloud-tasks`
-  using version `15665e3b`.
 - The Bazel remote publish/deploy bridge was removed after validation because
   the target Bazel-native model is source-target consumption, not URM Maven
   artifact consumption.
 - Parent/BOM POM artifacts still come from the Maven build and checked-in
   `pom.xml` files during coexistence.
-- A project-local opt-in Bazel CI job is available; the shared CI template has
-  not been updated yet.
-- License/NOTICE is covered by Bazel-native generation and checks from
-  `maven_install.json`, explicit production roots, and checked-in artifact
-  metadata. A formal `rules_license` integration is not implemented.
+- GitHub CI enforces nv-boot NOTICE drift and uploads its complete NOTICE and
+  runtime inventory. A license-grouped nv-boot OSRB delta still requires an
+  approved nv-boot baseline inventory.
+- The root dependency graph currently warns that protobuf expected
+  `libprotoc 33.4` but selected `33.0`.
 - Downstream Spring Boot executable app packaging belongs to downstream app
   migration, not to `nv-boot-parent`.

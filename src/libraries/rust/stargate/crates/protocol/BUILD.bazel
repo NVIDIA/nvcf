@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# build.rs invokes `capnpc::CompilerCommand::new().file("quic.capnp")`,
+# which spawns the host `capnp` binary. The bazel-ci image installs
+# capnproto via apt (see ci/Dockerfile.bazel); cargo_build_script
+# inherits PATH, so the binary is found there. Switching to a fully
+# hermetic capnp toolchain is a follow-up.
+cargo_build_script(
+    name = "build_script",
+    srcs = [
+        "build.rs",
+        "src/build_plan.rs",
+    ],
+    crate_root = "build.rs",
+    data = glob(["*.capnp"]),
+    # capnpc is listed in both [dev-dependencies] and [build-dependencies];
+    # crate_universe collapses the duplicate to a dev-dep, leaving
+    # all_crate_deps(build=True) empty. Add the crate label explicitly.
+    deps = all_crate_deps(build = True) + [
+        "@stargate_crates//:capnpc",
+    ],
+)
+
+rust_library(
+    name = "stargate-protocol",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    # build.rs is pulled in as a test-only module
+    # (`#[cfg(test)] #[path = "../build.rs"] mod build_script;` in lib.rs),
+    # so it must be a compile input for the rust_test that reuses this
+    # crate. compile_data makes it available without treating it as a
+    # crate root; the non-test build ignores the cfg(test) module.
+    compile_data = ["build.rs"],
+    crate_name = "stargate_protocol",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":build_script"] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "stargate-protocol_test",
+    crate = ":stargate-protocol",
+    deps = [
+        "//crates/stargate-tls:stargate-tls",
+    ] + all_crate_deps(normal_dev = True),
+)

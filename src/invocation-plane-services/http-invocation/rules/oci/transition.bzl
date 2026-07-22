@@ -5,14 +5,18 @@
 
 def _multiarch_transition(settings, attr):
     return [
-        {"//command_line_option:platforms": str(platform)}
+        {
+            "//command_line_option:platforms": str(platform),
+            # Pin opt: fastbuild's zig arm64 UBSan traps SIGTRAP jemalloc at startup (nvbug 6451362).
+            "//command_line_option:compilation_mode": "opt",
+        }
         for platform in attr.platforms
     ]
 
 multiarch_transition = transition(
     implementation = _multiarch_transition,
     inputs = [],
-    outputs = ["//command_line_option:platforms"],
+    outputs = ["//command_line_option:platforms", "//command_line_option:compilation_mode"],
 )
 
 def _multi_arch_impl(ctx):

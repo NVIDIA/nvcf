@@ -1,5 +1,5 @@
 load("@rules_java//java:defs.bzl", "java_library")
-load("//src/libraries/java/nv-boot-parent/tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
+load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
 
 EXCEPTIONS_REQUIRED_DEPS = [
     "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",

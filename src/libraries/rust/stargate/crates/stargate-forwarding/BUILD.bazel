@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Request-forwarding primitives shared by the stargate runtime and the
+# k8s router. Third-party deps only; stargate-tls is a dev-dependency
+# used by the test target.
+rust_library(
+    name = "stargate-forwarding",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "stargate_forwarding",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "stargate-forwarding_test",
+    crate = ":stargate-forwarding",
+    deps = [
+        "//crates/stargate-tls:stargate-tls",
+    ] + all_crate_deps(normal_dev = True),
+)
