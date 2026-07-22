@@ -94,6 +94,23 @@ done
 command -v kubectl >/dev/null || die "kubectl not found"
 command -v helm >/dev/null    || die "helm not found"
 
+# The in-house chart fixes its resource names to "cassandra" (StatefulSet, PVC
+# data-cassandra-0, services). A non-default --release would orphan-delete and
+# probe one set of names while helm deploys another, so PVC adoption and the
+# post-upgrade verification target different resources. Refuse anything else.
+[ "${RELEASE}" = "cassandra" ] \
+  || die "--release must be 'cassandra': the in-house chart's resource names are fixed, so any other value adopts and verifies the wrong resources"
+
+# Option A adopts the Bitnami-nested PVC in place, which only works when the
+# chart mounts the data volume with subPath "data" (so the old nested
+# <mount>/data/{data,commitlog,...} surfaces at the official image's defaults).
+# Render the chart with the supplied values and refuse before any destructive
+# step unless that mount resolves to subPath: data, so we never orphan-delete
+# and restart the node against the incompatible PVC root.
+helm template "${RELEASE}" "${CHART_DIR}" -f "${VALUES}" 2>/dev/null \
+  | grep -qE '^[[:space:]]*subPath:[[:space:]]*data[[:space:]]*$' \
+  || die "values file '${VALUES}' does not render the data mount with subPath: data (Option A requires persistence.subPath=data). Refusing."
+
 KC=(kubectl --context "${CONTEXT}" -n "${NAMESPACE}")
 
 # run: echo always; execute only with --confirm.
@@ -165,7 +182,13 @@ if [ -n "${PROBE_KEYSPACE}" ] && [ -n "${PROBE_TABLE}" ]; then
     pre_count="$("${KC[@]}" exec "${RELEASE}-0" -c cassandra -- \
       cqlsh -u "${CQL_USER}" -p "${CQL_PASS}" -e "SELECT COUNT(*) FROM ${PROBE_KEYSPACE}.${PROBE_TABLE};" 2>/dev/null \
       | grep -E '^[[:space:]]*[0-9]+' | tr -d ' ' || true)"
-    log "pre-migration count: ${pre_count:-unknown}"
+    # A probe you asked for must actually produce a count. An auth/query/parse
+    # failure otherwise yields an empty value that silently skips the
+    # post-migration comparison below, defeating the safety check. Fail here,
+    # before any destructive step.
+    [[ "${pre_count}" =~ ^[0-9]+$ ]] \
+      || die "could not obtain a numeric pre-migration row count for ${PROBE_KEYSPACE}.${PROBE_TABLE}; aborting before any destructive step"
+    log "pre-migration count: ${pre_count}"
   else
     printf '  + (would count %s.%s)\n' "${PROBE_KEYSPACE}" "${PROBE_TABLE}"
   fi
