@@ -117,7 +117,7 @@ func TestGetTemplateConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "custom SRE metrics config",
+			name: "custom metric subset config",
 			env: map[string]string{
 				"NVCF_BACKEND_TYPE":                 "gfn",
 				"NVCF_INSTANCE_ID":                  "test-instance",
@@ -125,32 +125,32 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCF_WORKLOAD_TYPE":                "function",
 				"NVCT_TASK_ID":                      "task-123",
 				"NVCF_ZONE_NAME":                    "zone-1",
-				"BYOO_SRE_METRICS_ENABLED":          "true",
-				"BYOO_SRE_METRICS_FILTER_CONFIG":    "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
-				"BYOO_CUSTOMER_METRICS_DROP_LABELS": "sre_metrics_enabled, custom_label, sre_metrics_enabled",
+				"BYOO_METRIC_SUBSET_ENABLED":        "true",
+				"BYOO_METRIC_SUBSET_FILTER_CONFIG":  "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
+				"BYOO_WORKLOAD_METRICS_DROP_LABELS": "metric_subset_enabled, custom_label, metric_subset_enabled",
 			},
 			expectErr: false,
 			expect: func(t *testing.T, cfg TemplateConfig) {
-				assert.True(t, cfg.SREMetrics.Enabled)
+				assert.True(t, cfg.MetricSubset.Enabled)
 				assert.Equal(t, map[string]interface{}{
 					"error_mode": "ignore",
 					"metric_conditions": []interface{}{
 						`metric.name == "drop"`,
 					},
-				}, cfg.SREMetrics.FilterConfig)
-				assert.Equal(t, []string{"sre_metrics_enabled", "custom_label"}, cfg.SREMetrics.CustomerMetricsDropLabels)
+				}, cfg.MetricSubset.FilterConfig)
+				assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.WorkloadMetrics.DropLabels)
 			},
 		},
 		{
-			name: "invalid SRE metrics filter config",
+			name: "invalid metric subset filter config",
 			env: map[string]string{
-				"NVCF_BACKEND_TYPE":              "gfn",
-				"NVCF_INSTANCE_ID":               "test-instance",
-				"NVCF_NAMESPACE":                 "test-ns",
-				"NVCF_WORKLOAD_TYPE":             "function",
-				"NVCT_TASK_ID":                   "task-123",
-				"NVCF_ZONE_NAME":                 "zone-1",
-				"BYOO_SRE_METRICS_FILTER_CONFIG": "processors: []",
+				"NVCF_BACKEND_TYPE":                "gfn",
+				"NVCF_INSTANCE_ID":                 "test-instance",
+				"NVCF_NAMESPACE":                   "test-ns",
+				"NVCF_WORKLOAD_TYPE":               "function",
+				"NVCT_TASK_ID":                     "task-123",
+				"NVCF_ZONE_NAME":                   "zone-1",
+				"BYOO_METRIC_SUBSET_FILTER_CONFIG": "processors: []",
 			},
 			expectErr: true,
 		},
@@ -240,9 +240,9 @@ func TestGetTemplateConfig(t *testing.T) {
 				"BYOO_LOG_CHUNK_MAX_BODY_BYTES",
 				"BYOO_LOG_CHUNK_DRY_RUN",
 				"BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES",
-				"BYOO_SRE_METRICS_ENABLED",
-				"BYOO_SRE_METRICS_FILTER_CONFIG",
-				"BYOO_CUSTOMER_METRICS_DROP_LABELS",
+				"BYOO_METRIC_SUBSET_ENABLED",
+				"BYOO_METRIC_SUBSET_FILTER_CONFIG",
+				"BYOO_WORKLOAD_METRICS_DROP_LABELS",
 			}
 			backup := map[string]*string{}
 			for _, k := range envKeys {

@@ -113,11 +113,11 @@ exporters:
     resource_to_telemetry_conversion:
       enabled: true
     send_timestamps: true
-  prometheusremotewrite/PROMETHEUS-customer-metrics-metrics:
-    endpoint: https://customer-metrics.example.invalid/api/v1/write
+  prometheusremotewrite/PROMETHEUS-workload-metrics-metrics:
+    endpoint: https://workload-metrics.example.invalid/api/v1/write
     tls:
-      cert_file: /etc/byoo-otel-collector/secrets/customer-metrics-clientCert
-      key_file: /etc/byoo-otel-collector/secrets/customer-metrics-clientKey
+      cert_file: /etc/byoo-otel-collector/secrets/workload-metrics-clientCert
+      key_file: /etc/byoo-otel-collector/secrets/workload-metrics-clientKey
 processors:
   attributes/add-metadata:
     actions:
@@ -149,10 +149,16 @@ processors:
     send_batch_max_size: 8192
     send_batch_size: 4096
     timeout: 400ms
-  batch/sre_metrics:
+  batch/metric_subset:
     send_batch_max_size: 8192
     send_batch_size: 4096
     timeout: 400ms
+  filter/metric_subset:
+    error_mode: ignore
+    metric_conditions:
+      - metric.name != "BpsInstrument" and metric.name != "FpsInstrument" and metric.name != "RtdInstrument" and metric.name != "StageOpenDuration"
+      - resource.attributes["metric_subset_enabled"] == "false"
+      - datapoint.attributes["metric_subset_enabled"] == "false"
   filter/metrics:
     metrics:
       exclude:
@@ -162,14 +168,6 @@ processors:
           - scrape_samples_post_metric_relabeling
           - scrape_samples_scraped
           - scrape_series_added
-  filter/sre_metrics:
-    error_mode: ignore
-    metric_conditions:
-      - metric.name != "BpsInstrument" and metric.name != "FpsInstrument" and metric.name != "RtdInstrument" and metric.name != "StageOpenDuration"
-      - resource.attributes["sre_metrics_enabled"] == "false"
-      - resource.attributes["sre_enabled_metrics"] == "false"
-      - datapoint.attributes["sre_metrics_enabled"] == "false"
-      - datapoint.attributes["sre_enabled_metrics"] == "false"
   memory_limiter:
     check_interval: 1s
     limit_percentage: 80
@@ -208,12 +206,10 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
-  resource/customer_metrics:
+  resource/workload_metrics_drop_labels:
     attributes:
       - action: delete
-        key: sre_metrics_enabled
-      - action: delete
-        key: sre_enabled_metrics
+        key: metric_subset_enabled
 extensions:
   cgroup_runtime:
     gomaxprocs:
@@ -274,25 +270,25 @@ service:
         - otlp
         - prometheus
       exporters:
-        - prometheusremotewrite/PROMETHEUS-customer-metrics-metrics
+        - prometheusremotewrite/PROMETHEUS-workload-metrics-metrics
       processors:
         - memory_limiter
         - filter/metrics
         - resource
-        - resource/customer_metrics
+        - resource/workload_metrics_drop_labels
         - metrics_transform
         - batch
-    metrics/sre:
+    metrics/metric_subset:
       receivers:
         - otlp
       exporters:
         - prometheus/user-metrics
       processors:
         - memory_limiter
-        - filter/sre_metrics
+        - filter/metric_subset
         - resource
         - metrics_transform
-        - batch/sre_metrics
+        - batch/metric_subset
   extensions:
     - healthcheckv2
     - cgroup_runtime
