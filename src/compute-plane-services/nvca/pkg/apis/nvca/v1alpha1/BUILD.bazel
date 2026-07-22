@@ -24,7 +24,6 @@ go_library(
         "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
         "//vendor/k8s.io/kube-openapi/pkg/common",
         "//vendor/k8s.io/kube-openapi/pkg/validation/spec",
-        "//vendor/sigs.k8s.io/yaml",
     ],
 )
 
