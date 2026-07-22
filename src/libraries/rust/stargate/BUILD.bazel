@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Cargo workspace files exported here for crate_universe's
+# `crate.from_cargo` extension to read them by label.
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+])
+
+# Bundled load-balancer benchmark configs. Staged as `data` for the
+# stargate crate's tests (the bundled_benchmark_lb_configs_parse suite
+# reads them; it is skipped under Bazel today, but the filegroup keeps
+# the label resolvable for when it is re-enabled via the runfiles crate).
+filegroup(
+    name = "benches",
+    srcs = glob(["benches/**"]),
+    visibility = ["//visibility:public"],
+)
