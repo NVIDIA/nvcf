@@ -44,6 +44,16 @@ bazel_dep(name = "rules_oci", version = "2.2.7")
 bazel_dep(name = "rules_pkg", version = "1.2.0")
 bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
 bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
+bazel_dep(name = "rules_python", version = "1.4.1")
+
+# rules_pkg (pulled in by //rules/oci image_layer) uses the hermetic Python
+# interpreter, which refuses to run as root unless told otherwise. The bazel-ci
+# matrix container runs as root, so allow it -- same as function-autoscaler.
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    ignore_root_user_error = True,
+    python_version = "3.11",
+)
 
 # NVCF OCI image-push macro. The umbrella's //rules/oci-destinations tree
 # publishes a data-free Bazel module containing only the
