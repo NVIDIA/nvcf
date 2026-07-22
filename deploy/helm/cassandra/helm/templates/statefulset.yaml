@@ -211,6 +211,12 @@ spec:
         resources:
           requests:
             storage: {{ .Values.cassandra.persistence.size }}
-        {{- with .Values.cassandra.persistence.storageClass }}
+        {{- /* persistence.storageClass is this chart's own value. The
+               self-managed stack still routes global.storageClass to
+               cassandra.global.defaultStorageClass (the Bitnami-subchart key);
+               read it as a deprecated fallback so that value keeps binding the
+               right class instead of silently dropping to the cluster default.
+               Remove once the stack emits cassandra.persistence.storageClass. */}}
+        {{- with (.Values.cassandra.persistence.storageClass | default .Values.cassandra.global.defaultStorageClass) }}
         storageClassName: {{ . }}
         {{- end }}

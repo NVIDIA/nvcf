@@ -20,6 +20,11 @@ cassandra:
 
   global:
     imagePullSecrets: []
+    # Deprecated compatibility fallback. The self-managed stack still routes
+    # global.storageClass to this Bitnami-subchart key; persistence.storageClass
+    # takes precedence and this is only read when that is empty. Remove once the
+    # stack emits cassandra.persistence.storageClass directly.
+    defaultStorageClass: ""
 
   image:
     # registry: must be supplied in additional values
