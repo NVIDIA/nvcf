@@ -37,6 +37,7 @@ go_library(
         "//internal/kubeclients",
         "//internal/logging",
         "//internal/metrics",
+        "//internal/metrics/clientmetrics",
         "//internal/metrics/modelcachetypes",
         "//internal/metrics/workloadtypes",
         "//internal/miniservice",

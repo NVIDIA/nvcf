@@ -396,6 +396,27 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 - `rate()` calculations give unexpected results if metrics appear mid-scrape
 - Dashboards show gaps instead of zeros
 
+### OTel client metrics (outbound dependencies)
+
+Outbound dependency clients are instrumented with OpenTelemetry metrics that
+follow the OpenTelemetry Semantic Conventions, separate from the client_golang
+metrics above. This path does not use the manual zero-init loops; instruments are
+created from an OTel MeterProvider and exported through the OTel to Prometheus
+bridge onto the same `/metrics` endpoint.
+
+- Pipeline: `internal/otel/meter.go` builds the MeterProvider and Prometheus
+  exporter. It is gated by the `ClientMetrics` feature flag; when off, a no-op
+  meter provider is installed and nothing is emitted.
+- Recording: `internal/metrics/clientmetrics/` holds the shared `Recorder` and
+  the HTTP metrics `RoundTripper`. The wrapper is attached to a client through the
+  shared HTTP factory's `WithTransportWrapper` option.
+- Labels: use the semconv helpers in `internal/metrics/semconv/` (`httpsemconv`,
+  `msgsemconv`, `rpcsemconv`). Keep label values bounded.
+- Adding a dependency: for a new HTTP client, pass the metrics transport wrapper
+  with a `peer.service` name (add the constant in
+  `internal/metrics/clientmetrics`). For a new client type, add a thin decorator
+  over the shared `Recorder`. See `internal/metrics/METRICS.md` for the recipe.
+
 ## Key Environment Variables
 
 Useful local test variables:

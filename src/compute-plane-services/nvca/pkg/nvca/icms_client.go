@@ -34,6 +34,7 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 	nvcaotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/otel"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
@@ -98,21 +99,24 @@ const (
 	defaultPathSIRsPrefix     = "v1/sirs"
 )
 
-func NewICMSClient(ctx context.Context, clusterID, endpoint string, tokenFetcher nvcaauth.TokenFetcher, tracer oteltrace.Tracer) *ICMSClient {
-	return NewICMSClientWithHostHeaderOverride(ctx, clusterID, endpoint, "", tokenFetcher, tracer)
+func NewICMSClient(ctx context.Context, clusterID, endpoint string, tokenFetcher nvcaauth.TokenFetcher, tracer oteltrace.Tracer, httpOpts ...cmnhttp.Option) *ICMSClient {
+	return NewICMSClientWithHostHeaderOverride(ctx, clusterID, endpoint, "", tokenFetcher, tracer, httpOpts...)
 }
 
 // NewICMSClientWithHostHeaderOverride creates an ICMS client with an optional HTTP Host header override.
+// httpOpts are forwarded to the underlying shared HTTP client (for example to add
+// a metrics transport wrapper).
 func NewICMSClientWithHostHeaderOverride(
 	ctx context.Context,
 	clusterID, endpoint, host string,
 	tokenFetcher nvcaauth.TokenFetcher,
 	tracer oteltrace.Tracer,
+	httpOpts ...cmnhttp.Option,
 ) *ICMSClient {
-	return newICMSClient(ctx, clusterID, strings.TrimSuffix(endpoint, "/"), host, tokenFetcher, tracer)
+	return newICMSClient(ctx, clusterID, strings.TrimSuffix(endpoint, "/"), host, tokenFetcher, tracer, httpOpts...)
 }
 
-func newICMSClient(ctx context.Context, clusterID, endpoint, host string, tokenFetcher nvcaauth.TokenFetcher, tracer oteltrace.Tracer) *ICMSClient {
+func newICMSClient(ctx context.Context, clusterID, endpoint, host string, tokenFetcher nvcaauth.TokenFetcher, tracer oteltrace.Tracer, httpOpts ...cmnhttp.Option) *ICMSClient {
 	// If the tracer is nil grab the default nvcaotel tracer
 	if tracer == nil {
 		tracer = nvcaotel.NewTracer()
@@ -130,12 +134,14 @@ func newICMSClient(ctx context.Context, clusterID, endpoint, host string, tokenF
 		pathHeartbeat:      strings.TrimPrefix(os.Getenv(envICMSPathHeartbeat), "/"),
 		pathSIRsPrefix:     icmsPathConfig(envICMSPathSIRsPrefix, defaultPathSIRsPrefix),
 		client: cmnhttp.NewRetryableClient(ctx,
-			cmnhttp.WithAppVersionUserAgent(types.AppName),
-			cmnhttp.WithRequestHeader(types.HeaderNVClusterID, clusterID),
-			cmnhttp.WithClientOptions(cmnhttp.ClientOptions{
-				RetryWaitMin: 3 * time.Second,
-				RetryWaitMax: 1 * time.Minute,
-			}),
+			append([]cmnhttp.Option{
+				cmnhttp.WithAppVersionUserAgent(types.AppName),
+				cmnhttp.WithRequestHeader(types.HeaderNVClusterID, clusterID),
+				cmnhttp.WithClientOptions(cmnhttp.ClientOptions{
+					RetryWaitMin: 3 * time.Second,
+					RetryWaitMax: 1 * time.Minute,
+				}),
+			}, httpOpts...)...,
 		),
 		tokenFetcher: tokenFetcher,
 		tracer:       tracer,
@@ -186,6 +192,22 @@ func (c *ICMSClient) nvcaPath(custom, suffix string) string {
 	return fmt.Sprintf("%s/clusters/%s/%s", c.pathNVCAPrefix, c.clusterID, suffix)
 }
 
+// nvcaTemplate mirrors nvcaPath but substitutes the cluster ID with a stable
+// placeholder, yielding a low-cardinality url.template for client metrics.
+func (c *ICMSClient) nvcaTemplate(custom, suffix string) string {
+	if custom != "" {
+		return fmt.Sprintf(custom, icmsClusterIDPlaceholder)
+	}
+	return fmt.Sprintf("%s/clusters/%s/%s", c.pathNVCAPrefix, icmsClusterIDPlaceholder, suffix)
+}
+
+// Placeholders replace high-cardinality path segments in url.template values.
+const (
+	icmsClusterIDPlaceholder  = "{clusterId}"
+	icmsRequestIDPlaceholder  = "{requestId}"
+	icmsInstanceIDPlaceholder = "{instanceId}"
+)
+
 func (c *ICMSClient) checkResponse(log logrus.FieldLogger, resp *http.Response, respBody []byte) error {
 	if resp.StatusCode == http.StatusOK {
 		log.Debug("Received OK from ICMS")
@@ -210,6 +232,7 @@ func (c *ICMSClient) logResponseError(log logrus.FieldLogger, resp *http.Respons
 }
 
 func (c *ICMSClient) GetICMSServerInstanceStatuses(ctx context.Context) (types.ICMSInstanceStatusResponse, error) {
+	ctx = clientmetrics.ContextWithURLTemplate(ctx, fmt.Sprintf(c.pathInstanceStatus, icmsClusterIDPlaceholder))
 	requestURL, err := c.buildURL(c.pathInstanceStatus, c.clusterID)
 	if err != nil {
 		return types.ICMSInstanceStatusResponse{}, err
@@ -270,6 +293,7 @@ func (c *ICMSClient) GetICMSServerInstanceStatuses(ctx context.Context) (types.I
 }
 
 func (c *ICMSClient) Register(ctx context.Context, rreq *types.ICMSRegistrationRequest) (*types.ICMSRegistrationResponse, error) {
+	ctx = clientmetrics.ContextWithURLTemplate(ctx, c.nvcaTemplate(c.pathRegister, "register"))
 	requestURL, err := c.buildURL(c.nvcaPath(c.pathRegister, "register"))
 	if err != nil {
 		return nil, err
@@ -330,6 +354,7 @@ func (c *ICMSClient) Register(ctx context.Context, rreq *types.ICMSRegistrationR
 }
 
 func (c *ICMSClient) GetCreds(ctx context.Context) (*types.ICMSCredentialResponse, error) {
+	ctx = clientmetrics.ContextWithURLTemplate(ctx, c.nvcaTemplate(c.pathCredentials, "credentials"))
 	requestURL, err := c.buildURL(c.nvcaPath(c.pathCredentials, "credentials"))
 	if err != nil {
 		return nil, err
@@ -382,6 +407,7 @@ func (c *ICMSClient) GetCreds(ctx context.Context) (*types.ICMSCredentialRespons
 }
 
 func (c *ICMSClient) PutHealthStatus(ctx context.Context, hsr *types.HealthStatusRequest) (*types.HealthStatusResponse, error) {
+	ctx = clientmetrics.ContextWithURLTemplate(ctx, c.nvcaTemplate(c.pathHeartbeat, "heartbeat"))
 	requestURL, err := c.buildURL(c.nvcaPath(c.pathHeartbeat, "heartbeat"))
 	if err != nil {
 		return nil, err
@@ -474,6 +500,7 @@ func (c *ICMSClient) PutRequestAcknowledgement(
 
 func (c *ICMSClient) putRequestAcknowledgement(ctx context.Context, requestID string,
 	messageBatchID string, instanceCount uint64) error {
+	ctx = clientmetrics.ContextWithURLTemplate(ctx, fmt.Sprintf("%s/%s", c.pathSIRsPrefix, icmsRequestIDPlaceholder))
 	requestURL, err := c.buildURL("%s/%s", c.pathSIRsPrefix, requestID)
 	if err != nil {
 		return err
@@ -554,6 +581,8 @@ func normalizeInstanceStatusUpdateRequestForLegacyAPI(
 }
 
 func (c *ICMSClient) PostInstanceStatusUpdate(ctx context.Context, requestID, instanceID string, ireq *types.ICMSInstanceStatusUpdateRequest) error {
+	ctx = clientmetrics.ContextWithURLTemplate(ctx,
+		fmt.Sprintf("%s/%s/%s", c.pathSIRsPrefix, icmsRequestIDPlaceholder, icmsInstanceIDPlaceholder))
 	requestURL, err := c.buildURL("%s/%s/%s", c.pathSIRsPrefix, requestID, instanceID)
 	if err != nil {
 		return err

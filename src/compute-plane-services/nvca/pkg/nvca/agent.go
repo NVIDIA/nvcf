@@ -29,6 +29,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcffndsclient "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/client"
+	cmnhttp "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
@@ -55,6 +56,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcalogging "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/logging"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 	mscontroller "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice"
 	nvcaotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/otel"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
@@ -224,6 +226,10 @@ type AgentOptions struct {
 	LowLatencyStreamingEnabled          bool
 	PVCRebindEnabled                    bool
 	MultiNodeWorkloadsEnabled           bool
+	// ClientMetricsEnabled turns on the OTel-based semconv metrics for outbound
+	// dependency clients. When false, the metrics pipeline installs a no-op meter
+	// provider and instrumented clients emit nothing.
+	ClientMetricsEnabled bool
 
 	// MaintenanceMode indicates the operational mode of NVCA
 	MaintenanceMode types.MaintenanceMode
@@ -358,6 +364,13 @@ type Agent struct {
 
 	metricsName    string
 	newKubeClients func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
+
+	// clientMetricsShutdown releases the OTel MeterProvider that backs outbound
+	// client metrics. It is a no-op when client metrics are disabled.
+	clientMetricsShutdown func()
+	// clientMetricsRecorder is the shared recorder used to instrument outbound
+	// dependency clients (ICMS, ReVal). It is nil when client metrics are off.
+	clientMetricsRecorder *clientmetrics.Recorder
 
 	icmsClient         ICMSClientInterface
 	fndsClient         fnds.Client
@@ -515,11 +528,46 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 		opts.NCAId, opts.ClusterName, opts.ClusterGroupName, opts.NVCAAgentVersion,
 		metricsOpts...)
 
+	// Set up the OTel metrics pipeline for outbound dependency clients. When the
+	// ClientMetrics feature flag is off this installs a no-op meter provider so
+	// instrumented clients emit nothing. The exporter registers into the same
+	// Prometheus registry served at /metrics, so OTel series appear alongside the
+	// existing client_golang metrics.
+	metricsRegisterer := prometheus.Registerer(prometheus.DefaultRegisterer)
+	if opts.MetricsRegisterer != nil {
+		metricsRegisterer = opts.MetricsRegisterer
+	}
+	meterProvider, meterShutdown, err := nvcaotel.SetupMeterProvider(nvcaotel.MeterProviderConfig{
+		Enabled:    opts.ClientMetricsEnabled,
+		Registerer: metricsRegisterer,
+	})
+	if err != nil {
+		log.WithError(err).Warn("failed to set up client-metrics meter provider; outbound client metrics disabled")
+		meterProvider, meterShutdown = otel.GetMeterProvider(), func() {}
+	}
+	// The OTel client-metric series carry the same NVCA default labels as the
+	// legacy client_golang metrics.
+	clientMetricsRecorder, err := clientmetrics.NewRecorder(meterProvider, opts.GetOTelAttributes())
+	if err != nil {
+		log.WithError(err).Warn("failed to create client-metrics recorder; outbound client metrics disabled")
+		clientMetricsRecorder = nil
+	}
+
+	// icmsHTTPOpts adds the metrics transport wrapper when client metrics are on.
+	var icmsHTTPOpts []cmnhttp.Option
+	if opts.ClientMetricsEnabled && clientMetricsRecorder != nil {
+		icmsHTTPOpts = append(icmsHTTPOpts, cmnhttp.WithTransportWrapper(func(inner http.RoundTripper) http.RoundTripper {
+			return clientmetrics.NewTransport(inner, clientMetricsRecorder, clientmetrics.PeerServiceICMS)
+		}))
+	}
+
 	a := &Agent{
-		AgentOptions: opts,
-		metricsName:  "nvca",
-		metrics:      metrics,
-		tracer:       nvcaotel.NewTracer(),
+		clientMetricsShutdown: meterShutdown,
+		clientMetricsRecorder: clientMetricsRecorder,
+		AgentOptions:          opts,
+		metricsName:           "nvca",
+		metrics:               metrics,
+		tracer:                nvcaotel.NewTracer(),
 		// Lazy readiness check getter to initialize throughout Start().
 		readinessCheckGetter: health.NewLazyReadinessCheckGetter(),
 		// Lazy liveness check getter to initialize throughout Start().
@@ -527,7 +575,7 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 	}
 
 	a.newKubeClients = defaultNewKubeClients
-	a.icmsClient = NewICMSClientWithHostHeaderOverride(ctx, opts.ClusterID, opts.EffectiveICMSURL(), opts.ICMSHostHeaderOverride, tokenFetcher, a.tracer)
+	a.icmsClient = NewICMSClientWithHostHeaderOverride(ctx, opts.ClusterID, opts.EffectiveICMSURL(), opts.ICMSHostHeaderOverride, tokenFetcher, a.tracer, icmsHTTPOpts...)
 	a.instStatusThreadPool = pool.New().WithMaxGoroutines(ICMSInstanceRequestStatusUpdatesMaxGoroutines)
 	a.ackThreadPool = pool.New().WithMaxGoroutines(ICMSRequestAckMaxGoroutines)
 	// initialize selfDestruct to false
@@ -950,6 +998,16 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	// Initialize tracing; a background goroutine handles shutdown on ctx cancellation.
 	setupTracing(ctx, *a.AgentOptions)
+
+	// Release the client-metrics meter provider on shutdown. Only spawn the
+	// watcher when client metrics are enabled; when disabled the shutdown is a
+	// no-op and no goroutine is needed.
+	if a.ClientMetricsEnabled && a.clientMetricsShutdown != nil {
+		go func() {
+			<-ctx.Done()
+			a.clientMetricsShutdown()
+		}()
+	}
 
 	log.Infof("Starting NVCF Cluster Agent version %s with options: %+v",
 		a.NVCAAgentVersion, a.AgentOptions.sanitizedString())

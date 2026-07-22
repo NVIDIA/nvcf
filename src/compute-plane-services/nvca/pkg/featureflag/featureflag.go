@@ -57,6 +57,7 @@ var (
 	MultiNodeWorkloads            = newFeatureFlag("MultiNodeWorkloads", newBool(true))
 	BYOObservability              = newFeatureFlag("BYOObservability", newBool(false))
 	BYOOFluentBit                 = newFeatureFlag("BYOOFluentBit", newBool(false))
+	ClientMetrics                 = newFeatureFlag("ClientMetrics", newBool(false))
 	KAIScheduler                  = newFeatureFlag("KAIScheduler", newBool(false))
 	HelmCustomAnnotations         = newFeatureFlag("HelmCustomAnnotations", newBool(false))
 	MaxSQSBatchPull               = newFeatureFlag("MaxSQSBatchPull", newBool(true))

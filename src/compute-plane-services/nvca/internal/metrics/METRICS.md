@@ -1528,3 +1528,73 @@ The following metrics have dynamic cardinality based on cluster configuration:
 - **Scheduler workload count** (`nvca_scheduler_workload_count`): 4 series fixed (2 schedulers × 2 workload kinds, pre-initialized)
 
 Total expected cardinality per cluster: **159-254 time series** depending on configuration and active workload count.
+
+## Outbound Client Metrics (OpenTelemetry semconv)
+
+NVCA instruments its outbound dependency calls with OpenTelemetry metrics that
+follow the OpenTelemetry Semantic Conventions. These are produced by a shared
+metrics transport attached to the outbound HTTP clients, not by hand at each call
+site, and are exported through the same `/metrics` endpoint via the OTel to
+Prometheus bridge. They are gated by the `ClientMetrics` feature flag: when it is
+off, a no-op meter provider is installed and no series are produced.
+
+### `http_client_request_duration_seconds`
+
+Histogram. Duration of an outbound HTTP client call, from which rate, error
+rate, and latency are all derived.
+
+Labels (in addition to the four default labels `nvca_nca_id`,
+`nvca_cluster_name`, `nvca_cluster_group`, `nvca_version`):
+
+| Label | Example | Notes |
+|-------|---------|-------|
+| `peer_service` | `icms`, `reval` | Which dependency was called. Bounded set. ICMS and ReVal are instrumented today; NGC is operator-side (separate pipeline) and not yet wired. |
+| `http_request_method` | `POST` | Request method. |
+| `http_response_status_code` | `200` | Present when a response was received; omitted on a transport failure. |
+| `server_address` | dependency host | Target host. |
+| `url_template` | `/v1/nvca/clusters/{clusterId}/heartbeat` | Route shape, opt-in. The ICMS client sets it per operation via request context; high-cardinality path segments (cluster/request/instance IDs) are replaced with placeholders to keep cardinality bounded. Preserves the per-operation breakdown of the legacy `operation` label. |
+| `error_type` | `timeout` | Present only on transport failure (no response). |
+
+```promql
+# Request rate to ICMS
+sum(rate(http_client_request_duration_seconds_count{peer_service="icms"}[5m]))
+
+# Success rate to ICMS (2xx over all)
+sum(rate(http_client_request_duration_seconds_count{peer_service="icms", http_response_status_code=~"2.."}[5m]))
+  / sum(rate(http_client_request_duration_seconds_count{peer_service="icms"}[5m]))
+
+# p95 latency to ICMS
+histogram_quantile(0.95,
+  sum(rate(http_client_request_duration_seconds_bucket{peer_service="icms"}[5m])) by (le))
+```
+
+### `http_client_request_body_size_bytes` and `http_client_response_body_size_bytes`
+
+Histograms of outbound request and response body sizes in bytes, carrying the
+same labels as the duration metric. Sizes come from the declared `Content-Length`;
+a request or response with an unknown length (for example a chunked body) is not
+recorded. NVCA's HTTP dependencies send JSON with `Content-Length` set, so these
+are accurate in practice.
+
+### Adding a new dependency
+
+The instrumentation lives in the shared transport, so adding coverage does not
+require new instruments or per-call recording code.
+
+Case 1: a new HTTP dependency. Build its client through the shared factory and
+pass the metrics transport wrapper with the dependency's `peer.service` name.
+Add the name to the peer-service constants in
+`internal/metrics/clientmetrics`. The full RED metric set is then emitted for
+that client automatically.
+
+Case 2: a new client type (for example messaging). Add a thin decorator over the
+shared `clientmetrics.Recorder` that records the appropriate semconv attributes
+(`msgsemconv` for messaging, `rpcsemconv` for RPC). No new meter provider,
+exporter, or registry wiring is needed.
+
+### Cardinality
+
+Bounded. Per dependency, series scale with the number of distinct
+method/status/error-type combinations actually observed, typically a handful.
+`url.template` is opt-in and only set where a safe, low-cardinality template is
+known; raw URLs are never used as labels.
