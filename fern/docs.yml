@@ -38,7 +38,7 @@ versions:
 
 check:
   rules:
-    broken-links: warn
+    broken-links: error
 
 redirects:
   - source: "/nvcf/index.html"

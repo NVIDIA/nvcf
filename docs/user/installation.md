@@ -9,7 +9,7 @@ For a full list of required artifacts, see [self-hosted-artifact-manifest](./man
 ![Self-hosted component overview](images/nvcf-high-level-stack.svg)
 
 <Tip>
-Want to try NVCF locally first? See [Local Development](./local-development.md) to create a k3d cluster, then use the [Quickstart](./quickstart.md) local k3d flow.
+Want to try NVCF locally first? See [Local Development](../local-development) to create a k3d cluster, then use the [Quickstart](./quickstart.md) local k3d flow.
 
 </Tip>
 
@@ -75,7 +75,7 @@ See [NVIDIA GPU Operator documentation](https://docs.nvidia.com/datacenter/cloud
 Fake GPU Operator for development and testing:
 
 For environments without actual GPU hardware, install the fake GPU operator to simulate
-GPU resources. See [fake-gpu-operator](./fake-gpu-operator.md) for full instructions.
+GPU resources. See [fake-gpu-operator](../fake-gpu-operator) for full instructions.
 </Note>
 
 #### SMB CSI Driver
