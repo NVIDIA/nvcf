@@ -1,10 +1,50 @@
 environments:
   default:
     values:
+      - ../../observability/environments/base.yaml
       - ../environments/base.yaml
       - ../environments/{{ requiredEnv "HELMFILE_ENV" }}.yaml
 
 ---
+
+{{- $mode := dig "observability" "mode" "disabled" .Values }}
+{{- if not (has $mode (list "install" "existing" "disabled")) }}
+{{- fail (printf "observability.mode must be install, existing, or disabled, got %q" $mode) }}
+{{- end }}
+{{- $installMode := eq $mode "install" }}
+{{- $existingMode := eq $mode "existing" }}
+{{- $observabilityNamespace := dig "observability" "namespace" "monitoring" .Values }}
+{{- $controlPlaneCollectorEnabled := and $installMode (dig "controlPlaneCollector" "enabled" false .Values) }}
+{{- $defaultMonitorsEnabled := and (or $installMode $existingMode) (dig "defaultMonitors" "enabled" false .Values) }}
+{{- $prometheusOperatorCrdsEnabled := and $installMode (dig "prometheusOperatorCrds" "enabled" false .Values) }}
+{{- $opentelemetryOperatorEnabled := and $installMode (dig "opentelemetryOperator" "enabled" false .Values) }}
+{{- $victoriaMetricsEnabled := and $installMode (dig "victoriaMetrics" "enabled" false .Values) }}
+{{- $victoriaMetricsNamespace := dig "victoriaMetrics" "namespace" $observabilityNamespace .Values }}
+{{- $bundledRemoteWriteEndpoint := printf "http://vmsingle.%s.svc.cluster.local:8428/api/v1/write" $victoriaMetricsNamespace }}
+{{- $configuredRemoteWriteEndpoint := dig "controlPlaneCollector" "config" "exporters" "prometheusremotewrite" "endpoint" "" .Values }}
+{{- if and $controlPlaneCollectorEnabled $victoriaMetricsEnabled (ne $configuredRemoteWriteEndpoint $bundledRemoteWriteEndpoint) }}
+{{- fail (printf "controlPlaneCollector.config.exporters.prometheusremotewrite.endpoint must be %q when victoriaMetrics.enabled=true, got %q" $bundledRemoteWriteEndpoint $configuredRemoteWriteEndpoint) }}
+{{- end }}
+{{- $functionAutoscalerValues := dig "functionAutoscaler" (dig "functionautoscaler" dict .Values) .Values }}
+{{- $functionAutoscalerNvcfApiValues := dig "nvcfApi" dict $functionAutoscalerValues }}
+{{- $functionAutoscalerEnabled := dig "enabled" false $functionAutoscalerValues }}
+{{- $functionAutoscalerChartPath := dig "chartPath" "" $functionAutoscalerValues }}
+{{- $functionAutoscalerChart := $functionAutoscalerChartPath | default "nvcf/helm-nvcf-function-autoscaler" }}
+{{- $functionAutoscalerChartVersion := dig "chartVersion" "0.0.0" $functionAutoscalerValues }}
+{{- $functionAutoscalerOauthURL := (dig "oauth2TokenApiAddress" "" $functionAutoscalerValues) | default (dig "nvcfApi" "oauth2TokenApiAddress" "" $functionAutoscalerValues) }}
+{{- $functionAutoscalerAuthEnabled := and (hasKey $functionAutoscalerNvcfApiValues "disableAuth") (not (get $functionAutoscalerNvcfApiValues "disableAuth")) }}
+{{- if and $functionAutoscalerEnabled (eq $mode "disabled") }}
+{{- fail "functionAutoscaler.enabled requires observability.mode to be install or existing" }}
+{{- end }}
+{{- if and $functionAutoscalerEnabled (not $functionAutoscalerChartPath) (or (not $functionAutoscalerChartVersion) (eq $functionAutoscalerChartVersion "0.0.0")) }}
+{{- fail "functionAutoscaler.chartVersion must be set to the published helm-nvcf-function-autoscaler chart version when functionAutoscaler.enabled=true and functionAutoscaler.chartPath is empty" }}
+{{- end }}
+{{- if and $functionAutoscalerEnabled (not (dig "stateMetrics" "enabled" false .Values)) }}
+{{- fail "functionAutoscaler.enabled requires stateMetrics.enabled=true" }}
+{{- end }}
+{{- if and $functionAutoscalerEnabled $functionAutoscalerAuthEnabled (not $functionAutoscalerOauthURL) }}
+{{- fail "functionAutoscaler.nvcfApi.oauth2TokenApiAddress is required when functionAutoscaler.enabled=true and nvcfApi.disableAuth=false" }}
+{{- end }}
 
 repositories:
   - name: nvcf
@@ -31,6 +71,108 @@ templates:
 
 releases:
 
+  {{- if $prometheusOperatorCrdsEnabled }}
+  - name: prometheus-operator-crds
+    chart: nvcf/prometheus-operator-crds
+    version: {{ dig "prometheusOperatorCrds" "version" "30.0.0" .Values | quote }}
+    namespace: {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}
+    values:
+      - {{- toYaml (dig "prometheusOperatorCrds" "values" dict .Values) | nindent 8 }}
+    labels:
+      release-group: observability
+  {{- end }}
+
+  {{- if $opentelemetryOperatorEnabled }}
+  - name: opentelemetry-operator
+    chart: nvcf/opentelemetry-operator
+    version: {{ dig "opentelemetryOperator" "version" "0.114.1" .Values | quote }}
+    namespace: {{ dig "opentelemetryOperator" "namespace" $observabilityNamespace .Values }}
+    {{- if $prometheusOperatorCrdsEnabled }}
+    needs:
+      - {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}/prometheus-operator-crds
+    {{- end }}
+    values:
+      - admissionWebhooks:
+          certManager:
+            enabled: {{ dig "opentelemetryOperator" "admissionWebhooks" "certManager" "enabled" false .Values }}
+          autoGenerateCert:
+            enabled: {{ not (dig "opentelemetryOperator" "admissionWebhooks" "certManager" "enabled" false .Values) }}
+            recreate: {{ dig "opentelemetryOperator" "admissionWebhooks" "autoGenerateCert" "recreate" false .Values }}
+        manager:
+          {{- with dig "opentelemetryOperator" "manager" "collectorImage" dict .Values }}
+          collectorImage:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with dig "opentelemetryOperator" "manager" "targetAllocatorImage" dict .Values }}
+          targetAllocatorImage:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- if .Values.global.imagePullSecrets }}
+        imagePullSecrets:
+          {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
+        {{- end }}
+    labels:
+      release-group: observability
+  {{- end }}
+
+  {{- if $victoriaMetricsEnabled }}
+  - name: victoria-metrics
+    chart: nvcf/victoria-metrics-single
+    version: {{ dig "victoriaMetrics" "version" "0.38.0" .Values | quote }}
+    namespace: {{ $victoriaMetricsNamespace }}
+    values:
+      - ../../observability/values/victoria-metrics.yaml.gotmpl
+    labels:
+      release-group: observability
+  {{- end }}
+
+  {{- if $controlPlaneCollectorEnabled }}
+  - name: control-plane-collector
+    chart: ../../observability/charts/nvcf-otel-collector
+    namespace: {{ dig "controlPlaneCollector" "namespace" $observabilityNamespace .Values }}
+    {{- if or $opentelemetryOperatorEnabled $prometheusOperatorCrdsEnabled $victoriaMetricsEnabled }}
+    needs:
+      {{- if $opentelemetryOperatorEnabled }}
+      - {{ dig "opentelemetryOperator" "namespace" $observabilityNamespace .Values }}/opentelemetry-operator
+      {{- end }}
+      {{- if $prometheusOperatorCrdsEnabled }}
+      - {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}/prometheus-operator-crds
+      {{- end }}
+      {{- if $victoriaMetricsEnabled }}
+      - {{ $victoriaMetricsNamespace }}/victoria-metrics
+      {{- end }}
+    {{- end }}
+    values:
+      - collectorName: {{ dig "controlPlaneCollector" "collectorName" "nvcf-control-plane" .Values | quote }}
+        image: {{ dig "controlPlaneCollector" "image" "" .Values | quote }}
+        {{- if .Values.global.imagePullSecrets }}
+        imagePullSecrets:
+          {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
+        {{- end }}
+        targetAllocatorRbac:
+          create: {{ dig "controlPlaneCollector" "targetAllocatorRbac" "create" true .Values }}
+        targetAllocator:
+          {{- toYaml (dig "controlPlaneCollector" "targetAllocator" dict .Values) | nindent 10 }}
+        config:
+          {{- toYaml (dig "controlPlaneCollector" "config" dict .Values) | nindent 10 }}
+    labels:
+      release-group: observability
+  {{- end }}
+
+  {{- if $defaultMonitorsEnabled }}
+  - name: default-monitors
+    chart: ../../observability/charts/nvcf-default-monitors
+    namespace: {{ dig "defaultMonitors" "namespace" $observabilityNamespace .Values }}
+    {{- if $prometheusOperatorCrdsEnabled }}
+    needs:
+      - {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}/prometheus-operator-crds
+    {{- end }}
+    values:
+      - {{- toYaml (dig "defaultMonitors" dict .Values) | nindent 8 }}
+    labels:
+      release-group: observability
+  {{- end }}
+
   # --- Observability Services ---
   - name: state-metrics
     version: 1.0.1
@@ -40,3 +182,35 @@ releases:
       - template: service
     # When enabled, this service will export realtime function information that can be
     # scraped by a Prometheus ServiceMonitor
+
+  {{- if $functionAutoscalerEnabled }}
+  # --- Function Autoscaler workload ---
+  # Deploys the function-autoscaler (chart nvcf/helm-nvcf-function-autoscaler),
+  # disabled by default. SECRETS_PATH and CONFIG come from the chart defaults;
+  # in-cluster endpoints are rendered by global.yaml.gotmpl from
+  # functionAutoscaler values.
+  - name: function-autoscaler
+    chart: {{ $functionAutoscalerChart | quote }}
+    {{- if not $functionAutoscalerChartPath }}
+    version: {{ $functionAutoscalerChartVersion | quote }}
+    {{- end }}
+    namespace: nvcf
+    values:
+      - ../global.yaml.gotmpl
+      - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
+    {{- if or $victoriaMetricsEnabled $controlPlaneCollectorEnabled }}
+    needs:
+      - nvcf/state-metrics
+      {{- if $victoriaMetricsEnabled }}
+      - {{ $victoriaMetricsNamespace }}/victoria-metrics
+      {{- end }}
+      {{- if $controlPlaneCollectorEnabled }}
+      - {{ dig "controlPlaneCollector" "namespace" $observabilityNamespace .Values }}/control-plane-collector
+      {{- end }}
+    {{- else }}
+    needs:
+      - nvcf/state-metrics
+    {{- end }}
+    labels:
+      release-group: observability
+  {{- end }}

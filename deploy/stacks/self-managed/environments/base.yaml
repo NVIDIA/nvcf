@@ -260,6 +260,22 @@ addons:
     tolerations: []
     affinity: {}
 
+# Function Autoscaler workload (stage 03). Disabled by default; requires the
+# stage-01 Cassandra/OpenBao migrations and the observability stack's VictoriaMetrics.
+functionAutoscaler:
+  enabled: false
+  # Use the in-repo chart for pre-publish testing. Set empty and use
+  # chartVersion once helm-nvcf-function-autoscaler is published to OCI.
+  chartPath: "../../../helm/function-autoscaler"
+  chartVersion: "0.0.0"
+  image:
+    tag: "v1.18.5"
+    pullPolicy: IfNotPresent
+  # Optional overrides for chart-owned defaults.
+  timeseriesDb: {}
+  nvcfApi: {}
+  cassandra: {}
+
 stateMetrics:
   enabled: false
   # Disable ServiceMonitor for environments without Prometheus Operator
