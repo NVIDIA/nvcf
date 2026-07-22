@@ -13,7 +13,12 @@ load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//rules/oci:defs.bzl", "JVM_ADD_OPENS", "create_oci_image")
 
-exports_files(["scripts/cassandra-env.sh"])
+exports_files([
+    "scripts/cassandra-env.sh",
+    # Referenced by cassandra_version_consistency_test as test data.
+    "MODULE.bazel",
+    "Dockerfile",
+])
 
 # ----------------------------------------------------------------------------
 # yq layer: the pinned static binary at /usr/local/bin/yq. Per-arch selection
@@ -106,4 +111,23 @@ sh_test(
         "/usr/local/bin/yq",
     ],
     data = [":yq_layer"],
+)
+
+# Version contract: the pinned oci.pull digest in MODULE.bazel is authoritative
+# for the built image, but the transitional Dockerfile still carries a
+# `FROM cassandra:<tag>`. Fail the build if that tag and the
+# `# cassandra-version:` marker recorded next to the digest ever drift, so a
+# bump cannot silently ship two different Cassandra versions.
+sh_test(
+    name = "cassandra_version_consistency_test",
+    size = "small",
+    srcs = ["//tools/ci:cassandra_version_consistency_test.sh"],
+    args = [
+        "$(location Dockerfile)",
+        "$(location MODULE.bazel)",
+    ],
+    data = [
+        "Dockerfile",
+        "MODULE.bazel",
+    ],
 )

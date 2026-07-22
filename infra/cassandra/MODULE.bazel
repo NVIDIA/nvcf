@@ -65,11 +65,16 @@ python.toolchain(
 
 # ============================================================================
 # OCI base image: official Apache Cassandra (Docker Hub), pinned by the
-# multi-arch manifest-list digest for the 5.0.8 tag. The tag/digest is the
-# single source of truth for the Cassandra version (Dockerfile `FROM
-# cassandra:5.0.8`). Bump by re-resolving the manifest-list digest of the
-# new tag. Only linux/amd64 + linux/arm64 are selected; the list also
-# carries armv7/ppc64le/s390x, which we do not build.
+# multi-arch manifest-list digest below. This digest is authoritative for the
+# built image and is the one thing to bump for a Cassandra version change:
+# re-resolve the new tag's manifest-list digest. The transitional Dockerfile
+# still carries a `FROM cassandra:<tag>` for manual/dev builds; the version
+# marker below records the tag this digest resolves, and
+# cassandra_version_consistency_test fails CI if the Dockerfile tag and this
+# marker drift. Bump all three together; see AGENTS.md. Only linux/amd64 +
+# linux/arm64 are selected; the list also carries armv7/ppc64le/s390x, which we
+# do not build.
+# cassandra-version: 5.0.8
 # ============================================================================
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 oci.pull(

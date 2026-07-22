@@ -51,8 +51,13 @@ bazel test //:yq_exec_bit_test
 
 Translation of the Dockerfile:
 - `FROM cassandra:5.0.8` -> `oci.pull` of the Docker Hub manifest-list digest
-  in `MODULE.bazel` (the digest is the single Cassandra version source; bump it
-  by re-resolving the new tag's manifest-list digest).
+  in `MODULE.bazel`. The digest is authoritative for the built image; the
+  Dockerfile tag is a transitional mirror for manual/dev builds. To bump
+  Cassandra, change these together: (1) the `oci.pull` digest in `MODULE.bazel`
+  (re-resolve the new tag's multi-arch manifest-list digest), (2) the
+  `# cassandra-version:` marker beside it, and (3) the Dockerfile
+  `FROM cassandra:<new>` tag. `cassandra_version_consistency_test` fails the
+  build if the Dockerfile tag and the marker disagree.
 - pinned `yq` -> `http_file` per arch in `rules/repos.bzl` (same version +
   sha256s as the Dockerfile), packaged at `/usr/local/bin/yq`.
 - `scripts/cassandra-env.sh` -> `pkg_tar` layer over `/etc/cassandra/`.

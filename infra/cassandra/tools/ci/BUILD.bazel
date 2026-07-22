@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 exports_files(
-    ["image_entrypoint_mode_test.sh"],
+    [
+        "cassandra_version_consistency_test.sh",
+        "image_entrypoint_mode_test.sh",
+    ],
     visibility = ["//visibility:public"],
 )
