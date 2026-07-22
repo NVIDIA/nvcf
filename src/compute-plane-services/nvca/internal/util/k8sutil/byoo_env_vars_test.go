@@ -32,12 +32,14 @@ func TestAddBYOOOTelCollectorEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t
 		{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
 		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
 	}
 	expectedEnv := []corev1.EnvVar{
 		{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
 		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
 		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
 	}
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{

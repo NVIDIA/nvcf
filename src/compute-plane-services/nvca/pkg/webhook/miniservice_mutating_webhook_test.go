@@ -1393,6 +1393,7 @@ func TestMiniserviceMutatePodSpec_BYOOOTelCollectorEnvVarsOnlyCollector(t *testi
 			{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
 			{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 			{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
+			{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
 		},
 	}
 	ps := corev1.PodSpec{
@@ -1424,11 +1425,14 @@ func TestMiniserviceMutatePodSpec_BYOOOTelCollectorEnvVarsOnlyCollector(t *testi
 	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
 	assert.NotContains(t, initByName, nvcaconfig.BYOOMetricSubsetEnabledEnv)
 	assert.NotContains(t, appByName, nvcaconfig.BYOOMetricSubsetEnabledEnv)
+	assert.NotContains(t, initByName, nvcaconfig.BYOOOTelCollectorConfigEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOOTelCollectorConfigEnv)
 	assert.NotContains(t, appByName, nvcaconfig.BYOODebugModeEnv)
 	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOOLogChunkingEnabledEnv])
 	assert.Equal(t, "983040", collectorByName[nvcaconfig.BYOOLogChunkMaxBodyBytesEnv])
 	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOODebugModeEnv])
 	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOOMetricSubsetEnabledEnv])
+	assert.Equal(t, "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19", collectorByName[nvcaconfig.BYOOOTelCollectorConfigEnv])
 }
 
 func envNames(envs []corev1.EnvVar) []string {
