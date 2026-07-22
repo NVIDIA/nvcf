@@ -32,3 +32,9 @@ build --workspace_status_command=tools/workspace_status.sh
 
 # CI profile.
 build:ci --jobs=16
+
+# Release profile. The nvcf-internal bazel release backend builds the image
+# with `--config=release` (uniform across services). This image is pure
+# assembly (no compiled targets), so opt is effectively a no-op here; the
+# config exists so the shared release script runs unmodified.
+build:release -c opt
