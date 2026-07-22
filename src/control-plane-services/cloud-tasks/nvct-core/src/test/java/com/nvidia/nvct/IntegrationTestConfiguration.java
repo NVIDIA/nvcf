@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.net.JarURLConnection;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.file.FileVisitOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -166,7 +167,7 @@ public class IntegrationTestConfiguration {
             if (fallbackCompose.isFile()) {
                 File dir = fallbackCompose.getParentFile();
                 log.info("Using compose bundle from filesystem: {}", dir.getAbsolutePath());
-                return dir;
+                return materializeComposeAssets(dir);
             }
             throw new IllegalStateException(
                     "Missing classpath resource "
@@ -182,7 +183,7 @@ public class IntegrationTestConfiguration {
                 var dir = composePath.getParent().toFile();
                 log.debug("Using compose bundle from filesystem (test-classes): {}",
                           dir.getAbsolutePath());
-                return dir;
+                return materializeComposeAssets(dir);
             }
 
             if ("jar".equalsIgnoreCase(composeUrl.getProtocol())) {
@@ -237,6 +238,49 @@ public class IntegrationTestConfiguration {
             log.info("Extracted integration compose bundle from {} to {}",
                      jarFile.getName(), extractRoot.toAbsolutePath());
             return extractRoot.toFile();
+        }
+    }
+
+    /**
+     * Copy a filesystem compose bundle into a directory of real files, dereferencing symlinks.
+     *
+     * <p>Under Bazel the test runfiles present {@code local_env/**} as symlinks into the build
+     * sandbox. Docker bind-mounts of a directory follow the mount but leave those symlinks dangling
+     * inside the container (their targets do not exist there), so {@code ./cassandra/schema} mounts
+     * empty: {@code entrypoint.sh} finds no {@code *.cql}, the {@code nvct} keyspace is never
+     * created, and Spring fails to start with {@code InvalidKeyspaceException}. Materialising to real
+     * files makes the bind mounts serve actual content, the same way {@link #extractLocalEnvFromJar}
+     * does for the Maven/JAR path. A no-op-ish copy on a plain checkout (real files already).
+     */
+    private static File materializeComposeAssets(File sourceDir) {
+        try {
+            var srcRoot = sourceDir.toPath();
+            var extractRoot = createIntegrationExtractDirectory();
+            try (var walk = Files.walk(srcRoot, FileVisitOption.FOLLOW_LINKS)) {
+                for (var src : (Iterable<Path>) walk::iterator) {
+                    var dest = extractRoot.resolve(srcRoot.relativize(src).toString());
+                    if (Files.isDirectory(src)) {
+                        Files.createDirectories(dest);
+                        continue;
+                    }
+                    Files.createDirectories(dest.getParent());
+                    Files.copy(src, dest, StandardCopyOption.REPLACE_EXISTING);
+                    if ("entrypoint.sh".equals(src.getFileName().toString())) {
+                        try {
+                            Files.setPosixFilePermissions(dest,
+                                    PosixFilePermissions.fromString("rwxr-xr-x"));
+                        } catch (UnsupportedOperationException ignored) {
+                            // Non-POSIX filesystem; Docker still runs the script via bash.
+                        }
+                    }
+                }
+            }
+            log.info("Materialized integration compose bundle from {} to {}", srcRoot,
+                     extractRoot.toAbsolutePath());
+            return extractRoot.toFile();
+        } catch (IOException e) {
+            throw new IllegalStateException(
+                    "Failed to materialize compose bundle from " + sourceDir, e);
         }
     }
 
