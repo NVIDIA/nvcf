@@ -16,18 +16,19 @@
 # Create the RBAC/SA during pre-install to ensure it's available
 # this way it can avoid using hook weights
 
-# Give the job rbac to read,patch,create secrets in the namespace
-# it will read/update the unseal key and create the root token
+# Give the job rbac to watch cassandra pods/statefulsets for readiness and to
+# exec into the cassandra pods to run cqlsh (superuser password bootstrap and
+# keyspace.cql initialization).
 
 # The serviceaccount (and therefore its permissions) are used in both
 # of the post-install jobs
-{{- $fullname := include "nvcf-cassandra.fullname" . }}
+{{- $fullname := include "cassandra.fullname" . }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ $fullname }}-initialize-cluster
-  namespace: {{ include "nvcf-cassandra.namespace" . }}
+  namespace: {{ include "cassandra.namespace" . }}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
 ---
@@ -35,7 +36,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ $fullname }}-initialize-cluster
-  namespace: {{ include "nvcf-cassandra.namespace" . }}
+  namespace: {{ include "cassandra.namespace" . }}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
 rules:
@@ -55,12 +56,12 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ $fullname }}-initialize-cluster
-  namespace: {{ include "nvcf-cassandra.namespace" . }}
+  namespace: {{ include "cassandra.namespace" . }}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
 subjects:
   - kind: ServiceAccount
-    namespace: {{ include "nvcf-cassandra.namespace" . }}
+    namespace: {{ include "cassandra.namespace" . }}
     name: {{ $fullname }}-initialize-cluster
 roleRef:
   apiGroup: rbac.authorization.k8s.io

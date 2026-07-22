@@ -13,13 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-{{- $fullname := include "nvcf-cassandra.fullname" . }}
-{{- $cassandraFullname := include "nvcf-cassandra.cassandraFullname" . }}
+{{- if .Values.cassandra.hooks.migrations.enabled }}
+{{- $fullname := include "cassandra.fullname" . }}
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ $fullname }}-migrations
-  namespace: {{ include "nvcf-cassandra.namespace" . }}
+  namespace: {{ include "cassandra.namespace" . }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "2"
@@ -32,7 +32,7 @@ spec:
         {{- toYaml . | nindent 8 }}
     {{- end }}
     spec:
-      {{- include "nvcf-cassandra.imagePullSecrets" . | nindent 6 }}
+      {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
       {{- with .Values.cassandra.hooks.migrations.schedulingGates }}
       schedulingGates:
         {{- toYaml . | nindent 8 }}
@@ -46,7 +46,7 @@ spec:
           {{- end }}
           env:
             - name: CASSANDRA_HOSTS
-              value: "{{ $cassandraFullname }}.{{ include "nvcf-cassandra.namespace" . }}.svc.cluster.local"
+              value: "{{ $fullname }}.{{ include "cassandra.namespace" . }}.svc.cluster.local"
             - name: CASSANDRA_USER
               value: {{ .Values.cassandra.dbUser.user | quote }}
             - name: CASSANDRA_PASSWORD
@@ -57,3 +57,4 @@ spec:
               value: {{ .Values.cassandra.replicaCount | quote }}
           resources:
             {{- toYaml .Values.cassandra.hooks.migrations.resources | nindent 12 }}
+{{- end }}
