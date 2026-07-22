@@ -18,22 +18,27 @@ limitations under the License.
 package api
 
 import (
+	"fmt"
 	"net/http"
 
 	echo "github.com/labstack/echo/v4"
 )
 
-func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
-	e.GET("/healthz", func(c echo.Context) error {
-		return c.NoContent(http.StatusOK)
-	})
-	e.GET("/readyz", func(c echo.Context) error {
-		return c.NoContent(http.StatusOK)
-	})
+const headerPriority = "X-Priority"
 
-	group := e.Group("", rejectClientSuppliedPriority)
-	handlers.AsOpenAIChatHandlers().RegisterRoutes(group)
-	handlers.AsResponsesHandlers().RegisterRoutes(group)
-	// proxy handlers only contain embedding route for now, but could be extended to other routes in the future
-	handlers.AsOpenAIProxyHandlers().RegisterRoutes(group)
+// rejectClientSuppliedPriority rejects requests that arrive with a
+// client-supplied X-Priority header.
+// Registered on the LLM route group, not globally. The check fires on header presence
+// rather than value so a present-but-empty X-Priority (which Header.Get cannot
+// distinguish from absent) is rejected too.
+func rejectClientSuppliedPriority(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(ec echo.Context) error {
+		if len(ec.Request().Header.Values(headerPriority)) > 0 {
+			return echo.NewHTTPError(
+				http.StatusBadRequest,
+				fmt.Sprintf("%s is a reserved header and cannot be set by the client", headerPriority),
+			)
+		}
+		return next(ec)
+	}
 }
