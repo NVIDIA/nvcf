@@ -36,13 +36,12 @@
     <name>NVCT API</name>
     <description>NVIDIA Cloud Tasks — aggregator for core library and modules.</description>
 
-    <repositories>
-        <!-- Resolve parent from here -->
-        <repository>
-            <id>nvcf</id>
-            <url>https://urm.nvidia.com/artifactory/sw-nvcf-maven</url>
-        </repository>
-    </repositories>
+    <!--
+      This POM is kept for Maven parity only. In the monorepo the service is
+      built with Bazel (//rules/java) and its nv-boot parent/BOM resolve from
+      the in-tree source targets under //src/libraries/java/nv-boot-parent, not
+      from a Maven repository, so no internal artifact server is referenced here.
+    -->
 
     <properties>
         <root.dir>${project.basedir}</root.dir>
