@@ -139,10 +139,14 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: src/compute-plane-services/byoo-otel-collector/otelcol/go.mod
+          # The generated otelcol module says `go 1.25.0`, but Linux
+          # builds of OTel v0.157.0 need the patched toolchain line used
+          # by this subtree's Bazel module.
+          go-version-file: src/compute-plane-services/byoo-otel-collector/go.work
 
       - name: Validate generated collector configs
         working-directory: src/compute-plane-services/byoo-otel-collector
         env:
           GOCACHE: ${{ runner.temp }}/go-cache
+          GO_BUILD_P: "1"
         run: ./scripts/validate-otelconfig.sh "${{ matrix.mode }}"

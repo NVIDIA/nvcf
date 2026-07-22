@@ -82,12 +82,11 @@ GOPATH="$${GOPATH:-/tmp/byoo-otelcol-gopath}"
 GOCACHE="$${GOCACHE:-/tmp/byoo-otelcol-gocache}"
 HOME="$${HOME:-$$(mktemp -d -t byoo-otelcol-home.XXXXXX)}"
 # Cap parallelism. Each linker pass of the otelcol module
-# holds ~6 GB RSS, so even with tags=["exclusive"] limiting
-# Bazel-side concurrency, the Go toolchain's internal worker
-# pool can still OOM a standard CI runner. Two workers is a
-# reasonable floor for build throughput on modern Go.
+# holds high RSS, so the Go toolchain's internal worker pool
+# can OOM a standard CI runner even when Bazel is serialized.
 GOMAXPROCS="$${GOMAXPROCS:-2}"
-export GOMODCACHE GOPATH GOCACHE HOME GOMAXPROCS
+GO_BUILD_P="$${GO_BUILD_P:-1}"
+export GOMODCACHE GOPATH GOCACHE HOME GOMAXPROCS GO_BUILD_P
 mkdir -p "$$GOMODCACHE" "$$GOPATH" "$$GOCACHE"
 WORK_DIR=$$(dirname $$(realpath $(location go.mod)))
 ABS_OUT="$$(pwd)/$@"
@@ -99,12 +98,12 @@ cd "$$WORK_DIR"
 # exit status 128". The collector binary does not need embedded VCS info.
 _CMD_GO_BUILD_AMD64 = """\
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \\
-    "$$GO_BIN" build -trimpath -buildvcs=false -o "$$ABS_OUT" .
+    "$$GO_BIN" build -p "$$GO_BUILD_P" -trimpath -buildvcs=false -o "$$ABS_OUT" .
 """
 
 _CMD_GO_BUILD_ARM64 = """\
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \\
-    "$$GO_BIN" build -trimpath -buildvcs=false -o "$$ABS_OUT" .
+    "$$GO_BIN" build -p "$$GO_BUILD_P" -trimpath -buildvcs=false -o "$$ABS_OUT" .
 """
 
 genrule(
