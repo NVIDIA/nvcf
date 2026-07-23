@@ -22,9 +22,14 @@ filegroup(
     ]),
 )
 
+# The tests read local_env paths (e.g. local_env/vault/secrets.json) relative
+# to the runfiles workspace root, the JVM working directory under `bazel test`.
+# Strip the package prefix so these files land root-relative in runfiles; in the
+# standalone repo this package was the repo root, so no strip was needed.
 nvct_workspace_runfiles(
     name = "integration_local_env",
     srcs = [":integration_local_env_files"],
+    strip_prefix = "src/control-plane-services/cloud-tasks/",
 )
 
 genrule(

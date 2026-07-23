@@ -455,7 +455,15 @@ jobs:
             cp "$RUNNER_TEMP/targets.txt" "$ttfile"
           else
             patterns=$(tr '\n' ' ' < "$RUNNER_TEMP/targets.txt")
-            tests=$(bazel query --noshow_progress --output=label "tests(set($patterns))" 2>/dev/null) || tests="__QFAIL__"
+            # Exclude requires-docker tests from the resolved set: they run in the
+            # bazel-integration lane, not here. Naming them explicitly and then
+            # running `bazel test --test_tag_filters=-requires-docker` fails with
+            # "No test targets were found, yet testing was requested" (exit 4) when
+            # a scope's only tests are requires-docker (e.g. cloud-tasks). Filtering
+            # them in the query lets such a scope resolve to empty and skip cleanly,
+            # matching the tag filter applied to the run below.
+            tests=$(bazel query --noshow_progress --output=label \
+              "tests(set($patterns)) except attr(tags, 'requires-docker', set($patterns))" 2>/dev/null) || tests="__QFAIL__"
             if [ "$tests" = "__QFAIL__" ]; then
               echo "tests() query failed; falling back to full test set"
               printf '//...\n' > "$ttfile"
