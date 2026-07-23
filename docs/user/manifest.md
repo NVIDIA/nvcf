@@ -57,6 +57,46 @@ global:
 
 See [Image Mirroring](./image-mirroring.md) for additional registry examples.
 
+### Use upstream container images
+
+You can configure a chart to pull a supporting image directly from its
+upstream registry. For example, replace the `nats.reloader.image` block in
+`deploy/stacks/self-managed/global.yaml.gotmpl` to pull the NATS configuration
+reloader from Docker Hub:
+
+```yaml
+nats:
+  reloader:
+    image:
+      registry: docker.io
+      repository: natsio/nats-server-config-reloader
+      tag: "0.23.0"
+```
+
+Use the version listed in the artifact table. Verify that your cluster can
+reach the upstream registry. If the registry requires authentication, add its
+pull secret to `global.imagePullSecrets`.
+
+To pull the API account-bootstrap Kubernetes utilities from their upstream
+image, replace the `api.accountBootstrap.image` block in
+`global.yaml.gotmpl`:
+
+```yaml
+api:
+  accountBootstrap:
+    image:
+      registry: docker.io
+      repository: alpine/k8s
+      tag: "1.36.1"
+```
+
+The current Cassandra initialization hook uses the
+`nvcf-cassandra-migrations` image, and the current NATS chart renders NKeys as
+Secrets without an nkey job. Their legacy `cassandra.initialization.image` and
+`nats.nkeyJob.image` values do not control rendered workloads. Using
+`alpine-k8s` for those operations requires chart support rather than a
+configuration-only override.
+
 <Info>
 Some supporting components such as the GPU Operator, OpenBao, NATS, Cassandra, etc. can alternatively be pulled directly from public NGC Catalog or other public opensource repositories if desired.
 
@@ -99,7 +139,7 @@ The following tables list the complete artifact inventory.
 | Artifact | Version | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
 | `admin-token-issuer-proxy` | `1.0.2` | Optional | Proxies admin token requests for the reference architecture. | `nvcr.io/nvidia/nvcf/admin-token-issuer-proxy:1.0.2` |  |
-| `alpine-k8s` | `1.36.1` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `nvcr.io/0833294136851237/selfhosted-ga/alpine-k8s:1.36.1-ea` |  |
+| `alpine-k8s` | `1.36.1` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `docker.io/alpine/k8s:1.36.1` | [GitHub](https://github.com/alpine-docker/k8s) |
 | `cert-manager-cainjector` | `v1.20.2` | Required | Injects certificate authority data into Kubernetes resources. | `nvcr.io/nvidia/nvcf/cert-manager-cainjector:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-controller` | `v1.20.2` | Required | Reconciles certificates and issuers for the control plane. | `nvcr.io/nvidia/nvcf/cert-manager-controller:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-startupapicheck` | `v1.20.2` | Required | Verifies that the cert-manager API is ready. | `nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
@@ -109,7 +149,7 @@ The following tables list the complete artifact inventory.
 | `llm-request-router` | `0.3.0` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/0833294136851237/selfhosted-ga/stargate:0.3.0-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 | `nats-box` | `0.19.7-nonroot` | Required | Provides NATS administration and diagnostic utilities. | `nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
 | `nats-server` | `2.11.17-alpine3.22` | Required | Provides messaging for function deployment and invocation. | `nvcr.io/nvidia/nvcf/nats-server:2.11.17-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
-| `nats-server-config-reloader` | `0.23.0` | Required | Reloads NATS server configuration when mounted settings change. | `nvcr.io/0833294136851237/selfhosted-ga/nats-server-config-reloader:0.23.0-ea` | [Upstream](https://github.com/nats-io/k8s) |
+| `nats-server-config-reloader` | `0.23.0` | Required | Reloads NATS server configuration when mounted settings change. | `docker.io/natsio/nats-server-config-reloader:0.23.0` | [Upstream](https://github.com/nats-io/k8s) |
 | `notary-service` | `1.8.1` | Required | Signs and validates functions and cluster nodes. | `nvcr.io/nvidia/nvcf/notary-service:1.8.1` |  |
 | `nvcf-api-keys-service` | `1.5.0` | Required | Creates and manages NVCF API keys. | `nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.5.0` |  |
 | `nvcf-grpc-proxy` | `1.29.1` | Required | Proxies bidirectional gRPC traffic between the control and compute planes. | `nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.29.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/grpc-proxy) |
