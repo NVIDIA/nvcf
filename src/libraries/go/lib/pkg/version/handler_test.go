@@ -41,38 +41,38 @@ func TestHandlerFor(t *testing.T) {
 			name:        "all set",
 			service:     "nvcf-my-service",
 			ver:         "1.2.3",
-			commit:      "abc1234",
+			commit:      "abc1234def5678901234567890123456789012ab",
 			wantService: "nvcf-my-service",
 			wantVersion: "1.2.3",
-			wantCommit:  "abc1234",
+			wantCommit:  "abc1234def5678901234567890123456789012ab",
 		},
 		{
 			name:        "empty service falls back to unknown",
 			service:     "",
 			ver:         "1.2.3",
-			commit:      "abc1234",
+			commit:      "abc1234def5678901234567890123456789012ab",
 			wantService: "unknown",
 			wantVersion: "1.2.3",
-			wantCommit:  "abc1234",
+			wantCommit:  "abc1234def5678901234567890123456789012ab",
 		},
 		{
 			name:        "empty version falls back to unknown",
 			service:     "nvcf-my-service",
 			ver:         "",
-			commit:      "abc1234",
+			commit:      "abc1234def5678901234567890123456789012ab",
 			wantService: "nvcf-my-service",
 			wantVersion: "unknown",
-			wantCommit:  "abc1234",
+			wantCommit:  "abc1234def5678901234567890123456789012ab",
 		},
 		{
-			name:        "empty commit falls back to buildinfo or unknown",
-			service:     "nvcf-my-service",
-			ver:         "1.2.3",
-			commit:      "",
-			wantService: "nvcf-my-service",
-			wantVersion: "1.2.3",
+			name:    "empty commit falls back to buildinfo or unknown",
+			service: "nvcf-my-service",
+			ver:     "1.2.3",
+			commit:  "",
 			// commit will be whatever buildinfo provides in the test binary,
 			// or "unknown" -- just assert it is non-empty string
+			wantService: "nvcf-my-service",
+			wantVersion: "1.2.3",
 		},
 	}
 
@@ -111,7 +111,7 @@ func TestHandler(t *testing.T) {
 
 	Service = "nvcf-my-service"
 	Version = "2.0.0"
-	GitHash = "deadbeef"
+	GitHash = "deadbeef1234567890abcdef1234567890abcdef"
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/info", nil)
@@ -124,5 +124,5 @@ func TestHandler(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, "nvcf-my-service", got.Service)
 	assert.Equal(t, "2.0.0", got.Version)
-	assert.Equal(t, "deadbeef", got.Commit)
+	assert.Equal(t, "deadbeef1234567890abcdef1234567890abcdef", got.Commit)
 }
