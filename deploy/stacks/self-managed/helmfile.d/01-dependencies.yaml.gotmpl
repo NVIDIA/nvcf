@@ -57,7 +57,7 @@ releases:
     <<: *dependency
 
   - name: openbao-server # this name MUST not change
-    version: 0.30.23
+    version: 0.30.25
     condition: openbao.enabled # From defaults.yaml or env overrides
     namespace: vault-system
     <<: *dependency # Inherits base values from the dependency template
