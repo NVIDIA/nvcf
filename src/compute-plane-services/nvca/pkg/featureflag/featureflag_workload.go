@@ -54,7 +54,7 @@ var workloadFeatureFlagKeys = map[string]struct{}{
 // DecodeWorkloadConfig decodes the workload config ConfigMap into a WorkloadConfig. The
 // config is read from the WorkloadConfigDataKey data key as a YAML document. Unrecognized
 // feature flags are dropped and logged as a warning. A nil ConfigMap yields a zero config.
-func DecodeWorkloadConfig(ctx context.Context, log logr.Logger, cm *corev1.ConfigMap) (cfg *v1alpha1.WorkloadConfig, err error) {
+func DecodeWorkloadConfig(ctx context.Context, log logr.Logger, cm *corev1.ConfigMap) (*v1alpha1.WorkloadConfig, error) {
 	if cm == nil {
 		return nil, nil
 	}
@@ -64,6 +64,7 @@ func DecodeWorkloadConfig(ctx context.Context, log logr.Logger, cm *corev1.Confi
 		log.Info("Ignoring empty workload config in ConfigMap %q", WorkloadConfigConfigMapName)
 		return nil, nil
 	}
+	var cfg v1alpha1.WorkloadConfig
 	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
 		return nil, err
 	}
@@ -74,5 +75,5 @@ func DecodeWorkloadConfig(ctx context.Context, log logr.Logger, cm *corev1.Confi
 			delete(cfg.FeatureFlags, key)
 		}
 	}
-	return cfg, nil
+	return &cfg, nil
 }

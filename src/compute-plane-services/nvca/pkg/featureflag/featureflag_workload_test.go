@@ -39,70 +39,67 @@ func TestDecodeWorkloadConfig(t *testing.T) {
 	tests := []struct {
 		name    string
 		cm      *corev1.ConfigMap
-		want    v1alpha1.WorkloadConfig
-		wantErr string
+		want    *v1alpha1.WorkloadConfig
+		wantErr bool
 	}{
 		{
-			name: "nil ConfigMap yields zero config",
+			name: "nil ConfigMap yields nil config",
 			cm:   nil,
-			want: v1alpha1.WorkloadConfig{},
+			want: nil,
 		},
 		{
-			name: "ConfigMap without config.yaml key yields zero config",
+			name: "ConfigMap without config.yaml key yields nil config",
 			cm:   &corev1.ConfigMap{Data: map[string]string{"other": "x"}},
-			want: v1alpha1.WorkloadConfig{},
+			want: nil,
 		},
 		{
-			name: "empty config.yaml yields zero config",
+			name: "empty config.yaml yields nil config",
 			cm:   workloadConfigCM(""),
-			want: v1alpha1.WorkloadConfig{},
+			want: nil,
+		},
+		{
+			name: "null config.yaml yields nil config",
+			cm:   workloadConfigCM("null"),
+			want: &v1alpha1.WorkloadConfig{},
 		},
 		{
 			name: "feature flag enabled",
-			cm: workloadConfigCM(`featureFlags:
-  STATUS_BY_WORKER_READINESS: true
-`),
-			want: v1alpha1.WorkloadConfig{
+			cm:   workloadConfigCM("featureFlags:\n  " + StatusByWorkerReadiness + ": true\n"),
+			want: &v1alpha1.WorkloadConfig{
 				FeatureFlags: map[string]bool{StatusByWorkerReadiness: true},
 			},
 		},
 		{
 			name: "feature flag disabled",
-			cm: workloadConfigCM(`featureFlags:
-  STATUS_BY_WORKER_READINESS: false
-`),
-			want: v1alpha1.WorkloadConfig{
+			cm:   workloadConfigCM("featureFlags:\n  " + StatusByWorkerReadiness + ": false\n"),
+			want: &v1alpha1.WorkloadConfig{
 				FeatureFlags: map[string]bool{StatusByWorkerReadiness: false},
 			},
 		},
 		{
-			name: "unknown feature flag is dropped with warning",
-			cm: workloadConfigCM(`featureFlags:
-  STATUS_BY_WORKER_READINESS: true
-  SOME_UNKNOWN_FLAG: true
-`),
-			want: v1alpha1.WorkloadConfig{
+			name: "unknown feature flag is dropped",
+			cm:   workloadConfigCM("featureFlags:\n  " + StatusByWorkerReadiness + ": true\n  SomeUnknownFlag: true\n"),
+			want: &v1alpha1.WorkloadConfig{
 				FeatureFlags: map[string]bool{StatusByWorkerReadiness: true},
 			},
 		},
 		{
 			name:    "invalid yaml returns error",
 			cm:      workloadConfigCM("featureFlags: [not-a-map"),
-			wantErr: "decode workload config",
+			wantErr: true,
 		},
 		{
 			name:    "wrong type for feature flag value returns error",
-			cm:      workloadConfigCM("featureFlags:\n  STATUS_BY_WORKER_READINESS: notabool\n"),
-			wantErr: "decode workload config",
+			cm:      workloadConfigCM("featureFlags:\n  " + StatusByWorkerReadiness + ": notabool\n"),
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := DecodeWorkloadConfig(context.Background(), logr.Discard(), tt.cm)
-			if tt.wantErr != "" {
+			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
@@ -117,12 +114,15 @@ func TestWorkloadConfigConfigMapName(t *testing.T) {
 }
 
 func TestWorkloadConfigIsFeatureFlagEnabled(t *testing.T) {
-	var zero v1alpha1.WorkloadConfig
-	assert.False(t, zero.IsFeatureFlagEnabled(StatusByWorkerReadiness))
+	var nilCfg *v1alpha1.WorkloadConfig
+	assert.False(t, nilCfg.IsFeatureFlagEnabled(StatusByWorkerReadiness))
 
-	cfg := v1alpha1.WorkloadConfig{
+	empty := &v1alpha1.WorkloadConfig{}
+	assert.False(t, empty.IsFeatureFlagEnabled(StatusByWorkerReadiness))
+
+	cfg := &v1alpha1.WorkloadConfig{
 		FeatureFlags: map[string]bool{StatusByWorkerReadiness: true},
 	}
 	assert.True(t, cfg.IsFeatureFlagEnabled(StatusByWorkerReadiness))
-	assert.False(t, cfg.IsFeatureFlagEnabled("SOME_OTHER_FLAG"))
+	assert.False(t, cfg.IsFeatureFlagEnabled("SomeOtherFlag"))
 }

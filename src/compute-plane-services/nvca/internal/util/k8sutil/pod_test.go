@@ -482,8 +482,8 @@ func TestIsPodDegraded(t *testing.T) {
 		workerDegradationPeriod time.Duration
 		startupTimeoutPeriod    time.Duration
 		restartPolicy           corev1.RestartPolicy
+		want                    PodDegraded
 		wantDegraded            bool
-		wantReason              string
 	}{
 		{
 			name: "not degraded - all conditions healthy",
@@ -510,8 +510,8 @@ func TestIsPodDegraded(t *testing.T) {
 			},
 			workerDegradationPeriod: time.Minute,
 			startupTimeoutPeriod:    time.Minute,
+			want:                    PodDegraded{},
 			wantDegraded:            false,
-			wantReason:              "",
 		},
 		{
 			name: "degraded - containers not ready and pod not ready beyond threshold",
@@ -549,8 +549,11 @@ func TestIsPodDegraded(t *testing.T) {
 			},
 			workerDegradationPeriod: time.Hour,
 			startupTimeoutPeriod:    time.Hour,
-			wantDegraded:            true,
-			wantReason:              "ContainersNotReady",
+			want: PodDegraded{
+				Containers: []ContainerDegraded{},
+				Reason:     "ContainersNotReady",
+			},
+			wantDegraded: true,
 		},
 		{
 			name: "not degraded - within startup timeout period",
@@ -588,8 +591,8 @@ func TestIsPodDegraded(t *testing.T) {
 			},
 			workerDegradationPeriod: time.Hour,
 			startupTimeoutPeriod:    time.Hour,
+			want:                    PodDegraded{},
 			wantDegraded:            false,
-			wantReason:              "",
 		},
 		{
 			name: "degraded - within startup timeout period but restart policy is never",
@@ -628,8 +631,11 @@ func TestIsPodDegraded(t *testing.T) {
 			workerDegradationPeriod: time.Hour,
 			startupTimeoutPeriod:    time.Hour,
 			restartPolicy:           corev1.RestartPolicyNever,
-			wantDegraded:            true,
-			wantReason:              "ContainersNotReady",
+			want: PodDegraded{
+				Containers: []ContainerDegraded{{Name: "foo"}},
+				Reason:     "ContainersNotReady",
+			},
+			wantDegraded: true,
 		},
 	}
 
@@ -639,12 +645,12 @@ func TestIsPodDegraded(t *testing.T) {
 				WorkerDegradationTimeout: tt.workerDegradationPeriod,
 				WorkerStartupTimeout:     tt.startupTimeoutPeriod,
 			}
-			degraded, reason := IsPodDegraded(&corev1.Pod{
+			got, degraded := IsPodDegraded(&corev1.Pod{
 				Spec:   corev1.PodSpec{RestartPolicy: tt.restartPolicy},
 				Status: tt.status,
 			}, k8sTimeConfig)
 			assert.Equal(t, tt.wantDegraded, degraded)
-			assert.Equal(t, tt.wantReason, reason)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -707,8 +713,13 @@ func TestImagePullIssuesReported(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			imagePullIssues, hasIssue := ImagePullIssuesReported(tt.status)
-			if assert.Equal(t, tt.wantIssue, hasIssue) && assert.Len(t, imagePullIssues, 1) {
-				assert.Equal(t, tt.wantReason, imagePullIssues[0].Reason)
+			assert.Equal(t, tt.wantIssue, hasIssue)
+			if tt.wantIssue {
+				if assert.Len(t, imagePullIssues, 1) {
+					assert.Equal(t, tt.wantReason, imagePullIssues[0].Reason)
+				}
+			} else {
+				assert.Empty(t, imagePullIssues)
 			}
 		})
 	}
@@ -837,10 +848,10 @@ func TestIsPodStuckInitializing(t *testing.T) {
 	defaultTimeConfig := (&TimeConfig{}).Complete()
 	now := time.Now()
 	tests := []struct {
-		name       string
-		podStatus  corev1.PodStatus
-		wantStuck  bool
-		wantReason string
+		name      string
+		podStatus corev1.PodStatus
+		want      PodStuckInitializing
+		wantStuck bool
 	}{
 		{
 			name: "pod successfully initialized",
@@ -858,8 +869,8 @@ func TestIsPodStuckInitializing(t *testing.T) {
 					},
 				},
 			},
-			wantStuck:  false,
-			wantReason: "",
+			want:      PodStuckInitializing{},
+			wantStuck: false,
 		},
 		{
 			name: "container in restart loop",
@@ -882,8 +893,11 @@ func TestIsPodStuckInitializing(t *testing.T) {
 					},
 				},
 			},
-			wantStuck:  true,
-			wantReason: "CrashLoopBackOff",
+			want: PodStuckInitializing{
+				Containers: []ContainerStuckInitializing{{Reason: "CrashLoopBackOff"}},
+				Reason:     "ContainersInRestartLoop",
+			},
+			wantStuck: true,
 		},
 		{
 			name: "init container in restart loop",
@@ -906,8 +920,11 @@ func TestIsPodStuckInitializing(t *testing.T) {
 					},
 				},
 			},
-			wantStuck:  true,
-			wantReason: "Error",
+			want: PodStuckInitializing{
+				Containers: []ContainerStuckInitializing{{Reason: "Error"}},
+				Reason:     "InitContainersInRestartLoop",
+			},
+			wantStuck: true,
 		},
 		{
 			name: "init container with waiting state",
@@ -930,8 +947,11 @@ func TestIsPodStuckInitializing(t *testing.T) {
 					},
 				},
 			},
-			wantStuck:  true,
-			wantReason: "ImagePullBackOff",
+			want: PodStuckInitializing{
+				Containers: []ContainerStuckInitializing{{Reason: "ImagePullBackOff"}},
+				Reason:     "InitContainersInRestartLoop",
+			},
+			wantStuck: true,
 		},
 		{
 			name: "pod stuck in initialization beyond threshold",
@@ -949,8 +969,11 @@ func TestIsPodStuckInitializing(t *testing.T) {
 					},
 				},
 			},
-			wantStuck:  true,
-			wantReason: "ContainerStuckAfterThreshold",
+			want: PodStuckInitializing{
+				Containers: []ContainerStuckInitializing{},
+				Reason:     "ContainerStuckAfterThreshold",
+			},
+			wantStuck: true,
 		},
 		{
 			name: "pod still initializing within threshold",
@@ -968,8 +991,8 @@ func TestIsPodStuckInitializing(t *testing.T) {
 					},
 				},
 			},
-			wantStuck:  false,
-			wantReason: "",
+			want:      PodStuckInitializing{},
+			wantStuck: false,
 		},
 		{
 			name: "container restarts within threshold",
@@ -987,8 +1010,8 @@ func TestIsPodStuckInitializing(t *testing.T) {
 					},
 				},
 			},
-			wantStuck:  false,
-			wantReason: "",
+			want:      PodStuckInitializing{},
+			wantStuck: false,
 		},
 		{
 			name: "no start time",
@@ -1005,16 +1028,16 @@ func TestIsPodStuckInitializing(t *testing.T) {
 					},
 				},
 			},
-			wantStuck:  false,
-			wantReason: "",
+			want:      PodStuckInitializing{},
+			wantStuck: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stuck, reason := IsPodStuckInitializing(&corev1.Pod{Status: tt.podStatus}, defaultTimeConfig)
+			got, stuck := IsPodStuckInitializing(&corev1.Pod{Status: tt.podStatus}, defaultTimeConfig)
 			assert.Equal(t, tt.wantStuck, stuck, "stuck status mismatch")
-			assert.Equal(t, tt.wantReason, reason, "reason mismatch")
+			assert.Equal(t, tt.want, got, "result mismatch")
 		})
 	}
 }

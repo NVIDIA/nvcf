@@ -260,16 +260,19 @@ func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (PodStuc
 			if containerStatus.RestartCount >= RestartCountToFailInstance &&
 				IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
 				reason := "ContainerInRestartLoop"
+				message := ""
 				switch {
 				case containerStatus.LastTerminationState.Terminated != nil:
 					reason = containerStatus.LastTerminationState.Terminated.Reason
+					message = containerStatus.LastTerminationState.Terminated.Message
 				case containerStatus.LastTerminationState.Waiting != nil:
 					reason = containerStatus.LastTerminationState.Waiting.Reason
+					message = containerStatus.LastTerminationState.Waiting.Message
 				}
 				stuckContainers = append(stuckContainers, ContainerStuckInitializing{
 					Name:    containerStatus.Name,
 					Reason:  reason,
-					Message: containerStatus.LastTerminationState.Terminated.Message,
+					Message: message,
 				})
 			}
 			if len(stuckContainers) > 0 {
@@ -284,16 +287,19 @@ func IsPodStuckInitializing(pod *corev1.Pod, k8sTimeConfig *TimeConfig) (PodStuc
 			if containerStatus.RestartCount >= RestartCountToFailInstance &&
 				IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdSecondsOnFailedRestarts) {
 				reason := "InitContainerInRestartLoop"
+				message := ""
 				switch {
 				case containerStatus.LastTerminationState.Terminated != nil:
 					reason = containerStatus.LastTerminationState.Terminated.Reason
+					message = containerStatus.LastTerminationState.Terminated.Message
 				case containerStatus.LastTerminationState.Waiting != nil:
 					reason = containerStatus.LastTerminationState.Waiting.Reason
+					message = containerStatus.LastTerminationState.Waiting.Message
 				}
 				stuckContainers = append(stuckContainers, ContainerStuckInitializing{
 					Name:    containerStatus.Name,
 					Reason:  reason,
-					Message: containerStatus.LastTerminationState.Terminated.Message,
+					Message: message,
 				})
 			}
 			if len(stuckContainers) > 0 {
