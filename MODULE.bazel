@@ -300,10 +300,10 @@ maven.install(
         "org.junit.jupiter:junit-jupiter-engine",
         "org.junit.platform:junit-platform-launcher",
         "org.junit.platform:junit-platform-reporting",
-        # cloud-tasks service closure. Version-less coordinates are managed by
+        # Cloud Tasks service closure. Version-less coordinates are managed by
         # the BOMs above (spring-boot 4.0.7 / spring-cloud 2025.1.2 /
         # testcontainers 2.0.5 / shedlock 7.7.0). Explicit versions match the
-        # cloud-tasks standalone module; io.grpc pins track GRPC_VERSION.
+        # validated Cloud Tasks baseline; io.grpc pins track GRPC_VERSION.
         "com.bucket4j:bucket4j_jdk17-core:8.19.0",
         "com.github.ben-manes.caffeine:caffeine",
         "com.google.protobuf:protobuf-java:4.33.4",

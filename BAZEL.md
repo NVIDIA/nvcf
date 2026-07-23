@@ -11,11 +11,13 @@ Bazel currently builds, tests, and packages:
 
 - `src/clis/nvcf-cli` (Go binary + multi-platform release matrix + OCI image)
 - `src/libraries/go/lib` (Go library, 92 targets)
+- `src/libraries/java/nv-boot-parent` (Java framework libraries and tests)
+- `src/control-plane-services/cloud-tasks` (Java libraries, tests, and Spring
+  Boot application)
 
-Subtrees listed in `imports.yaml` with `authoritative_source: upstream` are
-intentionally excluded via
-`.bazelignore` and `# gazelle:exclude` directives in the root `BUILD.bazel`.
-They will be onboarded one at a time as Phase B in separate MRs.
+Other upstream-owned subtrees remain excluded until they are onboarded one at
+a time. nv-boot-parent and Cloud Tasks are folded into the root Bazel module
+and are not nested Bazel workspaces.
 
 ## One-time setup
 
@@ -62,9 +64,33 @@ the cross-toolchain on first use.
 
 ### Common environment
 
-The repo expects Bazel 8.6.0 (pinned in `.bazelversion`). Bazelisk handles
+The repo expects Bazel 9.1.1 (pinned in `.bazelversion`). Bazelisk handles
 the download automatically; do not install Bazel via apt or brew directly,
 as that pins a different version.
+
+Java targets use Java 25 with the root `.bazelrc` setting
+`--java_runtime_version=local_jdk`. The pinned containerized CI image supplies
+Temurin 25 through `JAVA_HOME`. The bare Docker-integration lane downloads and
+configures Temurin 25 through the workflow's `actions/setup-java@v4` step.
+
+`bazel info java-home` reports the Java runtime used to run the Bazel server.
+That directory is not guaranteed to contain command-line tools such as
+`javac`, so it is not the right way to inspect the Java toolchains selected for
+build actions. Query those toolchains directly:
+
+```bash
+bazel cquery @bazel_tools//tools/jdk:current_java_runtime \
+  --output=starlark \
+  --starlark:expr='str(providers(target)["ToolchainInfo"].java_runtime.version)'
+
+bazel cquery @bazel_tools//tools/jdk:current_host_java_runtime \
+  --output=starlark \
+  --starlark:expr='str(providers(target)["ToolchainInfo"].java_runtime.version)'
+```
+
+Both commands must print `25`. The normal Java build then proves that the
+compiler toolchain works; a separate `javac` command under
+`bazel info java-home` is neither required nor expected.
 
 ## Day-to-day commands
 
@@ -282,12 +308,31 @@ build).
 
 ## CI
 
-Two Bazel-aware jobs in the root `.gitlab-ci.yml`:
+The public GitHub Bazel matrix in `.github/workflows/bazel.yml` consumes
+`ghcr.io/nvidia/nvcf/bazel-ci:0.12.0`. That image is built in the internal
+[`nvcf/bazel-ci-templates`](https://gitlab-master.nvidia.com/nvcf/bazel-ci-templates)
+project, stamped with a version, and mirrored to GHCR. The mirror is currently
+manual; automation is planned. To change the image's Bazel, Java, or operating
+system tooling, update the internal template first, publish and mirror a new
+tag, and only then update the pinned `container.image` here.
 
-- `bazel-ci-image`: rebuilds `ci/Dockerfile.bazel` via buildah and pushes
-  to `${CI_REGISTRY_IMAGE}/bazel-ci:<ref-slug>`. Triggers only when
-  `ci/Dockerfile.bazel` or `.bazelversion` changes (or when a web pipeline
-  is run with `$REBUILD_BAZEL_IMAGE` set).
+The root `ci/Dockerfile.bazel` and
+`.github/workflows/bazel-ci-image.yml` are legacy files and are not the
+authoritative producer for the image used by the matrix. Do not use them to
+reason about the contents of `bazel-ci:0.12.0`.
+
+The detect job also enforces the single-module import boundary:
+
+```bash
+bash tools/ci/check-java-import-boundaries
+```
+
+Run this after refreshing nv-boot-parent or Cloud Tasks source. It fails when
+a standalone Bazel root file, lockfile, workspace file, or migration directory
+is reintroduced under either subtree.
+
+The existing internal Bazel jobs include:
+
 - `bazel-smoke`: pulls the image, runs `bazel info release`, then
   `bazel build --config=remote //src/libraries/go/lib/...
   //src/clis/nvcf-cli:image_index` and `bazel mod graph`. It does not
@@ -339,9 +384,13 @@ For native subtrees outside Phase 1 scope today:
 5. Run `bazel run //:gazelle` then `bazel mod tidy`.
 6. `bazel build //path/to/subtree/...` to validate.
 
-For upstream-owned subtrees (`authoritative_source: upstream` in
-`imports.yaml`), Bazel files belong upstream so they survive the next commit-pin
-refresh.
+The public checkout does not contain the internal source-mirroring
+configuration. For an upstream-owned subtree, distinguish between source files
+that continue to mirror from the standalone repository and monorepo-native
+Bazel overlays. The import process must exclude standalone `MODULE.bazel`,
+lockfiles, `.bazelrc`, `.bazelversion`, downloader config, dependency hub,
+and `bazel-enablement` content. Root-module BUILD adaptations and monorepo
+agent/documentation overlays must be preserved during refreshes.
 
 ## Per-service publish cadence
 

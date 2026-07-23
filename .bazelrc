@@ -69,9 +69,10 @@ build --workspace_status_command=./tools/workspace_status.sh
 build --nostamp
 
 # Java baseline: Java 25 for the whole monorepo (nv-boot-parent and the Java
-# control-plane services). local_jdk is the approved runtime here: the folded
-# Java subtrees were validated against a locally provisioned JDK 25, so both the
-# build and tool runtimes resolve to local_jdk rather than a hermetic remotejdk.
+# control-plane services). local_jdk is the approved runtime. The pinned
+# bazel-ci image supplies Temurin 25 through JAVA_HOME; the bare
+# Docker-integration lane supplies it through actions/setup-java. The Java
+# build and test jobs prove that both environments satisfy this contract.
 # Full javac (header compilation off) is required because Lombok-generated APIs
 # in the imported projects are not compatible with Bazel's Turbine header
 # compiler.

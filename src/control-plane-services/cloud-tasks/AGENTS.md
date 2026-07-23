@@ -1,45 +1,51 @@
-# AGENTS.md - cloud_tasks
+# AGENTS.md - Cloud Tasks
 
-The NVCF cloud-tasks Java (Spring Boot) service, as a standalone Bazel module
-(`module(name = "cloud_tasks")`). Depends on `nv_boot_parent` (the Spring
-platform starters) via `bazel_dep` plus `local_path_override`. Maven and Bazel
-coexist; Maven stays the default build during coexistence.
+Cloud Tasks is an OSS/self-hosted Java service folded into the root `nvcf`
+Bazel module. It is not a nested Bazel module and does not own a
+`MODULE.bazel`, lockfile, `.bazelrc`, `.bazelversion`, downloader config, or
+third-party dependency hub.
 
-## Build and test (from this directory)
+Maven POMs remain during coexistence, but Bazel uses source targets throughout
+the monorepo. Do not generate or publish Maven-shaped project artifacts from
+Bazel.
 
-```
-cd src/control-plane-services/cloud-tasks
-export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/cloud-tasks-bazel-cache"
-bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" build //...
-bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" test //... --test_tag_filters=-requires-docker
-```
+## Build And Test
 
-The module builds on its own with no reference to the repo root. The Spring plus
-Testcontainers integration tests are tagged `requires-docker` and run in the
-dedicated Docker integration lane, not the default fast matrix.
+Run Bazel from the monorepo root:
 
-## Dependency hub
+```bash
+export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
 
-Third-party dependencies resolve through one shared hub named
-`nv_third_party_deps` (never `@maven`). `maven.install` lists `nv_boot_parent`
-in `known_contributing_modules`, so this service and the nv-boot starters
-resolve a single merged third-party graph. This root owns and re-pins the merged
-`maven_install.json`:
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build //src/control-plane-services/cloud-tasks/...
 
-```
-REPIN=1 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" run @nv_third_party_deps//:pin
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  test //src/control-plane-services/cloud-tasks/... \
+  --test_tag_filters=-requires-docker
 ```
 
-Both `maven_install.json` and `MODULE.bazel.lock` are committed. Lombok needs
-`build --java_header_compilation=false` (via `--nojava_header_compilation` in
-this module's `.bazelrc`).
+The Testcontainers suites are tagged `requires-docker` and run in the
+dedicated Docker integration lane.
+
+## Dependencies
+
+The root `MODULE.bazel` owns the single `nv_third_party_deps` hub and the root
+`maven_install.json` and `MODULE.bazel.lock`. BUILD targets here declare only
+the direct labels they compile or run against. A coordinate being available in
+the root hub does not put it on this service's runtime classpath.
+
+Use direct monorepo labels for nv-boot libraries, for example:
+
+```text
+//src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core
+```
+
+Do not introduce `@nv_boot_parent`, `@cloud_tasks`, `@maven`,
+`local_path_override`, or `git_override` for code already in this repository.
 
 ## Layout
 
-- `nvct-core/` - service library plus the gRPC `nvct.proto` codegen (driven by
-  the `protoc-gen-grpc-java` native plugins declared in `MODULE.bazel` and the
-  macros in `tools/bazel/proto.bzl`).
-- `nvct-service/` - the `@SpringBootApplication` entry point and the Spring Boot
-  executable app jar (`tools/bazel/spring_boot.bzl`).
-- `tools/bazel/` - the `nv_boot_library` macros (`java.bzl`), Lombok wiring, the
-  gRPC plugin, the JaCoCo runner, and the NOTICE generator.
+- `nvct-core/`: service library and gRPC code generation.
+- `nvct-service/`: Spring Boot application and executable `app.jar`.
+- `//rules/java`: shared Java, test, protobuf, and Spring Boot rules.
+- `//tools/bazel/java`: shared executable helper implementations.

@@ -18,8 +18,8 @@
 #
 # Image push targets, internal NGC registry pulls, and the nvcfbarn
 # remote cache are all internal-only; this workflow runs build + test
-# only. It pulls the same bazel-ci toolchain image the GitLab pipeline
-# uses, mirrored to ghcr.io by the bazel-ci-image workflow.
+# only. The bazel-ci image is built by the internal nvcf/bazel-ci-templates
+# project and mirrored to GHCR for this public workflow.
 
 name: bazel
 
@@ -70,6 +70,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Check Java import boundaries
+        run: bash tools/ci/check-java-import-boundaries
 
       - name: Compute changed subtrees
         id: detect
@@ -127,7 +130,7 @@ jobs:
           # Paths that affect the root-module workspace build (native root
           # subtrees plus the shared Bazel scaffold). Java and stargate no longer
           # ride the root row: nv-boot-parent, cloud-tasks, and stargate are
-          # their own module rows, so src/libraries/ is narrowed to
+          # their own scoped rows, so src/libraries/ is narrowed to
           # src/libraries/go/ and cloud-tasks is dropped here.
           ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
 
@@ -258,13 +261,11 @@ jobs:
       CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
       CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
-      # Built in GitLab nvcf/bazel-ci-templates (bazel-ci/Dockerfile: Temurin
-      # JDK 25 + Maven + prewarmed Bazel and Go SDKs -- that is where java/javac
-      # come from) and skopeo-mirrored to the public ghcr tag below. This repo
-      # does NOT build the image (the old ci/Dockerfile.bazel + bazel-ci-image.yml
-      # were a stale, Java-less copy and have been removed). Bump this ref in
-      # lockstep after a new tag is mirrored. Kept a string literal on purpose
-      # (see the container.image evaluation note above).
+      # This pinned image is built in the internal nvcf/bazel-ci-templates
+      # project and mirrored to GHCR. It supplies Temurin 25 at JAVA_HOME;
+      # Bazelisk then selects the root .bazelversion release. Update this tag
+      # only after the corresponding internal image has been published and
+      # mirrored.
       image: ghcr.io/nvidia/nvcf/bazel-ci:0.12.0
       credentials:
         username: ${{ github.actor }}
@@ -377,7 +378,7 @@ jobs:
         run: |
           set -uo pipefail
           tfile="$RUNNER_TEMP/targets.txt"
-          # SCOPE is //... for the root row and per-module rows, and //<path>/...
+          # SCOPE is //... for standalone-module rows, and //<path>/...
           # for a root-scoped lane so it builds only its own targets out of the
           # shared root module.
           full() { printf '%s\n' "$SCOPE" > "$tfile"; echo "targets: $SCOPE (full build)"; }
@@ -597,9 +598,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # The Java tree builds with local_jdk (root .bazelrc). This bare runner is
-      # not the bazel-ci image (which ships Temurin 25), so provide JDK 25 at
-      # JAVA_HOME for local_jdk to resolve.
+      # The Java tree builds with local_jdk (root .bazelrc). Unlike the fast
+      # matrix, this lane runs on a bare runner rather than the bazel-ci image,
+      # so provide JDK 25 explicitly for the Java requires-docker tests.
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -620,6 +621,9 @@ jobs:
         # only tests are requires-docker (cloud-tasks) still runs them all here.
         # bazel exit 4 (no test targets in scope) is treated as success.
         run: |
+          # Run only the Testcontainers suites across the root workspace against
+          # the host Docker. If a change touches none, bazel exits 4 (no tests
+          # matched) which we treat as success.
           set +e
           bazel test ${{ matrix.subtree.scope }} \
             --test_output=errors \
