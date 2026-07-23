@@ -261,6 +261,8 @@ addons:
     tolerations: []
     affinity: {}
 
+  # NVCF UI addon for optional NVCF admin-panel UI.
+  # Disabled by default
   nvcfUi:
     enabled: false
 

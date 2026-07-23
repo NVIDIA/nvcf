@@ -217,7 +217,7 @@ Helmfile deploys in order with dependencies:
 | Phase | Selector | Services | Wait time |
 |-------|----------|----------|-----------|
 | 1 | `release-group=dependencies` | NATS, OpenBao, Cassandra | 5-10 min |
-| 2 | `release-group=services` | API, SIS, ESS, invocation, grpc-proxy, notary, api-keys, optional LLM gateway/router, optional Vanity Gateway when the stack package includes the addon | 5-10 min |
+| 2 | `release-group=services` | API, SIS, ESS, invocation, grpc-proxy, notary, api-keys, optional LLM gateway/router, optional Vanity Gateway, NVCF UI when the stack package includes the addon | 5-10 min |
 | 3 | `release-group=ingress` | Gateway routes | 1-2 min |
 | 4 | `release-group=observability` | Observability stack (if enabled) | 1-2 min |
 
@@ -273,7 +273,63 @@ Do not enable Vanity Gateway for standard API, API Keys, invocation, LLM
 invocation, or gRPC traffic. Those routes are provided by the base gateway
 routes.
 
-### 7. Install the separate compute-plane stack
+### 7. Enable NVCF UI (optional)
+
+NVCF UI is optional and disabled by default. It is available only in
+stack packages that include the NVCF UI addon. If your extracted stack
+package does not contain a `nvcf-ui` release and `nvcfUi` route
+values, skip this section until you use a stack package that includes them.
+
+Enable it only when you need a customer-facing NVCF admin-panel UI
+
+If the stack package includes the addon, enable it in
+`environments/<env-name>.yaml`:
+
+```yaml
+addons:
+  nvcfUi:
+    enabled: true
+```
+
+Create namespace and image pull secret (if using a private registry)
+```bash
+kubectl create namespace nvcf-ui --dry-run=client -o yaml | kubectl apply -f -
+
+# Only if pulling from a private registry (e.g., NGC nvcr.io)
+export NGC_API_KEY="<your-key>"
+kubectl create secret docker-registry nvcr-creds \
+  --docker-server=nvcr.io \
+  --docker-username='$oauthtoken' \
+  --docker-password="$NGC_API_KEY" \
+  --namespace=nvcf-ui \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The default route host is `nvcf-ui.<domain>` and the backend is
+`nvcf-ui.nvcf-ui:8300`.
+
+After confirming the package includes the `nvcf-ui` release, preview and
+apply the service and route:
+
+```bash
+HELMFILE_ENV=<env-name> helmfile --selector name=nvcf-ui template
+HELMFILE_ENV=<env-name> helmfile --selector name=nvcf-ui sync
+HELMFILE_ENV=<env-name> helmfile --selector release-group=ingress sync
+```
+
+Verify the route only when the addon is present and enabled:
+
+```bash
+kubectl get deploy,svc -n nvcf-ui
+kubectl get httproute -A | grep -i nvcf-ui
+curl -i -H "Host: nvcf-ui.<domain>" "http://<gateway-address>/status"
+```
+
+The NVCF UI admin panel is currently unauthenticated. Do not expose it to the
+public internet. Restrict access to a trusted network, VPN, or an
+authenticating proxy in front of the `nvcf-ui` route.
+
+### 8. Install the separate compute-plane stack
 
 The control-plane stack does not install compute-plane components. After it is healthy, choose exactly one compute-plane handoff:
 
@@ -290,7 +346,7 @@ for commands, EKS routing, pull secrets, verification, and teardown order.
 Destroy every compute plane before the control plane, using the teardown for
 the same handoff; see [Split Compute-Plane Installation](references/compute-plane-installation.md#teardown).
 
-Scope: Only destroy releases managed by this control-plane helmfile stack. The NVCF releases are: `nats`, `openbao-server`, `cassandra`, `api-keys`, `sis`, `api`, `invocation-service`, `grpc-proxy`, `ess-api`, `notary-service`, optional `vanity-gateway`, `admin-issuer-proxy`, and `ingress`; `cert-manager` is included only when `certManager.enabled: true`. The control-plane namespace inventory also includes `cert-manager`, but default namespace cleanup preserves it. Namespace preservation does not preserve the Helm release. External cert-manager must use `certManager.enabled: false`; otherwise Helmfile treats the release as stack-managed. Do not delete other helm releases or namespaces on the cluster.
+Scope: Only destroy releases managed by this control-plane helmfile stack. The NVCF releases are: `nats`, `openbao-server`, `cassandra`, `api-keys`, `sis`, `api`, `invocation-service`, `grpc-proxy`, `ess-api`, `notary-service`, optional `vanity-gateway`, `nvcf-ui`, `admin-issuer-proxy`, and `ingress`; `cert-manager` is included only when `certManager.enabled: true`. The control-plane namespace inventory also includes `cert-manager`, but default namespace cleanup preserves it. Namespace preservation does not preserve the Helm release. External cert-manager must use `certManager.enabled: false`; otherwise Helmfile treats the release as stack-managed. Do not delete other helm releases or namespaces on the cluster.
 
 Before control-plane destroy, identify whether cert-manager is external. For an external installation, require effective `certManager.enabled: false` and abort if it is true. For an intended stack-managed release with effective `certManager.enabled: true`, verify matching stack Helm release metadata and abort on missing or mismatched evidence. Preserve the namespace by default; only plan its removal after verifying namespace provenance and getting explicit confirmation.
 
