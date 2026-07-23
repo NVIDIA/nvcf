@@ -64,6 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.detect.outputs.matrix }}
+      matrix_docker: ${{ steps.detect.outputs.matrix_docker }}
       any: ${{ steps.detect.outputs.any }}
     steps:
       - uses: actions/checkout@v4
@@ -176,7 +177,20 @@ jobs:
             nv_boot_changed=true
           fi
 
+          # Subtrees that own requires-docker (Testcontainers) tests. They run in
+          # the bazel-docker matrix on a Docker-capable runner, executing their
+          # FULL suite (unit + Testcontainers) with no tag filter, so every test a
+          # subtree owns runs in its own visible lane -- nothing is filtered out or
+          # deferred. A subtree here is NOT also placed in the container matrix, so
+          # it never produces a lane that runs no tests.
+          # NOTE: grpc-proxy also owns a requires-docker test but is a nested Rust
+          # module whose test has never run in CI; wiring+validating it is tracked
+          # separately (NVIDIA/nvcf#396) to keep this change scoped to the Java
+          # subtrees. It stays in the container matrix for now (build coverage).
+          DOCKER_SUBTREES=" cloud-tasks nv-boot-parent "
+
           include="[]"
+          include_docker="[]"
           while IFS='|' read -r id path tests_skip scoped; do
             id="$(echo "$id" | xargs)"; [ -z "$id" ] && continue
             scoped="$(echo "$scoped" | xargs)"
@@ -216,14 +230,21 @@ jobs:
               case "$NV_BOOT_CONSUMERS" in *" $id "*) hit=true ;; esac
             fi
             if [ "$hit" = "true" ]; then
-              include=$(printf '%s' "$include" | jq -c --arg id "$id" --arg path "$path" --argjson ts "$tests_skip" --arg wd "$workdir" --arg sc "$scope" --arg sm "$scoped" '. + [{id:$id, path:$path, tests_skip:$ts, workdir:$wd, scope:$sc, scoped:$sm}]')
+              entry=$(jq -cn --arg id "$id" --arg path "$path" --argjson ts "$tests_skip" --arg wd "$workdir" --arg sc "$scope" --arg sm "$scoped" '{id:$id, path:$path, tests_skip:$ts, workdir:$wd, scope:$sc, scoped:$sm}')
+              case "$DOCKER_SUBTREES" in
+                *" $id "*) include_docker=$(printf '%s' "$include_docker" | jq -c --argjson e "$entry" '. + [$e]') ;;
+                *)         include=$(printf '%s' "$include" | jq -c --argjson e "$entry" '. + [$e]') ;;
+              esac
             fi
           done <<< "$ROWS"
 
           count=$(printf '%s' "$include" | jq 'length')
-          echo "selected ${count} subtree(s): $(printf '%s' "$include" | jq -r '[.[].id] | join(", ")')"
+          count_docker=$(printf '%s' "$include_docker" | jq 'length')
+          total=$((count + count_docker))
+          echo "selected ${total} subtree(s): container=[$(printf '%s' "$include" | jq -r '[.[].id] | join(", ")')] docker=[$(printf '%s' "$include_docker" | jq -r '[.[].id] | join(", ")')]"
           echo "matrix=${include}" >> "$GITHUB_OUTPUT"
-          if [ "$count" -gt 0 ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
+          echo "matrix_docker=${include_docker}" >> "$GITHUB_OUTPUT"
+          if [ "$total" -gt 0 ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
 
   bazel:
     name: bazel (${{ matrix.subtree.id }})
@@ -553,28 +574,31 @@ jobs:
             bazel test "${COMMON[@]}" --remote_cache= "${TARGETS[@]}"
           fi
 
-  # Docker integration lane. Runs only the "requires-docker"-tagged tests
-  # (Testcontainers suites) that the containerized fast matrix cannot run
-  # because it has no Docker daemon. This is how integration tests stay ENABLED
-  # instead of being skipped. Runs on the bare runner (not the bazel-ci
-  # container) because ubuntu-latest ships Docker running, so Testcontainers
-  # uses the host daemon directly -- no DinD, no host-override networking, and it
-  # avoids the container+service checkout fragility. bazelisk reads
-  # .bazelversion for the pinned Bazel.
-  bazel-integration:
-    name: bazel integration (docker)
+  # Per-service Docker lane. Each subtree that owns requires-docker
+  # (Testcontainers) tests runs its FULL suite (unit + Testcontainers) here, in
+  # its own visibly-named lane, with no tag filter -- so no test a subtree owns
+  # is filtered out or deferred, and a green lane means that service's tests ran.
+  # Runs on the bare ubuntu-latest runner (not the bazel-ci container) because
+  # that runner ships a running Docker daemon, so Testcontainers uses the host
+  # daemon directly -- no DinD, no host-override networking. These subtrees are
+  # excluded from the container matrix, so they never produce a zero-test lane.
+  # bazelisk reads .bazelversion for the pinned Bazel.
+  bazel-docker:
+    name: bazel docker (${{ matrix.subtree.id }})
     needs: detect
-    if: needs.detect.outputs.any == 'true'
+    if: needs.detect.outputs.matrix_docker != '[]'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        subtree: ${{ fromJson(needs.detect.outputs.matrix_docker) }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # The Java tree builds with local_jdk (root .bazelrc). This lane runs on a
-      # bare runner (not the bazel-ci image, which ships Temurin 25), so provide
-      # a JDK 25 at JAVA_HOME for local_jdk to resolve; otherwise the Java
-      # requires-docker tests (nv-boot / cloud-tasks Testcontainers suites) that
-      # now live in the root module fail to build here.
+      # The Java tree builds with local_jdk (root .bazelrc). This bare runner is
+      # not the bazel-ci image (which ships Temurin 25), so provide JDK 25 at
+      # JAVA_HOME for local_jdk to resolve.
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -585,29 +609,31 @@ jobs:
             https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64
           sudo chmod +x /usr/local/bin/bazel
           bazel version
-      - name: bazel integration tests (requires-docker)
+      - name: bazel build (${{ matrix.subtree.id }})
+        working-directory: ${{ matrix.subtree.workdir }}
+        run: bazel build ${{ matrix.subtree.scope }}
+      - name: bazel test (${{ matrix.subtree.id }})
+        working-directory: ${{ matrix.subtree.workdir }}
+        # Full suite, NO tag filter: runs the subtree's unit AND requires-docker
+        # (Testcontainers) tests against the host Docker daemon. A subtree whose
+        # only tests are requires-docker (cloud-tasks) still runs them all here.
+        # bazel exit 4 (no test targets in scope) is treated as success.
         run: |
-          # Run only the Testcontainers suites across the root workspace against
-          # the host Docker. If a change touches none, bazel exits 4 (no tests
-          # matched) which we treat as success. Nested-module subtrees are
-          # handled in a later fan-out.
           set +e
-          bazel test //... \
-            --build_tests_only \
-            --test_tag_filters=requires-docker \
+          bazel test ${{ matrix.subtree.scope }} \
             --test_output=errors \
             --flaky_test_attempts=2
           rc=$?
           set -e
           if [ "$rc" -eq 4 ]; then
-            echo "no requires-docker tests matched; nothing to run"
+            echo "::warning::${{ matrix.subtree.id }}: no test targets in scope"
             exit 0
           fi
           exit "$rc"
 
   bazel-verification:
     name: bazel verification
-    needs: [detect, bazel, bazel-integration]
+    needs: [detect, bazel, bazel-docker]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -615,7 +641,7 @@ jobs:
         env:
           DETECT_RESULT: ${{ needs.detect.result }}
           BAZEL_RESULT: ${{ needs.bazel.result }}
-          INTEGRATION_RESULT: ${{ needs.bazel-integration.result }}
+          DOCKER_RESULT: ${{ needs.bazel-docker.result }}
           BAZEL_ANY: ${{ needs.detect.outputs.any }}
         run: |
           set -euo pipefail
@@ -639,8 +665,8 @@ jobs:
             exit 1
           fi
 
-          echo "integration result: ${INTEGRATION_RESULT}"
-          if [ "${INTEGRATION_RESULT}" != "success" ] && [ "${INTEGRATION_RESULT}" != "skipped" ]; then
-            echo "the bazel integration (docker) lane failed or was cancelled"
+          echo "bazel-docker result: ${DOCKER_RESULT}"
+          if [ "${DOCKER_RESULT}" != "success" ] && [ "${DOCKER_RESULT}" != "skipped" ]; then
+            echo "one or more bazel docker (per-service Testcontainers) lanes failed or were cancelled"
             exit 1
           fi
