@@ -1,5 +1,5 @@
-load("//tools/bazel:java.bzl", "nvct_library", "nvct_library_test")
-load("//tools/bazel:spring_boot.bzl", "spring_boot_app")
+load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
+load("//rules/java:spring.bzl", "spring_boot_app")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -10,11 +10,11 @@ NVCT_SERVICE_RESOURCES = glob(["src/main/resources/**"])
 NVCT_SERVICE_TEST_SRCS = glob(["src/test/java/**/*.java"])
 
 NVCT_SERVICE_TEST_RESOURCES = glob(["src/test/resources/**"]) + [
-    "//:integration_local_env_files",
+    "//src/control-plane-services/cloud-tasks:integration_local_env_files",
 ]
 
 NVCT_SERVICE_DEPS = [
-    "//nvct-core:nvct_core",
+    "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core",
     "@nv_third_party_deps//:org_slf4j_slf4j_api",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
@@ -27,7 +27,7 @@ nvct_library(
     name = "app_classes",
     srcs = NVCT_SERVICE_SRCS,
     deps = NVCT_SERVICE_DEPS,
-    resource_strip_prefix = "nvct-service/src/main/resources",
+    resource_strip_prefix = "src/control-plane-services/cloud-tasks/nvct-service/src/main/resources",
     resources = NVCT_SERVICE_RESOURCES,
     visibility = ["//visibility:private"],
 )
@@ -49,9 +49,9 @@ nvct_library_test(
     srcs = NVCT_SERVICE_TEST_SRCS,
     deps = [
         ":app_classes",
-        "//nvct-core:nvct_core",
-        "//nvct-core:nvct_core_test_fixtures",
-        "@nv_boot_parent//nv-boot-mock-servers-test:nv_boot_mock_servers_test",
+        "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core",
+        "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core_test_fixtures",
+        "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
         "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_testing",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
@@ -65,7 +65,7 @@ nvct_library_test(
         "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
     ],
     data = [
-        "//:integration_local_env",
+        "//src/control-plane-services/cloud-tasks:integration_local_env",
     ],
     resources = NVCT_SERVICE_TEST_RESOURCES,
     tags = [

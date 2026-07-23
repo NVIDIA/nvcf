@@ -164,6 +164,10 @@ bazel_dep(name = "rules_java", version = "9.3.0")
 bazel_dep(name = "rules_jvm_external", version = "7.0")
 bazel_dep(name = "contrib_rules_jvm", version = "0.33.0")
 
+# Spring Boot executable-jar packaging for the Java control-plane services
+# (consumed by //rules/java:spring.bzl). Folded in from the cloud-tasks import.
+bazel_dep(name = "rules_spring", version = "2.6.3")
+
 # gRPC-Java codegen. rules_proto_grpc_java drives the protoc-gen-grpc-java
 # plugin (fetched as native binaries below) to generate Java gRPC stubs for
 # Java services that expose or consume gRPC. protobuf/com_google_protobuf and

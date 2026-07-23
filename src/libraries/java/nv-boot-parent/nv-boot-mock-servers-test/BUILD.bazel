@@ -1,4 +1,4 @@
-load("//tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
 
 MOCK_SERVERS_COMPILE_DEPS = [
     "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",

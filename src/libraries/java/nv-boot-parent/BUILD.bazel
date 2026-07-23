@@ -1,26 +1,29 @@
 package(default_visibility = ["//visibility:public"])
 
+# NOTICE and its generator inputs are owned by this subtree. The third-party
+# artifact lock is the single root //:maven_install.json; the generation
+# algorithm is the root-owned //tools/bazel/java:generate_notice_tool.
 exports_files([
-    "maven_install.json",
-    "MODULE.bazel",
     "NOTICE",
+    "notice_metadata.json",
+    "notice_roots.json",
 ])
 
 genrule(
     name = "third_party_notice",
     srcs = [
-        ":maven_install.json",
-        "//tools/bazel:notice_metadata.json",
-        "//tools/bazel:notice_roots.json",
+        "//:maven_install.json",
+        ":notice_metadata.json",
+        ":notice_roots.json",
     ],
-    tools = ["//tools/bazel:generate_notice_tool"],
+    tools = ["//tools/bazel/java:generate_notice_tool"],
     outs = ["THIRD_PARTY_NOTICE"],
     cmd = """
 set -eu
-"$(execpath //tools/bazel:generate_notice_tool)" \
-    --maven-install "$(location :maven_install.json)" \
-    --metadata "$(location //tools/bazel:notice_metadata.json)" \
-    --root-manifest "$(location //tools/bazel:notice_roots.json)" \
+"$(execpath //tools/bazel/java:generate_notice_tool)" \
+    --maven-install "$(location //:maven_install.json)" \
+    --metadata "$(location :notice_metadata.json)" \
+    --root-manifest "$(location :notice_roots.json)" \
     --output "$@" \
     --write
 """,
@@ -29,11 +32,11 @@ set -eu
 genrule(
     name = "generate_notice",
     srcs = [
-        ":maven_install.json",
-        "//tools/bazel:notice_metadata.json",
-        "//tools/bazel:notice_roots.json",
+        "//:maven_install.json",
+        ":notice_metadata.json",
+        ":notice_roots.json",
     ],
-    tools = ["//tools/bazel:generate_notice_tool"],
+    tools = ["//tools/bazel/java:generate_notice_tool"],
     outs = ["generate_notice.sh"],
     cmd = """
 cat > "$@" <<'EOF'
@@ -41,11 +44,12 @@ cat > "$@" <<'EOF'
 set -euo pipefail
 
 workspace="$${BUILD_WORKSPACE_DIRECTORY:-$$(pwd)}"
-exec "$(execpath //tools/bazel:generate_notice_tool)" \
-    --maven-install "$(location :maven_install.json)" \
-    --metadata "$${workspace}/tools/bazel/notice_metadata.json" \
-    --notice "$${workspace}/NOTICE" \
-    --root-manifest "$(location //tools/bazel:notice_roots.json)" \
+service="$${workspace}/src/libraries/java/nv-boot-parent"
+exec "$(execpath //tools/bazel/java:generate_notice_tool)" \
+    --maven-install "$${workspace}/maven_install.json" \
+    --metadata "$${service}/notice_metadata.json" \
+    --notice "$${service}/NOTICE" \
+    --root-manifest "$${service}/notice_roots.json" \
     "$$@"
 EOF
 chmod +x "$@"

@@ -21,15 +21,18 @@ exports_files(
 )
 
 # Root module identity + third-party lock + NOTICE index, consumed by the
-# nv-boot-parent NOTICE generation/verification tooling now that its Maven
-# closure is owned by the root module.
+# Java subtrees' NOTICE generation/verification tooling now that their Maven
+# closure is owned by the single root module.
 exports_files(
     [
         "MODULE.bazel",
         "NOTICE",
         "maven_install.json",
     ],
-    visibility = ["//src/libraries/java/nv-boot-parent:__subpackages__"],
+    visibility = [
+        "//src/control-plane-services/cloud-tasks:__subpackages__",
+        "//src/libraries/java/nv-boot-parent:__subpackages__",
+    ],
 )
 
 # Phase 1 scope: only the native Go subtrees listed in go.work.bazel are

@@ -1,7 +1,7 @@
-load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("@com_google_protobuf//bazel:proto_library.bzl", "proto_library")
 load("@rules_java//java:defs.bzl", "java_library")
-load("//tools/bazel:java.bzl", "nvct_library", "nvct_library_test")
-load("//tools/bazel:proto.bzl", "nvct_java_grpc_compile")
+load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
+load("//rules/java:proto.bzl", "nvct_java_grpc_compile")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -10,13 +10,13 @@ NVCT_CORE_SRCS = glob(["src/main/java/**/*.java"])
 NVCT_CORE_TEST_SRCS = glob(["src/test/java/**/*.java"])
 
 NVCT_CORE_TEST_RESOURCES = glob(["src/test/resources/**"]) + [
-    "//:integration_local_env_files",
+    "//src/control-plane-services/cloud-tasks:integration_local_env_files",
 ]
 
 proto_library(
     name = "nvct_proto",
     srcs = ["src/main/proto/nvct.proto"],
-    deps = ["@protobuf//:timestamp_proto"],
+    deps = ["@com_google_protobuf//:timestamp_proto"],
 )
 
 nvct_java_grpc_compile(
@@ -63,13 +63,13 @@ nvct_library(
         "@nv_third_party_deps//:com_google_guava_guava",
         "@nv_third_party_deps//:com_google_protobuf_protobuf_java",
         "@nv_third_party_deps//:com_nimbusds_oauth2_oidc_sdk",
-        "@nv_boot_parent//nv-boot-starter-audit:nv_boot_starter_audit",
-        "@nv_boot_parent//nv-boot-starter-cassandra:nv_boot_starter_cassandra",
-        "@nv_boot_parent//nv-boot-starter-core:nv_boot_starter_core",
-        "@nv_boot_parent//nv-boot-starter-exceptions:nv_boot_starter_exceptions",
-        "@nv_boot_parent//nv-boot-starter-observability:nv_boot_starter_observability",
-        "@nv_boot_parent//nv-boot-starter-registries:nv_boot_starter_registries",
-        "@nv_boot_parent//nv-boot-starter-reloadable-properties:nv_boot_starter_reloadable_properties",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-audit:nv_boot_starter_audit",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-cassandra:nv_boot_starter_cassandra",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions:nv_boot_starter_exceptions",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-observability:nv_boot_starter_observability",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-registries:nv_boot_starter_registries",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties:nv_boot_starter_reloadable_properties",
         "@nv_third_party_deps//:io_grpc_grpc_api",
         "@nv_third_party_deps//:io_grpc_grpc_netty_shaded",
         "@nv_third_party_deps//:io_grpc_grpc_stub",
@@ -148,13 +148,13 @@ NVCT_CORE_TEST_DEPS = [
     "@nv_third_party_deps//:com_google_guava_guava",
     "@nv_third_party_deps//:com_google_protobuf_protobuf_java",
     "@nv_third_party_deps//:com_nimbusds_nimbus_jose_jwt",
-    "@nv_boot_parent//nv-boot-mock-servers-test:nv_boot_mock_servers_test",
-    "@nv_boot_parent//nv-boot-starter-audit:nv_boot_starter_audit",
-    "@nv_boot_parent//nv-boot-starter-core:nv_boot_starter_core",
-    "@nv_boot_parent//nv-boot-starter-exceptions:nv_boot_starter_exceptions",
-    "@nv_boot_parent//nv-boot-starter-observability:nv_boot_starter_observability",
-    "@nv_boot_parent//nv-boot-starter-registries:nv_boot_starter_registries",
-    "@nv_boot_parent//nv-boot-starter-reloadable-properties:nv_boot_starter_reloadable_properties",
+    "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-audit:nv_boot_starter_audit",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions:nv_boot_starter_exceptions",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-observability:nv_boot_starter_observability",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-registries:nv_boot_starter_registries",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties:nv_boot_starter_reloadable_properties",
     "@nv_third_party_deps//:io_grpc_grpc_api",
     "@nv_third_party_deps//:io_grpc_grpc_stub",
     "@nv_third_party_deps//:io_micrometer_micrometer_core",
@@ -213,7 +213,7 @@ nvct_library_test(
     srcs = NVCT_CORE_TEST_SRCS,
     deps = NVCT_CORE_TEST_DEPS,
     data = [
-        "//:integration_local_env",
+        "//src/control-plane-services/cloud-tasks:integration_local_env",
     ],
     # Spring Framework 7 pauses cached contexts when switching configurations.
     # The embedded gRPC server cannot reliably rebind its random port during

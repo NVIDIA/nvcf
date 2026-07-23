@@ -14,8 +14,8 @@ fi
 
 exec python3 "${generator}" \
     --maven-install "${workspace}/maven_install.json" \
-    --metadata "${workspace}/tools/bazel/notice_metadata.json" \
-    --notice "${workspace}/NOTICE" \
+    --metadata "${workspace}/src/control-plane-services/cloud-tasks/notice_metadata.json" \
+    --notice "${workspace}/src/control-plane-services/cloud-tasks/NOTICE" \
     --runtime-jar "${runtime_jar}" \
     --first-party-group com.nvidia.nvct \
     "$@"

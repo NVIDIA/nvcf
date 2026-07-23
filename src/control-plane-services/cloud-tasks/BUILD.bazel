@@ -1,11 +1,15 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
-load("//tools/bazel:java.bzl", "nvct_workspace_runfiles")
+load("//rules/java:defs.bzl", "nvct_workspace_runfiles")
 
 package(default_visibility = ["//visibility:public"])
 
+# NOTICE and its service-local metadata are owned by this subtree. The
+# third-party artifact lock is the single root //:maven_install.json; the
+# generation algorithm is root-owned under //tools/bazel/java.
 exports_files([
     "NOTICE",
-    "maven_install.json",
+    "notice_metadata.json",
+    "generate_notice.sh",
 ])
 
 filegroup(
@@ -26,17 +30,24 @@ nvct_workspace_runfiles(
 genrule(
     name = "third_party_notice",
     srcs = [
-        ":maven_install.json",
-        "//nvct-service:app",
-        "//tools/bazel:notice_metadata.json",
-        "@nv_boot_parent//tools/bazel:generate_notice.py",
+        "//:maven_install.json",
+        "//src/control-plane-services/cloud-tasks/nvct-service:app",
+        ":notice_metadata.json",
+        "//tools/bazel/java:generate_notice.py",
     ],
     outs = ["THIRD_PARTY_NOTICE"],
+    # Excluded from wildcard builds: the service NOTICE metadata does not yet
+    # cover every transitive resolved through the single merged root hub (for
+    # example aopalliance:aopalliance:1.0). Reconciling service NOTICE metadata
+    # against the merged root closure is the layered-NOTICE work deferred to the
+    # shared-tooling pilot in the monorepo Java architecture. Run explicitly
+    # with `bazel build //src/control-plane-services/cloud-tasks:third_party_notice`.
+    tags = ["manual"],
     cmd = """
-python3 "$(location @nv_boot_parent//tools/bazel:generate_notice.py)" \
-    --maven-install "$(location :maven_install.json)" \
-    --metadata "$(location //tools/bazel:notice_metadata.json)" \
-    --runtime-jar "$(location //nvct-service:app)" \
+python3 "$(location //tools/bazel/java:generate_notice.py)" \
+    --maven-install "$(location //:maven_install.json)" \
+    --metadata "$(location :notice_metadata.json)" \
+    --runtime-jar "$(location //src/control-plane-services/cloud-tasks/nvct-service:app)" \
     --first-party-group com.nvidia.nvct \
     --output "$@" \
     --write
@@ -45,9 +56,9 @@ python3 "$(location @nv_boot_parent//tools/bazel:generate_notice.py)" \
 
 sh_binary(
     name = "generate_notice",
-    srcs = ["//tools/bazel:generate_notice.sh"],
+    srcs = [":generate_notice.sh"],
     data = [
-        "//nvct-service:app",
-        "@nv_boot_parent//tools/bazel:generate_notice.py",
+        "//src/control-plane-services/cloud-tasks/nvct-service:app",
+        "//tools/bazel/java:generate_notice.py",
     ],
 )

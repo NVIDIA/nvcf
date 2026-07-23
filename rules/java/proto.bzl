@@ -18,7 +18,7 @@ nvct_java_grpc_compile = rule(
             providers = [ProtoPluginInfo],
             default = [
                 Label("@rules_proto_grpc_java//:proto_plugin"),
-                Label("//tools/bazel:grpc_java_1_63_plugin"),
+                Label("//tools/bazel/java:grpc_java_1_63_plugin"),
             ],
             cfg = "exec",
         ),
