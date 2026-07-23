@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="460" viewBox="0 0 1280 460" role="img" aria-labelledby="title desc">
   <title id="title">NVCF LLM invocation path</title>
-  <desc id="desc">Client traffic flows through an optional Vanity or custom edge, the public LLM/HTTP invocation endpoint, LLM API Gateway, LLM Request Router, the LLM worker sidecar, and the customer inference container.</desc>
+  <desc id="desc">Client traffic flows through an optional custom edge, the public LLM/HTTP invocation endpoint, LLM API Gateway, LLM Request Router, the LLM worker sidecar, and the customer inference container.</desc>
   <defs>
     <style>
       :root {
@@ -71,8 +71,8 @@
   <text class="small" x="110" y="218" text-anchor="middle">OpenAI API</text>
 
   <rect class="optional" x="220" y="155" width="168" height="88" rx="8" />
-  <text class="label" x="304" y="185" text-anchor="middle">Optional Vanity</text>
-  <text class="small" x="304" y="211" text-anchor="middle">or custom edge</text>
+  <text class="label" x="304" y="185" text-anchor="middle">Optional custom</text>
+  <text class="small" x="304" y="211" text-anchor="middle">edge</text>
   <text class="small" x="304" y="232" text-anchor="middle">front door</text>
 
   <rect class="panel-muted" x="428" y="155" width="188" height="88" rx="8" />
