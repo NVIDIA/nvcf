@@ -621,9 +621,6 @@ jobs:
         # only tests are requires-docker (cloud-tasks) still runs them all here.
         # bazel exit 4 (no test targets in scope) is treated as success.
         run: |
-          # Run only the Testcontainers suites across the root workspace against
-          # the host Docker. If a change touches none, bazel exits 4 (no tests
-          # matched) which we treat as success.
           set +e
           bazel test ${{ matrix.subtree.scope }} \
             --test_output=errors \

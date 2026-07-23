@@ -1,23 +1,25 @@
 # Bazel
 
-This project is migrating from Maven to Bazel while both build systems coexist.
-Maven remains available during the migration.
+Cloud Tasks lives inside the `NVIDIA/nvcf` monorepo. Run every command in this
+document from the monorepo root, not from this subtree. Maven remains available
+during coexistence, but Bazel configuration and dependency locks are owned by
+the monorepo root.
 
-For the Bazel path, consume `nv-boot-parent` directly as Bazel source targets
-instead of consuming Bazel-produced Maven-shaped `com.nvidia.boot:*` artifacts
-from URM.
+For the Bazel path, Cloud Tasks consumes nv-boot through direct first-party
+labels such as:
 
-Hard rule for this migration: do not publish Maven-shaped jars from the Bazel
-toolchain. Maven consumers should continue to use the Maven build/publish path
-during coexistence. Bazel consumers should depend on Bazel targets. We initially
-took a wrong turn by treating Maven artifact publication as required for Bazel
-coexistence; after clarifying that Bazel apps can consume source targets
-directly, we are correcting that path.
+```text
+//src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core
+```
+
+Bazel does not publish Maven-shaped Cloud Tasks or nv-boot jars. Maven
+consumers continue to use the Maven build/publish path during coexistence;
+Bazel consumers use source targets in this checkout.
 
 Set one OS-neutral Bazel output root when opening a shell in this repository:
 
 ```bash
-export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/cloud-tasks-bazel-cache"
+export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
 ```
 
 The commands below reuse this variable. It resolves under the operating
@@ -26,25 +28,24 @@ system's temporary directory instead of assuming the macOS-specific
 
 ## Understanding the Dependency Files
 
-Bazel uses three top-level files for dependency declarations and locking. A
+Bazel uses three root files for dependency declarations and locking. A
 simple way to remember their responsibilities is:
 
 ```text
-MODULE.bazel       = what this repository wants
+MODULE.bazel       = what the whole monorepo wants
 maven_install.json = exact third-party Java artifacts that were resolved
 MODULE.bazel.lock  = exact Bazel modules and module extensions that were resolved
 ```
 
 ### `MODULE.bazel`
 
-Developers edit this file. It declares the repository as a Bazel module and
-contains inputs such as:
+Developers edit the root `MODULE.bazel`. Cloud Tasks does not have a nested
+module file. The root file declares inputs such as:
 
 - `bazel_dep` entries for Bazel rules and tooling;
-- the pinned `git_override` for the nv-boot-parent source module;
 - Maven-compatible BOMs and third-party Java dependency roots supplied to
   `rules_jvm_external`;
-- the shared `nv_third_party_deps` hub configuration.
+- the shared `nv_third_party_deps` hub configuration; and
 - checksum-pinned repositories for native build tools that are not Java
   dependencies.
 
@@ -71,7 +72,7 @@ drift. Negative numbers there are normal. They are not artifact checksums;
 artifact integrity is recorded separately as hexadecimal SHA-256 values under
 each artifact's `shasums` entry.
 
-After changing BOMs, third-party roots, or versions in `MODULE.bazel`,
+After changing BOMs, third-party roots, or versions in the root `MODULE.bazel`,
 regenerate it with:
 
 ```bash
@@ -103,8 +104,9 @@ them, commit those changes together. The normal workflow is:
 
 ## Prerequisites
 
-- Bazel 9.1.1, preferably through Bazelisk honoring `.bazelversion`.
-- Java 25. `.bazelrc` pins Bazel Java compilation and runtime to Java 25.
+- Bazel 9.1.1 through Bazelisk honoring the root `.bazelversion`.
+- Java 25. The root `.bazelrc` selects the local Java 25 JDK for compilation
+  and runtime.
 - Docker is required for the current `nvct-core` and `nvct-service`
   integration tests.
 
@@ -114,15 +116,9 @@ only to build and commands that inherit build options. The `rules_spring`
 external Java-rule compatibility option is therefore under `common`, while the
 Lombok header-compilation setting remains under `build`.
 
-Current Bazel-path nv-boot source dependency:
-
-```text
-nv_boot_parent git_override commit bfd1db74fa6588cda53df364bfbbb14457221099
-```
-
-The Bazel path consumes `nv-boot-parent` source targets directly and does not
-list `com.nvidia.boot:nv-boot-bom` or `com.nvidia.boot:*` artifacts in
-`MODULE.bazel`.
+The root `.bazel_downloader_config` maps external downloads to approved
+mirrors. Bazel applies it automatically through `.bazelrc`; Cloud Tasks should
+not define a subtree-specific downloader configuration.
 
 ## Dependency Updates
 
@@ -134,7 +130,7 @@ Jackson, gRPC, and Guava. `rules_jvm_external` currently obtains those jars
 from Maven-compatible repositories, but that is an implementation detail of
 dependency resolution, not the meaning of the hub name.
 
-Both `nv-boot-parent` and Cloud Tasks intentionally use:
+The monorepo root defines exactly one install:
 
 ```python
 maven.install(
@@ -144,15 +140,14 @@ maven.install(
 use_repo(maven, "nv_third_party_deps")
 ```
 
-The same name is deliberate. In simple terms:
+In simple terms:
 
-1. `nv-boot-parent` contributes the third-party dependencies needed by its
-   libraries.
-2. Cloud Tasks contributes the additional dependencies needed by the app.
-3. Bzlmod and `rules_jvm_external` merge those contributions into one
-   `@nv_third_party_deps` repository.
-4. The merged hub resolves one selected version of each third-party artifact
-   for the complete application.
+1. The root `MODULE.bazel` lists the third-party roots needed across Java
+   libraries and applications.
+2. `rules_jvm_external` resolves them as one graph.
+3. BUILD files use labels from the generated `@nv_third_party_deps`
+   repository.
+4. The root `maven_install.json` locks the selected artifacts and checksums.
 
 The name `nv_third_party_deps` is intentionally agnostic about build tool,
 resolver, and runtime. The hub contains only third-party dependency targets.
@@ -161,71 +156,23 @@ consumed and built as first-party Bazel source targets. It also does not imply
 that Bazel creates or publishes Maven-shaped project artifacts.
 
 `maven.install.name` names the generated hub. `use_repo` makes that generated
-repository visible to BUILD files as `@nv_third_party_deps`. Cloud Tasks also
-lists `nv_boot_parent` in `known_contributing_modules` to state that the
-upstream module is expected to contribute third-party dependencies to this
-hub.
+repository visible to BUILD files as `@nv_third_party_deps`.
 
-Using different names would create two independent dependency graphs. A final
-Spring Boot app could then contain two versions of the same library or an
-incompatible mixture from one dependency family. We observed exactly that:
-the two-hub app was 218 MB, while the merged-hub app was 142 MB and closely
-matched Maven's 142 MB app. The split graph also mixed gRPC 1.63 and 1.74,
-causing missing-class failures at runtime.
+Do not add a second hub in a service subtree. Multiple hubs can select
+different versions of the same library and create an incompatible runtime.
+A coordinate's presence in the root hub only makes its Bazel target available;
+it reaches Cloud Tasks compilation or runtime only when a BUILD dependency
+edge selects it.
 
-Therefore, do not add a second `maven.install` or rename the Cloud Tasks hub to
-something project-specific. Add required roots to the existing
-`nv_third_party_deps` install and repin it.
-
-### Local nv-boot-parent Override
-
-The shared hub itself is not locally overridden. The command-line override
-replaces the first-party `nv_boot_parent` module, and that local module then
-contributes its third-party dependency roots to `nv_third_party_deps`.
-
-A local override is appropriate only while developing unpushed
-`nv-boot-parent` changes and validating them in Cloud Tasks. Supply an absolute
-path to the local checkout:
-
-```bash
-bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build \
-  --override_module=nv_boot_parent=/absolute/path/to/nv-boot-parent \
-  //...
-
-bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test \
-  --override_module=nv_boot_parent=/absolute/path/to/nv-boot-parent \
-  //... \
-  --cache_test_results=no \
-  --test_output=errors
-```
-
-If the local nv-boot-parent change modifies third-party dependency roots or
-versions, repin against that same local checkout:
-
-```bash
-REPIN=1 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  run \
-  --override_module=nv_boot_parent=/absolute/path/to/nv-boot-parent \
-  @nv_third_party_deps//:pin
-```
-
-Do not put a workstation path in `MODULE.bazel`, CI configuration, or shared
-scripts. CI and final validation must omit `--override_module` and use the
-committed `git_override` hash.
-
-An accidental or stale local override causes Bazel to ignore the committed
-nv-boot-parent Git hash for that invocation. The build may then use dirty,
-unpushed, or outdated source and a different contribution to the shared hub.
-It can fail with a pin-signature error, or it can pass locally while producing
-a result that CI cannot reproduce. Removing `--override_module` restores the
-committed Git dependency. Before committing Cloud Tasks, always repin, build,
-and test once without the override.
+Therefore, add required roots to the existing root install and repin it. Do
+not use `git_override`, `local_path_override`, or `--override_module` between
+nv-boot and Cloud Tasks: both are ordinary directories in the same Bazel
+module.
 
 ### Updating Dependencies
 
-After changing third-party roots or versions in `MODULE.bazel`, repin with:
+After changing third-party roots or versions in the root `MODULE.bazel`,
+repin with:
 
 ```bash
 REPIN=1 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
@@ -236,9 +183,9 @@ Then run the normal build and tests. Commit `MODULE.bazel` and
 `maven_install.json` together. Commit `MODULE.bazel.lock` too if Bzlmod changes
 it.
 
-The project intentionally pins gRPC runtime and code generation to 1.63.0.
+Cloud Tasks intentionally pins gRPC runtime and code generation to 1.63.0.
 `rules_proto_grpc_java` 5.8.0 bundles a newer 1.74 generator, so
-`tools/bazel/proto.bzl` keeps the upstream compile implementation but selects
+`//rules/java:proto.bzl` keeps the upstream compile implementation but selects
 the matching 1.63 executable fetched by checksum-pinned `http_file`
 repositories. These native executables intentionally stay outside
 `nv_third_party_deps`, which has `fetch_sources = True` for Java
@@ -256,11 +203,11 @@ outside the checkout:
 
 ## Build Everything
 
-Build all current Bazel targets:
+Build all Cloud Tasks targets:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //... \
+  build //src/control-plane-services/cloud-tasks/... \
   --verbose_failures
 ```
 
@@ -273,28 +220,28 @@ Build the main `nvct-core` library:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //nvct-core:nvct_core \
+  build //src/control-plane-services/cloud-tasks/nvct-core:nvct_core \
   --verbose_failures
 ```
 
 The current Bazel library jar is:
 
 ```text
-bazel-bin/nvct-core/libnvct_core.jar
+bazel-bin/src/control-plane-services/cloud-tasks/nvct-core/libnvct_core.jar
 ```
 
 Build the `nvct-core` test-fixtures target consumed by `nvct-service` tests:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //nvct-core:nvct_core_test_fixtures \
+  build //src/control-plane-services/cloud-tasks/nvct-core:nvct_core_test_fixtures \
   --verbose_failures
 ```
 
 The current Bazel test-fixtures jar is:
 
 ```text
-bazel-bin/nvct-core/libnvct_core_test_fixtures.jar
+bazel-bin/src/control-plane-services/cloud-tasks/nvct-core/libnvct_core_test_fixtures.jar
 ```
 
 This is a Bazel-native library target, not a Maven `tests` classifier artifact.
@@ -307,7 +254,7 @@ feedback:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //nvct-service:app_classes \
+  build //src/control-plane-services/cloud-tasks/nvct-service:app_classes \
   --verbose_failures
 ```
 
@@ -318,17 +265,17 @@ Build the Bazel-native Spring Boot executable jar:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //nvct-service:app \
+  build //src/control-plane-services/cloud-tasks/nvct-service:app \
   --verbose_failures
 ```
 
 The app jar is:
 
 ```text
-bazel-bin/nvct-service/app.jar
+bazel-bin/src/control-plane-services/cloud-tasks/nvct-service/app.jar
 ```
 
-The jar is produced by `tools/bazel/spring_boot.bzl`, which delegates Spring
+The jar is produced by `//rules/java:spring.bzl`, which delegates Spring
 Boot executable packaging to `rules_spring` and then injects the small set of
 metadata files that Maven plugins used to contribute:
 
@@ -361,7 +308,7 @@ git.tags
 Quick local launch smoke:
 
 ```bash
-java -jar bazel-bin/nvct-service/app.jar \
+java -jar bazel-bin/src/control-plane-services/cloud-tasks/nvct-service/app.jar \
   --spring.main.web-application-type=none \
   --spring.main.banner-mode=off \
   --logging.level.root=OFF \
@@ -374,13 +321,13 @@ Spring Boot launcher, app classes, and runtime dependencies.
 
 ## Build and Run the Docker Image
 
-Run these commands from the cloud-tasks repository root.
+Run these commands from the monorepo root.
 
 First, build the Spring Boot executable jar:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //nvct-service:app \
+  build //src/control-plane-services/cloud-tasks/nvct-service:app \
   --verbose_failures
 ```
 
@@ -393,10 +340,10 @@ BAZEL_BIN_DIR="$(
 )"
 
 docker build \
-  -f nvct-service/Dockerfile \
+  -f src/control-plane-services/cloud-tasks/nvct-service/Dockerfile \
   --build-arg APP_JAR=app.jar \
-  -t nvct-service:bazel \
-  "${BAZEL_BIN_DIR}/nvct-service"
+  -t cloud-tasks-nvct-service:bazel \
+  "${BAZEL_BIN_DIR}/src/control-plane-services/cloud-tasks/nvct-service"
 ```
 
 Using the resolved output directory is necessary because the workspace
@@ -406,7 +353,9 @@ Docker cannot follow that symlink through a repository-root build context.
 Start the local Cassandra dependency:
 
 ```bash
-docker compose -f local_env/docker-compose.yml up -d
+docker compose \
+  -f src/control-plane-services/cloud-tasks/local_env/docker-compose.yml \
+  up -d
 ```
 
 Run the application container with the `local` Spring profile:
@@ -414,13 +363,13 @@ Run the application container with the `local` Spring profile:
 ```bash
 docker run --rm \
   --name nvct-service \
-  --mount "type=bind,source=$(pwd),target=/home/app,readonly" \
+  --mount "type=bind,source=$(pwd)/src/control-plane-services/cloud-tasks,target=/home/app,readonly" \
   -e SPRING_PROFILES_ACTIVE=local \
   -e SPRING_CASSANDRA_CONTACT_POINTS=host.docker.internal \
   -p 8080:8080 \
   -p 9090:9090 \
   -p 8181:8181 \
-  nvct-service:bazel
+  cloud-tasks-nvct-service:bazel
 ```
 
 The repository bind mount makes `local_env/vault/secrets.json` available at
@@ -431,7 +380,9 @@ container refers to the application container itself.
 After stopping the application, stop the local Cassandra dependency:
 
 ```bash
-docker compose -f local_env/docker-compose.yml down
+docker compose \
+  -f src/control-plane-services/cloud-tasks/local_env/docker-compose.yml \
+  down
 ```
 
 Omitting the Docker build argument keeps the Dockerfile's Maven-build default,
@@ -443,7 +394,7 @@ Run all current Bazel test targets without using cached test results:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //... \
+  test //src/control-plane-services/cloud-tasks/... \
   --cache_test_results=no \
   --test_output=errors \
   --test_env=DOCKER_HOST \
@@ -456,12 +407,12 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
 Current Bazel test targets are:
 
 ```text
-//nvct-core:tests
-//nvct-service:tests
+//src/control-plane-services/cloud-tasks/nvct-core:tests
+//src/control-plane-services/cloud-tasks/nvct-service:tests
 ```
 
 Both are tagged `exclusive` because they use the same fixed-port local
-integration environment. Without that, `bazel test //...` can run them in
+integration environment. Without that, a scoped wildcard test can run them in
 parallel and collide on ports such as WireMock `9092`.
 
 ## Test `nvct-core`
@@ -470,7 +421,7 @@ Run the full `nvct-core` test target:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //nvct-core:tests \
+  test //src/control-plane-services/cloud-tasks/nvct-core:tests \
   --cache_test_results=no \
   --test_output=errors \
   --test_env=DOCKER_HOST \
@@ -489,7 +440,7 @@ Run the `nvct-service` Spring Boot smoke/integration test target:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //nvct-service:tests \
+  test //src/control-plane-services/cloud-tasks/nvct-service:tests \
   --cache_test_results=no \
   --test_output=errors \
   --test_env=DOCKER_HOST \
@@ -509,7 +460,7 @@ Convert the test source path to its fully qualified class name.
 Example:
 
 ```text
-nvct-core/src/test/java/com/nvidia/nvct/service/apikeys/ApiKeyValidationResultTest.java
+src/control-plane-services/cloud-tasks/nvct-core/src/test/java/com/nvidia/nvct/service/apikeys/ApiKeyValidationResultTest.java
 ```
 
 becomes:
@@ -522,7 +473,7 @@ Run only that test class:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //nvct-core:tests \
+  test //src/control-plane-services/cloud-tasks/nvct-core:tests \
   --cache_test_results=no \
   --test_output=errors \
   --test_env=DOCKER_HOST \
@@ -542,7 +493,7 @@ Run one test method by combining a class filter with a method-name filter:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //nvct-core:tests \
+  test //src/control-plane-services/cloud-tasks/nvct-core:tests \
   --cache_test_results=no \
   --test_output=errors \
   --test_env=DOCKER_HOST \
@@ -561,7 +512,7 @@ Example:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //nvct-core:tests \
+  test //src/control-plane-services/cloud-tasks/nvct-core:tests \
   --cache_test_results=no \
   --test_output=errors \
   --test_arg=--exclude-classname='^(?!com\.nvidia\.nvct\.service\.apikeys\.ApiKeyValidationResultTest$).*$' \
@@ -574,20 +525,20 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
 Bazel writes test logs under:
 
 ```text
-bazel-testlogs/<module>/tests/
+bazel-testlogs/src/control-plane-services/cloud-tasks/<module>/tests/
 ```
 
 Useful files:
 
 ```text
-bazel-testlogs/nvct-core/tests/test.log
-bazel-testlogs/nvct-core/tests/test.outputs/junit/TEST-junit-jupiter.xml
-bazel-testlogs/nvct-service/tests/test.log
-bazel-testlogs/nvct-service/tests/test.outputs/junit/TEST-junit-jupiter.xml
+bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-core/tests/test.log
+bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-core/tests/test.outputs/junit/TEST-junit-jupiter.xml
+bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-service/tests/test.log
+bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-service/tests/test.outputs/junit/TEST-junit-jupiter.xml
 ```
 
 The Jupiter XML files contain the real Java testcases and are the reports
-published by GitLab. The nearby `tests/test.xml` files describe Bazel's single
+published by GitHub Actions. The nearby `tests/test.xml` files describe Bazel's single
 outer `sh_test` wrapper and must not be used as JUnit reports.
 
 Use `--cache_test_results=no` when you want to force the tests to run again.
@@ -597,7 +548,7 @@ watch test output live:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //nvct-core:tests \
+  test //src/control-plane-services/cloud-tasks/nvct-core:tests \
   --cache_test_results=no \
   --test_output=streamed \
   --test_env=DOCKER_HOST \
@@ -608,17 +559,19 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
 
 ## Coverage And Sonar XML
 
-Coverage generation is part of `//nvct-core:tests` and
-`//nvct-service:tests`; no separate coverage command is required. Running a
+Coverage generation is part of
+`//src/control-plane-services/cloud-tasks/nvct-core:tests` and
+`//src/control-plane-services/cloud-tasks/nvct-service:tests`; no separate
+coverage command is required. Running a
 test with `--cache_test_results=no` refreshes these outputs:
 
 ```text
-bazel-testlogs/nvct-core/tests/test.outputs/index.html
-bazel-testlogs/nvct-core/tests/test.outputs/jacoco.xml
-bazel-testlogs/nvct-core/tests/test.outputs/jacoco.exec
-bazel-testlogs/nvct-service/tests/test.outputs/index.html
-bazel-testlogs/nvct-service/tests/test.outputs/jacoco.xml
-bazel-testlogs/nvct-service/tests/test.outputs/jacoco.exec
+bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-core/tests/test.outputs/index.html
+bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-core/tests/test.outputs/jacoco.xml
+bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-core/tests/test.outputs/jacoco.exec
+bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-service/tests/test.outputs/index.html
+bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-service/tests/test.outputs/jacoco.xml
+bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-service/tests/test.outputs/jacoco.exec
 ```
 
 The test JVM runs the JaCoCo agent with `dumponexit=true`. After JUnit exits,
@@ -630,7 +583,7 @@ Open `index.html` for the JaCoCo HTML report. Sonar consumes the corresponding
 `jacoco.xml`, for example:
 
 ```text
--Dsonar.coverage.jacoco.xmlReportPaths=bazel-testlogs/nvct-core/tests/test.outputs/jacoco.xml,bazel-testlogs/nvct-service/tests/test.outputs/jacoco.xml
+-Dsonar.coverage.jacoco.xmlReportPaths=bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-core/tests/test.outputs/jacoco.xml,bazel-testlogs/src/control-plane-services/cloud-tasks/nvct-service/tests/test.outputs/jacoco.xml
 ```
 
 Class and method filters also produce reports, but those reports describe only
@@ -638,132 +591,48 @@ the selected test execution.
 
 ## License/NOTICE Generation
 
-This is the Bazel-native replacement for the aggregate third-party inventory
-previously produced through `license-maven-plugin`. It covers third-party
-runtime dependency names, versions, declared licenses, and project URLs. It is
-separate from source-file license-header enforcement.
-
-The canonical root `NOTICE` is derived from the third-party jars actually
-nested in `//nvct-service:app`. This makes the executable application, rather
-than a manually maintained dependency list, the source of truth. The generator
-does not read project POM files and does not invoke Maven.
-
-License metadata is checked into
-`tools/bazel/notice_metadata.json`. Keeping this metadata in the repository
-makes normal NOTICE checks deterministic and allows CI to fail when the runtime
-graph changes without a corresponding NOTICE update.
-
-### Regenerate NOTICE
-
-Regenerate `NOTICE` and fetch metadata for newly encountered runtime
-coordinates:
-
-```bash
-bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  run //:generate_notice -- --update-metadata --write
-```
-
-This command builds `//nvct-service:app` automatically, inspects its
-`BOOT-INF/lib` jars, refreshes missing license metadata, and writes:
+NOTICE generation is the Bazel-native replacement for the aggregate
+third-party inventory previously produced through `license-maven-plugin`. It
+must derive the shipped coordinates from the jars nested in:
 
 ```text
-NOTICE
-tools/bazel/notice_metadata.json
+//src/control-plane-services/cloud-tasks/nvct-service:app
 ```
 
-Run it whenever `MODULE.bazel`, `maven_install.json`, or an application runtime
-dependency changes. Commit both generated files when both change.
+The root owns the generator under `//tools/bazel/java`; Cloud Tasks owns its
+checked-in `NOTICE` and service-specific `notice_metadata.json`. The generator
+does not read project POM files and does not invoke Maven.
 
-### Check Committed NOTICE
-
-Check that the committed NOTICE and metadata match the current app runtime:
+The final layered NOTICE integration is Phase 4 work. The current diagnostic
+target is intentionally tagged `manual` and exposes the metadata gap:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //tools/bazel:notice_check_test \
-  --cache_test_results=no \
-  --test_output=errors
+  build //src/control-plane-services/cloud-tasks:third_party_notice
 ```
 
-For an interactive check through the generator entrypoint:
+At the end of Phase 3 this reports missing service/shared metadata, beginning
+with `aopalliance:aopalliance:1.0`. Do not treat the current target or
+checked-in NOTICE as the completed CI contract. Phase 4 will add deterministic
+regenerate, check, complete-runtime NOTICE, and license-grouped OSRB-delta
+commands here.
 
-```bash
-bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  run //:generate_notice -- --check
-```
+## GitHub CI
 
-`//tools/bazel:notice_check_test` is also part of `bazel test //...` and the
-opt-in Bazel CI job.
+The monorepo uses `.github/workflows/bazel.yml`. There are no GitLab
+`ENABLE_BAZEL_*` variables for this subtree.
 
-### Build A NOTICE Artifact
+The workflow detects Cloud Tasks or shared Java changes and selects the
+appropriate service lane. The containerized fast lane excludes
+`requires-docker` tests at query time. The per-service `bazel-docker` lane
+receives Java 25 through `actions/setup-java`, uses the host Docker daemon, and
+runs the complete Cloud Tasks test scope, including unit and Testcontainers
+tests. Changes to nv-boot or shared Java tooling must also select Cloud Tasks
+as a reverse-dependency validation target.
 
-Build a generated NOTICE artifact without modifying the checkout:
-
-```bash
-bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //:third_party_notice
-```
-
-The output is `bazel-bin/THIRD_PARTY_NOTICE`. It is useful for packaging or
-inspection; the checked-in root `NOTICE` remains the reviewable canonical copy.
-
-## Opt-In CI
-
-Maven remains the default CI path. To add the Bazel build/test job to a
-pipeline, set this GitLab CI/CD variable when starting the pipeline or in an MR
-pipeline configuration:
-
-```yaml
-ENABLE_BAZEL_BUILD: "true"
-```
-
-The `bazel-build-test` job uses Bazelisk with `.bazelversion`, Java 25, and a
-Docker-in-Docker service. It runs all Bazel tests without cached test results,
-builds all targets, checks NOTICE, and retains `app.jar`, JUnit XML, JaCoCo
-HTML/XML, and other Bazel outputs for seven days. It also writes
-`bazel-sonar.properties` with the discovered JaCoCo XML paths.
-
-CI intentionally sets `BAZEL_OUTPUT_USER_ROOT` under `/builds`, outside
-`CI_PROJECT_DIR`. With the Kubernetes executor, `/builds` is shared by the job
-container and Docker-in-Docker service, while each container has its own
-`/tmp`. Testcontainers Compose bind mounts originate inside Bazel's test
-sandbox, so a `/tmp` output root makes those files invisible to the Docker
-daemon and causes file-versus-directory mount errors.
-
-There is intentionally no Bazel publish/deploy job. During coexistence, Maven
-continues to own Maven artifact publication; the Bazel application consumes
-`nv-boot-parent` source targets and produces the container input app jar.
-
-### Opt-In Bazel Docker Publication
-
-To prove container publication from the Bazel-built application, set:
-
-```yaml
-ENABLE_BAZEL_DOCKER_PUBLISH: "true"
-```
-
-This flag also enables `bazel-build-test`, so `ENABLE_BAZEL_BUILD` does not
-need to be set separately. It does not replace or disable the default Maven
-jobs. The isolated proof path is:
-
-1. `compute-next-release-version` supplies `NEXT_VERSION`.
-2. `bazel-build-test` embeds that value in `maven.properties` and
-   `pom.properties`, archives `app.jar`, and records its SHA-256.
-3. `bazel-docker-build` downloads that artifact, builds and pushes
-   `nvct-service-oss-bazel-validation` to the GitLab registry, pulls it back,
-   extracts `/usr/share/app.jar`, and compares its checksum and metadata with
-   the archived Bazel jar.
-4. `bazel-pulse-scan` scans the isolated validation image.
-5. `bazel-docker-push-ngc` is a manual job that reuses the existing NGC
-   publication path.
-
-An MR image tag remains `mr.<iid>-<commit-short-sha>`; a non-MR image uses
-`NEXT_VERSION`. The separate validation image name prevents this proof from
-overwriting the Maven-produced `nvct-service-oss` image. Verification evidence
-is retained under the `bazel-docker-build` job artifacts.
-
-This publishes a container application product, not Maven-shaped jars or POMs.
-There remains no Bazel Maven artifact publication path.
+GitHub CI currently proves build and test behavior. Container publication and
+layered NOTICE enforcement are later phases. Bazel never publishes
+Maven-shaped project artifacts.
 
 ## Clean
 
