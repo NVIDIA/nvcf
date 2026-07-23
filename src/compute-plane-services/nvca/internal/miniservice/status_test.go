@@ -34,6 +34,8 @@ import (
 
 	nvcak8sutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 )
 
 // testTimeConfig creates a TimeConfig with tighter intervals for faster testing.
@@ -1420,6 +1422,150 @@ func Test_collectObjectIDs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := collectObjectIDs(ctx, scheme, tt.statuses, tt.filter)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestGetFunctionWorkerContainerStatus(t *testing.T) {
+	utilsStatus := corev1.ContainerStatus{
+		Name:         common.UtilsContainerName,
+		Ready:        true,
+		RestartCount: 2,
+		Image:        "utils:latest",
+	}
+	llmStatus := corev1.ContainerStatus{
+		Name:  function.LLMWorkerContainerName,
+		Ready: true,
+	}
+
+	tests := []struct {
+		name           string
+		pod            *corev1.Pod
+		wantStatus     corev1.ContainerStatus
+		wantPresent    bool
+		wantErr        bool
+		wantErrMessage string
+	}{
+		{
+			name: "utils worker container status present",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{utilsStatus},
+				},
+			},
+			wantStatus:  utilsStatus,
+			wantPresent: true,
+		},
+		{
+			name: "llm worker container status present",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{llmStatus},
+				},
+			},
+			wantStatus:  llmStatus,
+			wantPresent: true,
+		},
+		{
+			name: "worker container status present among sidecars",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{
+						{Name: "sidecar-a", Ready: true},
+						utilsStatus,
+						{Name: "sidecar-b", Ready: false},
+					},
+				},
+			},
+			wantStatus:  utilsStatus,
+			wantPresent: true,
+		},
+		{
+			name: "status takes precedence over spec when both present",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: common.UtilsContainerName}},
+				},
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{utilsStatus},
+				},
+			},
+			wantStatus:  utilsStatus,
+			wantPresent: true,
+		},
+		{
+			name: "utils worker in spec but status not yet available",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{Name: "sidecar-a"},
+						{Name: common.UtilsContainerName},
+					},
+				},
+			},
+			wantStatus:  corev1.ContainerStatus{},
+			wantPresent: false,
+		},
+		{
+			name: "llm worker in spec but status not yet available",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: function.LLMWorkerContainerName}},
+				},
+			},
+			wantStatus:  corev1.ContainerStatus{},
+			wantPresent: false,
+		},
+		{
+			name: "non-worker status present but worker still only in spec",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: common.UtilsContainerName}},
+				},
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{{Name: "sidecar-a", Ready: true}},
+				},
+			},
+			wantStatus:  corev1.ContainerStatus{},
+			wantPresent: false,
+		},
+		{
+			name: "worker container not found in spec or status",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "sidecar-a"}},
+				},
+				Status: corev1.PodStatus{
+					ContainerStatuses: []corev1.ContainerStatus{{Name: "sidecar-a"}},
+				},
+			},
+			wantStatus:     corev1.ContainerStatus{},
+			wantPresent:    false,
+			wantErr:        true,
+			wantErrMessage: "terminal error: worker container not found",
+		},
+		{
+			name:           "empty pod returns terminal error",
+			pod:            &corev1.Pod{},
+			wantStatus:     corev1.ContainerStatus{},
+			wantPresent:    false,
+			wantErr:        true,
+			wantErrMessage: "terminal error: worker container not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, present, err := getFunctionWorkerContainerStatus(tt.pod)
+			if tt.wantErr {
+				// The error must be terminal so the reconciler does not requeue; the
+				// "terminal error: " prefix is added by reconcile.TerminalError.
+				assert.EqualError(t, err, tt.wantErrMessage)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantPresent, present)
+			assert.Equal(t, tt.wantStatus, got)
 		})
 	}
 }

@@ -504,8 +504,9 @@ func (r *Reconciler) doStatusByWorkerReadiness(
 		return reconcile.Result{}, errors.Join(append(serrs, err)...)
 	}
 
-	workerContainerStatus, err := getFunctionWorkerContainerStatus(utilsPod)
-	if err != nil {
+	workerContainerStatus, statusPresent, err := getFunctionWorkerContainerStatus(utilsPod)
+	if err != nil || !statusPresent {
+		// Utils pod events will requeue this once container statuses are present.
 		return reconcile.Result{}, err
 	}
 
@@ -706,13 +707,19 @@ func (r *Reconciler) doTerminalTaskStatus(
 
 // getFunctionWorkerContainerStatus returns the worker container's status from the utils pod for the given MiniService,
 // either utils for normal functions/tasks or the llm worker (pylon) for LLM-type functions.
-func getFunctionWorkerContainerStatus(utilsPod *corev1.Pod) (corev1.ContainerStatus, error) {
+func getFunctionWorkerContainerStatus(utilsPod *corev1.Pod) (corev1.ContainerStatus, bool, error) {
 	for _, cs := range utilsPod.Status.ContainerStatuses {
 		if isWorkerContainerName(cs.Name) {
-			return cs, nil
+			return cs, true, nil
 		}
 	}
-	return corev1.ContainerStatus{}, reconcile.TerminalError(fmt.Errorf("worker container not found"))
+	// The container statuses are not yet available, indicating the pod hasn't been initialized by kubelet yet.
+	for _, c := range utilsPod.Spec.Containers {
+		if isWorkerContainerName(c.Name) {
+			return corev1.ContainerStatus{}, false, nil
+		}
+	}
+	return corev1.ContainerStatus{}, false, reconcile.TerminalError(fmt.Errorf("worker container not found"))
 }
 
 func isWorkerContainerName(name string) bool {
