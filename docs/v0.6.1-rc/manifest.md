@@ -77,22 +77,11 @@ Use the version listed in the artifact table. Verify that your cluster can
 reach the upstream registry. If the registry requires authentication, add its
 pull secret to `global.imagePullSecrets`.
 
-To pull the Kubernetes deployment utilities from their upstream image, replace
-the three `alpine-k8s` image blocks in `global.yaml.gotmpl`:
+To pull the API account-bootstrap Kubernetes utilities from their upstream
+image, replace the `api.accountBootstrap.image` block in
+`global.yaml.gotmpl`:
 
 ```yaml
-cassandra:
-  initialization:
-    image:
-      registry: docker.io
-      repository: alpine/k8s
-      tag: "1.36.1"
-nats:
-  nkeyJob:
-    image:
-      registry: docker.io
-      repository: alpine/k8s
-      tag: "1.36.1"
 api:
   accountBootstrap:
     image:
@@ -100,6 +89,13 @@ api:
       repository: alpine/k8s
       tag: "1.36.1"
 ```
+
+The current Cassandra initialization hook uses the
+`nvcf-cassandra-migrations` image, and the current NATS chart renders NKeys as
+Secrets without an nkey job. Their legacy `cassandra.initialization.image` and
+`nats.nkeyJob.image` values do not control rendered workloads. Using
+`alpine-k8s` for those operations requires chart support rather than a
+configuration-only override.
 
 <Info>
 Some supporting components such as the GPU Operator, OpenBao, NATS, Cassandra, etc. can alternatively be pulled directly from public NGC Catalog or other public opensource repositories if desired.

@@ -558,6 +558,82 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 }
 
+// TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
+// focused upstream-image feature against a fake runner. The seeded global
+// template contains the exact documentation blocks so the ledger-backed
+// substitutions exercise real file writes.
+func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	upstreamReloader := "docker.io/natsio/nats-server-config-reloader:0.23.0"
+	upstreamAlpine := "docker.io/alpine/k8s:1.36.1"
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+		"rg --fixed-strings 'docker.io/natsio/nats-server-config-reloader:0.23.0' deploy/stacks/self-managed/out -g '**/*-nats/**'": {
+			ExitCode: 0,
+			Stdout:   upstreamReloader,
+		},
+		"rg --fixed-strings 'nvcf-cassandra-migrations:' deploy/stacks/self-managed/out -g '**/*-cassandra/**'": {
+			ExitCode: 0,
+			Stdout:   "nvcf-cassandra-migrations:",
+		},
+		"rg --fixed-strings '# Source: helm-nvcf-nats/templates/nkey-secret.yaml' deploy/stacks/self-managed/out -g '**/*-nats/**'": {
+			ExitCode: 0,
+			Stdout:   "nkey-secret.yaml",
+		},
+		"rg --fixed-strings 'docker.io/alpine/k8s:1.36.1' deploy/stacks/self-managed/out -g '**/*-api/**'": {
+			ExitCode: 0,
+			Stdout:   upstreamAlpine,
+		},
+		"helm list --all-namespaces -o json": {
+			ExitCode: 0,
+			Stdout:   helmListAllNamespacesJSON(),
+		},
+		`kubectl get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'`: {
+			ExitCode: 0,
+			Stdout:   upstreamReloader,
+		},
+	}))
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	seedUpstreamImageStackInputs(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile-upstream-images.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "single-cluster-helmfile-upstream-images-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanThatContains(runs, "template HELMFILE_ENV=local-bdd") {
+		t.Fatal("helmfile template make target was never invoked")
+	}
+	for _, selector := range []string{
+		"HELMFILE_SELECTOR=release-group=dependencies",
+		"HELMFILE_SELECTOR=name=ess-api",
+		"HELMFILE_SELECTOR=name=nats-auth-callout-service",
+		"HELMFILE_SELECTOR=name=api",
+	} {
+		if !commandRanThatContains(runs, "install HELMFILE_ENV=local-bdd "+selector) {
+			t.Fatalf("helmfile install selector %q was never invoked", selector)
+		}
+	}
+}
+
 // helmListAllNamespacesJSON returns canned helm-list output covering
 // every release the helmfile install scenario asserts.
 func helmListAllNamespacesJSON() string {
@@ -605,6 +681,47 @@ addons:
   llm:
     enabled: true
 `)
+}
+
+// seedUpstreamImageStackInputs writes the two stack files the focused
+// upstream-image feature copies and edits in its wiring test.
+func seedUpstreamImageStackInputs(t *testing.T, repoRoot string) {
+	t.Helper()
+	clusterSecretsDir := filepath.Join(repoRoot, "tools", "ncp-local-cluster", "secrets")
+	if err := os.MkdirAll(clusterSecretsDir, 0o755); err != nil {
+		t.Fatalf("mkdir cluster secrets dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(clusterSecretsDir, "docker-config.json"), []byte(`{
+  "auths": {
+    "nvcr.io": {}
+  }
+}`), 0o600); err != nil {
+		t.Fatalf("write docker config: %v", err)
+	}
+	stackDir := filepath.Join(repoRoot, "deploy", "stacks", "self-managed")
+	if err := os.MkdirAll(stackDir, 0o755); err != nil {
+		t.Fatalf("mkdir stack dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stackDir, "Makefile.dist"), []byte("template:\n\t@true\ninstall:\n\t@true\n"), 0o644); err != nil {
+		t.Fatalf("write Makefile.dist: %v", err)
+	}
+	global := `nats:
+  reloader:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
+      tag: "0.23.0"
+api:
+  accountBootstrap:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/alpine-k8s
+      tag: 1.36.1
+      pullPolicy: IfNotPresent
+`
+	if err := os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte(global), 0o644); err != nil {
+		t.Fatalf("write global template: %v", err)
+	}
 }
 
 // seedHelmfileLocalBDDMultiFixture writes the multi-cluster variant
@@ -982,6 +1099,15 @@ func TestSingleClusterHelmfile(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "single-cluster-helmfile.feature")
+}
+
+// TestSingleClusterHelmfileUpstreamImages is the live entry point for the
+// focused Docker Hub supporting-image override feature. Skipped under -short.
+func TestSingleClusterHelmfileUpstreamImages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "single-cluster-helmfile-upstream-images.feature")
 }
 
 // TestMultiClusterHelmfile is the live entry point for the
