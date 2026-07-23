@@ -11,7 +11,7 @@ description: |
   OpenAI-compatible invocation, Responses API, embeddings, batch task, task
   monitor, cluster rotate, cluster delete, helm task, helm-based task,
   task secrets, update task secrets, retrieve task results, bulk fetch tasks,
-  task results.
+  task results, NVCT, NVCT task, NVCT batch job.
 allowed-tools: Bash, Read, AskUserQuestion
 argument-hint: "[install|status|check|deploy-function|register-cluster|teardown] [args]"
 ---
@@ -35,13 +35,9 @@ Token Budget:
 - "rotate NVCF cluster JWKS" / "the NVCA agent stopped authenticating"
 - "tear down NVCF" / "remove the compute plane" / "uninstall NVCF" / "deregister this cluster"
 - "preview what `down` would do" / "dry-run uninstall"
-- "create a task" / "run a task" / "submit a GPU job" / "monitor a task"
-- "cancel a task" / "delete a task" / "list tasks" / "list running tasks"
-- "run a helm-based task" / "helm task" / "submit a helm task"
-- "update secrets on my task" / "replace task secrets" / "task update-secrets"
-- "retrieve task results" / "bulk fetch task details" / "get task results"
+- Any task operation: create / run / submit / monitor / cancel / delete / list tasks, helm task, update task secrets, retrieve task results, bulk fetch task details.
+- Any reference to `NVCT`, `NVCT task`, or `NVCT batch job` (list / run / cancel / delete / results).
 - Any reference to `NVCFBackend`, `NVCA`, ICMS, helm releases like `helm-nvcf-*`, or `icms.<domain>` / `api.<domain>` URLs.
-- Any reference to `nvcf-cli task` or batch tasks.
 
 ## Quick start
 
@@ -219,6 +215,7 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 - `nvcf-cli self-hosted down --all` — nukes everything. Always show the cluster list (`nvcf-cli cluster list`) and get confirmation.
 - `nvcf-cli cluster delete` — removes the cluster's ICMS registration; the compute plane immediately stops being able to authenticate.
 - `nvcf-cli function delete` — removes a function and any active deployment.
+- `nvcf-cli task delete` — permanently removes the task record.
 - Any raw `helm uninstall` or `kubectl delete pvc/pv` — affects persistent state. Prefer `nvcf-cli self-hosted down` (orchestrator) or `uninstall` (per-plane) which handle this safely.
 - Any `--force` flag (`--force-with-registered-clusters`, `--confirm` in non-interactive contexts).
 

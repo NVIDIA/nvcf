@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Shared async-runtime primitives (owned tasks, critical-section guards,
+# signal handling). No workspace-local deps; third-party only.
+rust_library(
+    name = "stargate-runtime",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "stargate_runtime",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "stargate-runtime_test",
+    crate = ":stargate-runtime",
+    deps = all_crate_deps(normal_dev = True),
+)

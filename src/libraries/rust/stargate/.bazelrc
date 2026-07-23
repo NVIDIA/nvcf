@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ============================================================================
+# Bazel configuration for stargate.
+#
+# Nested Rust module. Tracks the canonical Phase B scaffold from
+# function-autoscaler, adapted for the multi-crate stargate workspace
+# (rules_rust + crate_universe + cargo_build_script). See the umbrella's
+# BAZEL.md.
+# ============================================================================
+
+build --compilation_mode=fastbuild
+common --enable_bzlmod
+build --incompatible_strict_action_env
+common --enable_platform_specific_config
+
+# Proto toolchain (used by crates/proto/build.rs through tonic-prost-build;
+# we point PROTOC at the hermetic protoc from @protobuf//:protoc via
+# cargo_build_script's build_script_env).
+common --incompatible_enable_proto_toolchain_resolution
+
+# lld is faster than the default ld on large Rust link steps. The bazel-ci
+# image ships lld; dev machines need `apt install lld`.
+build:linux --@rules_rust//:extra_rustc_flags=-Clink-arg=-fuse-ld=lld
+
+test --test_output=errors
+test --test_env=HOME=/tmp
+test --test_env=XDG_CACHE_HOME=/tmp/.cache
+
+startup --host_jvm_args=-Xmx2g
+
+# ---- Workspace status (build stamping) ----
+# Feeds tools/workspace_status.sh keys (STABLE_VERSION, STABLE_GIT_COMMIT,
+# STABLE_OCI_TAG, ...) into the stamped OCI tags emitted by the
+# rust_oci_image push targets.
+build --workspace_status_command=tools/workspace_status.sh
+
+# CI profile.
+build:ci --jobs=16
+
+# Debug / release profiles.
+build:debug --compilation_mode=dbg
+build:debug -s
+build:release --compilation_mode=opt
+build:release --strip=always

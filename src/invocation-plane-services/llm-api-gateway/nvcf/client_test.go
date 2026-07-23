@@ -110,6 +110,61 @@ func TestGRPCClientAuthorizeInvocation(t *testing.T) {
 	if len(spec.URIs) != 1 || spec.URIs[0] != "https://example.com/model" {
 		t.Fatalf("uris = %#v, want [https://example.com/model]", spec.URIs)
 	}
+	if authResponse.Priority != nil {
+		t.Fatalf("priority = %d, want unset", *authResponse.Priority)
+	}
+}
+
+func TestGRPCClientAuthorizeInvocationMapsResolvedPriority(t *testing.T) {
+	t.Parallel()
+
+	// Explicit 0 (highest priority) and the uint32 max (lowest) must both
+	// round-trip as set values, distinct from an unset priority.
+	for _, priority := range []uint32{0, 4294967295} {
+		invocationService := &stubInvocationService{
+			t:        t,
+			priority: uint32Ptr(priority),
+		}
+
+		listener := bufconn.Listen(1024 * 1024)
+		server := grpc.NewServer()
+		llmgatewaypb.RegisterLlmGatewayServer(server, invocationService)
+
+		go func() {
+			_ = server.Serve(listener)
+		}()
+		t.Cleanup(func() {
+			server.Stop()
+			_ = listener.Close()
+		})
+
+		conn, err := grpc.NewClient(
+			"passthrough:///bufnet",
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return listener.Dial()
+			}),
+		)
+		if err != nil {
+			t.Fatalf("create client conn: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = conn.Close()
+		})
+
+		client := NewClientWithConn(conn, func() string { return "service-token" }, time.Second)
+
+		authResponse, err := client.AuthorizeInvocation(context.Background(), "client-token", "fn-123")
+		if err != nil {
+			t.Fatalf("authorize invocation: %v", err)
+		}
+		if authResponse.Priority == nil {
+			t.Fatalf("priority = nil, want %d", priority)
+		}
+		if *authResponse.Priority != priority {
+			t.Fatalf("priority = %d, want %d", *authResponse.Priority, priority)
+		}
+	}
 }
 
 func TestGRPCClientAuthorizeInvocationDoesNotFallbackRateLimitKey(t *testing.T) {
@@ -306,6 +361,7 @@ type stubInvocationService struct {
 	clientAuthID       string
 	clientNCAID        string
 	clientProjectID    string
+	priority           *uint32
 	expectedAuthHeader string
 	traceparent        string
 }
@@ -346,6 +402,7 @@ func (s *stubInvocationService) AuthLlmInvocation(
 	resp := &llmgatewaypb.AuthLlmInvokeResponse{
 		RoutingKey:        "fn-123",
 		ClientAuthSubject: clientAuthID,
+		Priority:          s.priority,
 		ModelSpecs: map[string]*llmgatewaypb.AuthLlmInvokeResponse_ModelSpec{
 			"gateway-model": {
 				Uris:           []string{"https://example.com/model"},
@@ -383,5 +440,9 @@ func incomingMetadataValue(ctx context.Context, key string) string {
 }
 
 func stringPtr(value string) *string {
+	return &value
+}
+
+func uint32Ptr(value uint32) *uint32 {
 	return &value
 }

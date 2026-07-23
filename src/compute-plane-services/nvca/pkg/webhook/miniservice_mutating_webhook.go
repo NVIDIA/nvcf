@@ -327,8 +327,6 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 
 		// Pod spec mutations must only be applied on creation events.
 		if isCreate {
-			w.mutatePodSpec(&t.Spec, meta)
-
 			// NVLink DRA mutations for claims/scheduling.
 			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
 				w.mutateNVLinkDRA(obj.GetNamespace(), t)
@@ -337,6 +335,8 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, meta); err != nil {
 				return fmt.Errorf("mutate shared storage: %w", err)
 			}
+
+			w.mutatePodSpec(&t.Spec, meta)
 		}
 	}
 
@@ -386,6 +386,8 @@ func (w *miniserviceMutatingWebhook) mutatePodSpec(ps *corev1.PodSpec, meta nvca
 	if meta.NodeAffinityKey != "" {
 		if w.fff.IsFeatureFlagEnabled(featureflag.HelmAllowCPUNodes) && !k8sutil.PodSpecRequestsGPU(ps) {
 			k8sutil.SetCPUWorkloadNodeAffinity(ps, meta.NodeAffinityKey)
+		} else {
+			k8sutil.SetInstanceTypeNodeAffinity(ps, meta.NodeAffinityKey, meta.NodeAffinityValue)
 		}
 	}
 

@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Benchmark harness. Not packaged into an OCI image.
+
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+# Workspace-local Cargo deps (own-workspace `workspace = true`).
+_WORKSPACE_DEPS = [
+    "//crates/proto:stargate-proto",
+    "//crates/protocol:stargate-protocol",
+    "//crates/stargate:stargate_lib",
+    "//crates/stargate-tls:stargate-tls",
+]
+
+rust_binary(
+    name = "stargate-bench",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    # src/k8s/render.rs pulls in the collector template via
+    # include_str!("otel_collector.yaml"); make the non-.rs data file
+    # available to the compiler.
+    compile_data = glob(["src/**/*.yaml"]),
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)

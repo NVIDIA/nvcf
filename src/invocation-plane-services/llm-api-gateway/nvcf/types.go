@@ -30,6 +30,9 @@ type InvocationAuthResponse struct {
 	AuthContext  map[string]string
 	RateLimitKey string
 	ModelSpecs   map[string]ModelSpec
+	// Priority is the caller priority resolved by NVCF API, or nil when no
+	// priority config applies. Lower value is higher priority, 0 is highest.
+	Priority *uint32
 }
 
 func deriveRateLimitKey(authContext map[string]string) string {
