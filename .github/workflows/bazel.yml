@@ -530,6 +530,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # The Java tree builds with local_jdk (root .bazelrc). This lane runs on a
+      # bare runner (not the bazel-ci image, which ships Temurin 25), so provide
+      # a JDK 25 at JAVA_HOME for local_jdk to resolve; otherwise the Java
+      # requires-docker tests (nv-boot / cloud-tasks Testcontainers suites) that
+      # now live in the root module fail to build here.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
       - name: Install bazelisk
         run: |
           sudo curl -fsSLo /usr/local/bin/bazel \
