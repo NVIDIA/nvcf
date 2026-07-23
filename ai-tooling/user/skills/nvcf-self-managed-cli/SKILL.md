@@ -11,7 +11,7 @@ description: |
   OpenAI-compatible invocation, Responses API, embeddings, batch task, task
   monitor, cluster rotate, cluster delete, helm task, helm-based task,
   task secrets, update task secrets, retrieve task results, bulk fetch tasks,
-  task results.
+  task results, NVCT, NVCT task, NVCT batch job.
 allowed-tools: Bash, Read, AskUserQuestion
 argument-hint: "[install|status|check|deploy-function|register-cluster|teardown] [args]"
 ---
@@ -35,13 +35,9 @@ Token Budget:
 - "rotate NVCF cluster JWKS" / "the NVCA agent stopped authenticating"
 - "tear down NVCF" / "remove the compute plane" / "uninstall NVCF" / "deregister this cluster"
 - "preview what `down` would do" / "dry-run uninstall"
-- "create a task" / "run a task" / "submit a GPU job" / "monitor a task"
-- "cancel a task" / "delete a task" / "list tasks" / "list running tasks"
-- "run a helm-based task" / "helm task" / "submit a helm task"
-- "update secrets on my task" / "replace task secrets" / "task update-secrets"
-- "retrieve task results" / "bulk fetch task details" / "get task results"
+- Any task operation: create / run / submit / monitor / cancel / delete / list tasks, helm task, update task secrets, retrieve task results, bulk fetch task details.
+- Any reference to `NVCT`, `NVCT task`, or `NVCT batch job` (list / run / cancel / delete / results).
 - Any reference to `NVCFBackend`, `NVCA`, ICMS, helm releases like `helm-nvcf-*`, or `icms.<domain>` / `api.<domain>` URLs.
-- Any reference to `nvcf-cli task` or batch tasks.
 
 ## Quick start
 
@@ -170,7 +166,7 @@ After `init`, the credentials live in `~/.nvcf-cli.state`, so later commands wor
 | `nvcf-cli task results [taskId]` | List result artifacts for a completed task | Result upload not yet supported; returns empty list for `NONE` strategy |
 | `nvcf-cli task cancel [taskId]` | Cancel a queued or running task | |
 | `nvcf-cli task delete [taskId]` | Delete a task record | **Confirm with user.** |
-| `nvcf-cli task update-secrets [taskId] --secrets NAME=value` | Replace all secrets on a task (full replacement) | |
+| `nvcf-cli task update-secrets [taskId] --secrets NAME=value` | Update secrets on a task; supplied secrets are added or updated by name, existing secrets not in the request are preserved | |
 | `nvcf-cli task bulk --task-ids=ID1,ID2` | Fetch details for multiple tasks in one call | |
 
 > Registry credential propagation: after `registry-credential add`/`update`/`delete`, task creation can keep using the previous credential for up to about 5 minutes (NVCT caches account credentials at `nvct.nvcf.cache-ttl`, default `PT5M`), even though `registry-credential list`/`get` show the new value immediately. Wait about 5 minutes, or `kubectl -n nvcf rollout restart deployment/nvct-api` to apply immediately. See [reference/troubleshooting.md](reference/troubleshooting.md).
@@ -219,6 +215,7 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 - `nvcf-cli self-hosted down --all` — nukes everything. Always show the cluster list (`nvcf-cli cluster list`) and get confirmation.
 - `nvcf-cli cluster delete` — removes the cluster's ICMS registration; the compute plane immediately stops being able to authenticate.
 - `nvcf-cli function delete` — removes a function and any active deployment.
+- `nvcf-cli task delete` — permanently removes the task record.
 - Any raw `helm uninstall` or `kubectl delete pvc/pv` — affects persistent state. Prefer `nvcf-cli self-hosted down` (orchestrator) or `uninstall` (per-plane) which handle this safely.
 - Any `--force` flag (`--force-with-registered-clusters`, `--confirm` in non-interactive contexts).
 

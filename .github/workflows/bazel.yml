@@ -115,6 +115,7 @@ jobs:
           worker-utils|src/compute-plane-services/worker-utils|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
           helm-reval|src/control-plane-services/helm-reval|false
+          stargate|src/libraries/rust/stargate|false
           nv-boot-parent|src/libraries/java/nv-boot-parent|false
           cloud-tasks|src/control-plane-services/cloud-tasks|false
           java-spring-boot-service|examples/java-spring-boot-service|false'
@@ -125,10 +126,10 @@ jobs:
           # EC2 Buildbarn secrets, so these rows warm from and hit that shared
           # cache rather than cold-building (see NVIDIA/nvcf#372).
           # Paths that affect the root-module workspace build (native root
-          # subtrees plus the shared Bazel scaffold). Java no longer rides the
-          # root row: nv-boot-parent, cloud-tasks, and the example are their own
-          # modules (src/libraries/ is narrowed to src/libraries/go/ and
-          # cloud-tasks is dropped here).
+          # subtrees plus the shared Bazel scaffold). Java and stargate no longer
+          # ride the root row: nv-boot-parent, cloud-tasks, the example, and
+          # stargate are their own module rows, so src/libraries/ is narrowed to
+          # src/libraries/go/ and cloud-tasks is dropped here.
           ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false

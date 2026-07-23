@@ -1,0 +1,165 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Bzlmod module definition for stargate (LLM router + pylon).
+
+Multi-crate Cargo workspace (resolver 3, edition 2024). The three
+service binaries packaged into OCI images are:
+  crates/stargate/            -> stargate            (LLM router runtime)
+  crates/stargate-k8s-router/ -> stargate-k8s-router (k8s control loop)
+  crates/pylon/               -> pylon               (edge tunnel agent)
+
+Support crates (proto, protocol, runtime, forwarding, auth, telemetry,
+tls, pylon-lib, mock-dynamo, stargate-bench) are libraries or dev/bench
+helpers.
+
+Nested module: the umbrella root .bazelignore skips
+src/libraries/rust/stargate, so this subtree builds as its own Bazel
+module (working-directory = the subtree) via a dedicated CI matrix row,
+mirroring src/control-plane-services/function-autoscaler.
+"""
+
+module(
+    name = "stargate",
+    version = "0.4.0",
+)
+
+# ============================================================================
+# OCI containers (multi-arch).
+# ============================================================================
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_oci", version = "2.2.7")
+bazel_dep(name = "rules_pkg", version = "1.2.0")
+bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
+bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
+bazel_dep(name = "rules_python", version = "1.4.1")
+
+# rules_pkg (pulled in by //rules/oci image_layer) uses the hermetic Python
+# interpreter, which refuses to run as root unless told otherwise. The bazel-ci
+# matrix container runs as root, so allow it -- same as function-autoscaler.
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    ignore_root_user_error = True,
+    python_version = "3.11",
+)
+
+# NVCF OCI image-push macro. The umbrella's //rules/oci-destinations tree
+# publishes a data-free Bazel module containing only the
+# `nvcr_image_pushes` macro. Depending on it via bazel_dep +
+# local_path_override lets every service share one macro implementation.
+# Destination URLs (registry + tenant) are NOT in this module: the
+# per-service nvidia-internal/BUILD.bazel call-site inlines its own dict,
+# keeping NGC tenant identifiers out of the OSS mirror. From this subtree
+# the root is four parents up (stargate -> rust -> libraries -> src).
+bazel_dep(name = "nvcf_nvcr_destinations", version = "0.0.0")
+local_path_override(
+    module_name = "nvcf_nvcr_destinations",
+    path = "../../../../rules/oci-destinations",
+)
+
+# ============================================================================
+# Rust
+# ============================================================================
+bazel_dep(name = "rules_rust", version = "0.69.0")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    versions = ["1.97.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
+crate.from_cargo(
+    name = "stargate_crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = [
+        "//:Cargo.toml",
+        "//crates/mock-dynamo:Cargo.toml",
+        "//crates/proto:Cargo.toml",
+        "//crates/protocol:Cargo.toml",
+        "//crates/pylon:Cargo.toml",
+        "//crates/pylon-lib:Cargo.toml",
+        "//crates/stargate:Cargo.toml",
+        "//crates/stargate-auth:Cargo.toml",
+        "//crates/stargate-bench:Cargo.toml",
+        "//crates/stargate-forwarding:Cargo.toml",
+        "//crates/stargate-k8s-router:Cargo.toml",
+        "//crates/stargate-runtime:Cargo.toml",
+        "//crates/stargate-telemetry:Cargo.toml",
+        "//crates/stargate-tls:Cargo.toml",
+    ],
+    # Linux + macOS only. Skips Windows-only crates that would otherwise
+    # be resolved into the graph and break Linux builds.
+    supported_platform_triples = [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+    ],
+)
+use_repo(crate, "stargate_crates")
+
+# ============================================================================
+# Prebuilt protoc toolchain. crates/proto/build.rs feeds the *.proto
+# files through tonic-prost-build; PROTOC is overridden to the hermetic
+# @protobuf//:protoc the bzlmod protoc extension fetches so the build is
+# hermetic instead of relying on protoc_bin_vendored at runtime.
+# ============================================================================
+bazel_dep(name = "toolchains_protoc", version = "0.6.1")
+
+protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
+protoc.toolchain(
+    google_protobuf = "com_google_protobuf",
+    version = "v29.0",
+)
+
+bazel_dep(name = "protobuf", version = "29.1", repo_name = "protobuf")
+
+# ============================================================================
+# C++ cross-compilation (multi-arch container builds).
+# ============================================================================
+zig = use_extension("@hermetic_cc_toolchain//toolchain:ext.bzl", "toolchains")
+use_repo(zig, "zig_sdk")
+
+register_toolchains(
+    "@zig_sdk//toolchain:linux_arm64_gnu.2.38",
+)
+
+# ============================================================================
+# OCI base image. Rust binaries dynamically link glibc, so distroless/cc
+# (which ships libc) is required. Pinned to the v4.0.8 multi-arch index
+# digest (matches the legacy Dockerfile's runtime-base tag).
+# ============================================================================
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+oci.pull(
+    name = "distroless_cc",
+    digest = "sha256:92a46f84206c3e4610043eaef50946451019e3c479b71d280015919ba311babb",
+    image = "nvcr.io/nvidia/distroless/cc",
+    # v4.0.8's arm64 manifest carries variant v8, so the platform string
+    # (and the generated child repo name) must include the variant.
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
+use_repo(
+    oci,
+    "distroless_cc",
+    "distroless_cc_linux_amd64",
+    "distroless_cc_linux_arm64_v8",
+)

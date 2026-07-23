@@ -115,6 +115,11 @@
       "legacy_tag_prefix": "nvcf-function-autoscaler-v"
     },
     {
+      "id": "function-autoscaler-helm",
+      "path": "deploy/helm/function-autoscaler",
+      "service_name": "helm-nvcf-function-autoscaler"
+    },
+    {
       "id": "nats-auth-callout",
       "path": "src/control-plane-services/nats-auth-callout",
       "service_name": "nvcf-nats-auth-callout-service",

@@ -134,9 +134,12 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	_, criuSpan := tracing.Tracer().Start(ctx, "restore.criu")
 	criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
 	cmd := exec.CommandContext(rctx, "nsenter", args...)
+	// No LD_LIBRARY_PATH: the bundle's libraries carry RPATH=$ORIGIN (see
+	// Dockerfile.base), so criu resolves its dependency graph from
+	// /criu-bundle/lib on its own. Setting it here would leak the bundle's
+	// glibc into cuda-checkpoint and abort restore into newer-glibc containers.
 	cmd.Env = []string{
 		"PATH=" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin",
-		"LD_LIBRARY_PATH=" + v2BinDirInContainer + "/lib",
 		"HOME=/root",
 	}
 	// Place criu — and therefore the restored tree, which inherits its

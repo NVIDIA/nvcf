@@ -131,6 +131,7 @@ fail_case_api() {
 pass_case "action keyword short ref" "$(issue_body 'Closes #286')"
 pass_case "action keyword repo ref" "$(issue_body 'Fixes NVIDIA/nvcf#286')"
 pass_case "NO-REF last resort" "$(issue_body 'NO-REF')"
+pass_case "CRLF line endings" $'## Issues\r\nCloses #286\r\n\r\n## Checklist\r\n'
 
 fail_case "missing Issues section" $'## TL;DR\nCloses #286\n'
 fail_case "reference outside Issues" $'## TL;DR\nCloses #286\n\n## Issues\n\n## Checklist\n'

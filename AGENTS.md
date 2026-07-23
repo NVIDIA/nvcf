@@ -313,6 +313,18 @@ motivation without doing detective work. Always include:
 <new or updated third-party packages, license review result, NOTICE update status, or "None">
 ```
 
+## PR scope and batching
+
+Group changes that share a root cause into one Pull Request. Do not open one PR
+per file when a single fix addresses the same underlying problem across multiple
+files or sections. For example, broken-link corrections across several doc pages,
+a style fix applied to multiple files, or a rename propagated through a subtree
+are each one logical change and belong in one PR.
+
+A high volume of fine-grained PRs degrades reviewer throughput and obscures
+signal in the project history. When in doubt, ask: "would a reviewer naturally
+review these together?" If yes, combine them.
+
 ## Cross-subtree impact
 
 NVCF clients in this repo (notably `src/clis/nvcf-cli`) are hand-written against

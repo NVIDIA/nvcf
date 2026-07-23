@@ -36,10 +36,13 @@ src/control-plane-services/helm-reval
 src/control-plane-services/nats-auth-callout
 src/invocation-plane-services
 src/libraries/python
-# stargate rolled back to authoritative_source: upstream in !413; its
-# BUILD files load @rules_rust which the umbrella's Phase-1
-# MODULE.bazel does not declare. Re-include this line when stargate
-# goes native again.
+# stargate is a nested Bazel module (own MODULE.bazel under
+# src/libraries/rust/stargate), built via a dedicated CI matrix row with
+# working-directory set to the subtree, the same model as
+# function-autoscaler under the ignored src/control-plane-services tree.
+# The root module keeps it ignored so its crate BUILD files (which load
+# @stargate_crates from the nested module) do not resolve against the
+# umbrella root MODULE.bazel.
 src/libraries/rust/stargate
 src/libraries/ts
 deploy

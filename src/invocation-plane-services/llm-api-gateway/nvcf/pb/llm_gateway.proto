@@ -35,6 +35,9 @@ message AuthLlmInvokeResponse {
     string clientAuthSubject = 2;
     map<string, string> authContext = 3;
     map<string, ModelSpec> modelSpecs = 4;
+    // Resolved caller priority; lower value = higher priority, 0 is highest.
+    // Unset when no priority config applies; absent is not 0, check hasPriority().
+    optional uint32 priority = 5;
 
     message ModelSpec {
         reserved 3;

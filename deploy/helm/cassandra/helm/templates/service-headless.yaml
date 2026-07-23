@@ -13,14 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: v2
-name: helm-nvcf-invocation-service
-description: NVCF HTTP/gRPC invocation service
-
-type: application
-version: 0.5.0
-# Placeholder appVersion; release pipeline (semantic-release) replaces
-# this at build time.
-appVersion: "0.0.0"
-# All templates live under templates/ and all values are declared
-# explicitly at the root of values.yaml.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cassandra.fullname" . }}-headless
+  namespace: {{ include "cassandra.namespace" . }}
+  labels: {{- include "cassandra.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {{- include "cassandra.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: intra
+      port: 7000
+    - name: cql
+      port: 9042
