@@ -22,7 +22,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Builder;
 
 @Builder
-@Schema(description = "Data Transfer Object(DTO) representing instance health")
+@Schema(types = {"object"}, description = "Data Transfer Object(DTO) representing instance health")
 public record HealthDto(
         @Schema(description = "GPU Type as per SDD")
         @NotBlank String gpu,

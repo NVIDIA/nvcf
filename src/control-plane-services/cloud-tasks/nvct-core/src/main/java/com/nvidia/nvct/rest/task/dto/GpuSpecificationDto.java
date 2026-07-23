@@ -16,16 +16,16 @@
  */
 package com.nvidia.nvct.rest.task.dto;
 
-import tools.jackson.databind.node.ObjectNode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.annotation.Nullable;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import java.util.Set;
 import lombok.Builder;
+import tools.jackson.databind.node.ObjectNode;
 
 @Builder
-@Schema(description = "Data Transfer Object(DTO) representing GPU specification for a Task.")
+@Schema(types = {"object"}, description = "Data Transfer Object(DTO) representing GPU specification for a Task.")
 public record GpuSpecificationDto(
         @Schema(description = "GPU name from the cluster")
         @NotBlank String gpu,
@@ -43,7 +43,10 @@ public record GpuSpecificationDto(
         @NotBlank String instanceType,
 
         @Schema(description = "Optional configuration field typically used with Helm Charts " +
-                "to substitute placeholders in values.yaml")
+                "to substitute placeholders in values.yaml",
+                types = {"object"},
+                implementation = Object.class,
+                additionalProperties = Schema.AdditionalPropertiesValue.TRUE)
         @Nullable ObjectNode configuration,
 
         @Schema(description = "Helm validation policy cluster attributes")

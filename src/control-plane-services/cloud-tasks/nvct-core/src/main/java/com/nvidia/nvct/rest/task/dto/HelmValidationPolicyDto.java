@@ -26,7 +26,7 @@ import java.util.List;
 import lombok.Builder;
 
 @Builder
-@Schema(description = "Data Transfer Object(DTO) representing Helm validation policy")
+@Schema(types = {"object"}, description = "Data Transfer Object(DTO) representing Helm validation policy")
 public record HelmValidationPolicyDto (
         @Schema(description = "Helm validation policy name.")
         @NotNull
@@ -41,6 +41,7 @@ public record HelmValidationPolicyDto (
         List<@NotNull KubernetesType> extraKubernetesTypes) {
 
     @Builder
+    @Schema(types = {"object"})
     public record KubernetesType(
             @Schema(description = "Name of API Group")
             @NotBlank

@@ -25,6 +25,9 @@ import static org.springframework.http.HttpMethod.POST;
 import com.nvidia.nvct.IntegrationTestConfiguration;
 import com.nvidia.nvct.NvctTestApp;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -43,6 +46,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.RequestEntity;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.web.cors.CorsConfiguration;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 @Slf4j
 @TestInstance(Lifecycle.PER_CLASS)
@@ -53,6 +58,16 @@ import org.springframework.web.cors.CorsConfiguration;
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
 @AutoConfigureTestRestTemplate
 class MiscEndpointsTest {
+
+    private static final JsonMapper JSON_MAPPER = JsonMapper.builder().build();
+    private static final Set<String> OBJECT_COMPONENT_SCHEMAS = Set.of(
+            "CreateTaskRequest",
+            "HealthDto",
+            "HelmValidationPolicyDto",
+            "KubernetesType",
+            "TelemetriesDto",
+            "ResultDto",
+            "GpuSpecificationDto");
 
     @Autowired
     private TestRestTemplate testRestTemplate;
@@ -75,6 +90,7 @@ class MiscEndpointsTest {
         assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
+    @SneakyThrows
     @Test
     void testOpenApiDocs() {
         var requestEntity = RequestEntity.get(URI.create("/v3/openapi")).build();
@@ -82,6 +98,30 @@ class MiscEndpointsTest {
         var responseBody = responseEntity.getBody();
         assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(responseBody).isNotNull();
+
+        var spec = JSON_MAPPER.readTree(responseBody);
+        var componentSchemas = spec.at("/components/schemas");
+        var nullOnlySchemas = componentSchemas.properties().stream()
+                .filter(entry -> entry.getValue().path("type").isString())
+                .filter(entry -> "null".equals(entry.getValue().path("type").asString()))
+                .map(entry -> entry.getKey())
+                .toList();
+        assertThat(nullOnlySchemas).isEmpty();
+
+        OBJECT_COMPONENT_SCHEMAS.forEach(schemaName ->
+                assertThat(schema(spec, schemaName).path("type").asString()).isEqualTo("object"));
+        assertThat(componentSchemas.has("JsonNode")).isFalse();
+        assertThat(schema(spec, "CreateTaskRequest").path("properties")
+                .has("gpuSpecification")).isTrue();
+        assertThat(schema(spec, "GpuSpecificationDto").path("properties").has("gpu")).isTrue();
+        assertThat(schema(spec, "GpuSpecificationDto").at("/properties/configuration/type")
+                .asString()).isEqualTo("object");
+        var secretSchema = schema(spec, "SecretDto");
+        assertThat(secretSchema.at("/properties/value").has("$ref")).isFalse();
+        assertThat(jsonStringValues(secretSchema.path("required")))
+                .containsExactlyInAnyOrder("name", "value");
+        assertThat(jsonStringValues(secretSchema.at("/properties/value/type")))
+                .containsExactly("string", "object");
     }
 
     @ParameterizedTest
@@ -111,5 +151,17 @@ class MiscEndpointsTest {
                          "https://picasso.stg.nvct.nvidia.com",
                          "foo.bar.baz",
                          "*");
+    }
+
+    private static JsonNode schema(JsonNode spec, String schemaName) {
+        return spec.path("components").path("schemas").path(schemaName);
+    }
+
+    private static List<String> jsonStringValues(JsonNode arrayNode) {
+        var values = new ArrayList<String>();
+        for (var node : arrayNode) {
+            values.add(node.asString());
+        }
+        return values;
     }
 }

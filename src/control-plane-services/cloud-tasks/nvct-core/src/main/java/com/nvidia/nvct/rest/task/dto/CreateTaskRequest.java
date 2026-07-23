@@ -49,7 +49,7 @@ import org.hibernate.validator.constraints.Length;
 
 @Slf4j
 @Builder(toBuilder = true)
-@Schema(description = "Request payload to create a Task")
+@Schema(types = {"object"}, description = "Request payload to create a Task")
 public record CreateTaskRequest(
         @Schema(description = "Task name must start with lowercase/uppercase/digit and can " +
                 "only contain lowercase, uppercase, digit, hyphen, and underscore characters.")

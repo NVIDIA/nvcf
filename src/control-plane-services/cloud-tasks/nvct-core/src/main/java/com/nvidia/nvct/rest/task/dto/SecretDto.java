@@ -41,14 +41,19 @@ import lombok.extern.slf4j.Slf4j;
 @Builder
 @Schema(description = "Data Transfer Object(DTO) representing secret name/value pair")
 public record SecretDto(
-        @Schema(description = "Secret name")
+        @Schema(description = "Secret name",
+                requiredMode = Schema.RequiredMode.REQUIRED)
         @Pattern(regexp = SECRET_NAME_REGEX,
                 message = "Invalid secret name: Must conform to regex " + SECRET_NAME_REGEX)
         @Size(min = 1, max = MAX_SECRET_NAME_LENGTH,
                 message = "Invalid secret name: must be 1 - " + MAX_SECRET_NAME_LENGTH + " chars long")
         @NonNull @NotBlank String name,
 
-        @Schema(description = "Secret value must be 1 - " + MAX_SECRET_VALUE_LENGTH + " chars long")
+        @Schema(description = "Secret value must be a string or JSON object and 1 - "
+                + MAX_SECRET_VALUE_LENGTH + " chars long",
+                types = {"string", "object"},
+                implementation = Object.class,
+                requiredMode = Schema.RequiredMode.REQUIRED)
         @NonNull @ValidSecretValueLength JsonNode value) {
 
         private static final String MESG_INVALID_SECRET_VALUE =

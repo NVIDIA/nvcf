@@ -16,15 +16,15 @@
  */
 package com.nvidia.nvct.rest.result.dto;
 
-import tools.jackson.databind.node.ObjectNode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import java.time.Instant;
 import java.util.UUID;
 import lombok.Builder;
+import tools.jackson.databind.node.ObjectNode;
 
 @Builder(toBuilder = true)
-@Schema(description = "Data Transfer Object(DTO) representing a Result")
+@Schema(types = {"object"}, description = "Data Transfer Object(DTO) representing a Result")
 public record ResultDto(
         @Schema(description = "Result id")
         @NotNull UUID resultId,
@@ -38,7 +38,10 @@ public record ResultDto(
         @Schema(description = "Result name")
         @NotNull String name,
 
-        @Schema(description = "Result metadata")
+        @Schema(description = "Result metadata",
+                types = {"object"},
+                implementation = Object.class,
+                additionalProperties = Schema.AdditionalPropertiesValue.TRUE)
         @NotNull ObjectNode metadata,
 
         @Schema(description = "Result creation timestamp")

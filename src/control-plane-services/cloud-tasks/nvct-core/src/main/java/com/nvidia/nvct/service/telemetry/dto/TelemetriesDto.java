@@ -22,7 +22,7 @@ import java.util.UUID;
 import lombok.Builder;
 
 @Builder
-@Schema(description = "Telemetry configuration for logs, metrics, and traces.")
+@Schema(types = {"object"}, description = "Telemetry configuration for logs, metrics, and traces.")
 public record TelemetriesDto(
         @Nullable
         @Schema(description = "UUID representing the logs telemetry.")
