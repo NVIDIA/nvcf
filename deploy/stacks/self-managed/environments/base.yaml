@@ -133,6 +133,31 @@ global:
       # global.observability.metrics.enabled
       enabled: false
 
+# Optional observability runtime (stage 03). `install` deploys the complete
+# managed metrics path; `existing` assumes a customer-owned backend.
+observability:
+  mode: disabled
+  namespace: monitoring
+
+prometheusOperatorCrds:
+  version: "30.0.0"
+
+opentelemetryOperator:
+  version: "0.114.1"
+
+victoriaMetrics:
+  version: "0.38.0"
+
+controlPlaneCollector:
+  version: "0.1.0"
+
+defaultMonitors:
+  version: "0.1.0"
+  # External observability mode may set enabled: true to install the NVCF-owned
+  # default monitors against customer-managed scrape infrastructure.
+  controlPlane:
+    enabled: true
+
 accounts:
   limits:
     maxFunctions: 10
@@ -267,6 +292,19 @@ addons:
     nodeSelector: {}
     tolerations: []
     affinity: {}
+
+# Function Autoscaler workload (stage 03). Disabled by default; requires the
+# stage-01 Cassandra/OpenBao migrations and a Prometheus-compatible TSDB.
+functionAutoscaler:
+  enabled: false
+  chartVersion: "1.18.6"
+  image:
+    tag: "1.18.6"
+    pullPolicy: IfNotPresent
+  # Optional overrides for chart-owned defaults.
+  timeseriesDb: {}
+  nvcfApi: {}
+  cassandra: {}
 
 stateMetrics:
   enabled: false

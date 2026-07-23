@@ -97,6 +97,9 @@ functionautoscaler:
     - name: probe
       containerPort: 8181
       protocol: TCP
+    - name: metrics
+      containerPort: 41338
+      protocol: TCP
 
   # Stable service DNS. Override for multiple releases in one namespace.
   service:
@@ -109,6 +112,10 @@ functionautoscaler:
       - name: probe
         port: 8181
         targetPort: probe
+        protocol: TCP
+      - name: metrics
+        port: 41338
+        targetPort: metrics
         protocol: TCP
 
   # Additional volumes on the output Deployment definition.
@@ -140,3 +147,16 @@ functionautoscaler:
     # Read the secrets file rendered by the Vault Agent. Override this value
     # when mounting secrets manually.
     SECRETS_PATH: "/vault/secrets/secrets.json"
+
+    # Self-managed in-cluster defaults. Consuming stacks should override these
+    # only when service names, namespaces, or auth mode differ.
+    CASSANDRA__CONTACT_POINTS: "cassandra.cassandra-system.svc.cluster.local"
+    CASSANDRA__PORT: "9042"
+    CASSANDRA__KEYSPACE: "nvcf_autoscaler"
+    CASSANDRA__SSL__ENABLED: "false"
+    TIMESERIES_DB__TIMESERIES_DB_URL: "http://vmsingle.monitoring.svc.cluster.local:8428"
+    TIMESERIES_DB__DISABLE_AUTH: "true"
+    TIMESERIES_DB__ENV: "stg"
+    TIMESERIES_DB__IGNORE_ENV: "true"
+    NVCF_API__NVCF_API_GRPC_ADDRESS: "http://api.nvcf.svc.cluster.local:9090"
+    NVCF_API__DISABLE_AUTH: "true"

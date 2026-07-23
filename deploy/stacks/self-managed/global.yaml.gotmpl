@@ -336,6 +336,8 @@ api:
     NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_GROUP_SCOPE: "ngc"
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+    MANAGEMENT_PROMETHEUS_METRICS_EXPORT_ENABLED: {{ .Values.global.observability.metrics.enabled | quote }}
+    MANAGEMENT_METRICS_ENABLE_ALL: {{ .Values.global.observability.metrics.enabled | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
@@ -565,7 +567,7 @@ adminIssuerProxy:
     path: "/v1/admin/keys"
 
 stateMetrics:
-  enabled: false
+  enabled: {{ dig "stateMetrics" "enabled" false .Values }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -582,6 +584,80 @@ stateMetrics:
   # Disable ServiceMonitor for environments without Prometheus Operator
   serviceMonitor:
     enabled: false
+
+{{- $observabilityNamespace := dig "observability" "namespace" "monitoring" .Values }}
+{{- $victoriaMetricsNamespace := dig "victoriaMetrics" "namespace" $observabilityNamespace .Values }}
+{{- $functionAutoscalerValues := dig "functionAutoscaler" (dig "functionautoscaler" dict .Values) .Values }}
+{{- $functionAutoscalerImageValues := dig "image" dict $functionAutoscalerValues }}
+{{- $functionAutoscalerTimeseriesDbValues := dig "timeseriesDb" dict $functionAutoscalerValues }}
+{{- $functionAutoscalerNvcfApiValues := dig "nvcfApi" dict $functionAutoscalerValues }}
+{{- $functionAutoscalerCassandraValues := dig "cassandra" dict $functionAutoscalerValues }}
+{{- $functionAutoscalerCassandraSslValues := dig "ssl" dict $functionAutoscalerCassandraValues }}
+{{- $functionAutoscalerTsdbURL := (dig "timeseriesDbUrl" "" $functionAutoscalerValues) | default (dig "url" "" $functionAutoscalerTimeseriesDbValues) }}
+{{- if and (not $functionAutoscalerTsdbURL) (ne $victoriaMetricsNamespace "monitoring") }}
+{{- $functionAutoscalerTsdbURL = printf "http://vmsingle.%s.svc.cluster.local:8428" $victoriaMetricsNamespace }}
+{{- end }}
+{{- $functionAutoscalerCassandraContactPoints := (dig "cassandraContactPoints" "" $functionAutoscalerValues) | default (dig "contactPoints" "" $functionAutoscalerCassandraValues) }}
+{{- $functionAutoscalerGrpcAddress := (dig "nvcfApiGrpcAddress" "" $functionAutoscalerValues) | default (dig "grpcAddress" "" $functionAutoscalerNvcfApiValues) }}
+{{- $functionAutoscalerOauthURL := (dig "oauth2TokenApiAddress" "" $functionAutoscalerValues) | default (dig "oauth2TokenApiAddress" "" $functionAutoscalerNvcfApiValues) }}
+{{- $functionAutoscalerImageRepository := (dig "repository" "" $functionAutoscalerImageValues) | default (printf "%s/nvcf-autoscaler-service" .Values.global.image.repository) }}
+{{- $functionAutoscalerHasEnvOverrides := or $functionAutoscalerTsdbURL $functionAutoscalerCassandraContactPoints $functionAutoscalerGrpcAddress $functionAutoscalerOauthURL (hasKey $functionAutoscalerTimeseriesDbValues "disableAuth") (hasKey $functionAutoscalerTimeseriesDbValues "env") (hasKey $functionAutoscalerTimeseriesDbValues "ignoreEnv") (hasKey $functionAutoscalerCassandraValues "port") (hasKey $functionAutoscalerCassandraValues "keyspace") (hasKey $functionAutoscalerCassandraSslValues "enabled") (hasKey $functionAutoscalerNvcfApiValues "disableAuth") }}
+functionautoscaler:
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ $functionAutoscalerImageRepository }}
+    {{- with dig "tag" "" $functionAutoscalerImageValues }}
+    tag: {{ . | quote }}
+    {{- end }}
+    {{- with dig "pullPolicy" "" $functionAutoscalerImageValues }}
+    pullPolicy: {{ . | quote }}
+    {{- end }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $functionAutoscalerHasEnvOverrides }}
+  env:
+    {{- with $functionAutoscalerTsdbURL }}
+    TIMESERIES_DB__TIMESERIES_DB_URL: {{ $functionAutoscalerTsdbURL | quote }}
+    {{- end }}
+    {{- if hasKey $functionAutoscalerTimeseriesDbValues "disableAuth" }}
+    TIMESERIES_DB__DISABLE_AUTH: {{ get $functionAutoscalerTimeseriesDbValues "disableAuth" | quote }}
+    {{- end }}
+    {{- with dig "env" "" $functionAutoscalerTimeseriesDbValues }}
+    TIMESERIES_DB__ENV: {{ . | quote }}
+    {{- end }}
+    {{- if hasKey $functionAutoscalerTimeseriesDbValues "ignoreEnv" }}
+    TIMESERIES_DB__IGNORE_ENV: {{ get $functionAutoscalerTimeseriesDbValues "ignoreEnv" | quote }}
+    {{- end }}
+    {{- with $functionAutoscalerCassandraContactPoints }}
+    CASSANDRA__CONTACT_POINTS: {{ $functionAutoscalerCassandraContactPoints | quote }}
+    {{- end }}
+    {{- with dig "port" "" $functionAutoscalerCassandraValues }}
+    CASSANDRA__PORT: {{ . | quote }}
+    {{- end }}
+    {{- with dig "keyspace" "" $functionAutoscalerCassandraValues }}
+    CASSANDRA__KEYSPACE: {{ . | quote }}
+    {{- end }}
+    {{- if hasKey $functionAutoscalerCassandraSslValues "enabled" }}
+    CASSANDRA__SSL__ENABLED: {{ get $functionAutoscalerCassandraSslValues "enabled" | quote }}
+    {{- end }}
+    {{- with $functionAutoscalerGrpcAddress }}
+    NVCF_API__NVCF_API_GRPC_ADDRESS: {{ $functionAutoscalerGrpcAddress | quote }}
+    {{- end }}
+    {{- with $functionAutoscalerOauthURL }}
+    NVCF_API__OAUTH2_TOKEN_API_ADDRESS: {{ $functionAutoscalerOauthURL | quote }}
+    {{- end }}
+    {{- if hasKey $functionAutoscalerNvcfApiValues "disableAuth" }}
+    NVCF_API__DISABLE_AUTH: {{ get $functionAutoscalerNvcfApiValues "disableAuth" | quote }}
+    {{- end }}
+  {{- end }}
 
 reval:
   fullnameOverride: reval
