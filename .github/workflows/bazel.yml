@@ -149,6 +149,13 @@ jobs:
               fi
               ;;
           esac
+          # Policy: run the full test matrix on every PR and push so no subtree's
+          # tests are skipped because an unrelated path changed (regression safety
+          # over queue latency; the remote cache keeps unaffected targets to cache
+          # hits). The change-aware detection above and the reverse-dependency
+          # edges below are retained but inert while this is set; delete the next
+          # line to restore change-aware scheduling.
+          run_all=true
           # A change to this workflow itself revalidates everything.
           if printf '%s\n' "$changed" | grep -q '^\.github/workflows/bazel\.yml$'; then
             run_all=true
@@ -489,7 +496,11 @@ jobs:
               echo "tests() query failed; falling back to full test set"
               printf '//...\n' > "$ttfile"
             elif [ -z "$tests" ]; then
-              echo "no affected test targets; skipping tests"; exit 0
+              # Not a coverage gap: requires-docker tests are excluded here (the
+              # container has no Docker daemon) and run in the bazel-integration
+              # lane instead. A scope whose only tests are requires-docker (e.g.
+              # cloud-tasks) resolves empty here and is covered there.
+              echo "no non-docker test targets in scope; requires-docker tests run in the integration lane"; exit 0
             else
               printf '%s\n' "$tests" > "$ttfile"
               echo "tests: $(grep -c . "$ttfile") affected test target(s)"
