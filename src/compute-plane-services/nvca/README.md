@@ -1,5 +1,7 @@
 # NVIDIA Cloud Functions Agent (NVCA)
 
+<!-- Review-routing touchpoint for compute-plane-owned NVCA docs. -->
+
 NVCA is a Kubernetes agent that manages NVCF Bring-Your-Own-Compute (BYOC) Kubernetes clusters. This repository also contains the **NVCA Operator**, which automates the deployment and lifecycle management of NVCA.
 
 ## Overview
