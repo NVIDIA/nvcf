@@ -266,6 +266,14 @@ stateMetrics:
   serviceMonitor:
     enabled: false
 
+# Function Autoscaler workload (stage 03). Disabled by default; requires the
+# stage-01 Cassandra/OpenBao migrations and the observability stack's VictoriaMetrics.
+functionAutoscaler:
+  enabled: false
+  chartVersion: "0.0.0" # Pin to the published helm-nvcf-function-autoscaler version.
+  cassandraContactPoints: "" # e.g. cassandra.cassandra-system.svc.cluster.local
+  timeseriesDbUrl: "" # e.g. http://vmsingle.monitoring.svc:8428
+
 rateLimiter:
   enabled: true
   replicaCount: 1
