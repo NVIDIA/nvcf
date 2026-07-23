@@ -1,25 +1,25 @@
 load("@rules_java//java:defs.bzl", "java_library")
-load("//src/libraries/java/nv-boot-parent/tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
+load("//tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
 
 EXCEPTIONS_REQUIRED_DEPS = [
-    "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
-    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@maven//:jakarta_annotation_jakarta_annotation_api",
+    "@maven//:org_slf4j_slf4j_api",
 ]
 
 # Maven marks the Spring MVC, WebFlux, Security, and autoconfiguration APIs as
 # optional/provided. They compile conditional handlers but must not select a
 # downstream application's web stack or security runtime.
 EXCEPTIONS_OPTIONAL_COMPILE_DEPS = [
-    "@nv_third_party_deps//:io_projectreactor_reactor_core",
-    "@nv_third_party_deps//:org_jspecify_jspecify",
-    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
-    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
-    "@nv_third_party_deps//:org_springframework_security_spring_security_core",
-    "@nv_third_party_deps//:org_springframework_spring_context",
-    "@nv_third_party_deps//:org_springframework_spring_core",
-    "@nv_third_party_deps//:org_springframework_spring_web",
-    "@nv_third_party_deps//:org_springframework_spring_webflux",
-    "@nv_third_party_deps//:org_springframework_spring_webmvc",
+    "@maven//:io_projectreactor_reactor_core",
+    "@maven//:org_jspecify_jspecify",
+    "@maven//:org_springframework_boot_spring_boot",
+    "@maven//:org_springframework_boot_spring_boot_autoconfigure",
+    "@maven//:org_springframework_security_spring_security_core",
+    "@maven//:org_springframework_spring_context",
+    "@maven//:org_springframework_spring_core",
+    "@maven//:org_springframework_spring_web",
+    "@maven//:org_springframework_spring_webflux",
+    "@maven//:org_springframework_spring_webmvc",
 ]
 
 java_library(
@@ -32,7 +32,7 @@ java_library(
 nv_boot_library(
     name = "nv_boot_starter_exceptions",
     srcs = glob(["src/main/java/**/*.java"]),
-    resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions/src/main/resources",
+    resource_strip_prefix = "nv-boot-starter-exceptions/src/main/resources",
     resources = glob(["src/main/resources/**"]),
     visibility = ["//visibility:public"],
     deps = EXCEPTIONS_REQUIRED_DEPS + [":optional_compile_deps"],
@@ -55,11 +55,11 @@ nv_boot_library_test(
     name = "tests",
     srcs = glob(["src/test/java/**/*.java"]),
     coverage_library = ":nv_boot_starter_exceptions",
-    resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions/src/test/resources",
+    resource_strip_prefix = "nv-boot-starter-exceptions/src/test/resources",
     resources = glob(["src/test/resources/**"]),
     deps = [
         ":nv_boot_starter_exceptions",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webflux_test",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+        "@maven//:org_springframework_boot_spring_boot_starter_webflux_test",
+        "@maven//:org_springframework_boot_spring_boot_starter_webmvc_test",
     ] + EXCEPTIONS_REQUIRED_DEPS + EXCEPTIONS_OPTIONAL_COMPILE_DEPS,
 )

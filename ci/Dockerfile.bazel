@@ -130,4 +130,29 @@ RUN mkdir /tmp/warmup && cd /tmp/warmup \
   && bazel version \
   && rm -rf /tmp/warmup
 
-LABEL description="NVCF monorepo Bazel CI image - Ubuntu 24.04 + Bazel ${BAZEL_VERSION} + kubebuilder-tools ${KUBEBUILDER_TOOLS_VERSION}"
+# Pre-warm the hermetic JDK the standalone Java modules build against. The
+# nvcf_java_rules / nv_boot_parent / cloud-tasks / java-spring-boot-service
+# modules pin Bazel ${JAVA_MODULE_BAZEL_VERSION} and compile against
+# remotejdk_${JAVA_MODULE_JDK_VERSION} (fetched hermetically by rules_java),
+# both re-downloaded on a cold runner. Compiling a throwaway class with those
+# pins fills the shared Bazel repository cache (the JDK archive) and bazelisk's
+# ${JAVA_MODULE_BAZEL_VERSION} binary, so the Java matrix rows start warm instead
+# of cold-fetching the JDK. Additive: it only populates caches the Java rows
+# reuse; no other subtree row's inputs change. Maven jars are intentionally not
+# baked (see .github/workflows/bazel.yml and NVIDIA/nvcf#373).
+ARG JAVA_MODULE_BAZEL_VERSION=9.1.1
+ARG JAVA_MODULE_JDK_VERSION=25
+RUN mkdir /tmp/jdkwarm && cd /tmp/jdkwarm \
+  && echo "${JAVA_MODULE_BAZEL_VERSION}" > .bazelversion \
+  && echo 'bazel_dep(name = "rules_java", version = "9.3.0")' > MODULE.bazel \
+  && printf 'load("@rules_java//java:defs.bzl", "java_library")\njava_library(name = "warm", srcs = ["Warm.java"])\n' > BUILD.bazel \
+  && echo 'public class Warm {}' > Warm.java \
+  && bazel build //:warm \
+       --java_language_version="${JAVA_MODULE_JDK_VERSION}" \
+       --java_runtime_version="remotejdk_${JAVA_MODULE_JDK_VERSION}" \
+       --tool_java_language_version="${JAVA_MODULE_JDK_VERSION}" \
+       --tool_java_runtime_version="remotejdk_${JAVA_MODULE_JDK_VERSION}" \
+       --java_header_compilation=false \
+  && rm -rf /tmp/jdkwarm
+
+LABEL description="NVCF monorepo Bazel CI image - Ubuntu 24.04 + Bazel ${BAZEL_VERSION} + kubebuilder-tools ${KUBEBUILDER_TOOLS_VERSION} + remotejdk_${JAVA_MODULE_JDK_VERSION} prewarm"

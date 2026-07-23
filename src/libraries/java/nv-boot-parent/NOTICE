@@ -1,5 +1,5 @@
 
-Lists of 208 third-party dependencies.
+Lists of 209 third-party dependencies.
      (Public Domain) AOP alliance (aopalliance:aopalliance:1.0 - http://aopalliance.sourceforge.net)
      (Apache License, Version 2.0) LZ4 Java Compression (at.yawk.lz4:lz4-java:1.10.3 - https://github.com/yawkat/lz4-java)
      (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.34 - http://logback.qos.ch)
@@ -24,11 +24,11 @@ Lists of 208 third-party dependencies.
      (MIT License) jnr-x86asm (com.github.jnr:jnr-x86asm:1.0.2 - http://github.com/jnr/jnr-x86asm)
      (Apache License, Version 2.0) JCIP Annotations under Apache License (com.github.stephenc.jcip:jcip-annotations:1.0-1 - http://stephenc.github.com/jcip-annotations)
      (The Apache Software License, Version 2.0) FindBugs-jsr305 (com.google.code.findbugs:jsr305:3.0.2 - http://findbugs.sourceforge.net/)
-     (Apache 2.0) error-prone annotations (com.google.errorprone:error_prone_annotations:2.49.0 - https://errorprone.info)
-     (Apache License, Version 2.0) Guava InternalFutureFailureAccess and InternalFutures (com.google.guava:failureaccess:1.0.3 - https://github.com/google/guava)
-     (Apache License, Version 2.0) Guava: Google Core Libraries for Java (com.google.guava:guava:33.6.0-jre - https://github.com/google/guava)
+     (Apache 2.0) error-prone annotations (com.google.errorprone:error_prone_annotations:2.5.1 - http://nexus.sonatype.org/oss-repository-hosting.html)
+     (The Apache Software License, Version 2.0) Guava InternalFutureFailureAccess and InternalFutures (com.google.guava:failureaccess:1.0.1 - https://github.com/google/guava)
+     (Apache License, Version 2.0) Guava: Google Core Libraries for Java (com.google.guava:guava:32.0.1-jre - https://github.com/google/guava)
      (The Apache Software License, Version 2.0) Guava ListenableFuture only (com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava - https://github.com/google/guava)
-     (Apache License, Version 2.0) J2ObjC Annotations (com.google.j2objc:j2objc-annotations:3.1 - https://github.com/google/j2objc/)
+     (Apache License, Version 2.0) J2ObjC Annotations (com.google.j2objc:j2objc-annotations:2.8 - https://github.com/google/j2objc/)
      (The Apache Software License, Version 2.0) Nimbus Content Type (com.nimbusds:content-type:2.3 - https://bitbucket.org/connect2id/nimbus-content-type)
      (The Apache Software License, Version 2.0) Nimbus LangTag (com.nimbusds:lang-tag:1.7 - https://bitbucket.org/connect2id/nimbus-language-tags)
      (The Apache Software License, Version 2.0) Nimbus JOSE+JWT (com.nimbusds:nimbus-jose-jwt:10.4 - https://bitbucket.org/connect2id/nimbus-jose-jwt)
@@ -102,6 +102,7 @@ Lists of 208 third-party dependencies.
      (Apache License, Version 2.0) tomcat-embed-el (org.apache.tomcat.embed:tomcat-embed-el:11.0.22 - https://tomcat.apache.org/)
      (Bouncy Castle Licence) Bouncy Castle Provider (org.bouncycastle:bcprov-jdk18on:1.84 - https://www.bouncycastle.org/download/bouncy-castle-java/)
      (Bouncy Castle Licence) Bouncy Castle Provider (LTS Distribution) (org.bouncycastle:bcprov-lts8on:2.73.8 - https://www.bouncycastle.org/lts-java)
+     (The MIT License) Checker Qual (org.checkerframework:checker-qual:3.33.0 - https://checkerframework.org/)
      (Public Domain, per Creative Commons CC0) (BSD-2-Clause) HdrHistogram (org.hdrhistogram:HdrHistogram:2.2.2 - http://hdrhistogram.github.io/HdrHistogram/)
      (Apache License 2.0) Hibernate Validator Engine (org.hibernate.validator:hibernate-validator:9.0.1.Final - https://hibernate.org/validator)
      (Apache License 2.0) JBoss Logging 3 (org.jboss.logging:jboss-logging:3.6.3.Final - https://www.jboss.org)

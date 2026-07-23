@@ -38,7 +38,13 @@ permissions:
 env:
   # Keep in lockstep with BAZEL_CI_VERSION in .gitlab-ci.yml and the
   # container.image tag in .github/workflows/bazel.yml.
-  BAZEL_CI_VERSION: "0.8.0"
+  #
+  # 0.13.0 adds the remotejdk_25 + Bazel 9.1.1 pre-warm for the standalone Java
+  # modules (see ci/Dockerfile.bazel). This workflow builds (and, on merge to
+  # main, publishes) the tag; .github/workflows/bazel.yml is bumped to 0.13.0 in
+  # a fast-follow once the tag is published, so the bazel matrix never pins an
+  # unpublished image. Tracked in NVIDIA/nvcf#372.
+  BAZEL_CI_VERSION: "0.13.0"
   IMAGE: ghcr.io/nvidia/nvcf/bazel-ci
 
 jobs:

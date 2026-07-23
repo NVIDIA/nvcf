@@ -114,10 +114,22 @@ jobs:
           worker-task|src/compute-plane-services/worker-task|false
           worker-utils|src/compute-plane-services/worker-utils|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
-          helm-reval|src/control-plane-services/helm-reval|false'
-          # Paths that affect the root-module workspace build (native
-          # root subtrees, Go and Java, plus the shared Bazel scaffold).
-          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/ src/control-plane-services/cloud-tasks/ .github/bazel-root-test-quarantine.txt)
+          helm-reval|src/control-plane-services/helm-reval|false
+          nv-boot-parent|src/libraries/java/nv-boot-parent|false
+          cloud-tasks|src/control-plane-services/cloud-tasks|false
+          java-spring-boot-service|examples/java-spring-boot-service|false'
+          # Standalone Java modules. Each has its own MODULE.bazel and @maven
+          # hub, so it builds+tests in its own module dir. Like every non-root
+          # row they do NOT set --config=remote; the build/test steps below
+          # inject --remote_cache/--tls_certificate/--remote_header from the
+          # EC2 Buildbarn secrets, so these rows warm from and hit that shared
+          # cache rather than cold-building (see NVIDIA/nvcf#372).
+          # Paths that affect the root-module workspace build (native root
+          # subtrees plus the shared Bazel scaffold). Java no longer rides the
+          # root row: nv-boot-parent, cloud-tasks, and the example are their own
+          # modules (src/libraries/ is narrowed to src/libraries/go/ and
+          # cloud-tasks is dropped here).
+          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
@@ -198,6 +210,12 @@ jobs:
       CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
       CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
+      # Staged bump: ci/Dockerfile.bazel + bazel-ci-image.yml move to 0.13.0
+      # (adds the remotejdk_25 / Bazel 9.1.1 pre-warm the Java module rows use).
+      # 0.13.0 publishes only on merge to main, so this consumer ref stays at
+      # 0.12.0 until then to keep the matrix from pinning an unpublished image;
+      # a fast-follow bumps it to 0.13.0. The Java rows still work on 0.12.0 (they
+      # cold-fetch the JDK once, then reuse it via actions/cache). See #372.
       image: ghcr.io/nvidia/nvcf/bazel-ci:0.12.0
       credentials:
         username: ${{ github.actor }}

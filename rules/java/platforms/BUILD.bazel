@@ -13,13 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"Public Java build rules for NVCF services."
+package(default_visibility = ["//visibility:public"])
 
-load(
-    "//private:spring_boot.bzl",
-    _nvcf_java_library = "nvcf_java_library",
-    _nvcf_spring_boot_image = "nvcf_spring_boot_image",
+platform(
+    name = "linux_arm64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
 )
 
-nvcf_spring_boot_image = _nvcf_spring_boot_image
-nvcf_java_library = _nvcf_java_library
+platform(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
