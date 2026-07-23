@@ -4,7 +4,7 @@
 # yq is used by the chart's conf initContainer to deep-merge cassandra.yaml
 # overrides onto the image default. Fetch it in a native build stage (no
 # emulation) and verify it against a pinned checksum.
-FROM --platform=$BUILDPLATFORM alpine:3.21 AS yq-downloader
+FROM --platform=$BUILDPLATFORM docker.io/library/alpine:3.21 AS yq-downloader
 ARG TARGETARCH
 ARG YQ_VERSION=v4.44.3
 ARG YQ_LINUX_AMD64_SHA256=a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
@@ -19,7 +19,7 @@ RUN apk add --no-cache curl && \
     printf '%s  /tmp/yq\n' "${YQ_SHA256}" | sha256sum -c - && \
     chmod +x /tmp/yq
 
-FROM cassandra:5.0.8
+FROM docker.io/library/cassandra:5.0.8
 
 # Metrics exporter agent. The OSS snapshot does not redistribute the jar;
 # only files/.gitkeep ships, so the default here points at that placeholder
