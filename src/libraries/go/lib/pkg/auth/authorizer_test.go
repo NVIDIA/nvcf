@@ -234,22 +234,81 @@ func TestWebhookAuthorizer(t *testing.T) {
 		assert.Nil(t, res)
 	})
 
-	t.Run("injected client without redirect policy gets no-redirect applied", func(t *testing.T) {
-		// A client with no CheckRedirect set should have noRedirectPolicy applied by the constructor.
+	t.Run("injected client without redirect policy gets no-redirect applied on private copy", func(t *testing.T) {
+		// A client with no CheckRedirect set receives noRedirectPolicy on a private copy;
+		// the caller's original client is not mutated.
 		injected := &http.Client{Timeout: 5 * time.Second}
 		authorizer, err := NewWebhookAuthorizer("http://127.0.0.1:0", WithHTTPClient(injected))
 		require.NoError(t, err)
 		assert.NotNil(t, authorizer.client.CheckRedirect)
+		// The constructor must never mutate the caller-owned client.
+		assert.Nil(t, injected.CheckRedirect, "caller client must not be mutated")
+		// The private copy must be a different pointer.
+		assert.NotSame(t, injected, authorizer.client)
 	})
 
-	t.Run("custom HTTP client configuration", func(t *testing.T) {
+	t.Run("injected client with custom CheckRedirect is still replaced by noRedirectPolicy", func(t *testing.T) {
+		// A caller-supplied permissive redirect policy must be overridden so that
+		// 307/308 responses cannot replay a POST carrying AuthRequest.Credential.
+		allowRedirects := func(req *http.Request, via []*http.Request) error { return nil }
+		injected := &http.Client{
+			Timeout:       3 * time.Second,
+			CheckRedirect: allowRedirects,
+		}
+
+		redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("redirect target must never receive the POST even with a custom CheckRedirect")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer redirectTarget.Close()
+
+		primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, redirectTarget.URL, http.StatusTemporaryRedirect)
+		}))
+		defer primary.Close()
+
+		authorizer, err := NewWebhookAuthorizer(primary.URL, WithHTTPClient(injected))
+		require.NoError(t, err)
+
+		res, err := authorizer.Authorize(ctx, &AuthRequest{
+			Action:     testActionRead,
+			Credential: "secret-token",
+		})
+		// noRedirectPolicy causes the 307 to surface directly as ErrAuthorizerInternal,
+		// not as a replayed POST to the redirect target.
+		require.ErrorIs(t, err, ErrAuthorizerInternal)
+		assert.Nil(t, res)
+	})
+
+	t.Run("injected client transport and timeout are preserved in private copy", func(t *testing.T) {
+		customTransport := &http.Transport{MaxIdleConns: 7}
+		injected := &http.Client{
+			Transport: customTransport,
+			Timeout:   3 * time.Second,
+		}
+		authorizer, err := NewWebhookAuthorizer("http://127.0.0.1:0", WithHTTPClient(injected))
+		require.NoError(t, err)
+		// Timeout must be carried over to the private copy.
+		assert.Equal(t, 3*time.Second, authorizer.client.Timeout)
+		// The private copy must enforce noRedirectPolicy.
+		assert.NotNil(t, authorizer.client.CheckRedirect)
+		// The private copy must be a different pointer from the injected client.
+		assert.NotSame(t, injected, authorizer.client)
+	})
+
+	t.Run("custom HTTP client configuration uses private copy with noRedirectPolicy", func(t *testing.T) {
 		customClient := &http.Client{
 			Timeout:       1 * time.Millisecond,
 			CheckRedirect: noRedirectPolicy,
 		}
 		authorizer, err := NewWebhookAuthorizer("http://127.0.0.1:0", WithHTTPClient(customClient))
 		require.NoError(t, err)
-		assert.Equal(t, customClient, authorizer.client)
+		// The authorizer holds a private copy, not the original pointer.
+		assert.NotSame(t, customClient, authorizer.client)
+		// Timeout is preserved.
+		assert.Equal(t, 1*time.Millisecond, authorizer.client.Timeout)
+		// noRedirectPolicy is set.
+		assert.NotNil(t, authorizer.client.CheckRedirect)
 	})
 
 	t.Run("transport failure returns ErrAuthorizerInternal", func(t *testing.T) {

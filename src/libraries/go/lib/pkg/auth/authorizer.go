@@ -129,6 +129,8 @@ func WithHTTPClient(client *http.Client) WebhookOption {
 // NewWebhookAuthorizer initializes a WebhookAuthorizer targeting the provided endpoint URL.
 // It returns an error if endpointURL is empty, any option is nil, or the resolved HTTP client is nil.
 // The default HTTP client is instrumented with OpenTelemetry and configured to refuse redirects.
+// Any caller-injected client is wrapped in a private copy with noRedirectPolicy always applied and
+// its transport wrapped with otelhttp.NewTransport; the caller-owned client is never mutated.
 func NewWebhookAuthorizer(endpointURL string, opts ...WebhookOption) (*WebhookAuthorizer, error) {
 	if endpointURL == "" {
 		return nil, errors.New("webhook endpoint URL must not be empty")
@@ -151,9 +153,18 @@ func NewWebhookAuthorizer(endpointURL string, opts ...WebhookOption) (*WebhookAu
 	if w.client == nil {
 		return nil, errors.New("webhook HTTP client must not be nil")
 	}
-	// Enforce no-redirect policy on injected clients that do not set one.
-	if w.client.CheckRedirect == nil {
-		w.client.CheckRedirect = noRedirectPolicy
+	// When the caller injected a custom client, replace it with a private copy so we
+	// never mutate a caller-owned shared client. Always enforce noRedirectPolicy on the
+	// private copy regardless of any CheckRedirect already set by the caller, preventing
+	// 307/308 responses from replaying a POST that carries AuthRequest.Credential to an
+	// unintended redirect target. Wrap the transport with otelhttp.NewTransport to
+	// propagate W3C Trace Context on every outbound webhook call.
+	if w.client != defaultClient {
+		w.client = &http.Client{
+			Transport:     otelhttp.NewTransport(w.client.Transport),
+			Timeout:       w.client.Timeout,
+			CheckRedirect: noRedirectPolicy,
+		}
 	}
 	return w, nil
 }
