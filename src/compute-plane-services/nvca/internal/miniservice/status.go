@@ -511,11 +511,6 @@ func (r *Reconciler) doStatusByWorkerReadiness(
 	}
 
 	// If the worker container is ready, then the miniservice is running.
-	/*
-		TODO:
-		* only use utils container readiness
-		* fail on utils container restart count > 3
-	*/
 	if workerContainerStatus.Ready {
 		ms.Status.Phase = v1alpha1.MiniServiceRunning
 		meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
@@ -526,7 +521,8 @@ func (r *Reconciler) doStatusByWorkerReadiness(
 		return reconcile.Result{}, nil
 	}
 
-	// The worker container is either progressing towards a ready state, or is in a terminal bad state.
+	// At this point the worker container is either progressing towards a ready state,
+	// or is in a terminal bad state.
 
 	var workerIssueReasons []string
 	if utilsStatus.AdditionalPodStatus != nil {
