@@ -116,7 +116,7 @@ jobs:
           helm-reval|src/control-plane-services/helm-reval|false'
           # Paths that affect the root-module workspace build (native
           # root subtrees, Go and Java, plus the shared Bazel scaffold).
-          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/ .github/bazel-root-test-quarantine.txt)
+          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
@@ -160,6 +160,12 @@ jobs:
                 # wildcards and avoids any shell glob expansion of the token.
                 if printf '%s\n' "$changed" | awk -v p="$g" 'index($0, p) == 1 { f = 1 } END { exit !f }'; then hit=true; break; fi
               done
+              # Root-level *.bzl files have no fixed path prefix, so the awk
+              # prefix test above cannot match them. The target-selection logic
+              # treats them as full-build triggers, so gate root on them
+              # explicitly; otherwise a root-global .bzl change selects zero rows
+              # and passes without running Bazel.
+              if [ "$hit" != "true" ] && printf '%s\n' "$changed" | grep -qE '^[^/]+\.bzl$'; then hit=true; fi
             else
               if printf '%s\n' "$changed" | grep -q "^${path}/"; then hit=true; fi
             fi
