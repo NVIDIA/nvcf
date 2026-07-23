@@ -258,12 +258,13 @@ jobs:
       CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
       CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
-      # Staged bump: ci/Dockerfile.bazel + bazel-ci-image.yml move to 0.13.0
-      # (adds the remotejdk_25 / Bazel 9.1.1 pre-warm the Java module rows use).
-      # 0.13.0 publishes only on merge to main, so this consumer ref stays at
-      # 0.12.0 until then to keep the matrix from pinning an unpublished image;
-      # a fast-follow bumps it to 0.13.0. The Java rows still work on 0.12.0 (they
-      # cold-fetch the JDK once, then reuse it via actions/cache). See #372.
+      # Built in GitLab nvcf/bazel-ci-templates (bazel-ci/Dockerfile: Temurin
+      # JDK 25 + Maven + prewarmed Bazel and Go SDKs -- that is where java/javac
+      # come from) and skopeo-mirrored to the public ghcr tag below. This repo
+      # does NOT build the image (the old ci/Dockerfile.bazel + bazel-ci-image.yml
+      # were a stale, Java-less copy and have been removed). Bump this ref in
+      # lockstep after a new tag is mirrored. Kept a string literal on purpose
+      # (see the container.image evaluation note above).
       image: ghcr.io/nvidia/nvcf/bazel-ci:0.12.0
       credentials:
         username: ${{ github.actor }}
@@ -584,7 +585,7 @@ jobs:
   # excluded from the container matrix, so they never produce a zero-test lane.
   # bazelisk reads .bazelversion for the pinned Bazel.
   bazel-docker:
-    name: bazel docker (${{ matrix.subtree.id }})
+    name: bazel (${{ matrix.subtree.id }})
     needs: detect
     if: needs.detect.outputs.matrix_docker != '[]'
     runs-on: ubuntu-latest
