@@ -138,7 +138,7 @@ agent:
 		require.NoError(t, err)
 		require.NotNil(t, gotOpts)
 		assert.False(t, gotOpts.Config.Agent.BYOOLogChunking.Enabled)
-		assert.Zero(t, gotOpts.Config.Agent.BYOOLogChunking.MaxBodyBytes)
+		assert.Zero(t, gotOpts.Config.Agent.BYOOLogChunking.MaxPayloadBytes)
 	})
 
 	t.Run("enabled BYOO log chunking config preserves collector default handoff", func(t *testing.T) {
@@ -179,7 +179,7 @@ agent:
 		require.NoError(t, err)
 		require.NotNil(t, gotOpts)
 		assert.True(t, gotOpts.Config.Agent.BYOOLogChunking.Enabled)
-		assert.Zero(t, gotOpts.Config.Agent.BYOOLogChunking.MaxBodyBytes)
+		assert.Zero(t, gotOpts.Config.Agent.BYOOLogChunking.MaxPayloadBytes)
 	})
 
 	t.Run("configured control plane endpoints populate agent options", func(t *testing.T) {

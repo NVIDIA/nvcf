@@ -201,6 +201,8 @@ func TestConfig_EncodeDecode_BYOOConfigSwitches(t *testing.T) {
 agent:
   byooLogChunking:
     enabled: true
+    maxBodyBytes: 131072
+    maxPayloadBytes: 262144
   byooDebugMode:
     enabled: true
   byooOtelCollector:
@@ -211,7 +213,8 @@ agent:
 
 	completed := cfg.Complete()
 	assert.True(t, completed.Agent.BYOOLogChunking.Enabled)
-	assert.Zero(t, completed.Agent.BYOOLogChunking.MaxBodyBytes)
+	assert.Equal(t, int64(262144), completed.Agent.BYOOLogChunking.MaxPayloadBytes)
+	assert.Equal(t, int64(131072), completed.Agent.BYOOLogChunking.MaxBodyBytes)
 	assert.True(t, completed.Agent.BYOODebugMode.Enabled)
 	assert.Equal(t, "30s", completed.Agent.BYOOOTelCollector.ExporterHelper.Timeout)
 }

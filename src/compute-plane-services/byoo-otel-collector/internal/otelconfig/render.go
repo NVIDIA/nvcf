@@ -65,8 +65,8 @@ type OpenTelemetryConfig struct {
 }
 
 const (
-	defaultLogChunkMaxBodyBytes       = 262144
-	minConfiguredLogChunkMaxBodyBytes = 4
+	defaultLogChunkMaxPayloadBytes       = 262144
+	minConfiguredLogChunkMaxPayloadBytes = 4
 )
 
 const (
@@ -154,17 +154,20 @@ func getCredentialsPath() string {
 }
 
 func resolvedLogChunkingConfig(config LogChunkingConfig) (LogChunkingConfig, error) {
-	if config.MaxBodyBytes < 0 {
-		return LogChunkingConfig{}, fmt.Errorf("log chunk max body bytes must be greater than or equal to 0")
+	if config.MaxPayloadBytes == 0 && config.MaxBodyBytes != 0 {
+		config.MaxPayloadBytes = config.MaxBodyBytes
 	}
-	if config.MaxBodyBytes > 0 {
-		if config.MaxBodyBytes < minConfiguredLogChunkMaxBodyBytes {
-			return LogChunkingConfig{}, fmt.Errorf("log chunk max body bytes must be 0 or at least %d", minConfiguredLogChunkMaxBodyBytes)
+	if config.MaxPayloadBytes < 0 {
+		return LogChunkingConfig{}, fmt.Errorf("log chunk max payload bytes must be greater than or equal to 0")
+	}
+	if config.MaxPayloadBytes > 0 {
+		if config.MaxPayloadBytes < minConfiguredLogChunkMaxPayloadBytes {
+			return LogChunkingConfig{}, fmt.Errorf("log chunk max payload bytes must be 0 or at least %d", minConfiguredLogChunkMaxPayloadBytes)
 		}
 		config.Enabled = true
 	}
-	if config.Enabled && config.MaxBodyBytes == 0 {
-		config.MaxBodyBytes = defaultLogChunkMaxBodyBytes
+	if config.Enabled && config.MaxPayloadBytes == 0 {
+		config.MaxPayloadBytes = defaultLogChunkMaxPayloadBytes
 	}
 	return config, nil
 }
@@ -858,8 +861,8 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		logPipeline.Processors = []string{"memory_limiter", "attributes/add-metadata"}
 		if logChunking.Enabled {
 			otelConfig.Processors["logchunk/byoo"] = map[string]interface{}{
-				"max_body_bytes": logChunking.MaxBodyBytes,
-				"dry_run":        logChunking.DryRun,
+				"max_payload_bytes": logChunking.MaxPayloadBytes,
+				"dry_run":           logChunking.DryRun,
 			}
 			logPipeline.Processors = append(logPipeline.Processors, "logchunk/byoo")
 		}

@@ -1390,7 +1390,7 @@ func TestMiniserviceMutatePodSpec_BYOOOTelCollectorEnvVarsOnlyCollector(t *testi
 		},
 		OTelCollectorEnvVars: []corev1.EnvVar{
 			{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
-			{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
+			{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
 			{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 			{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
 			{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
@@ -1403,7 +1403,7 @@ func TestMiniserviceMutatePodSpec_BYOOOTelCollectorEnvVarsOnlyCollector(t *testi
 			{
 				Name: common.ByooOTelCollectorPodNameBase,
 				Env: []corev1.EnvVar{
-					{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "1000000"},
+					{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "1000000"},
 				},
 			},
 		},
@@ -1419,17 +1419,17 @@ func TestMiniserviceMutatePodSpec_BYOOOTelCollectorEnvVarsOnlyCollector(t *testi
 	assert.Equal(t, "shared", appByName["SHARED_ENV"])
 	assert.Equal(t, "shared", collectorByName["SHARED_ENV"])
 	assert.NotContains(t, initByName, nvcaconfig.BYOOLogChunkingEnabledEnv)
-	assert.NotContains(t, initByName, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
+	assert.NotContains(t, initByName, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
 	assert.NotContains(t, initByName, nvcaconfig.BYOODebugModeEnv)
 	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkingEnabledEnv)
-	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
 	assert.NotContains(t, initByName, nvcaconfig.BYOOMetricSubsetEnabledEnv)
 	assert.NotContains(t, appByName, nvcaconfig.BYOOMetricSubsetEnabledEnv)
 	assert.NotContains(t, initByName, nvcaconfig.BYOOOTelCollectorConfigEnv)
 	assert.NotContains(t, appByName, nvcaconfig.BYOOOTelCollectorConfigEnv)
 	assert.NotContains(t, appByName, nvcaconfig.BYOODebugModeEnv)
 	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOOLogChunkingEnabledEnv])
-	assert.Equal(t, "983040", collectorByName[nvcaconfig.BYOOLogChunkMaxBodyBytesEnv])
+	assert.Equal(t, "983040", collectorByName[nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv])
 	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOODebugModeEnv])
 	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOOMetricSubsetEnabledEnv])
 	assert.Equal(t, "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19", collectorByName[nvcaconfig.BYOOOTelCollectorConfigEnv])

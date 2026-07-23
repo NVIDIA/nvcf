@@ -191,7 +191,7 @@ func assertBYOOOTelCollectorEnvVars(t *testing.T, envs []corev1.EnvVar) {
 	t.Helper()
 	envsByName := envVarsByName(envs)
 	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOLogChunkingEnabledEnv])
-	assert.Equal(t, "262144", envsByName[nvcaconfig.BYOOLogChunkMaxBodyBytesEnv])
+	assert.Equal(t, "262144", envsByName[nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv])
 	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOLogChunkDryRunEnv])
 	encodedCollectorConfig, ok := envsByName[nvcaconfig.BYOOOTelCollectorConfigEnv]
 	require.True(t, ok)
@@ -281,9 +281,9 @@ func TestReconcile_Function(t *testing.T) {
 	}
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
-		Enabled:      true,
-		MaxBodyBytes: 262144,
-		DryRun:       true,
+		Enabled:         true,
+		MaxPayloadBytes: 262144,
+		DryRun:          true,
 	}
 	r.cfg.Agent.BYOOOTelCollector = nvcaconfig.BYOOOTelCollectorConfig{
 		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
@@ -852,7 +852,7 @@ rules:
 		metaEnv[env.Name] = env.Value
 	}
 	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkingEnabledEnv)
-	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
 	assert.NotContains(t, metaEnv, nvcaconfig.BYOOMetricSubsetEnabledEnv)
 	assertBYOOOTelCollectorEnvVars(t, msMeta.OTelCollectorEnvVars)
 	assert.Equal(t, nodefeatures.UniformInstanceTypeLabelKey, msMeta.NodeAffinityKey)
@@ -2201,9 +2201,9 @@ func TestReconcile_Task(t *testing.T) {
 
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
-		Enabled:      true,
-		MaxBodyBytes: 262144,
-		DryRun:       true,
+		Enabled:         true,
+		MaxPayloadBytes: 262144,
+		DryRun:          true,
 	}
 	r.cfg.Agent.BYOOOTelCollector = nvcaconfig.BYOOOTelCollectorConfig{
 		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
@@ -2686,7 +2686,7 @@ rules:
 	assert.NotNil(t, msMeta.TerminationGracePeriodSeconds)
 	metaEnv := envVarsByName(msMeta.EnvVars)
 	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkingEnabledEnv)
-	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
 	assert.NotContains(t, metaEnv, nvcaconfig.BYOOMetricSubsetEnabledEnv)
 	assert.NotContains(t, metaEnv, nvcaconfig.BYOOOTelCollectorConfigEnv)
 	assertBYOOOTelCollectorEnvVars(t, msMeta.OTelCollectorEnvVars)

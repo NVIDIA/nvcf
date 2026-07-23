@@ -19,6 +19,7 @@ package logchunkprocessor
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -68,7 +69,6 @@ func makeLogs(body pcommon.Value) plog.Logs {
 	record.SetTimestamp(123)
 	record.SetObservedTimestamp(456)
 	record.SetSeverityText("INFO")
-	record.Attributes().PutStr("existing", "value")
 	body.CopyTo(record.Body())
 	return logs
 }
@@ -78,7 +78,7 @@ func firstRecord(logs plog.Logs) plog.LogRecord {
 }
 
 func TestDisabledLeavesLogsUnchanged(t *testing.T) {
-	processor := newTestProcessor(t, &Config{MaxBodyBytes: 0, MetadataPrefix: defaultMetadataPrefix})
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 0, MetadataPrefix: defaultMetadataPrefix})
 	input := makeLogs(pcommon.NewValueStr("abcdef"))
 
 	output, err := processor.processLogs(context.Background(), input)
@@ -92,15 +92,50 @@ func TestDisabledLeavesLogsUnchanged(t *testing.T) {
 }
 
 func TestValidateRejectsEnabledLimitBelowUTF8Max(t *testing.T) {
+	cfg := &Config{MaxPayloadBytes: utf8.UTFMax - 1, MetadataPrefix: defaultMetadataPrefix}
+
+	err := cfg.Validate()
+
+	require.ErrorContains(t, err, "max_payload_bytes must be 0 or at least 4")
+}
+
+func TestValidateUsesDeprecatedMaxBodyBytes(t *testing.T) {
 	cfg := &Config{MaxBodyBytes: utf8.UTFMax - 1, MetadataPrefix: defaultMetadataPrefix}
 
 	err := cfg.Validate()
 
-	require.ErrorContains(t, err, "max_body_bytes must be 0 or at least 4")
+	require.ErrorContains(t, err, "max_payload_bytes must be 0 or at least 4")
+}
+
+func TestDeprecatedMaxBodyBytesEnablesPayloadLimit(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxBodyBytes: 4, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("abcdef"))
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 2, records.Len())
+	require.Equal(t, "abcd", records.At(0).Body().Str())
+	require.Equal(t, "ef", records.At(1).Body().Str())
+}
+
+func TestMaxPayloadBytesTakesPrecedenceOverDeprecatedMaxBodyBytes(t *testing.T) {
+	processor := newTestProcessor(t, &Config{
+		MaxPayloadBytes: 6,
+		MaxBodyBytes:    4,
+		MetadataPrefix:  defaultMetadataPrefix,
+	})
+	input := makeLogs(pcommon.NewValueStr("abcdef"))
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	requireSharesFirstRecord(t, input, output)
 }
 
 func TestEnabledReturnsOriginalLogsWhenNoRecordsAreOversized(t *testing.T) {
-	processor := newTestProcessor(t, &Config{MaxBodyBytes: 10, MetadataPrefix: defaultMetadataPrefix})
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 10, MetadataPrefix: defaultMetadataPrefix})
 	input := makeLogs(pcommon.NewValueStr("abcdef"))
 
 	output, err := processor.processLogs(context.Background(), input)
@@ -110,7 +145,7 @@ func TestEnabledReturnsOriginalLogsWhenNoRecordsAreOversized(t *testing.T) {
 }
 
 func TestDryRunLeavesOversizedLogsUnchanged(t *testing.T) {
-	processor := newTestProcessor(t, &Config{MaxBodyBytes: 4, DryRun: true, MetadataPrefix: defaultMetadataPrefix})
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 4, DryRun: true, MetadataPrefix: defaultMetadataPrefix})
 	input := makeLogs(pcommon.NewValueStr("abcdef"))
 
 	output, err := processor.processLogs(context.Background(), input)
@@ -128,9 +163,9 @@ func TestDryRunMetricsUseModeAttribute(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	processor := newTestProcessorWithMeterProvider(t, &Config{
-		MaxBodyBytes:   4,
-		DryRun:         true,
-		MetadataPrefix: defaultMetadataPrefix,
+		MaxPayloadBytes: 4,
+		DryRun:          true,
+		MetadataPrefix:  defaultMetadataPrefix,
 	}, meterProvider)
 	ctx := context.Background()
 	input := makeLogs(pcommon.NewValueStr("abcdef"))
@@ -154,8 +189,8 @@ func TestChunkMetricsUseModeAttribute(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	processor := newTestProcessorWithMeterProvider(t, &Config{
-		MaxBodyBytes:   4,
-		MetadataPrefix: defaultMetadataPrefix,
+		MaxPayloadBytes: 4,
+		MetadataPrefix:  defaultMetadataPrefix,
 	}, meterProvider)
 	ctx := context.Background()
 	input := makeLogs(pcommon.NewValueStr("abcdef"))
@@ -175,7 +210,7 @@ func TestChunkMetricsUseModeAttribute(t *testing.T) {
 }
 
 func TestChunksOversizedStringBody(t *testing.T) {
-	processor := newTestProcessor(t, &Config{MaxBodyBytes: 5, MetadataPrefix: defaultMetadataPrefix})
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 5, MetadataPrefix: defaultMetadataPrefix})
 	input := makeLogs(pcommon.NewValueStr("abcdefghijkl"))
 
 	output, err := processor.processLogs(context.Background(), input)
@@ -194,12 +229,239 @@ func TestChunksOversizedStringBody(t *testing.T) {
 		requireAttributeInt(t, attrs, defaultMetadataPrefix+".count", 3)
 		requireAttributeInt(t, attrs, defaultMetadataPrefix+".original_size_bytes", 12)
 		requireAttributeBool(t, attrs, defaultMetadataPrefix+".final", i == 2)
-		requireAttributeStr(t, attrs, "existing", "value")
 		requireAttributeAbsent(t, attrs, "_partial")
 	}
 	requireAttributeInt(t, records.At(0).Attributes(), defaultMetadataPrefix+".offset_bytes", 0)
 	requireAttributeInt(t, records.At(1).Attributes(), defaultMetadataPrefix+".offset_bytes", 5)
 	requireAttributeInt(t, records.At(2).Attributes(), defaultMetadataPrefix+".offset_bytes", 10)
+}
+
+func TestChunksStringBodyAndAttributesUnderSharedLimit(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 8, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("abcdefghijkl"))
+	firstRecord(input).Attributes().PutStr("a", "value")
+	firstRecord(input).Attributes().PutStr("b", "123456")
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 4, records.Len())
+
+	expectedBodies := []string{"abcdefgh", "ijkl", "", ""}
+	expectedA := []string{"", "val", "ue", ""}
+	expectedAOK := []bool{false, true, true, false}
+	expectedB := []string{"", "", "1234", "56"}
+	expectedBOK := []bool{false, false, true, true}
+	for i := 0; i < records.Len(); i++ {
+		record := records.At(i)
+		require.Equal(t, expectedBodies[i], record.Body().Str())
+		requireOptionalAttributeStr(t, record.Attributes(), "a", expectedA[i], expectedAOK[i])
+		requireOptionalAttributeStr(t, record.Attributes(), "b", expectedB[i], expectedBOK[i])
+		require.LessOrEqual(t, payloadBytes(record, defaultMetadataPrefix), 8)
+		requireAttributeInt(t, record.Attributes(), defaultMetadataPrefix+".index", int64(i))
+		requireAttributeInt(t, record.Attributes(), defaultMetadataPrefix+".count", 4)
+		requireAttributeInt(t, record.Attributes(), defaultMetadataPrefix+".original_size_bytes", 25)
+		requireAttributeBool(t, record.Attributes(), defaultMetadataPrefix+".final", i == 3)
+	}
+	requireAttributeInt(t, records.At(0).Attributes(), defaultMetadataPrefix+".offset_bytes", 0)
+	requireAttributeInt(t, records.At(1).Attributes(), defaultMetadataPrefix+".offset_bytes", 8)
+	requireAttributeInt(t, records.At(2).Attributes(), defaultMetadataPrefix+".offset_bytes", 16)
+	requireAttributeInt(t, records.At(3).Attributes(), defaultMetadataPrefix+".offset_bytes", 24)
+	require.Equal(t, "abcdefghijkl", concatenateBodies(records))
+	require.Equal(t, "value", concatenateStringAttribute(records, "a"))
+	require.Equal(t, "123456", concatenateStringAttribute(records, "b"))
+}
+
+func TestChunksWhenCombinedStringBodyAndAttributesExceedLimit(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 5, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("abcd"))
+	firstRecord(input).Attributes().PutStr("x", "yz")
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 2, records.Len())
+	require.Equal(t, "abcd", records.At(0).Body().Str())
+	requireAttributeAbsent(t, records.At(0).Attributes(), "x")
+	require.LessOrEqual(t, payloadBytes(records.At(0), defaultMetadataPrefix), 5)
+	require.Empty(t, records.At(1).Body().Str())
+	requireAttributeStr(t, records.At(1).Attributes(), "x", "yz")
+	require.LessOrEqual(t, payloadBytes(records.At(1), defaultMetadataPrefix), 5)
+	requireAttributeInt(t, records.At(0).Attributes(), defaultMetadataPrefix+".original_size_bytes", 7)
+	requireAttributeInt(t, records.At(1).Attributes(), defaultMetadataPrefix+".original_size_bytes", 7)
+}
+
+func TestChunksNonStringAttributesOnce(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 5, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("abcd"))
+	firstRecord(input).Attributes().PutInt("n", 12)
+	firstRecord(input).Attributes().PutBool("ok", false)
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 3, records.Len())
+	require.Equal(t, "abcd", records.At(0).Body().Str())
+	requireAttributeAbsent(t, records.At(0).Attributes(), "n")
+	requireAttributeAbsent(t, records.At(0).Attributes(), "ok")
+	require.LessOrEqual(t, payloadBytes(records.At(0), defaultMetadataPrefix), 5)
+
+	require.Empty(t, records.At(1).Body().Str())
+	requireAttributeInt(t, records.At(1).Attributes(), "n", 12)
+	requireAttributeAbsent(t, records.At(1).Attributes(), "ok")
+	require.LessOrEqual(t, payloadBytes(records.At(1), defaultMetadataPrefix), 5)
+
+	require.Empty(t, records.At(2).Body().Str())
+	requireAttributeAbsent(t, records.At(2).Attributes(), "n")
+	requireAttributeBool(t, records.At(2).Attributes(), "ok", false)
+	require.Equal(t, 7, payloadBytes(records.At(2), defaultMetadataPrefix))
+}
+
+func TestChunksBytesAttributesWithoutChangingType(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 8, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("ab"))
+	firstRecord(input).Attributes().PutEmptyBytes("bin").FromRaw([]byte{1, 2, 3, 4, 5, 6})
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 2, records.Len())
+
+	require.Equal(t, "ab", records.At(0).Body().Str())
+	requireAttributeBytes(t, records.At(0).Attributes(), "bin", []byte{1, 2, 3})
+	require.LessOrEqual(t, payloadBytes(records.At(0), defaultMetadataPrefix), 8)
+
+	require.Empty(t, records.At(1).Body().Str())
+	requireAttributeBytes(t, records.At(1).Attributes(), "bin", []byte{4, 5, 6})
+	require.LessOrEqual(t, payloadBytes(records.At(1), defaultMetadataPrefix), 8)
+	require.Equal(t, []byte{1, 2, 3, 4, 5, 6}, concatenateBytesAttribute(records, "bin"))
+}
+
+func TestChunksStructuredAttributesOnceWithoutChangingType(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 10, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("abcd"))
+	attrs := firstRecord(input).Attributes()
+	nested := attrs.PutEmptyMap("m")
+	nested.PutStr("x", "y")
+	list := attrs.PutEmptySlice("s")
+	list.AppendEmpty().SetStr("a")
+	list.AppendEmpty().SetStr("b")
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 3, records.Len())
+	require.Equal(t, "abcd", records.At(0).Body().Str())
+	requireAttributeAbsent(t, records.At(0).Attributes(), "m")
+	requireAttributeAbsent(t, records.At(0).Attributes(), "s")
+
+	mapValue, ok := records.At(1).Attributes().Get("m")
+	require.True(t, ok)
+	require.Equal(t, pcommon.ValueTypeMap, mapValue.Type())
+	nestedValue, ok := mapValue.Map().Get("x")
+	require.True(t, ok)
+	require.Equal(t, "y", nestedValue.Str())
+	requireAttributeAbsent(t, records.At(1).Attributes(), "s")
+	require.LessOrEqual(t, payloadBytes(records.At(1), defaultMetadataPrefix), 10)
+
+	sliceValue, ok := records.At(2).Attributes().Get("s")
+	require.True(t, ok)
+	require.Equal(t, pcommon.ValueTypeSlice, sliceValue.Type())
+	require.Equal(t, "a", sliceValue.Slice().At(0).Str())
+	require.Equal(t, "b", sliceValue.Slice().At(1).Str())
+	requireAttributeAbsent(t, records.At(2).Attributes(), "m")
+	require.LessOrEqual(t, payloadBytes(records.At(2), defaultMetadataPrefix), 10)
+}
+
+func TestChunksNonStringBodyOnceWhenAttributesForceChunking(t *testing.T) {
+	body := pcommon.NewValueMap()
+	body.Map().PutStr("x", "y")
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 10, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(body)
+	firstRecord(input).Attributes().PutStr("a", "12345")
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 2, records.Len())
+	require.Equal(t, pcommon.ValueTypeMap, records.At(0).Body().Type())
+	bodyValue, ok := records.At(0).Body().Map().Get("x")
+	require.True(t, ok)
+	require.Equal(t, "y", bodyValue.Str())
+	requireAttributeAbsent(t, records.At(0).Attributes(), "a")
+	require.LessOrEqual(t, payloadBytes(records.At(0), defaultMetadataPrefix), 10)
+
+	require.Equal(t, pcommon.ValueTypeStr, records.At(1).Body().Type())
+	require.Empty(t, records.At(1).Body().Str())
+	requireAttributeStr(t, records.At(1).Attributes(), "a", "12345")
+	require.LessOrEqual(t, payloadBytes(records.At(1), defaultMetadataPrefix), 10)
+}
+
+func TestChunksEmptyAttributesOnce(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 5, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("abcdef"))
+	firstRecord(input).Attributes().PutStr("e", "")
+	firstRecord(input).Attributes().PutEmptyBytes("z")
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 2, records.Len())
+	require.Equal(t, "abcde", records.At(0).Body().Str())
+	requireAttributeAbsent(t, records.At(0).Attributes(), "e")
+	requireAttributeAbsent(t, records.At(0).Attributes(), "z")
+	require.Equal(t, "f", records.At(1).Body().Str())
+	requireAttributeStr(t, records.At(1).Attributes(), "e", "")
+	requireAttributeBytes(t, records.At(1).Attributes(), "z", nil)
+	require.LessOrEqual(t, payloadBytes(records.At(1), defaultMetadataPrefix), 5)
+}
+
+func TestChunksStringAttributesWithoutSplittingUTF8Runes(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 5, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("ab"))
+	firstRecord(input).Attributes().PutStr("u", "🙂🙂")
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 3, records.Len())
+	require.Equal(t, "ab", records.At(0).Body().Str())
+	requireAttributeAbsent(t, records.At(0).Attributes(), "u")
+	requireAttributeStr(t, records.At(1).Attributes(), "u", "🙂")
+	requireAttributeStr(t, records.At(2).Attributes(), "u", "🙂")
+	attr1, _ := records.At(1).Attributes().Get("u")
+	attr2, _ := records.At(2).Attributes().Get("u")
+	require.True(t, utf8.ValidString(attr1.Str()))
+	require.True(t, utf8.ValidString(attr2.Str()))
+	require.LessOrEqual(t, payloadBytes(records.At(1), defaultMetadataPrefix), 5)
+	require.LessOrEqual(t, payloadBytes(records.At(2), defaultMetadataPrefix), 5)
+}
+
+func TestChunksAttributesInDeterministicKeyOrder(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 4, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("x"))
+	firstRecord(input).Attributes().PutStr("b", "12")
+	firstRecord(input).Attributes().PutStr("a", "34")
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 2, records.Len())
+	require.Equal(t, "x", records.At(0).Body().Str())
+	requireAttributeStr(t, records.At(0).Attributes(), "a", "34")
+	requireAttributeAbsent(t, records.At(0).Attributes(), "b")
+	require.Empty(t, records.At(1).Body().Str())
+	requireAttributeAbsent(t, records.At(1).Attributes(), "a")
+	requireAttributeStr(t, records.At(1).Attributes(), "b", "12")
 }
 
 func TestChunksDoNotSplitUTF8Runes(t *testing.T) {
@@ -225,7 +487,7 @@ func TestChunksFitFourByteUTF8RunesWithinLimit(t *testing.T) {
 func TestNonStringBodyIsUnchanged(t *testing.T) {
 	body := pcommon.NewValueMap()
 	body.Map().PutStr("message", "abcdef")
-	processor := newTestProcessor(t, &Config{MaxBodyBytes: 4, MetadataPrefix: defaultMetadataPrefix})
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 4, MetadataPrefix: defaultMetadataPrefix})
 	input := makeLogs(body)
 
 	output, err := processor.processLogs(context.Background(), input)
@@ -262,10 +524,28 @@ func requireAttributeBool(t *testing.T, attrs pcommon.Map, key string, want bool
 	require.Equal(t, want, got.Bool())
 }
 
+func requireAttributeBytes(t *testing.T, attrs pcommon.Map, key string, want []byte) {
+	t.Helper()
+	got, ok := attrs.Get(key)
+	require.True(t, ok, "missing attribute %s", key)
+	require.Equal(t, pcommon.ValueTypeBytes, got.Type())
+	require.Equal(t, want, got.Bytes().AsRaw())
+}
+
 func requireAttributeAbsent(t *testing.T, attrs pcommon.Map, key string) {
 	t.Helper()
 	_, ok := attrs.Get(key)
 	require.False(t, ok, "attribute %s should not be present", key)
+}
+
+func requireOptionalAttributeStr(t *testing.T, attrs pcommon.Map, key string, want string, wantOK bool) {
+	t.Helper()
+	got, ok := attrs.Get(key)
+	require.Equal(t, wantOK, ok, "attribute %s presence mismatch", key)
+	if !wantOK {
+		return
+	}
+	require.Equal(t, want, got.Str())
 }
 
 func requireSharesFirstRecord(t *testing.T, input plog.Logs, output plog.Logs) {
@@ -274,6 +554,53 @@ func requireSharesFirstRecord(t *testing.T, input plog.Logs, output plog.Logs) {
 	got, ok := firstRecord(input).Attributes().Get("shared")
 	require.True(t, ok, "output should share the original log record")
 	require.Equal(t, "true", got.Str())
+}
+
+func payloadBytes(record plog.LogRecord, metadataPrefix string) int {
+	total := 0
+	if record.Body().Type() == pcommon.ValueTypeStr {
+		total += len(record.Body().Str())
+	}
+	record.Attributes().Range(func(key string, value pcommon.Value) bool {
+		if strings.HasPrefix(key, metadataPrefix+".") {
+			return true
+		}
+		total += len(key) + valuePayloadBytes(value)
+		return true
+	})
+	return total
+}
+
+func concatenateBodies(records plog.LogRecordSlice) string {
+	var builder strings.Builder
+	for i := 0; i < records.Len(); i++ {
+		builder.WriteString(records.At(i).Body().Str())
+	}
+	return builder.String()
+}
+
+func concatenateStringAttribute(records plog.LogRecordSlice, key string) string {
+	var builder strings.Builder
+	for i := 0; i < records.Len(); i++ {
+		value, ok := records.At(i).Attributes().Get(key)
+		if !ok {
+			continue
+		}
+		builder.WriteString(value.Str())
+	}
+	return builder.String()
+}
+
+func concatenateBytesAttribute(records plog.LogRecordSlice, key string) []byte {
+	var out []byte
+	for i := 0; i < records.Len(); i++ {
+		value, ok := records.At(i).Attributes().Get(key)
+		if !ok {
+			continue
+		}
+		out = append(out, value.Bytes().AsRaw()...)
+	}
+	return out
 }
 
 func requireInt64MetricDataPoint(

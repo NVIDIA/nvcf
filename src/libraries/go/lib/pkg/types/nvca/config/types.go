@@ -55,7 +55,11 @@ type ResourceRequirements struct {
 }
 
 const (
-	// BYOOLogChunkMaxBodyBytesEnv is the BYOO collector env var for the log chunk size override.
+	// BYOOLogChunkMaxPayloadBytesEnv is the BYOO collector env var for the log chunk payload size override.
+	BYOOLogChunkMaxPayloadBytesEnv = "BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES"
+	// BYOOLogChunkMaxBodyBytesEnv is the deprecated BYOO collector env var for the log chunk size override.
+	//
+	// Deprecated: use BYOOLogChunkMaxPayloadBytesEnv.
 	BYOOLogChunkMaxBodyBytesEnv = "BYOO_LOG_CHUNK_MAX_BODY_BYTES"
 	// BYOOLogChunkDryRunEnv is the BYOO collector env var that records chunking metrics without mutating logs.
 	BYOOLogChunkDryRunEnv = "BYOO_LOG_CHUNK_DRY_RUN"
@@ -74,16 +78,23 @@ const (
 )
 
 type BYOOLogChunkingConfig struct {
-	Enabled      bool  `yaml:"enabled,omitempty"`
-	MaxBodyBytes int64 `yaml:"maxBodyBytes,omitempty"`
-	DryRun       bool  `yaml:"dryRun,omitempty"`
+	Enabled         bool  `mapstructure:"enabled" yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	MaxPayloadBytes int64 `mapstructure:"maxPayloadBytes" yaml:"maxPayloadBytes,omitempty" json:"maxPayloadBytes,omitempty"`
+	// MaxBodyBytes is a deprecated alias for MaxPayloadBytes.
+	//
+	// Deprecated: use MaxPayloadBytes / maxPayloadBytes.
+	MaxBodyBytes int64 `mapstructure:"maxBodyBytes" yaml:"maxBodyBytes,omitempty" json:"maxBodyBytes,omitempty"`
+	DryRun       bool  `mapstructure:"dryRun" yaml:"dryRun,omitempty" json:"dryRun,omitempty"`
 }
 
 func (c BYOOLogChunkingConfig) IsZero() bool {
-	return !c.Enabled && c.MaxBodyBytes == 0 && !c.DryRun
+	return !c.Enabled && c.MaxPayloadBytes == 0 && c.MaxBodyBytes == 0 && !c.DryRun
 }
 
 func (c BYOOLogChunkingConfig) Complete() BYOOLogChunkingConfig {
+	if c.MaxPayloadBytes == 0 && c.MaxBodyBytes != 0 {
+		c.MaxPayloadBytes = c.MaxBodyBytes
+	}
 	return c
 }
 
@@ -97,10 +108,10 @@ func (c BYOOLogChunkingConfig) EnvVars() []corev1.EnvVar {
 			Value: strconv.FormatBool(c.Enabled),
 		})
 	}
-	if c.MaxBodyBytes > 0 {
+	if c.MaxPayloadBytes > 0 {
 		envs = append(envs, corev1.EnvVar{
-			Name:  BYOOLogChunkMaxBodyBytesEnv,
-			Value: strconv.FormatInt(c.MaxBodyBytes, 10),
+			Name:  BYOOLogChunkMaxPayloadBytesEnv,
+			Value: strconv.FormatInt(c.MaxPayloadBytes, 10),
 		})
 	}
 	if c.DryRun {

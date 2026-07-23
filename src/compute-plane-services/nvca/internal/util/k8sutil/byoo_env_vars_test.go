@@ -29,13 +29,13 @@ import (
 func TestAddBYOOOTelCollectorEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) {
 	envs := []corev1.EnvVar{
 		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
-		{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
+		{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
 		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
 	}
 	expectedEnv := []corev1.EnvVar{
-		{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
+		{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
 		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
 		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
@@ -47,7 +47,7 @@ func TestAddBYOOOTelCollectorEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t
 				{
 					Name: common.ByooOTelCollectorPodNameBase,
 					Env: []corev1.EnvVar{
-						{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "1000000"},
+						{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "1000000"},
 					},
 				},
 				{Name: "inference"},

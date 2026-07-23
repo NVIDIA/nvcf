@@ -451,8 +451,8 @@ func TestGenerateExportersAndServiceAddsLogChunkProcessor(t *testing.T) {
 	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
 		Namespace: "test-namespace",
 		LogChunking: LogChunkingConfig{
-			MaxBodyBytes: 983040,
-			DryRun:       true,
+			MaxPayloadBytes: 983040,
+			DryRun:          true,
 		},
 	})
 
@@ -464,8 +464,8 @@ func TestGenerateExportersAndServiceAddsLogChunkProcessor(t *testing.T) {
 		"batch",
 	}, otelConfig.Service.Pipelines["logs"].Processors)
 	assert.Equal(t, map[string]interface{}{
-		"max_body_bytes": 983040,
-		"dry_run":        true,
+		"max_payload_bytes": 983040,
+		"dry_run":           true,
 	}, otelConfig.Processors["logchunk/byoo"])
 
 	exporter := otelConfig.Exporters["splunk_hec/SPLUNK-example-logs-logs"]
@@ -499,8 +499,8 @@ func TestGenerateExportersAndServiceAddsLogChunkDefaultsWhenEnabled(t *testing.T
 
 	assert.NoError(t, err)
 	assert.Equal(t, map[string]interface{}{
-		"max_body_bytes": defaultLogChunkMaxBodyBytes,
-		"dry_run":        false,
+		"max_payload_bytes": defaultLogChunkMaxPayloadBytes,
+		"dry_run":           false,
 	}, otelConfig.Processors["logchunk/byoo"])
 	exporter := otelConfig.Exporters["splunk_hec/SPLUNK-example-logs-logs"]
 	assert.NotContains(t, exporter["sending_queue"].(map[string]interface{}), "batch")

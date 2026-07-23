@@ -122,12 +122,13 @@ The configuration produced by otelconfig-generator guarantees that only `otlp` t
 
 ### 🧩 Oversized Log Chunking
 
-Some telemetry backends reject a single log entry when its body is larger than the backend's per-entry size limit. The BYOO collector can insert a custom `logchunk/byoo` processor into the logs pipeline to split oversized UTF-8 string log bodies into correlated chunks before export.
+Some telemetry backends reject a single log entry when its body and attributes are larger than the backend's per-entry size limit. The BYOO collector can insert a custom `logchunk/byoo` processor into the logs pipeline to split oversized UTF-8 string log bodies plus string/bytes attributes into correlated chunks before export. Non-string attribute values are counted toward the payload limit and emitted once without changing their type.
 
 Chunking is disabled by default. Configure it with:
 
-- `BYOO_LOG_CHUNKING_ENABLED`: enables the `logchunk/byoo` processor. When enabled without overrides, the collector uses `262144` bytes for `max_body_bytes` and `false` for dry-run.
-- `BYOO_LOG_CHUNK_MAX_BODY_BYTES`: maximum log body size in bytes before chunking. `0` uses the enabled-mode default when `BYOO_LOG_CHUNKING_ENABLED=true`. Explicit enabled values must be at least `4` bytes so chunks can preserve UTF-8 rune boundaries.
+- `BYOO_LOG_CHUNKING_ENABLED`: enables the `logchunk/byoo` processor. When enabled without overrides, the collector uses `262144` bytes for `max_payload_bytes` and `false` for dry-run.
+- `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES`: maximum combined log body and attribute payload size in bytes before chunking. `0` uses the enabled-mode default when `BYOO_LOG_CHUNKING_ENABLED=true`. Explicit enabled values must be at least `4` bytes so chunks can preserve UTF-8 rune boundaries.
+- `BYOO_LOG_CHUNK_MAX_BODY_BYTES`: deprecated alias for `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES`. When both are set, `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES` wins.
 - `BYOO_LOG_CHUNK_DRY_RUN`: records oversized-log metrics and warnings without mutating log payloads. Dry-run metric datapoints use `mode=dry_run`.
 - `BYOO_DEBUG_MODE`: enables collector debug logging and adds the `debug` exporter to every generated pipeline.
 - `BYOO_OTEL_COLLECTOR_CONFIG_B64`: optional base64-encoded JSON for advanced collector rendering overrides, such as exporterhelper timeout, retry, sending queue, sending queue batch, memory limiter, batch, and log batch settings.

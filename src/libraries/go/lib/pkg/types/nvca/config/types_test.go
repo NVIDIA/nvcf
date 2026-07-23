@@ -93,26 +93,73 @@ func TestBYOOLogChunkingConfig_Complete(t *testing.T) {
 	t.Run("disabled does not add defaults", func(t *testing.T) {
 		completed := BYOOLogChunkingConfig{}.Complete()
 		assert.False(t, completed.Enabled)
-		assert.Zero(t, completed.MaxBodyBytes)
+		assert.Zero(t, completed.MaxPayloadBytes)
 		assert.False(t, completed.DryRun)
 	})
 
 	t.Run("enabled does not add collector defaults", func(t *testing.T) {
 		completed := BYOOLogChunkingConfig{Enabled: true}.Complete()
 		assert.True(t, completed.Enabled)
-		assert.Zero(t, completed.MaxBodyBytes)
+		assert.Zero(t, completed.MaxPayloadBytes)
 		assert.False(t, completed.DryRun)
 	})
 
 	t.Run("enabled preserves explicit values", func(t *testing.T) {
 		completed := BYOOLogChunkingConfig{
-			Enabled:      true,
-			MaxBodyBytes: 131072,
-			DryRun:       true,
+			Enabled:         true,
+			MaxPayloadBytes: 131072,
+			DryRun:          true,
 		}.Complete()
-		assert.Equal(t, int64(131072), completed.MaxBodyBytes)
+		assert.Equal(t, int64(131072), completed.MaxPayloadBytes)
 		assert.True(t, completed.DryRun)
 	})
+
+	t.Run("deprecated max body bytes populates max payload bytes", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{
+			MaxBodyBytes: 131072,
+		}.Complete()
+		assert.Equal(t, int64(131072), completed.MaxPayloadBytes)
+	})
+
+	t.Run("max payload bytes takes precedence over deprecated max body bytes", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{
+			MaxPayloadBytes: 262144,
+			MaxBodyBytes:    131072,
+		}.Complete()
+		assert.Equal(t, int64(262144), completed.MaxPayloadBytes)
+	})
+}
+
+func TestBYOOLogChunkingConfig_EnvVarsUsesMaxPayloadBytes(t *testing.T) {
+	cfg := BYOOLogChunkingConfig{
+		Enabled:         true,
+		MaxPayloadBytes: 262144,
+		DryRun:          true,
+	}
+
+	assert.Equal(t, []corev1.EnvVar{
+		{Name: BYOOLogChunkingEnabledEnv, Value: "true"},
+		{Name: BYOOLogChunkMaxPayloadBytesEnv, Value: "262144"},
+		{Name: BYOOLogChunkDryRunEnv, Value: "true"},
+	}, cfg.EnvVars())
+}
+
+func TestBYOOLogChunkingConfig_EnvVarsAcceptsDeprecatedMaxBodyBytes(t *testing.T) {
+	cfg := BYOOLogChunkingConfig{
+		MaxPayloadBytes: 262144,
+		MaxBodyBytes:    131072,
+	}
+
+	assert.Equal(t, []corev1.EnvVar{{
+		Name:  BYOOLogChunkMaxPayloadBytesEnv,
+		Value: "262144",
+	}}, cfg.EnvVars())
+
+	cfg = BYOOLogChunkingConfig{MaxBodyBytes: 131072}
+	assert.Equal(t, []corev1.EnvVar{{
+		Name:  BYOOLogChunkMaxPayloadBytesEnv,
+		Value: "131072",
+	}}, cfg.EnvVars())
 }
 
 func TestBYOODebugModeConfig_IsZero(t *testing.T) {

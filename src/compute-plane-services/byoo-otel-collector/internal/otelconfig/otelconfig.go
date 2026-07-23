@@ -31,15 +31,17 @@ import (
 )
 
 type envConfig struct {
-	NvcfBackendType               string `split_words:"true" required:"true"`
-	NvcfInstanceID                string `split_words:"true" required:"true"`
-	NvcfNamespace                 string `split_words:"true" required:"true"`
-	NvcfWorkloadType              string `split_words:"true" required:"true"`
-	NvcfFunctionID                string `split_words:"true"`
-	NvcfFunctionVersionID         string `split_words:"true"`
-	NvctTaskID                    string `split_words:"true"`
-	NvcfZoneName                  string `split_words:"true"`
-	ByooLogChunkingEnabled        bool   `split_words:"true"`
+	NvcfBackendType             string `split_words:"true" required:"true"`
+	NvcfInstanceID              string `split_words:"true" required:"true"`
+	NvcfNamespace               string `split_words:"true" required:"true"`
+	NvcfWorkloadType            string `split_words:"true" required:"true"`
+	NvcfFunctionID              string `split_words:"true"`
+	NvcfFunctionVersionID       string `split_words:"true"`
+	NvctTaskID                  string `split_words:"true"`
+	NvcfZoneName                string `split_words:"true"`
+	ByooLogChunkingEnabled      bool   `split_words:"true"`
+	ByooLogChunkMaxPayloadBytes int    `split_words:"true"`
+	// Deprecated: use ByooLogChunkMaxPayloadBytes.
 	ByooLogChunkMaxBodyBytes      int    `split_words:"true"`
 	ByooLogChunkDryRun            bool   `split_words:"true"`
 	ByooDebugMode                 bool   `split_words:"true"`
@@ -75,11 +77,12 @@ func getTemplateConfig() (TemplateConfig, error) {
 	tcgf.Namespace = env.NvcfNamespace
 	tcgf.InstanceID = env.NvcfInstanceID
 	tcgf.LogChunking.Enabled = env.ByooLogChunkingEnabled
+	tcgf.LogChunking.MaxPayloadBytes = env.ByooLogChunkMaxPayloadBytes
 	tcgf.LogChunking.MaxBodyBytes = env.ByooLogChunkMaxBodyBytes
 	tcgf.LogChunking.DryRun = env.ByooLogChunkDryRun
 	logChunking, err := resolvedLogChunkingConfig(tcgf.LogChunking)
 	if err != nil {
-		return TemplateConfig{}, fmt.Errorf("BYOO_LOG_CHUNK_MAX_BODY_BYTES: %w", err)
+		return TemplateConfig{}, fmt.Errorf("BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES: %w", err)
 	}
 	tcgf.LogChunking = logChunking
 	otelCollectorConfig, err := decodeOTelCollectorConfig(env.ByooOtelCollectorConfigB64)

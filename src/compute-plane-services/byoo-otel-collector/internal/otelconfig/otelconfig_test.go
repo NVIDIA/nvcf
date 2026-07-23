@@ -111,8 +111,43 @@ func TestGetTemplateConfig(t *testing.T) {
 			expectErr: false,
 			expect: func(t *testing.T, cfg TemplateConfig) {
 				assert.True(t, cfg.LogChunking.Enabled)
-				assert.Equal(t, defaultLogChunkMaxBodyBytes, cfg.LogChunking.MaxBodyBytes)
+				assert.Equal(t, defaultLogChunkMaxPayloadBytes, cfg.LogChunking.MaxPayloadBytes)
 				assert.False(t, cfg.LogChunking.DryRun)
+			},
+		},
+		{
+			name: "BYOO log chunk max payload bytes overrides deprecated max body bytes",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":                "gfn",
+				"NVCF_INSTANCE_ID":                 "test-instance",
+				"NVCF_NAMESPACE":                   "test-ns",
+				"NVCF_WORKLOAD_TYPE":               "function",
+				"NVCT_TASK_ID":                     "task-123",
+				"NVCF_ZONE_NAME":                   "zone-1",
+				"BYOO_LOG_CHUNK_MAX_BODY_BYTES":    "131072",
+				"BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES": "262144",
+			},
+			expectErr: false,
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.True(t, cfg.LogChunking.Enabled)
+				assert.Equal(t, 262144, cfg.LogChunking.MaxPayloadBytes)
+			},
+		},
+		{
+			name: "BYOO deprecated log chunk max body bytes is accepted",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":             "gfn",
+				"NVCF_INSTANCE_ID":              "test-instance",
+				"NVCF_NAMESPACE":                "test-ns",
+				"NVCF_WORKLOAD_TYPE":            "function",
+				"NVCT_TASK_ID":                  "task-123",
+				"NVCF_ZONE_NAME":                "zone-1",
+				"BYOO_LOG_CHUNK_MAX_BODY_BYTES": "131072",
+			},
+			expectErr: false,
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.True(t, cfg.LogChunking.Enabled)
+				assert.Equal(t, 131072, cfg.LogChunking.MaxPayloadBytes)
 			},
 		},
 		{
@@ -256,6 +291,7 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCF_ZONE_NAME",
 				"NVCF_CLUSTER_REGION",
 				"BYOO_LOG_CHUNKING_ENABLED",
+				"BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES",
 				"BYOO_LOG_CHUNK_MAX_BODY_BYTES",
 				"BYOO_LOG_CHUNK_DRY_RUN",
 				"BYOO_DEBUG_MODE",

@@ -102,6 +102,7 @@ agentConfig:
   #     logLevel: debug
   #     byooLogChunking:
   #       enabled: true
+  #       maxPayloadBytes: 262144
   #     byooDebugMode:
   #       enabled: true
   #     byooOtelCollector:

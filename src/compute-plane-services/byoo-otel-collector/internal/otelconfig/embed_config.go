@@ -54,7 +54,9 @@ type TemplateConfig struct {
 }
 
 type LogChunkingConfig struct {
-	Enabled      bool
+	Enabled         bool
+	MaxPayloadBytes int
+	// Deprecated: use MaxPayloadBytes.
 	MaxBodyBytes int
 	DryRun       bool
 }

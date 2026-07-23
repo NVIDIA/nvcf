@@ -2837,9 +2837,9 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 				},
 			},
 			BYOOLogChunking: nvcaconfig.BYOOLogChunkingConfig{
-				Enabled:      true,
-				MaxBodyBytes: 983040,
-				DryRun:       true,
+				Enabled:         true,
+				MaxPayloadBytes: 983040,
+				DryRun:          true,
 			},
 			BYOOOTelCollector: nvcaconfig.BYOOOTelCollectorConfig{
 				ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
@@ -2876,7 +2876,7 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 	assert.True(t, byooLimits.Memory().Equal(resource.MustParse("2Gi")))
 	assert.True(t, fluentBitRequests.Cpu().Equal(resource.MustParse("100m")))
 	assert.True(t, got.Agent.BYOOLogChunking.Enabled)
-	assert.Equal(t, int64(983040), got.Agent.BYOOLogChunking.MaxBodyBytes)
+	assert.Equal(t, int64(983040), got.Agent.BYOOLogChunking.MaxPayloadBytes)
 	assert.True(t, got.Agent.BYOOLogChunking.DryRun)
 	assert.Equal(t, "30s", got.Agent.BYOOOTelCollector.ExporterHelper.Timeout)
 	require.NotNil(t, got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MinSize)
