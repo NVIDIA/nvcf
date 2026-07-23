@@ -60,6 +60,7 @@ go_library(
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
         "//vendor/github.com/go-logr/logr",
         "//vendor/github.com/google/go-cmp/cmp",
+        "//vendor/github.com/google/go-cmp/cmp/cmpopts",
         "//vendor/github.com/google/go-containerregistry/pkg/name",
         "//vendor/github.com/hashicorp/go-retryablehttp",
         "//vendor/github.com/imdario/mergo",

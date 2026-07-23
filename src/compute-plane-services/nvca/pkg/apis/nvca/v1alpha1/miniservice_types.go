@@ -43,6 +43,29 @@ type MiniServiceSpec struct {
 	ICMSRequestName string `json:"icmsRequestName"`
 
 	HelmChartConfig common.HelmConfig `json:"helmChartConfig"`
+
+	// WorkloadConfig holds workload-specific configuration decoded from the user-provided
+	// workload config ConfigMap in the rendered Helm chart. It is populated by the controller
+	// during installation and read on subsequent reconciles.
+	// +optional
+	WorkloadConfig *WorkloadConfig `json:"workloadConfig,omitempty"`
+}
+
+// WorkloadConfig is workload-specific configuration a chart author may supply through the
+// workload config ConfigMap. It is intended to grow with additional workload-scoped settings
+// beyond feature flags.
+type WorkloadConfig struct {
+	// FeatureFlags toggles per-workload behaviors, keyed by feature flag name.
+	// +optional
+	FeatureFlags map[string]bool `json:"featureFlags,omitempty"`
+}
+
+// IsFeatureFlagEnabled reports whether the named feature flag is enabled.
+func (c *WorkloadConfig) IsFeatureFlagEnabled(key string) bool {
+	if c == nil || c.FeatureFlags == nil {
+		return false
+	}
+	return c.FeatureFlags[key]
 }
 
 type LocalObjectReference struct {
