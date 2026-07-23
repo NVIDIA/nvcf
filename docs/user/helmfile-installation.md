@@ -1370,7 +1370,7 @@ After `helmfile destroy` completes, clean up the namespaces:
 ```bash
 # Delete NVCF namespaces
 kubectl delete namespace cassandra-system nats-system vault-system \
-  nvcf api-keys ess sis \
+  nvcf api-keys ess sis nvcf-ui \
   --ignore-not-found
 ```
 

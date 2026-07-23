@@ -174,7 +174,7 @@ above.
 
 2. Skip the credential steps above. When the cluster authenticates to the registry
    automatically (the node or workload identity has pull access), the pull needs no
-   Kubernetes secret, so you do not need: the per-namespace `nvcr-pull-secret` from step 1
+   Kubernetes secret, so you do not need: the per-namespace `nvcr-creds` from step 1
    (still create the namespaces, just not the secret), the `global.imagePullSecrets` entry,
    or the `docker login`/`helm registry login nvcr.io` from step 2.
 
@@ -361,7 +361,7 @@ HELMFILE_ENV=<env-name> helmfile destroy
 ### Delete namespaces
 
 ```bash
-for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvcf-ui vault-system; do
   kubectl delete namespace "$ns" --ignore-not-found
 done
 ```
@@ -461,7 +461,7 @@ helm install kyverno kyverno/kyverno -n kyverno --create-namespace
 # 2. Create pull secret in each namespace
 export NGC_API_KEY="<your-key>"
 for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system cert-manager; do
-  kubectl create secret docker-registry nvcr-pull-secret \
+  kubectl create secret docker-registry nvcr-creds \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
     --docker-password="$NGC_API_KEY" \
@@ -473,11 +473,11 @@ done
 kubectl apply -f kyverno-imagepullsecret-policy.yaml
 ```
 
-The policy mutates every pod at admission time, adding `imagePullSecrets: [{name: nvcr-pull-secret}]`. Verify with:
+The policy mutates every pod at admission time, adding `imagePullSecrets: [{name: nvcr-creds}]`. Verify with:
 
 ```bash
 kubectl get pod -n <namespace> <pod-name> -o jsonpath='{.spec.imagePullSecrets}'
-# Should show: [{"name":"nvcr-pull-secret"}]
+# Should show: [{"name":"nvcr-creds"}]
 ```
 
 Not needed if using a CSP built-in credential helper (e.g., ECR with IAM node roles).
