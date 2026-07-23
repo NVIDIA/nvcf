@@ -7,11 +7,11 @@ NV_JAVA_JAVACOPTS = [
 ]
 
 NV_LOMBOK_COMPILE_DEPS = [
-    "//src/libraries/java/nv-boot-parent/tools/bazel:lombok_annotations",
+    "//tools/bazel:lombok_annotations",
 ]
 
 NV_LOMBOK_PLUGINS = [
-    "//src/libraries/java/nv-boot-parent/tools/bazel:lombok_plugin",
+    "//tools/bazel:lombok_plugin",
 ]
 
 NV_JUNIT5_ARGS = [
@@ -24,21 +24,21 @@ NV_JUNIT5_ARGS = [
 ]
 
 NV_JUNIT5_RUNTIME_DEPS = [
-    "@nv_third_party_deps//:org_junit_platform_junit_platform_console_standalone",
+    "@maven//:org_junit_platform_junit_platform_console_standalone",
 ]
 
 NV_JUNIT5_COMPILE_DEPS = [
-    "@nv_third_party_deps//:org_assertj_assertj_core",
-    "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_api",
-    "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_params",
-    "@nv_third_party_deps//:org_mockito_mockito_core",
-    "@nv_third_party_deps//:org_mockito_mockito_junit_jupiter",
-    "@nv_third_party_deps//:org_springframework_boot_spring_boot_test",
-    "@nv_third_party_deps//:org_springframework_boot_spring_boot_test_autoconfigure",
-    "@nv_third_party_deps//:org_springframework_spring_test",
+    "@maven//:org_assertj_assertj_core",
+    "@maven//:org_junit_jupiter_junit_jupiter_api",
+    "@maven//:org_junit_jupiter_junit_jupiter_params",
+    "@maven//:org_mockito_mockito_core",
+    "@maven//:org_mockito_mockito_junit_jupiter",
+    "@maven//:org_springframework_boot_spring_boot_test",
+    "@maven//:org_springframework_boot_spring_boot_test_autoconfigure",
+    "@maven//:org_springframework_spring_test",
 ]
 
-NV_MOCKITO_CORE = "@nv_third_party_deps//:org_mockito_mockito_core"
+NV_MOCKITO_CORE = "@maven//:org_mockito_mockito_core"
 
 NV_MOCKITO_AGENT_DATA = [
     NV_MOCKITO_CORE,
@@ -48,7 +48,7 @@ NV_MOCKITO_AGENT_JVM_FLAGS = [
     "-javaagent:$(location %s)" % NV_MOCKITO_CORE,
 ]
 
-NV_JACOCO_AGENT = "@nv_third_party_deps//:org_jacoco_org_jacoco_agent_runtime"
+NV_JACOCO_AGENT = "@maven//:org_jacoco_org_jacoco_agent_runtime"
 
 NV_JACOCO_AGENT_DATA = [
     NV_JACOCO_AGENT,
@@ -184,13 +184,13 @@ def nv_boot_library_test(
 
     _sh_test(
         name = name,
-        srcs = ["//src/libraries/java/nv-boot-parent/tools/bazel:jacoco_test_runner.sh"],
+        srcs = ["//tools/bazel:jacoco_test_runner.sh"],
         args = [
             "$(location :%s)" % junit_runner,
             "$(location %s)" % coverage_library,
             coverage_source_root if coverage_sourcefiles else "",
             native.package_name(),
-            "$(location //src/libraries/java/nv-boot-parent/tools/bazel:jacoco_cli)",
+            "$(location //tools/bazel:jacoco_cli)",
         ] + NV_JUNIT5_ARGS + [
             "--class-path=$(location :%s.jar)" % junit_runner,
             "--scan-classpath=$(location :%s.jar)" % junit_runner,
@@ -202,7 +202,7 @@ def nv_boot_library_test(
             ":" + junit_runner,
             ":%s.jar" % junit_runner,
             coverage_library,
-            "//src/libraries/java/nv-boot-parent/tools/bazel:jacoco_cli",
+            "//tools/bazel:jacoco_cli",
         ] + coverage_sourcefiles,
         size = size,
         tags = tags,

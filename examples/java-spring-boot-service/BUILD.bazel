@@ -21,7 +21,16 @@
 # wiring a real service adds.
 
 load("@contrib_rules_jvm//java:defs.bzl", "java_junit5_test")
-load("//rules/java:defs.bzl", "nvcf_java_library", "nvcf_spring_boot_image")
+load("@nvcf_java_rules//:bom_alignment.bzl", "bom_alignment_test")
+load("@nvcf_java_rules//:defs.bzl", "nvcf_java_library", "nvcf_spring_boot_image")
+
+exports_files(["MODULE.bazel"])
+
+# Fails the build if this module's inlined maven.install boms drift from the
+# canonical SPRING_BOOT_BOM in @nvcf_java_rules//:platform.bzl.
+bom_alignment_test(
+    name = "bom_alignment_test",
+)
 
 nvcf_java_library(
     name = "example_lib",
@@ -31,10 +40,10 @@ nvcf_java_library(
     # the concrete artifacts below are the ones the code imports directly, so
     # the strict-deps header compiler sees them on the direct classpath.
     deps = [
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_web",
-        "@nv_third_party_deps//:org_springframework_spring_web",
+        "@maven//:org_springframework_boot_spring_boot",
+        "@maven//:org_springframework_boot_spring_boot_autoconfigure",
+        "@maven//:org_springframework_boot_spring_boot_starter_web",
+        "@maven//:org_springframework_spring_web",
     ],
 )
 
@@ -54,13 +63,13 @@ java_junit5_test(
     srcs = ["src/test/java/com/nvidia/nvcf/example/HelloControllerTest.java"],
     test_class = "com.nvidia.nvcf.example.HelloControllerTest",
     runtime_deps = [
-        "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_engine",
-        "@nv_third_party_deps//:org_junit_platform_junit_platform_launcher",
-        "@nv_third_party_deps//:org_junit_platform_junit_platform_reporting",
+        "@maven//:org_junit_jupiter_junit_jupiter_engine",
+        "@maven//:org_junit_platform_junit_platform_launcher",
+        "@maven//:org_junit_platform_junit_platform_reporting",
     ],
     deps = [
         ":example_lib",
-        "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_api",
+        "@maven//:org_junit_jupiter_junit_jupiter_api",
     ],
 )
 
@@ -73,17 +82,17 @@ java_junit5_test(
     srcs = ["src/test/java/com/nvidia/nvcf/example/HelloControllerWebTest.java"],
     test_class = "com.nvidia.nvcf.example.HelloControllerWebTest",
     runtime_deps = [
-        "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_engine",
-        "@nv_third_party_deps//:org_junit_platform_junit_platform_launcher",
-        "@nv_third_party_deps//:org_junit_platform_junit_platform_reporting",
+        "@maven//:org_junit_jupiter_junit_jupiter_engine",
+        "@maven//:org_junit_platform_junit_platform_launcher",
+        "@maven//:org_junit_platform_junit_platform_reporting",
     ],
     deps = [
         ":example_lib",
-        "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_api",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_test",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_test_autoconfigure",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_webmvc_test",
-        "@nv_third_party_deps//:org_springframework_spring_beans",
-        "@nv_third_party_deps//:org_springframework_spring_test",
+        "@maven//:org_junit_jupiter_junit_jupiter_api",
+        "@maven//:org_springframework_boot_spring_boot_test",
+        "@maven//:org_springframework_boot_spring_boot_test_autoconfigure",
+        "@maven//:org_springframework_boot_spring_boot_webmvc_test",
+        "@maven//:org_springframework_spring_beans",
+        "@maven//:org_springframework_spring_test",
     ],
 )

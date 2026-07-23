@@ -1,5 +1,5 @@
 load("@contrib_rules_jvm//java:defs.bzl", "java_junit5_test")
-load("//rules/java:defs.bzl", "nvcf_java_library", "nvcf_spring_boot_image")
+load("@nvcf_java_rules//:defs.bzl", "nvcf_java_library", "nvcf_spring_boot_image")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -18,14 +18,14 @@ NVCT_JAVACOPTS = [
 # nvcf_java_library does not wire Lombok; add the annotation processor plugin
 # plus the neverlink annotations jar to every library that compiles Lombok
 # sources. Both targets already exist in tools/bazel.
-LOMBOK_PLUGINS = ["//src/control-plane-services/cloud-tasks/tools/bazel:lombok_plugin"]
+LOMBOK_PLUGINS = ["//tools/bazel:lombok_plugin"]
 
-LOMBOK_DEPS = ["//src/control-plane-services/cloud-tasks/tools/bazel:lombok_annotations"]
+LOMBOK_DEPS = ["//tools/bazel:lombok_annotations"]
 
 JUNIT5_RUNTIME_DEPS = [
-    "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_engine",
-    "@nv_third_party_deps//:org_junit_platform_junit_platform_launcher",
-    "@nv_third_party_deps//:org_junit_platform_junit_platform_reporting",
+    "@maven//:org_junit_jupiter_junit_jupiter_engine",
+    "@maven//:org_junit_platform_junit_platform_launcher",
+    "@maven//:org_junit_platform_junit_platform_reporting",
 ]
 
 nvcf_java_library(
@@ -33,16 +33,16 @@ nvcf_java_library(
     srcs = glob(["src/main/java/**/*.java"]),
     javacopts = NVCT_JAVACOPTS,
     plugins = LOMBOK_PLUGINS,
-    resource_strip_prefix = "src/control-plane-services/cloud-tasks/nvct-service/src/main/resources",
+    resource_strip_prefix = "nvct-service/src/main/resources",
     resources = glob(["src/main/resources/**"]),
     deps = [
-        "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core",
-        "@nv_third_party_deps//:org_slf4j_slf4j_api",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_loader",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_tracing",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_security",
+        "//nvct-core:nvct_core",
+        "@maven//:org_slf4j_slf4j_api",
+        "@maven//:org_springframework_boot_spring_boot",
+        "@maven//:org_springframework_boot_spring_boot_autoconfigure",
+        "@maven//:org_springframework_boot_spring_boot_loader",
+        "@maven//:org_springframework_boot_spring_boot_micrometer_tracing",
+        "@maven//:org_springframework_boot_spring_boot_security",
     ] + LOMBOK_DEPS,
 )
 
@@ -63,10 +63,10 @@ java_junit5_test(
     javacopts = NVCT_JAVACOPTS,
     plugins = LOMBOK_PLUGINS,
     resources = glob(["src/test/resources/**"]) + [
-        "//src/control-plane-services/cloud-tasks:integration_local_env_files",
+        "//:integration_local_env_files",
     ],
     data = [
-        "//src/control-plane-services/cloud-tasks:integration_local_env",
+        "//:integration_local_env",
     ],
     tags = [
         # Full Spring context + Testcontainers integration test. Runs in the
@@ -78,28 +78,28 @@ java_junit5_test(
     timeout = "long",
     deps = [
         ":app_classes",
-        "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core",
-        "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core_test_fixtures",
-        "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
-        "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_testing",
-        "@nv_third_party_deps//:org_assertj_assertj_core",
-        "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_api",
-        "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_params",
-        "@nv_third_party_deps//:org_mockito_mockito_core",
-        "@nv_third_party_deps//:org_mockito_mockito_junit_jupiter",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_test",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_test_autoconfigure",
-        "@nv_third_party_deps//:org_springframework_spring_test",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_web_server",
-        "@nv_third_party_deps//:org_springframework_spring_beans",
-        "@nv_third_party_deps//:org_springframework_spring_web",
-        "@nv_third_party_deps//:org_springframework_spring_webmvc",
-        "@nv_third_party_deps//:org_testcontainers_testcontainers",
-        "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
+        "//nvct-core:nvct_core",
+        "//nvct-core:nvct_core_test_fixtures",
+        "@nv_boot_parent//nv-boot-mock-servers-test:nv_boot_mock_servers_test",
+        "@maven//:io_opentelemetry_opentelemetry_sdk_testing",
+        "@maven//:org_assertj_assertj_core",
+        "@maven//:org_junit_jupiter_junit_jupiter_api",
+        "@maven//:org_junit_jupiter_junit_jupiter_params",
+        "@maven//:org_mockito_mockito_core",
+        "@maven//:org_mockito_mockito_junit_jupiter",
+        "@maven//:org_springframework_boot_spring_boot_test",
+        "@maven//:org_springframework_boot_spring_boot_test_autoconfigure",
+        "@maven//:org_springframework_spring_test",
+        "@maven//:org_springframework_boot_spring_boot",
+        "@maven//:org_springframework_boot_spring_boot_restclient",
+        "@maven//:org_springframework_boot_spring_boot_resttestclient",
+        "@maven//:org_springframework_boot_spring_boot_starter_webmvc_test",
+        "@maven//:org_springframework_boot_spring_boot_web_server",
+        "@maven//:org_springframework_spring_beans",
+        "@maven//:org_springframework_spring_web",
+        "@maven//:org_springframework_spring_webmvc",
+        "@maven//:org_testcontainers_testcontainers",
+        "@maven//:org_testcontainers_testcontainers_cassandra",
     ] + LOMBOK_DEPS,
     runtime_deps = JUNIT5_RUNTIME_DEPS,
 )

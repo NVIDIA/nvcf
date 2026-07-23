@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""nvcf_java_example: reference Spring Boot service, as a standalone module.
+
+The copy-me template for a new NVCF Java service module: bazel_dep on
+nvcf_java_rules, a java_library for the app, nvcf_spring_boot_image for the
+multi-arch container, and JUnit 5 tests. A real service also bazel_deps
+nv_boot_parent and adds the internal Maven overlay; see README.md.
+"""
+
+module(
+    name = "nvcf_java_example",
+    version = "4.0.7",
+)
+
+bazel_dep(name = "nvcf_java_rules", version = "0.1.0")
+local_path_override(
+    module_name = "nvcf_java_rules",
+    path = "../../rules/java",
+)
+
+bazel_dep(name = "rules_java", version = "9.3.0")
+bazel_dep(name = "rules_jvm_external", version = "7.0")
+bazel_dep(name = "contrib_rules_jvm", version = "0.33.0")
+
+maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
+maven.install(
+    name = "maven",
+    artifacts = [
+        "org.springframework.boot:spring-boot-starter-web",
+        "org.springframework.boot:spring-boot-starter-test",
+        "org.springframework.boot:spring-boot-webmvc-test",
+        "org.junit.jupiter:junit-jupiter-api",
+        "org.junit.jupiter:junit-jupiter-engine",
+        "org.junit.platform:junit-platform-launcher",
+        "org.junit.platform:junit-platform-reporting",
+    ],
+    boms = [
+        # Keep identical to SPRING_BOOT_BOM in @nvcf_java_rules//:platform.bzl.
+        # //:bom_alignment_test fails the build if these drift.
+        "org.springframework.boot:spring-boot-dependencies:4.0.7",
+        "org.springframework.cloud:spring-cloud-dependencies:2025.1.2",
+        "org.testcontainers:testcontainers-bom:2.0.5",
+        "net.javacrumbs.shedlock:shedlock-bom:7.7.0",
+    ],
+    fail_on_missing_checksum = True,
+    fetch_sources = True,
+    known_contributing_modules = ["protobuf"],
+    lock_file = "//:maven_install.json",
+    repositories = [
+        "https://maven-central.storage-download.googleapis.com/maven2",
+        "https://repo.maven.apache.org/maven2",
+    ],
+    resolver = "maven",
+)
+use_repo(maven, "maven")

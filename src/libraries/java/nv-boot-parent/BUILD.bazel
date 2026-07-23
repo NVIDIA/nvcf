@@ -1,22 +1,31 @@
+load("@nvcf_java_rules//:bom_alignment.bzl", "bom_alignment_test")
+
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["NOTICE"])
+exports_files(["NOTICE", "MODULE.bazel"])
+
+# Fails the build if this module's inlined maven.install boms drift from the
+# canonical SPRING_BOOT_BOM in @nvcf_java_rules//:platform.bzl. load() cannot be
+# used in MODULE.bazel, so the boms list is inlined and guarded here instead.
+bom_alignment_test(
+    name = "bom_alignment_test",
+)
 
 genrule(
     name = "third_party_notice",
     srcs = [
         "//:maven_install.json",
-        "//src/libraries/java/nv-boot-parent/tools/bazel:notice_metadata.json",
-        "//src/libraries/java/nv-boot-parent/tools/bazel:notice_roots.json",
+        "//tools/bazel:notice_metadata.json",
+        "//tools/bazel:notice_roots.json",
     ],
-    tools = ["//src/libraries/java/nv-boot-parent/tools/bazel:generate_notice_tool"],
+    tools = ["//tools/bazel:generate_notice_tool"],
     outs = ["THIRD_PARTY_NOTICE"],
     cmd = """
 set -eu
-"$(execpath //src/libraries/java/nv-boot-parent/tools/bazel:generate_notice_tool)" \
+"$(execpath //tools/bazel:generate_notice_tool)" \
     --maven-install "$(location //:maven_install.json)" \
-    --metadata "$(location //src/libraries/java/nv-boot-parent/tools/bazel:notice_metadata.json)" \
-    --root-manifest "$(location //src/libraries/java/nv-boot-parent/tools/bazel:notice_roots.json)" \
+    --metadata "$(location //tools/bazel:notice_metadata.json)" \
+    --root-manifest "$(location //tools/bazel:notice_roots.json)" \
     --output "$@" \
     --write
 """,
@@ -26,10 +35,10 @@ genrule(
     name = "generate_notice",
     srcs = [
         "//:maven_install.json",
-        "//src/libraries/java/nv-boot-parent/tools/bazel:notice_metadata.json",
-        "//src/libraries/java/nv-boot-parent/tools/bazel:notice_roots.json",
+        "//tools/bazel:notice_metadata.json",
+        "//tools/bazel:notice_roots.json",
     ],
-    tools = ["//src/libraries/java/nv-boot-parent/tools/bazel:generate_notice_tool"],
+    tools = ["//tools/bazel:generate_notice_tool"],
     outs = ["generate_notice.sh"],
     cmd = """
 cat > "$@" <<'EOF'
@@ -37,11 +46,11 @@ cat > "$@" <<'EOF'
 set -euo pipefail
 
 workspace="$${BUILD_WORKSPACE_DIRECTORY:-$$(pwd)}"
-exec "$(execpath //src/libraries/java/nv-boot-parent/tools/bazel:generate_notice_tool)" \
+exec "$(execpath //tools/bazel:generate_notice_tool)" \
     --maven-install "$(location //:maven_install.json)" \
     --metadata "$${workspace}/tools/bazel/notice_metadata.json" \
     --notice "$${workspace}/NOTICE" \
-    --root-manifest "$(location //src/libraries/java/nv-boot-parent/tools/bazel:notice_roots.json)" \
+    --root-manifest "$(location //tools/bazel:notice_roots.json)" \
     "$$@"
 EOF
 chmod +x "$@"

@@ -46,10 +46,10 @@ find_workspace() {
 }
 
 workspace="$(find_workspace)"
-# nv-boot-parent is a subtree of the monorepo, not the workspace root, so its
-# notice tooling and its own NOTICE live under this prefix rather than at the
-# repo root. The Maven lock, however, is the single root maven_install.json.
-nvboot="${workspace}/src/libraries/java/nv-boot-parent"
+# nv-boot-parent is its own standalone Bazel module: its module root is the
+# nv-boot-parent directory, so the notice tooling, its NOTICE, and its
+# maven_install.json all live at the workspace root.
+nvboot="${workspace}"
 
 PYTHONPATH="${nvboot}/tools/bazel" python3 - <<'PY'
 import pathlib
