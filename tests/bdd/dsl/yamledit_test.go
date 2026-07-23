@@ -87,10 +87,10 @@ list:
 `)
 
 	cases := []struct {
-		name    string
-		key     string
-		want    string
-		found   bool
+		name  string
+		key   string
+		want  string
+		found bool
 	}{
 		{"map leaf", "global.image.registry", "nvcr.io", true},
 		{"list index", "list[1]", "second", true},
@@ -189,6 +189,46 @@ func TestSubstituteFileReplacesPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "real-value") {
 		t.Fatalf("replacement missing:\n%s", got)
+	}
+}
+
+func TestSubstituteFileBlockReplacesExactBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "global.yaml.gotmpl")
+	writeFile(t, path, "before\nold one\nold two\nafter\n")
+
+	spec := "old one\nold two\n---\nnew one\nnew two"
+	if err := SubstituteFileBlock(path, spec); err != nil {
+		t.Fatalf("substitute block: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "before\nnew one\nnew two\nafter\n" {
+		t.Fatalf("body = %q", got)
+	}
+}
+
+func TestSubstituteFileBlockRejectsMalformedSpec(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "global.yaml.gotmpl")
+	writeFile(t, path, "old\n")
+
+	err := SubstituteFileBlock(path, "old\nnew")
+	if err == nil || !strings.Contains(err.Error(), "separator") {
+		t.Fatalf("err = %v, want separator error", err)
+	}
+}
+
+func TestSubstituteFileBlockRejectsMissingOldBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "global.yaml.gotmpl")
+	writeFile(t, path, "different\n")
+
+	err := SubstituteFileBlock(path, "old\n---\nnew")
+	if err == nil || !strings.Contains(err.Error(), "not present") {
+		t.Fatalf("err = %v, want missing old block error", err)
 	}
 }
 

@@ -36,6 +36,7 @@ func registerFileSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I copy the file "([^"]*)" to "([^"]*)"$`, sc.iCopyFile)
 	ctx.Step(`^I update yaml file "([^"]*)" with keys:$`, sc.iUpdateYAMLFile)
 	ctx.Step(`^I substitute "([^"]*)" in file "([^"]*)" with base64 of "([^"]*)"$`, sc.iSubstituteBase64)
+	ctx.Step(`^I substitute a block in file "([^"]*)":$`, sc.iSubstituteBlock)
 	ctx.Step(`^environment variable "([^"]*)" is set$`, sc.environmentVariableIsSet)
 	ctx.Step(`^file "([^"]*)" exists$`, sc.fileShouldExist)
 }
@@ -81,6 +82,16 @@ func (sc *ScenarioContext) iSubstituteBase64(placeholder, path, source string) e
 	resolvedSource := dsl.Interpolate(source)
 	encoded := base64.StdEncoding.EncodeToString([]byte(resolvedSource))
 	return dsl.SubstituteFile(resolvedPath, placeholder, encoded)
+}
+
+// iSubstituteBlock snapshots path before delegating the exact multi-line
+// replacement to the pure DSL helper.
+func (sc *ScenarioContext) iSubstituteBlock(path string, doc *godog.DocString) error {
+	resolvedPath := sc.resolvePath(dsl.Interpolate(path))
+	if err := sc.Suite.Ledger.Snapshot(resolvedPath); err != nil {
+		return err
+	}
+	return dsl.SubstituteFileBlock(resolvedPath, dsl.Interpolate(doc.Content))
 }
 
 // environmentVariableIsSet asserts the named env var is non-empty.
