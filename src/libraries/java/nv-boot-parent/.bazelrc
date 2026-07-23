@@ -26,12 +26,12 @@ build --incompatible_strict_action_env
 # public builds go straight to Maven Central (try-import is a no-op when absent).
 try-import %workspace%/tools/bazel/internal.bazelrc
 
-# Java: hermetic remotejdk 25 regardless of the host JDK, matching the root
-# module so builds are reproducible everywhere.
+# Java: use the image-provided local JDK 25 (Temurin at JAVA_HOME) instead of a
+# hermetic remotejdk download; the bazel-ci image ships Temurin 25 (no download).
 build --java_language_version=25
-build --java_runtime_version=remotejdk_25
+build --java_runtime_version=local_jdk
 build --tool_java_language_version=25
-build --tool_java_runtime_version=remotejdk_25
+build --tool_java_runtime_version=local_jdk
 build --java_header_compilation=false
 
 test --test_output=errors
