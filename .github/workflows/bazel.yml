@@ -154,6 +154,21 @@ jobs:
             run_all=true
           fi
 
+          # Reverse-dependency edges. A change to a framework subtree must also
+          # validate its consumers: the consumer's build and tests are what prove
+          # the framework change is compatible, so an incompatible nv-boot-parent
+          # change cannot merge without building its consumers and running their
+          # (requires-docker) tests. nv-boot-parent is consumed by the Java
+          # services; list each consumer id here as it enters the monorepo. When
+          # more Java services land, a root-level nv-boot consumer suite can
+          # replace this explicit list.
+          NV_BOOT_PATH="src/libraries/java/nv-boot-parent"
+          NV_BOOT_CONSUMERS=" cloud-tasks "
+          nv_boot_changed=false
+          if [ "$run_all" != "true" ] && printf '%s\n' "$changed" | grep -q "^${NV_BOOT_PATH}/"; then
+            nv_boot_changed=true
+          fi
+
           include="[]"
           while IFS='|' read -r id path tests_skip scoped; do
             id="$(echo "$id" | xargs)"; [ -z "$id" ] && continue
@@ -186,6 +201,12 @@ jobs:
               if [ "$hit" != "true" ] && printf '%s\n' "$changed" | grep -qE '^[^/]+\.bzl$'; then hit=true; fi
             else
               if printf '%s\n' "$changed" | grep -q "^${path}/"; then hit=true; fi
+            fi
+            # Framework consumer edge: when nv-boot-parent changed, also schedule
+            # its consumers (see NV_BOOT_CONSUMERS above) so a framework change is
+            # validated against them, not just built in isolation.
+            if [ "$hit" != "true" ] && [ "$nv_boot_changed" = "true" ]; then
+              case "$NV_BOOT_CONSUMERS" in *" $id "*) hit=true ;; esac
             fi
             if [ "$hit" = "true" ]; then
               include=$(printf '%s' "$include" | jq -c --arg id "$id" --arg path "$path" --argjson ts "$tests_skip" --arg wd "$workdir" --arg sc "$scope" --arg sm "$scoped" '. + [{id:$id, path:$path, tests_skip:$ts, workdir:$wd, scope:$sc, scoped:$sm}]')
