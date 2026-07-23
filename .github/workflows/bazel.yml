@@ -115,15 +115,14 @@ jobs:
           function-autoscaler|src/control-plane-services/function-autoscaler|false
           helm-reval|src/control-plane-services/helm-reval|false
           stargate|src/libraries/rust/stargate|false
-          nv-boot-parent|src/libraries/java/nv-boot-parent|false
-          cloud-tasks|src/control-plane-services/cloud-tasks|false'
-          # Standalone Java modules. Each has its own MODULE.bazel and its own
-          # nv_third_party_deps hub, so it builds+tests in its own module dir.
-          # Like every non-root row they do NOT set --config=remote; the
-          # build/test steps below inject --remote_cache/--tls_certificate/
-          # --remote_header from the EC2 Buildbarn secrets, so these rows warm
-          # from and hit that shared cache rather than cold-building (see
-          # NVIDIA/nvcf#372).
+          nv-boot-parent|src/libraries/java/nv-boot-parent|false|root
+          cloud-tasks|src/control-plane-services/cloud-tasks|false|root'
+          # Root-scoped Java lanes (optional 4th field `root`). The Java tree is
+          # folded into the single root `nvcf` module -- no nested MODULE.bazel --
+          # so these rows do NOT cd into a module dir. They run bazel from the
+          # repo root and build/test only their own targets (//<path>/...), which
+          # gives each Java service its own check lane without a nested module.
+          # Add a new Java service as one line here with the `root` marker.
           # Paths that affect the root-module workspace build (native root
           # subtrees plus the shared Bazel scaffold). Java and stargate no longer
           # ride the root row: nv-boot-parent, cloud-tasks, and stargate are
@@ -156,8 +155,14 @@ jobs:
           fi
 
           include="[]"
-          while IFS='|' read -r id path tests_skip; do
+          while IFS='|' read -r id path tests_skip scoped; do
             id="$(echo "$id" | xargs)"; [ -z "$id" ] && continue
+            scoped="$(echo "$scoped" | xargs)"
+            # Root-scoped lane (scoped=root): the subtree lives inside the single
+            # root module, so it runs bazel from the repo root and builds only
+            # //<path>/... . Every other row keeps per-module behavior
+            # (workdir=path, scope=//...).
+            if [ "$scoped" = "root" ]; then workdir="."; scope="//${path}/..."; else workdir="$path"; scope="//..."; fi
             hit=false
             if [ "$run_all" = "true" ]; then
               hit=true
@@ -183,7 +188,7 @@ jobs:
               if printf '%s\n' "$changed" | grep -q "^${path}/"; then hit=true; fi
             fi
             if [ "$hit" = "true" ]; then
-              include=$(printf '%s' "$include" | jq -c --arg id "$id" --arg path "$path" --argjson ts "$tests_skip" '. + [{id:$id, path:$path, tests_skip:$ts}]')
+              include=$(printf '%s' "$include" | jq -c --arg id "$id" --arg path "$path" --argjson ts "$tests_skip" --arg wd "$workdir" --arg sc "$scope" --arg sm "$scoped" '. + [{id:$id, path:$path, tests_skip:$ts, workdir:$wd, scope:$sc, scoped:$sm}]')
             fi
           done <<< "$ROWS"
 
@@ -231,7 +236,7 @@ jobs:
       - name: Skip if subtree has no MODULE.bazel yet
         id: precheck
         run: |
-          if [ ! -f "${{ matrix.subtree.path }}/MODULE.bazel" ]; then
+          if [ "${{ matrix.subtree.scoped }}" != "root" ] && [ ! -f "${{ matrix.subtree.path }}/MODULE.bazel" ]; then
             echo "no MODULE.bazel at ${{ matrix.subtree.path }} -- skipping"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
@@ -241,7 +246,7 @@ jobs:
       # bazelisk is preinstalled in the bazel-ci image as `bazel`.
       - name: bazel version
         if: steps.precheck.outputs.skip == 'false'
-        working-directory: ${{ matrix.subtree.path }}
+        working-directory: ${{ matrix.subtree.workdir }}
         run: bazel version
 
       - name: Cache Bazel repository + disk caches
@@ -251,7 +256,7 @@ jobs:
           path: |
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
-          key: bazel-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.path), format('{0}/.bazelversion', matrix.subtree.path)) }}
+          key: bazel-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
           restore-keys: |
             bazel-${{ matrix.subtree.id }}-
 
@@ -313,15 +318,19 @@ jobs:
       - name: Determine build targets
         id: targets
         if: steps.precheck.outputs.skip == 'false'
-        working-directory: ${{ matrix.subtree.path }}
+        working-directory: ${{ matrix.subtree.workdir }}
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           SUBTREE_PATH: ${{ matrix.subtree.path }}
+          SCOPE: ${{ matrix.subtree.scope }}
         run: |
           set -uo pipefail
           tfile="$RUNNER_TEMP/targets.txt"
-          full() { printf '//...\n' > "$tfile"; echo "targets: //... (full build)"; }
+          # SCOPE is //... for the root row and per-module rows, and //<path>/...
+          # for a root-scoped lane so it builds only its own targets out of the
+          # shared root module.
+          full() { printf '%s\n' "$SCOPE" > "$tfile"; echo "targets: $SCOPE (full build)"; }
 
           # Only the root row on a pull_request is a narrowing candidate. Every
           # other trigger (main push warms + uploads the whole closure; dispatch
@@ -383,7 +392,7 @@ jobs:
 
       - name: bazel build
         if: steps.precheck.outputs.skip == 'false'
-        working-directory: ${{ matrix.subtree.path }}
+        working-directory: ${{ matrix.subtree.workdir }}
         run: |
           if [ ! -s "$RUNNER_TEMP/targets.txt" ]; then
             echo "no targets to build; skipping"; exit 0
@@ -431,7 +440,7 @@ jobs:
         # but tests fail with an environment delta from GitLab CI (per the
         # documented build-only policy). Default is to run tests.
         if: steps.precheck.outputs.skip == 'false' && !matrix.subtree.tests_skip
-        working-directory: ${{ matrix.subtree.path }}
+        working-directory: ${{ matrix.subtree.workdir }}
         run: |
           if [ ! -s "$RUNNER_TEMP/targets.txt" ]; then
             echo "no targets to test; skipping"; exit 0
