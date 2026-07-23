@@ -77,18 +77,35 @@ func SetCPUWorkloadNodeAffinity(pts *corev1.PodSpec, instanceTypeLabelKey string
 
 	RemoveInstanceTypeRequiredAffinity(pts.Affinity.NodeAffinity, instanceTypeLabelKey)
 
-	pts.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution = append(
-		pts.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution,
-		corev1.PreferredSchedulingTerm{
-			Weight: 100,
-			Preference: corev1.NodeSelectorTerm{
-				MatchExpressions: []corev1.NodeSelectorRequirement{{
-					Key:      instanceTypeLabelKey,
-					Operator: corev1.NodeSelectorOpDoesNotExist,
-				}},
-			},
+	preferred := &pts.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution
+	for _, term := range *preferred {
+		if hasCPUWorkloadSoftAntiAffinity(term, instanceTypeLabelKey) {
+			return
+		}
+	}
+
+	*preferred = append(*preferred, corev1.PreferredSchedulingTerm{
+		Weight: 100,
+		Preference: corev1.NodeSelectorTerm{
+			MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key:      instanceTypeLabelKey,
+				Operator: corev1.NodeSelectorOpDoesNotExist,
+			}},
 		},
-	)
+	})
+}
+
+// hasCPUWorkloadSoftAntiAffinity reports whether preferred already includes a
+// preference that soft-avoids nodes with instanceTypeLabelKey, even
+// when that preference also has other MatchExpressions/MatchFields.
+func hasCPUWorkloadSoftAntiAffinity(term corev1.PreferredSchedulingTerm, instanceTypeLabelKey string) bool {
+	for _, expr := range term.Preference.MatchExpressions {
+		if expr.Key == instanceTypeLabelKey &&
+			expr.Operator == corev1.NodeSelectorOpDoesNotExist {
+			return true
+		}
+	}
+	return false
 }
 
 // RemoveInstanceTypeRequiredAffinity removes any RequiredDuringSchedulingIgnoredDuringExecution

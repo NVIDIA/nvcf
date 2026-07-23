@@ -52,6 +52,9 @@ Each request is normalized into a function-scoped request context.
   and is forwarded to NVCF gRPC auth when that adapter is configured.
 - `X-Request-ID` is accepted if present, otherwise the gateway generates one.
 - `X-NVCF-Target-Region` is forwarded into the request context.
+- `X-Priority` is reserved for the gateway and derived from the caller's
+  resolved priority; a client-supplied `X-Priority` on the LLM endpoints is
+  rejected with 400.
 
 Configured functions control the downstream `model`, service tier, routing
 method, and per-function rate limits. Prompt rendering and exact prompt

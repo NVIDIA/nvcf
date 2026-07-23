@@ -74,7 +74,6 @@ jobs:
         id: detect
         env:
           EVENT: ${{ github.event_name }}
-          REF: ${{ github.ref }}
           BEFORE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.sha }}
           BASE_REF: ${{ github.base_ref }}
@@ -114,10 +113,11 @@ jobs:
           worker-task|src/compute-plane-services/worker-task|false
           worker-utils|src/compute-plane-services/worker-utils|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
-          helm-reval|src/control-plane-services/helm-reval|false'
+          helm-reval|src/control-plane-services/helm-reval|false
+          stargate|src/libraries/rust/stargate|false'
           # Paths that affect the root-module workspace build (native
           # root subtrees, Go and Java, plus the shared Bazel scaffold).
-          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/ .github/bazel-root-test-quarantine.txt)
+          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
@@ -143,18 +143,6 @@ jobs:
             run_all=true
           fi
 
-          # Warm the remote cache on every merge to main. The root row builds
-          # the whole ~7k-target closure; the build step uploads results only on
-          # main pushes (CACHE_UPLOAD). If root ran on main only when a ROOT_GLOB
-          # changed (~1 in 10 merges), the root closure would almost never be
-          # warmed, so PRs and later merges keep paying the full cold-build cost.
-          # Forcing the root row on every main push warms it each merge; hits on
-          # the shared closure then carry over to the per-service rows and PRs.
-          is_main_push=false
-          if [ "$EVENT" = "push" ] && [ "$REF" = "refs/heads/main" ]; then
-            is_main_push=true
-          fi
-
           include="[]"
           while IFS='|' read -r id path tests_skip; do
             id="$(echo "$id" | xargs)"; [ -z "$id" ] && continue
@@ -162,17 +150,23 @@ jobs:
             if [ "$run_all" = "true" ]; then
               hit=true
             elif [ "$path" = "." ]; then
-              # Always warm root on a main push, even when no ROOT_GLOB changed.
-              if [ "$is_main_push" = "true" ]; then
-                hit=true
-              else
-                for g in "${ROOT_GLOBS[@]}"; do
-                  # Fixed-string, start-of-line prefix test via awk index()==1:
-                  # avoids treating the dots in .bazelrc/MODULE.bazel as regex
-                  # wildcards and avoids any shell glob expansion of the token.
-                  if printf '%s\n' "$changed" | awk -v p="$g" 'index($0, p) == 1 { f = 1 } END { exit !f }'; then hit=true; break; fi
-                done
-              fi
+              # Root is glob-gated on PRs and merges alike: it runs only when a
+              # ROOT_GLOB file changed (a docs- or helm-only change never triggers
+              # it). When it does run on a main push it uploads (CACHE_UPLOAD),
+              # warming the cache; the rings do not evict, so a later root PR reads
+              # that warm closure.
+              for g in "${ROOT_GLOBS[@]}"; do
+                # Fixed-string, start-of-line prefix test via awk index()==1:
+                # avoids treating the dots in .bazelrc/MODULE.bazel as regex
+                # wildcards and avoids any shell glob expansion of the token.
+                if printf '%s\n' "$changed" | awk -v p="$g" 'index($0, p) == 1 { f = 1 } END { exit !f }'; then hit=true; break; fi
+              done
+              # Root-level *.bzl files have no fixed path prefix, so the awk
+              # prefix test above cannot match them. The target-selection logic
+              # treats them as full-build triggers, so gate root on them
+              # explicitly; otherwise a root-global .bzl change selects zero rows
+              # and passes without running Bazel.
+              if [ "$hit" != "true" ] && printf '%s\n' "$changed" | grep -qE '^[^/]+\.bzl$'; then hit=true; fi
             else
               if printf '%s\n' "$changed" | grep -q "^${path}/"; then hit=true; fi
             fi

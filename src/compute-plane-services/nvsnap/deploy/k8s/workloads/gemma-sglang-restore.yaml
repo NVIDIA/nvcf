@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Restore placeholder for a criu-v2 checkpoint of gemma-sglang.
+# Dumb reaper (same image as source), bash pid1 reaps orphans, no
+# restore-entrypoint; the agent drives restore via POST /v1/restore. See
+# vllm-small-restore.yaml.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gemma-sglang-restored
+  namespace: nvsnap-system
+  labels:
+    app: gemma-sglang-restored
+    nvsnap.io/demo: "true"
+spec:
+  automountServiceAccountToken: false
+  nodeName: __NODE_NAME__
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+  containers:
+    - name: restore
+      image: lmsysorg/sglang:v0.5.15.post1-cu129
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          echo 100000 > /proc/sys/kernel/ns_last_pid || echo "(ns_last_pid bump failed)"
+          touch /sglang.out
+          tail -F /sglang.out &
+          while true; do sleep 30; done
+      env:
+        - name: CHECKPOINT_ID
+          value: "__CHECKPOINT_ID__"
+      readinessProbe:
+        httpGet: { path: /health, port: 30000 }
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 5
+        failureThreshold: 120
+      securityContext:
+        privileged: true
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"
+      volumeMounts:
+        - { name: checkpoints, mountPath: /checkpoints }
+        - { name: dev-shm, mountPath: /dev/shm }
+  volumes:
+    - name: checkpoints
+      hostPath:
+        path: /var/lib/containerd/nvsnap-checkpoints
+        type: Directory
+    - name: dev-shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+  restartPolicy: Never

@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//rules/oci:defs.bzl", "rust_oci_image")
+
+# Workspace-local Cargo deps (own-workspace `workspace = true`).
+_WORKSPACE_DEPS = [
+    "//crates/proto:stargate-proto",
+    "//crates/protocol:stargate-protocol",
+    "//crates/stargate-forwarding:stargate-forwarding",
+    "//crates/stargate-runtime:stargate-runtime",
+    "//crates/stargate-tls:stargate-tls",
+]
+
+rust_library(
+    name = "stargate_k8s_router_lib",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/main.rs"],
+    ),
+    aliases = aliases(),
+    crate_name = "stargate_k8s_router",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "stargate-k8s-router",
+    srcs = ["src/main.rs"],
+    aliases = aliases(),
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = [":stargate_k8s_router_lib"] + _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "stargate_k8s_router_test",
+    crate = ":stargate_k8s_router_lib",
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal_dev = True),
+)
+
+# Multi-arch OCI image. distroless/cc base, binary at
+# /usr/local/bin/stargate-k8s-router.
+rust_oci_image(
+    name = "image",
+    base = "@distroless_cc",
+    binary = ":stargate-k8s-router",
+    binary_path = "/usr/local/bin/stargate-k8s-router",
+    tags = ["stargate-k8s-router"],
+    visibility = ["//visibility:public"],
+)
+
+# Entrypoint exec-bit guard. Required by NVCF MR feedback memory
+# feedback_image_entrypoint_exec_bit.
+sh_test(
+    name = "image_entrypoint_mode_test",
+    srcs = ["//tools/ci:image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :image_layer)",
+        "/usr/local/bin/stargate-k8s-router",
+    ],
+    data = [":image_layer"],
+)

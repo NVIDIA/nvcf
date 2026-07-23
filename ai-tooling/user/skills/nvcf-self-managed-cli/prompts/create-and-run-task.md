@@ -150,7 +150,7 @@ nvcf-cli task create --input-file=task-helm.json
 nvcf-cli task update-secrets <task_id> --secrets NAME=value
 ```
 
-`update-secrets` is a full replacement: it overwrites every existing secret on the task. Re-supply all secrets you want to retain, not only the ones being changed. Do not echo secret values into chat.
+`update-secrets` merges secrets by name: supplied secrets are added or updated, and existing secrets not included in the request are preserved. Do not echo secret values into chat.
 
 ## 4. Monitor
 

@@ -6,7 +6,7 @@ This repository contains the Helm chart for deploying NVCF Cassandra clusters on
 
 The chart packages Cassandra cluster resources together with initialization and migration hooks. The repository is chart source only. It does not include public container images or a vendored dependency package in the OSS snapshot.
 
-The default chart values do not set the required image registries and repositories for the Cassandra, migration, or seed-discovery components. They must be supplied through an additional values file at install time, and access to those images must be arranged separately.
+The default chart values do not set the required image registries and repositories for the Cassandra or migration components. They must be supplied through an additional values file at install time, and access to those images must be arranged separately.
 
 Example:
 
@@ -18,11 +18,7 @@ cassandra:
       repository: 0651155215864979/ncp-dev/nvcf-cassandra-migrations
   image:
     registry: nvcr.io
-    repository: 0651155215864979/ncp-dev/bitnami-cassandra
-  dynamicSeedDiscovery:
-    image:
-      registry: nvcr.io
-      repository: 0651155215864979/ncp-dev/bitnami-cassandra
+    repository: 0651155215864979/ncp-dev/cassandra
 ```
 
 ## Prerequisites
@@ -32,12 +28,6 @@ cassandra:
 - `kubectl`
 
 ## Getting Started
-
-Build the chart dependency from source before installing:
-
-```bash
-helm dependency build helm
-```
 
 Install the chart with the default values plus your own overrides:
 
@@ -78,7 +68,6 @@ Important settings to review before deployment:
 
 - `cassandra.image.*` for the main Cassandra image
 - `cassandra.migrations.image.*` for the migrations job image
-- `cassandra.dynamicSeedDiscovery.image.*` for the seed discovery helper image
 - `cassandra.global.imagePullSecrets` for private registry access
 - `cassandra.replicaCount`, `cassandra.cluster.*`, and storage settings for your environment
 - `cassandra.dbUser.*` and `cassandra.serviceRolePassword` for database credentials
