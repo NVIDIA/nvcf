@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -617,7 +618,7 @@ func ensureDebugExporter(otelConfig *OpenTelemetryConfig) {
 		otelConfig.Exporters["debug"] = map[string]interface{}{}
 	}
 	for name, pipeline := range otelConfig.Service.Pipelines {
-		if stringSliceContains(pipeline.Exporters, "debug") {
+		if slices.Contains(pipeline.Exporters, "debug") {
 			continue
 		}
 		pipeline.Exporters = append(pipeline.Exporters, "debug")
@@ -626,16 +627,15 @@ func ensureDebugExporter(otelConfig *OpenTelemetryConfig) {
 }
 
 func mapFromInterface(v interface{}) map[string]interface{} {
-	if v == nil {
+	switch typed := v.(type) {
+	case nil:
 		return map[string]interface{}{}
-	}
-	if typed, ok := v.(map[string]interface{}); ok {
+	case map[string]interface{}:
 		if typed == nil {
 			return map[string]interface{}{}
 		}
 		return typed
-	}
-	if typed, ok := v.(map[string]string); ok {
+	case map[string]string:
 		if typed == nil {
 			return map[string]interface{}{}
 		}
@@ -644,17 +644,9 @@ func mapFromInterface(v interface{}) map[string]interface{} {
 			out[key] = value
 		}
 		return out
+	default:
+		return map[string]interface{}{}
 	}
-	return map[string]interface{}{}
-}
-
-func stringSliceContains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func exporterTraces(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {

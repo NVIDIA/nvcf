@@ -34,7 +34,10 @@ type OTelCollectorConfig struct {
 }
 
 // IsZero returns true when no collector rendering overrides are configured.
-func (c OTelCollectorConfig) IsZero() bool {
+func (c *OTelCollectorConfig) IsZero() bool {
+	if c == nil {
+		return true
+	}
 	return c.ExporterHelper.IsZero() &&
 		c.MemoryLimiter.IsZero() &&
 		c.Batch.IsZero() &&
@@ -49,7 +52,10 @@ type ExporterHelperConfig struct {
 }
 
 // IsZero returns true when no exporterhelper overrides are configured.
-func (c ExporterHelperConfig) IsZero() bool {
+func (c *ExporterHelperConfig) IsZero() bool {
+	if c == nil {
+		return true
+	}
 	return c.Timeout == "" && c.RetryOnFailure.IsZero() && c.SendingQueue.IsZero()
 }
 
@@ -62,7 +68,10 @@ type RetryOnFailureConfig struct {
 }
 
 // IsZero returns true when no retry_on_failure overrides are configured.
-func (c RetryOnFailureConfig) IsZero() bool {
+func (c *RetryOnFailureConfig) IsZero() bool {
+	if c == nil {
+		return true
+	}
 	return c.Enabled == nil && c.InitialInterval == "" && c.MaxInterval == "" && c.MaxElapsedTime == ""
 }
 
@@ -79,7 +88,10 @@ type SendingQueueConfig struct {
 }
 
 // IsZero returns true when no sending_queue overrides are configured.
-func (c SendingQueueConfig) IsZero() bool {
+func (c *SendingQueueConfig) IsZero() bool {
+	if c == nil {
+		return true
+	}
 	return c.Enabled == nil &&
 		c.NumConsumers == nil &&
 		c.QueueSize == nil &&
@@ -99,7 +111,10 @@ type SendingQueueBatchConfig struct {
 }
 
 // IsZero returns true when no sending_queue.batch overrides are configured.
-func (c SendingQueueBatchConfig) IsZero() bool {
+func (c *SendingQueueBatchConfig) IsZero() bool {
+	if c == nil {
+		return true
+	}
 	return c.FlushTimeout == "" && c.Sizer == "" && c.MinSize == nil && c.MaxSize == nil
 }
 
@@ -113,7 +128,10 @@ type MemoryLimiterConfig struct {
 }
 
 // IsZero returns true when no memory_limiter overrides are configured.
-func (c MemoryLimiterConfig) IsZero() bool {
+func (c *MemoryLimiterConfig) IsZero() bool {
+	if c == nil {
+		return true
+	}
 	return c.CheckInterval == "" &&
 		c.LimitMiB == nil &&
 		c.SpikeLimitMiB == nil &&
@@ -131,7 +149,10 @@ type BatchConfig struct {
 }
 
 // IsZero returns true when no batch processor overrides are configured.
-func (c BatchConfig) IsZero() bool {
+func (c *BatchConfig) IsZero() bool {
+	if c == nil {
+		return true
+	}
 	return c.Timeout == "" &&
 		c.SendBatchSize == nil &&
 		c.SendBatchMaxSize == nil &&
