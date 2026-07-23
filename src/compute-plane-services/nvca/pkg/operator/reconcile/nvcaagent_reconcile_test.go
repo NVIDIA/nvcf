@@ -1619,6 +1619,11 @@ func Test_setupNVCARBAC(t *testing.T) {
 				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
 				Verbs:         []string{"get", "list", "watch"},
 			},
+			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "delete", "patch"},
+			},
 			{}, // Node rule, added below
 			{
 				APIGroups: []string{""},
@@ -2035,6 +2040,11 @@ func Test_setupNVCARBAC_ValidationPolicy(t *testing.T) {
 				Verbs:         []string{"get", "list", "watch"},
 			},
 			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "delete", "patch"},
+			},
+			{
 				APIGroups: []string{""},
 				Resources: []string{"nodes"},
 				Verbs:     []string{"get", "list", "watch", "update", "patch"},
@@ -2260,6 +2270,11 @@ func Test_NVLinkOptimized(t *testing.T) {
 				Resources:     []string{"mutatingwebhookconfigurations", "validatingwebhookconfigurations"},
 				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
 				Verbs:         []string{"get", "list", "watch"},
+			},
+			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "delete", "patch"},
 			},
 			{
 				APIGroups: []string{""},

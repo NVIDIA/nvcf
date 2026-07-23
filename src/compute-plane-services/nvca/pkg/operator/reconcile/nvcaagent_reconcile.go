@@ -800,6 +800,19 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
 				Verbs:         []string{"get", "list", "watch"},
 			},
+			// NvSnap integration (PR-3 + PR-5): NVCA agent reads and
+			// writes NvSnapFunctionState — cluster-scoped CRD that tracks
+			// per-function-version checkpoint state. Read in Hook A to
+			// decide whether to stamp nvsnap.io/restore-from at pod
+			// apply; written by Hook B's reconciler after a successful
+			// checkpoint. The integration is gated behind
+			// featureflag.NvSnapCheckpointRestore (default off), so this
+			// rule is dormant until that flag is enabled on a cluster.
+			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     crudVerbs,
+			},
 		},
 	}
 

@@ -97,13 +97,13 @@ type ClusterConfig struct {
 	Attributes             []string `json:"attributes,omitempty"`
 	K8sClusterNetworkCIDRs []string `json:"k8sClusterNetworkCIDRs,omitempty"`
 
-	// Cryo configures the per-cluster behavior of the Cryo
+	// NvSnap configures the per-cluster behavior of the NvSnap
 	// checkpoint/restore integration. Empty (or unset Enabled flag)
 	// → integration disabled on this cluster; pod creation behaves
-	// identically to today. The global featureflag.CryoCheckpointRestore
+	// identically to today. The global featureflag.NvSnapCheckpointRestore
 	// short-circuits this field — both must be true for either hook
-	// to fire. See docs/users/cryo/CRYO-INTEGRATION-DESIGN.md.
-	Cryo *CryoConfig `json:"cryo,omitempty"`
+	// to fire. See docs/users/nvsnap/NVSNAP-INTEGRATION-DESIGN.md.
+	NvSnap *NvSnapConfig `json:"nvsnap,omitempty"`
 }
 
 // +k8s:openapi-gen=true
@@ -217,32 +217,37 @@ type MiniServiceConfig struct {
 }
 
 const (
-	// DefaultCryoServerURL is the in-cluster cryo-server Service URL.
+	// DefaultNvSnapServerURL is the in-cluster nvsnap-server Service URL.
 	// Operators can override per cluster for off-cluster deployments
-	// (e.g., a hosted cryo-server fronting a fleet of NVCA clusters).
-	DefaultCryoServerURL = "http://cryo-server.cryo-system.svc.cluster.local:8080"
+	// (e.g., a hosted nvsnap-server fronting a fleet of NVCA clusters).
+	DefaultNvSnapServerURL = "http://nvsnap-server.nvsnap-system.svc.cluster.local:8080"
 
-	// DefaultCryoWarmupTimeoutSeconds caps how long NVCA polls
+	// DefaultNvSnapWarmupTimeoutSeconds caps how long NVCA polls
 	// /v1/health/ready on the inference container before giving up on
 	// a checkpoint attempt. 15 min covers TRT-LLM 70B engine compile.
-	DefaultCryoWarmupTimeoutSeconds = 15 * 60
+	DefaultNvSnapWarmupTimeoutSeconds = 15 * 60
 
-	// DefaultCryoWarmupBufferSeconds is the gap between the first
-	// /health 200 and the actual checkpoint POST — lets post-response
-	// setup (CUDA graph capture, lazy JIT) land before the snapshot.
-	DefaultCryoWarmupBufferSeconds = 10
+	// DefaultNvSnapWarmupBufferSeconds is the gap between the first
+	// /health 200 and the actual checkpoint POST. Flipped from 10 → 0
+	// in the v0.0.49 / rootfs-everywhere design: an honest readiness
+	// probe is the contract; padding every capture by 10s adds latency
+	// for no benefit and can capture mid-flight CUDA-graph builds that
+	// destabilize the snapshot. Operators that need a workload-specific
+	// dwell can still set spec.nvsnap.warmupBufferSeconds explicitly
+	// per-NVCFBackend.
+	DefaultNvSnapWarmupBufferSeconds = 0
 )
 
-// CryoConfig is the per-cluster configuration for the Cryo
+// NvSnapConfig is the per-cluster configuration for the NvSnap
 // checkpoint/restore integration. All fields default to "off" or to
-// the in-cluster Service URL — a default-constructed CryoConfig is
+// the in-cluster Service URL — a default-constructed NvSnapConfig is
 // a no-op.
 //
 // Layered disable order (any false short-circuits):
 //
-//	featureflag.CryoCheckpointRestore  (global kill switch)
-//	→ CryoConfig.IntegrationEnabled    (per-cluster)
-//	→ CryoFunctionState.spec.optOut    (per-function-version)
+//	featureflag.NvSnapCheckpointRestore  (global kill switch)
+//	→ NvSnapConfig.IntegrationEnabled    (per-cluster)
+//	→ NvSnapFunctionState.spec.optOut    (per-function-version)
 //
 // IntegrationEnabled controls the checkpoint side (Hook B).
 // RestoreEnabled controls the restore side (Hook A) — split so we
@@ -250,60 +255,67 @@ const (
 // gathered timing data.
 //
 // +k8s:openapi-gen=true
-type CryoConfig struct {
+type NvSnapConfig struct {
 	// IntegrationEnabled turns on the post-Ready checkpoint reconciler
 	// (Hook B). When false, no pod is checkpointed on this cluster.
 	IntegrationEnabled bool `json:"integrationEnabled,omitempty"`
 
 	// RestoreEnabled turns on the restore-on-create hook (Hook A).
-	// When false, NVCA does not stamp cryo.io/restore-from on new
+	// When false, NVCA does not stamp nvsnap.io/restore-from on new
 	// pods even if a checkpoint hash exists in NGC. Lets us validate
 	// checkpoint capture independently of restore.
 	RestoreEnabled bool `json:"restoreEnabled,omitempty"`
 
-	// ServerURL is the cryo-server endpoint NVCA's checkpoint reconciler
-	// POSTs to. Empty → DefaultCryoServerURL (in-cluster Service).
+	// ServerURL is the nvsnap-server endpoint NVCA's checkpoint reconciler
+	// POSTs to. Empty → DefaultNvSnapServerURL (in-cluster Service).
 	ServerURL string `json:"serverURL,omitempty"`
 
 	// WarmupTimeoutSeconds caps the per-pod health-check polling
 	// window before NVCA gives up on triggering a checkpoint. 0 →
-	// DefaultCryoWarmupTimeoutSeconds (15 min).
+	// DefaultNvSnapWarmupTimeoutSeconds (15 min).
 	WarmupTimeoutSeconds int32 `json:"warmupTimeoutSeconds,omitempty"`
 
 	// WarmupBufferSeconds is the dwell time between first /health 200
-	// and the checkpoint POST. 0 → DefaultCryoWarmupBufferSeconds (10s).
+	// and the checkpoint POST. Default 0 (no extra dwell — the
+	// readiness probe is the contract). Set explicitly to override
+	// per-NVCFBackend for workloads that need post-Ready dwell time
+	// (e.g., lazy-JIT engines that finish compiling shortly after the
+	// first 200). The previous semantics ("0 means use 10s default")
+	// conflated "I want zero" with "I didn't set this", so this field
+	// no longer treats 0 as a sentinel; the value you set is the
+	// value used.
 	WarmupBufferSeconds int32 `json:"warmupBufferSeconds,omitempty"`
 }
 
-// Complete returns a copy of CryoConfig with empty fields filled from
+// Complete returns a copy of NvSnapConfig with empty fields filled from
 // the defaults. Returns a non-nil pointer even when called on nil,
 // so callers can rely on the result for field reads without nil
 // checks. The returned value has the same enable bits as the input
 // (defaults do not opt anything in).
-func (c *CryoConfig) Complete(_ EnvType) *CryoConfig {
-	var tmp *CryoConfig
+func (c *NvSnapConfig) Complete(_ EnvType) *NvSnapConfig {
+	var tmp *NvSnapConfig
 	if c == nil {
-		tmp = &CryoConfig{}
+		tmp = &NvSnapConfig{}
 	} else {
 		tmp = c.DeepCopy()
 	}
 	if tmp.ServerURL == "" {
-		tmp.ServerURL = DefaultCryoServerURL
+		tmp.ServerURL = DefaultNvSnapServerURL
 	}
 	if tmp.WarmupTimeoutSeconds == 0 {
-		tmp.WarmupTimeoutSeconds = DefaultCryoWarmupTimeoutSeconds
+		tmp.WarmupTimeoutSeconds = DefaultNvSnapWarmupTimeoutSeconds
 	}
-	if tmp.WarmupBufferSeconds == 0 {
-		tmp.WarmupBufferSeconds = DefaultCryoWarmupBufferSeconds
-	}
+	// WarmupBufferSeconds: NO fallback. The value you set is the
+	// value used. Default 0 (DefaultNvSnapWarmupBufferSeconds) is a
+	// real choice, not a sentinel — see the field's doc comment.
 	return tmp
 }
 
 // IsEnabled reports whether the per-cluster integration is on AT ALL
 // — either checkpoint-side, restore-side, or both. The global feature
-// flag (featureflag.CryoCheckpointRestore) is a separate AND-gate
+// flag (featureflag.NvSnapCheckpointRestore) is a separate AND-gate
 // checked by callers.
-func (c *CryoConfig) IsEnabled() bool {
+func (c *NvSnapConfig) IsEnabled() bool {
 	return c != nil && (c.IntegrationEnabled || c.RestoreEnabled)
 }
 
