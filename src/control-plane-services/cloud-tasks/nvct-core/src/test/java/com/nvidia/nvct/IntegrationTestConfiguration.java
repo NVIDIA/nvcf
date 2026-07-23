@@ -207,7 +207,7 @@ public class IntegrationTestConfiguration {
 
         JarURLConnection connection = (JarURLConnection) composeUrlInsideJar.openConnection();
         try (var jarFile = connection.getJarFile()) {
-            var extractRoot = createIntegrationExtractDirectory();
+            var extractRoot = createIntegrationExtractDirectory().normalize();
             var prefix = LOCAL_ENV_CLASSPATH_PREFIX + "/";
 
             Enumeration<JarEntry> entries = jarFile.entries();
