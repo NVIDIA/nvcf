@@ -46,6 +46,11 @@ nvcf-cli registry add \
   --artifact-type CONTAINER
 ```
 
+To opt into worker-readiness-based instance health, set
+`statusByWorkerReadiness: true` in `inference-test/values.yaml`. This
+renders the optional `nvcf-workload-config` ConfigMap described in
+[Helm Functions](../../../../docs/user/helm-functions.md#use-worker-readiness-for-function-health).
+
 Create a function that references the chart, then deploy it:
 
 ```bash
