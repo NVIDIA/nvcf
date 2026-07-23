@@ -1,20 +1,15 @@
-load("@nvcf_java_rules//:bom_alignment.bzl", "bom_alignment_test")
-
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["NOTICE", "MODULE.bazel"])
-
-# Fails the build if this module's inlined maven.install boms drift from the
-# canonical SPRING_BOOT_BOM in @nvcf_java_rules//:platform.bzl. load() cannot be
-# used in MODULE.bazel, so the boms list is inlined and guarded here instead.
-bom_alignment_test(
-    name = "bom_alignment_test",
-)
+exports_files([
+    "maven_install.json",
+    "MODULE.bazel",
+    "NOTICE",
+])
 
 genrule(
     name = "third_party_notice",
     srcs = [
-        "//:maven_install.json",
+        ":maven_install.json",
         "//tools/bazel:notice_metadata.json",
         "//tools/bazel:notice_roots.json",
     ],
@@ -23,7 +18,7 @@ genrule(
     cmd = """
 set -eu
 "$(execpath //tools/bazel:generate_notice_tool)" \
-    --maven-install "$(location //:maven_install.json)" \
+    --maven-install "$(location :maven_install.json)" \
     --metadata "$(location //tools/bazel:notice_metadata.json)" \
     --root-manifest "$(location //tools/bazel:notice_roots.json)" \
     --output "$@" \
@@ -34,7 +29,7 @@ set -eu
 genrule(
     name = "generate_notice",
     srcs = [
-        "//:maven_install.json",
+        ":maven_install.json",
         "//tools/bazel:notice_metadata.json",
         "//tools/bazel:notice_roots.json",
     ],
@@ -47,7 +42,7 @@ set -euo pipefail
 
 workspace="$${BUILD_WORKSPACE_DIRECTORY:-$$(pwd)}"
 exec "$(execpath //tools/bazel:generate_notice_tool)" \
-    --maven-install "$(location //:maven_install.json)" \
+    --maven-install "$(location :maven_install.json)" \
     --metadata "$${workspace}/tools/bazel/notice_metadata.json" \
     --notice "$${workspace}/NOTICE" \
     --root-manifest "$(location //tools/bazel:notice_roots.json)" \

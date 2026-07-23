@@ -1,22 +1,22 @@
 load("//tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test")
 
 MOCK_SERVERS_COMPILE_DEPS = [
-    "@maven//:com_fasterxml_jackson_core_jackson_annotations",
-    "@maven//:com_nimbusds_nimbus_jose_jwt",
-    "@maven//:jakarta_annotation_jakarta_annotation_api",
-    "@maven//:jakarta_validation_jakarta_validation_api",
-    "@maven//:org_apache_commons_commons_lang3",
-    "@maven//:org_apache_logging_log4j_log4j_api",
-    "@maven//:org_slf4j_slf4j_api",
-    "@maven//:org_springframework_boot_spring_boot_autoconfigure",
-    "@maven//:org_springframework_boot_spring_boot_starter_jackson",
-    "@maven//:org_springframework_cloud_spring_cloud_context",
-    "@maven//:org_springframework_security_spring_security_oauth2_core",
-    "@maven//:org_springframework_security_spring_security_oauth2_jose",
-    "@maven//:org_springframework_spring_context",
-    "@maven//:org_springframework_spring_web",
-    "@maven//:org_wiremock_wiremock_standalone",
-    "@maven//:tools_jackson_core_jackson_databind",
+    "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",
+    "@nv_third_party_deps//:com_nimbusds_nimbus_jose_jwt",
+    "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
+    "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_apache_logging_log4j_log4j_api",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_core",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_jose",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
 ]
 
 nv_boot_library(

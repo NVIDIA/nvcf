@@ -32,9 +32,6 @@ sh_test(
         ":generate_notice.py",
         ":notice_metadata.json",
         "//:MODULE.bazel",
-        # nv-boot-parent's own NOTICE (its Java closure), not the aggregate root
-        # NOTICE which also covers the Go/Rust subtrees and can never match a
-        # Java-only regeneration.
         "//:NOTICE",
         "//:maven_install.json",
         ":notice_roots.json",
@@ -45,17 +42,17 @@ java_plugin(
     name = "lombok_plugin",
     generates_api = True,
     processor_class = "lombok.launch.AnnotationProcessorHider$AnnotationProcessor",
-    deps = ["@maven//:org_projectlombok_lombok"],
+    deps = ["@nv_third_party_deps//:org_projectlombok_lombok"],
 )
 
 java_binary(
     name = "jacoco_cli",
     main_class = "org.jacoco.cli.internal.Main",
-    runtime_deps = ["@maven//:org_jacoco_org_jacoco_cli"],
+    runtime_deps = ["@nv_third_party_deps//:org_jacoco_org_jacoco_cli"],
 )
 
 java_library(
     name = "lombok_annotations",
-    exports = ["@maven//:org_projectlombok_lombok"],
+    exports = ["@nv_third_party_deps//:org_projectlombok_lombok"],
     neverlink = True,
 )

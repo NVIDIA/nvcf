@@ -1,47 +1,9 @@
-# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# Standalone module .bazelrc. `cd rules/java && bazel build //...` must work with
-# no reference to the repo root. The caller supplies any remote cache endpoint;
-# no cache config is baked in (parity with the other nested modules).
-
-common --enable_bzlmod
-common --enable_platform_specific_config
-build --incompatible_strict_action_env
-
-# Route public Maven Central through an internal Artifactory mirror on internal
-# builds only. The target host lives in an un-mirrored internal bazelrc, so
-# public builds go straight to Maven Central (try-import is a no-op when absent).
-try-import %workspace%/tools/bazel/internal.bazelrc
-
-# Java: use the image-provided local JDK 25 (Temurin at JAVA_HOME) instead of a
-# hermetic remotejdk download; the bazel-ci image ships Temurin 25 (no download).
+build --enable_bzlmod
 build --java_language_version=25
-build --java_runtime_version=local_jdk
 build --tool_java_language_version=25
+build --java_runtime_version=local_jdk
 build --tool_java_runtime_version=local_jdk
 build --java_header_compilation=false
+build --javacopt=-Xlint:deprecation
 
 test --test_output=errors
-test --test_env=HOME=/tmp
-test --test_env=XDG_CACHE_HOME=/tmp/.cache
-
-startup --host_jvm_args=-Xmx4g
-
-build:release --compilation_mode=opt
-build:release --strip=always
-
-try-import %workspace%/user.bazelrc
-try-import %user.home%/.bazelrc.user

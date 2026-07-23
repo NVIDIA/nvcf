@@ -81,8 +81,8 @@ nvct:
     tracing-key: unused
     hostname: nvcr.io
     repository: nv-cf/nvcf-core
-    # Sidecar container images are configured in configData in nvct-api-colocated-deploy/nvct-api/values.yaml:
-    # https://gitlab-master.nvidia.com/ncp/nvcf/application-services/nvct-api-colocated-deploy/-/blob/main/nvct-api/values.yaml
+    # Sidecar container images are configured in configData in the colocated
+    # deploy values (nvct-api/values.yaml).
     init-container: dummy
     utils-container: dummy
     otel-container: dummy

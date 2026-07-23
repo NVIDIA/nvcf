@@ -4,11 +4,6 @@
     "at.yawk.lz4:lz4-java": 1725015399,
     "com.github.ben-manes.caffeine:guava": 1054685015,
     "com.github.java-json-tools:json-patch": -1031005245,
-    "com.google.code.findbugs:jsr305": 495355163,
-    "com.google.code.gson:gson": 597770368,
-    "com.google.errorprone:error_prone_annotations": -1035138750,
-    "com.google.guava:guava": 1943808618,
-    "com.google.j2objc:j2objc-annotations": 2003271689,
     "commons-codec:commons-codec": -1269462382,
     "io.cloudevents:cloudevents-core": -2103567774,
     "io.cloudevents:cloudevents-json-jackson": -1197487309,
@@ -20,19 +15,10 @@
     "net.javacrumbs.shedlock:shedlock-bom": -1406345450,
     "org.apache.cassandra:java-driver-metrics-micrometer": -465267397,
     "org.apache.commons:commons-lang3": -278168457,
-    "org.assertj:assertj-core": 1863574844,
-    "org.awaitility:awaitility": -1630939750,
     "org.bouncycastle:bcprov-jdk18on": -1405390253,
     "org.jacoco:org.jacoco.agent": -2069397525,
     "org.jacoco:org.jacoco.cli": -1856875155,
-    "org.junit.jupiter:junit-jupiter-api": 194920406,
-    "org.junit.jupiter:junit-jupiter-engine": -1886863302,
-    "org.junit.jupiter:junit-jupiter-params": 1082310006,
     "org.junit.platform:junit-platform-console-standalone": -1481831078,
-    "org.junit.platform:junit-platform-launcher": -354104948,
-    "org.junit.platform:junit-platform-reporting": 1896713402,
-    "org.mockito:mockito-core": -554630660,
-    "org.mockito:mockito-junit-jupiter": -1104541639,
     "org.ow2.asm:asm-analysis": -1027574299,
     "org.ow2.asm:asm-util": -307204853,
     "org.projectlombok:lombok": -2073039513,
@@ -80,7 +66,7 @@
     "ch.qos.logback:logback-classic:jar:sources": -390128445,
     "ch.qos.logback:logback-core": -1554021729,
     "ch.qos.logback:logback-core:jar:sources": 77538609,
-    "com.datastax.cassandra:cassandra-driver-core": 197829386,
+    "com.datastax.cassandra:cassandra-driver-core": -681774303,
     "com.datastax.cassandra:cassandra-driver-core:jar:sources": -2045236197,
     "com.datastax.oss:native-protocol": 447263174,
     "com.datastax.oss:native-protocol:jar:sources": 396473389,
@@ -96,9 +82,9 @@
     "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:sources": 1241536710,
     "com.fasterxml:classmate": -1468141616,
     "com.fasterxml:classmate:jar:sources": -179492269,
-    "com.github.ben-manes.caffeine:caffeine": 1925806502,
+    "com.github.ben-manes.caffeine:caffeine": 96455941,
     "com.github.ben-manes.caffeine:caffeine:jar:sources": -967473790,
-    "com.github.ben-manes.caffeine:guava": 2074933175,
+    "com.github.ben-manes.caffeine:guava": 1187631417,
     "com.github.ben-manes.caffeine:guava:jar:sources": 1956210603,
     "com.github.docker-java:docker-java-api": 1857041788,
     "com.github.docker-java:docker-java-api:jar:sources": 300128277,
@@ -106,13 +92,13 @@
     "com.github.docker-java:docker-java-transport-zerodep": -1848983763,
     "com.github.docker-java:docker-java-transport-zerodep:jar:sources": 1882881505,
     "com.github.docker-java:docker-java-transport:jar:sources": 864522470,
-    "com.github.java-json-tools:btf": 204024567,
+    "com.github.java-json-tools:btf": -1747700664,
     "com.github.java-json-tools:btf:jar:sources": 1539011915,
-    "com.github.java-json-tools:jackson-coreutils": 1585779168,
+    "com.github.java-json-tools:jackson-coreutils": 2047023685,
     "com.github.java-json-tools:jackson-coreutils:jar:sources": 323093438,
-    "com.github.java-json-tools:json-patch": 388171991,
+    "com.github.java-json-tools:json-patch": -399792119,
     "com.github.java-json-tools:json-patch:jar:sources": -1320375757,
-    "com.github.java-json-tools:msg-simple": -285204120,
+    "com.github.java-json-tools:msg-simple": 986302814,
     "com.github.java-json-tools:msg-simple:jar:sources": 1013495835,
     "com.github.jnr:jffi": 1952487985,
     "com.github.jnr:jffi:jar:native": 1426144838,
@@ -127,19 +113,16 @@
     "com.github.jnr:jnr-x86asm:jar:sources": -1784079536,
     "com.github.stephenc.jcip:jcip-annotations": -121928928,
     "com.github.stephenc.jcip:jcip-annotations:jar:sources": -2051941468,
-    "com.google.code.findbugs:jsr305": -1038659426,
-    "com.google.code.findbugs:jsr305:jar:sources": -1300148931,
-    "com.google.code.gson:gson": 1618556651,
-    "com.google.code.gson:gson:jar:sources": 389178860,
-    "com.google.errorprone:error_prone_annotations": 492382488,
-    "com.google.errorprone:error_prone_annotations:jar:sources": 456515251,
-    "com.google.guava:failureaccess": -268223546,
-    "com.google.guava:failureaccess:jar:sources": 2053502918,
-    "com.google.guava:guava": 1240305771,
-    "com.google.guava:guava:jar:sources": 1591586943,
+    "com.google.code.findbugs:jsr305": 1838181273,
+    "com.google.errorprone:error_prone_annotations": -1266099896,
+    "com.google.errorprone:error_prone_annotations:jar:sources": 936701586,
+    "com.google.guava:failureaccess": -56291903,
+    "com.google.guava:failureaccess:jar:sources": -820168004,
+    "com.google.guava:guava": -1132194940,
+    "com.google.guava:guava:jar:sources": -1505508770,
     "com.google.guava:listenablefuture": 1588902908,
-    "com.google.j2objc:j2objc-annotations": -596695707,
-    "com.google.j2objc:j2objc-annotations:jar:sources": 900785715,
+    "com.google.j2objc:j2objc-annotations": -2074422376,
+    "com.google.j2objc:j2objc-annotations:jar:sources": -597974451,
     "com.jayway.jsonpath:json-path": 626712679,
     "com.jayway.jsonpath:json-path:jar:sources": -343427302,
     "com.nimbusds:content-type": -444977683,
@@ -334,8 +317,6 @@
     "org.bouncycastle:bcprov-jdk18on:jar:sources": 106463766,
     "org.bouncycastle:bcprov-lts8on": 973431866,
     "org.bouncycastle:bcprov-lts8on:jar:sources": -196135755,
-    "org.checkerframework:checker-qual": -2018582244,
-    "org.checkerframework:checker-qual:jar:sources": 2110417205,
     "org.hamcrest:hamcrest": 1116842741,
     "org.hamcrest:hamcrest:jar:sources": -996443755,
     "org.hdrhistogram:HdrHistogram": 1379183334,
@@ -372,10 +353,6 @@
     "org.junit.platform:junit-platform-console-standalone:jar:sources": -103511349,
     "org.junit.platform:junit-platform-engine": -748595950,
     "org.junit.platform:junit-platform-engine:jar:sources": -191078126,
-    "org.junit.platform:junit-platform-launcher": 1722101087,
-    "org.junit.platform:junit-platform-launcher:jar:sources": -717285440,
-    "org.junit.platform:junit-platform-reporting": 1847654060,
-    "org.junit.platform:junit-platform-reporting:jar:sources": -1771745730,
     "org.latencyutils:LatencyUtils": 1082471286,
     "org.latencyutils:LatencyUtils:jar:sources": 1894864087,
     "org.mockito:mockito-core": 734095861,
@@ -384,8 +361,6 @@
     "org.mockito:mockito-junit-jupiter:jar:sources": -1281757309,
     "org.objenesis:objenesis": 1083875484,
     "org.objenesis:objenesis:jar:sources": 703772823,
-    "org.opentest4j.reporting:open-test-reporting-tooling-spi": -1639379357,
-    "org.opentest4j.reporting:open-test-reporting-tooling-spi:jar:sources": 1632689314,
     "org.opentest4j:opentest4j": 793813175,
     "org.opentest4j:opentest4j:jar:sources": 1210936723,
     "org.ow2.asm:asm": 716467505,
@@ -596,7 +571,7 @@
     "org.springframework:spring-webmvc": 56813816,
     "org.springframework:spring-webmvc:jar:sources": -837106767,
     "org.testcontainers:testcontainers": 450183679,
-    "org.testcontainers:testcontainers-cassandra": 584880112,
+    "org.testcontainers:testcontainers-cassandra": -1886187917,
     "org.testcontainers:testcontainers-cassandra:jar:sources": 2024290088,
     "org.testcontainers:testcontainers-database-commons": -1213526598,
     "org.testcontainers:testcontainers-database-commons:jar:sources": 315333060,
@@ -850,38 +825,30 @@
     },
     "com.google.code.findbugs:jsr305": {
       "shasums": {
-        "jar": "766ad2a0783f2687962c8ad74ceecc38a28b9f72a2d085ee438b7813e928d0c7",
-        "sources": "1c9e85e272d0708c6a591dc74828c71603053b48cc75ae83cce56912a2aa063b"
+        "jar": "1e7f53fa5b8b5c807e986ba335665da03f18d660802d8bf061823089d1bee468"
       },
-      "version": "3.0.2"
-    },
-    "com.google.code.gson:gson": {
-      "shasums": {
-        "jar": "d3999291855de495c94c743761b8ab5176cfeabe281a5ab0d8e8d45326fd703e",
-        "sources": "ba5bddb1a89eb721fcca39f3b34294532060f851e2407a82d82134a41eec4719"
-      },
-      "version": "2.8.9"
+      "version": "2.0.1"
     },
     "com.google.errorprone:error_prone_annotations": {
       "shasums": {
-        "jar": "ff80626baaf12a09342befd4e84cba9d50662f5fcd7f7a9b3490a6b7cf87e66c",
-        "sources": "bf08616e340f5e2ef50aaa84aea8baa086fd7bb2ad310501ff4e88ec77f8f31a"
+        "jar": "3b1003e51b8ae56fdbd7c71073e81d1683b97e6c4dff5a9151164d59b769d13c",
+        "sources": "69d2de7f69033ff914ba06f0858adb96ac7b1436959f04fca7de5805c834b281"
       },
-      "version": "2.5.1"
+      "version": "2.49.0"
     },
     "com.google.guava:failureaccess": {
       "shasums": {
-        "jar": "a171ee4c734dd2da837e4b16be9df4661afab72a41adaf31eb84dfdaf936ca26",
-        "sources": "092346eebbb1657b51aa7485a246bf602bb464cc0b0e2e1c7e7201fadce1e98f"
+        "jar": "cbfc3906b19b8f55dd7cfd6dfe0aa4532e834250d7f080bd8d211a3e246b59cb",
+        "sources": "6fef4dfd2eb9f961655f2a3c4ea87c023618d9fcbfb6b104c17862e5afe66b97"
       },
-      "version": "1.0.1"
+      "version": "1.0.3"
     },
     "com.google.guava:guava": {
       "shasums": {
-        "jar": "bd7fa227591fb8509677d0d1122cf95158f3b8a9f45653f58281d879f6dc48c5",
-        "sources": "9105dfc522fb440b39ff8da07cc56aacf65a9f765044c7803a9f32e36e05a22b"
+        "jar": "dc573e1fca4fd5454f4a5fd3d7da2df03002876a4175bafc14a95980dd7713b3",
+        "sources": "eff31867dd63a92d63ca856127a424a6836418d8bfa044162cac20430abd3500"
       },
-      "version": "32.0.1-jre"
+      "version": "33.6.0-jre"
     },
     "com.google.guava:listenablefuture": {
       "shasums": {
@@ -891,10 +858,10 @@
     },
     "com.google.j2objc:j2objc-annotations": {
       "shasums": {
-        "jar": "f02a95fa1a5e95edb3ed859fd0fb7df709d121a35290eff8b74dce2ab7f4d6ed",
-        "sources": "7413eed41f111453a08837f5ac680edded7faed466cbd35745e402e13f4cc3f5"
+        "jar": "84d3a150518485f8140ea99b8a985656749629f6433c92b80c75b36aba3b099b",
+        "sources": "295938307f4016b3f128f7347101b236ada1394808104519c9e93cd61b64602b"
       },
-      "version": "2.8"
+      "version": "3.1"
     },
     "com.jayway.jsonpath:json-path": {
       "shasums": {
@@ -1565,13 +1532,6 @@
       },
       "version": "2.73.8"
     },
-    "org.checkerframework:checker-qual": {
-      "shasums": {
-        "jar": "e316255bbfcd9fe50d165314b85abb2b33cb2a66a93c491db648e498a82c2de1",
-        "sources": "443fa6151982bb4c6ce62e2938f53660085b13a7dceb517202777b87d0dea2c7"
-      },
-      "version": "3.33.0"
-    },
     "org.hamcrest:hamcrest": {
       "shasums": {
         "jar": "5d66b6a4a680755cb6ed7cb104fa7835ef644667586ff0737adeb977c39ecdbc",
@@ -1698,20 +1658,6 @@
       },
       "version": "6.0.3"
     },
-    "org.junit.platform:junit-platform-launcher": {
-      "shasums": {
-        "jar": "315608372e4dc44bca0ccb3ae8a07ecc206b3367033fa05748a03ccd563f1301",
-        "sources": "4fcbdb81cc882c0c3e73f742878db5884d3d2f86facc08369ca953e32796d144"
-      },
-      "version": "6.0.3"
-    },
-    "org.junit.platform:junit-platform-reporting": {
-      "shasums": {
-        "jar": "f19c5be871c37ebed493f3152b67a909f89a44dff67c2db8016dfe34167d5730",
-        "sources": "bbdda2b9c002dbd1b05cfec144bab91e8cca46ed8d58525f51b547f3a0a84a7d"
-      },
-      "version": "6.0.3"
-    },
     "org.latencyutils:LatencyUtils": {
       "shasums": {
         "jar": "a32a9ffa06b2f4e01c5360f8f9df7bc5d9454a5d373cd8f361347fa5a57165ec",
@@ -1739,13 +1685,6 @@
         "sources": "d06164f8ca002c8ef193cef2d682822014dd330505616af93a3fb64226fc131d"
       },
       "version": "3.3"
-    },
-    "org.opentest4j.reporting:open-test-reporting-tooling-spi": {
-      "shasums": {
-        "jar": "04ac4ecfcaf60abe0e6d5b18e8306320aec7cd9cbf15e59eeac54fa9faa16902",
-        "sources": "efe9672e74111726c0ff85a2508a0bc78be611a7cbe460560dc7cd429ee0a4ce"
-      },
-      "version": "0.2.4"
     },
     "org.opentest4j:opentest4j": {
       "shasums": {
@@ -2674,6 +2613,9 @@
   "conflict_resolution": {
     "com.github.jnr:jnr-ffi:2.2.11": "com.github.jnr:jnr-ffi:2.1.7",
     "com.github.jnr:jnr-posix:3.0.44": "com.github.jnr:jnr-posix:3.1.15",
+    "com.google.code.findbugs:jsr305:3.0.2": "com.google.code.findbugs:jsr305:2.0.1",
+    "com.google.errorprone:error_prone_annotations:2.47.0": "com.google.errorprone:error_prone_annotations:2.49.0",
+    "com.google.guava:guava:19.0": "com.google.guava:guava:33.6.0-jre",
     "org.jetbrains:annotations:13.0": "org.jetbrains:annotations:17.0.0",
     "org.ow2.asm:asm-commons:5.0.3": "org.ow2.asm:asm-commons:9.9",
     "org.ow2.asm:asm-tree:5.0.3": "org.ow2.asm:asm-tree:9.9",
@@ -2757,12 +2699,11 @@
       "com.github.jnr:jnr-ffi"
     ],
     "com.google.guava:guava": [
-      "com.google.code.findbugs:jsr305",
       "com.google.errorprone:error_prone_annotations",
       "com.google.guava:failureaccess",
       "com.google.guava:listenablefuture",
       "com.google.j2objc:j2objc-annotations",
-      "org.checkerframework:checker-qual"
+      "org.jspecify:jspecify"
     ],
     "com.jayway.jsonpath:json-path": [
       "net.minidev:json-smart",
@@ -3180,17 +3121,6 @@
       "org.junit.platform:junit-platform-commons",
       "org.opentest4j:opentest4j"
     ],
-    "org.junit.platform:junit-platform-launcher": [
-      "org.apiguardian:apiguardian-api",
-      "org.jspecify:jspecify",
-      "org.junit.platform:junit-platform-engine"
-    ],
-    "org.junit.platform:junit-platform-reporting": [
-      "org.apiguardian:apiguardian-api",
-      "org.jspecify:jspecify",
-      "org.junit.platform:junit-platform-launcher",
-      "org.opentest4j.reporting:open-test-reporting-tooling-spi"
-    ],
     "org.mockito:mockito-core": [
       "net.bytebuddy:byte-buddy",
       "net.bytebuddy:byte-buddy-agent",
@@ -3199,9 +3129,6 @@
     "org.mockito:mockito-junit-jupiter": [
       "org.junit.jupiter:junit-jupiter-api",
       "org.mockito:mockito-core"
-    ],
-    "org.opentest4j.reporting:open-test-reporting-tooling-spi": [
-      "org.apiguardian:apiguardian-api"
     ],
     "org.ow2.asm:asm-analysis": [
       "org.ow2.asm:asm-tree"
@@ -4196,17 +4123,6 @@
       "javax.annotation",
       "javax.annotation.concurrent",
       "javax.annotation.meta"
-    ],
-    "com.google.code.gson:gson": [
-      "com.google.gson",
-      "com.google.gson.annotations",
-      "com.google.gson.internal",
-      "com.google.gson.internal.bind",
-      "com.google.gson.internal.bind.util",
-      "com.google.gson.internal.reflect",
-      "com.google.gson.internal.sql",
-      "com.google.gson.reflect",
-      "com.google.gson.stream"
     ],
     "com.google.errorprone:error_prone_annotations": [
       "com.google.errorprone.annotations",
@@ -5680,38 +5596,6 @@
       "org.bouncycastle.util.io.pem",
       "org.bouncycastle.util.test"
     ],
-    "org.checkerframework:checker-qual": [
-      "org.checkerframework.checker.builder.qual",
-      "org.checkerframework.checker.calledmethods.qual",
-      "org.checkerframework.checker.compilermsgs.qual",
-      "org.checkerframework.checker.fenum.qual",
-      "org.checkerframework.checker.formatter.qual",
-      "org.checkerframework.checker.guieffect.qual",
-      "org.checkerframework.checker.i18n.qual",
-      "org.checkerframework.checker.i18nformatter.qual",
-      "org.checkerframework.checker.index.qual",
-      "org.checkerframework.checker.initialization.qual",
-      "org.checkerframework.checker.interning.qual",
-      "org.checkerframework.checker.lock.qual",
-      "org.checkerframework.checker.mustcall.qual",
-      "org.checkerframework.checker.nullness.qual",
-      "org.checkerframework.checker.optional.qual",
-      "org.checkerframework.checker.propkey.qual",
-      "org.checkerframework.checker.regex.qual",
-      "org.checkerframework.checker.signature.qual",
-      "org.checkerframework.checker.signedness.qual",
-      "org.checkerframework.checker.tainting.qual",
-      "org.checkerframework.checker.units.qual",
-      "org.checkerframework.common.aliasing.qual",
-      "org.checkerframework.common.initializedfields.qual",
-      "org.checkerframework.common.reflection.qual",
-      "org.checkerframework.common.returnsreceiver.qual",
-      "org.checkerframework.common.subtyping.qual",
-      "org.checkerframework.common.util.report.qual",
-      "org.checkerframework.common.value.qual",
-      "org.checkerframework.dataflow.qual",
-      "org.checkerframework.framework.qual"
-    ],
     "org.hamcrest:hamcrest": [
       "org.hamcrest",
       "org.hamcrest.beans",
@@ -6092,27 +5976,6 @@
       "org.junit.platform.engine.support.hierarchical",
       "org.junit.platform.engine.support.store"
     ],
-    "org.junit.platform:junit-platform-launcher": [
-      "org.junit.platform.launcher",
-      "org.junit.platform.launcher.core",
-      "org.junit.platform.launcher.jfr",
-      "org.junit.platform.launcher.listeners",
-      "org.junit.platform.launcher.listeners.discovery",
-      "org.junit.platform.launcher.listeners.session",
-      "org.junit.platform.launcher.tagexpression"
-    ],
-    "org.junit.platform:junit-platform-reporting": [
-      "org.junit.platform.reporting",
-      "org.junit.platform.reporting.legacy",
-      "org.junit.platform.reporting.legacy.xml",
-      "org.junit.platform.reporting.open.xml",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.events.api",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.events.core",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.events.git",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.events.java",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.events.root",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.schema"
-    ],
     "org.latencyutils:LatencyUtils": [
       "org.LatencyUtils"
     ],
@@ -6198,9 +6061,6 @@
       "org.objenesis.instantiator.sun",
       "org.objenesis.instantiator.util",
       "org.objenesis.strategy"
-    ],
-    "org.opentest4j.reporting:open-test-reporting-tooling-spi": [
-      "org.opentest4j.reporting.tooling.spi.htmlreport"
     ],
     "org.opentest4j:opentest4j": [
       "org.opentest4j"
@@ -8610,9 +8470,6 @@
       "com.github.stephenc.jcip:jcip-annotations",
       "com.github.stephenc.jcip:jcip-annotations:jar:sources",
       "com.google.code.findbugs:jsr305",
-      "com.google.code.findbugs:jsr305:jar:sources",
-      "com.google.code.gson:gson",
-      "com.google.code.gson:gson:jar:sources",
       "com.google.errorprone:error_prone_annotations",
       "com.google.errorprone:error_prone_annotations:jar:sources",
       "com.google.guava:failureaccess",
@@ -8816,8 +8673,6 @@
       "org.bouncycastle:bcprov-jdk18on:jar:sources",
       "org.bouncycastle:bcprov-lts8on",
       "org.bouncycastle:bcprov-lts8on:jar:sources",
-      "org.checkerframework:checker-qual",
-      "org.checkerframework:checker-qual:jar:sources",
       "org.hamcrest:hamcrest",
       "org.hamcrest:hamcrest:jar:sources",
       "org.hdrhistogram:HdrHistogram",
@@ -8854,10 +8709,6 @@
       "org.junit.platform:junit-platform-console-standalone:jar:sources",
       "org.junit.platform:junit-platform-engine",
       "org.junit.platform:junit-platform-engine:jar:sources",
-      "org.junit.platform:junit-platform-launcher",
-      "org.junit.platform:junit-platform-launcher:jar:sources",
-      "org.junit.platform:junit-platform-reporting",
-      "org.junit.platform:junit-platform-reporting:jar:sources",
       "org.latencyutils:LatencyUtils",
       "org.latencyutils:LatencyUtils:jar:sources",
       "org.mockito:mockito-core",
@@ -8866,8 +8717,6 @@
       "org.mockito:mockito-junit-jupiter:jar:sources",
       "org.objenesis:objenesis",
       "org.objenesis:objenesis:jar:sources",
-      "org.opentest4j.reporting:open-test-reporting-tooling-spi",
-      "org.opentest4j.reporting:open-test-reporting-tooling-spi:jar:sources",
       "org.opentest4j:opentest4j",
       "org.opentest4j:opentest4j:jar:sources",
       "org.ow2.asm:asm",
@@ -9191,9 +9040,6 @@
       "com.github.stephenc.jcip:jcip-annotations",
       "com.github.stephenc.jcip:jcip-annotations:jar:sources",
       "com.google.code.findbugs:jsr305",
-      "com.google.code.findbugs:jsr305:jar:sources",
-      "com.google.code.gson:gson",
-      "com.google.code.gson:gson:jar:sources",
       "com.google.errorprone:error_prone_annotations",
       "com.google.errorprone:error_prone_annotations:jar:sources",
       "com.google.guava:failureaccess",
@@ -9397,8 +9243,6 @@
       "org.bouncycastle:bcprov-jdk18on:jar:sources",
       "org.bouncycastle:bcprov-lts8on",
       "org.bouncycastle:bcprov-lts8on:jar:sources",
-      "org.checkerframework:checker-qual",
-      "org.checkerframework:checker-qual:jar:sources",
       "org.hamcrest:hamcrest",
       "org.hamcrest:hamcrest:jar:sources",
       "org.hdrhistogram:HdrHistogram",
@@ -9435,10 +9279,6 @@
       "org.junit.platform:junit-platform-console-standalone:jar:sources",
       "org.junit.platform:junit-platform-engine",
       "org.junit.platform:junit-platform-engine:jar:sources",
-      "org.junit.platform:junit-platform-launcher",
-      "org.junit.platform:junit-platform-launcher:jar:sources",
-      "org.junit.platform:junit-platform-reporting",
-      "org.junit.platform:junit-platform-reporting:jar:sources",
       "org.latencyutils:LatencyUtils",
       "org.latencyutils:LatencyUtils:jar:sources",
       "org.mockito:mockito-core",
@@ -9447,8 +9287,6 @@
       "org.mockito:mockito-junit-jupiter:jar:sources",
       "org.objenesis:objenesis",
       "org.objenesis:objenesis:jar:sources",
-      "org.opentest4j.reporting:open-test-reporting-tooling-spi",
-      "org.opentest4j.reporting:open-test-reporting-tooling-spi:jar:sources",
       "org.opentest4j:opentest4j",
       "org.opentest4j:opentest4j:jar:sources",
       "org.ow2.asm:asm",
@@ -9921,19 +9759,6 @@
         "org.junit.platform.engine.discovery.PackageSelector$IdentifierParser",
         "org.junit.platform.engine.discovery.UniqueIdSelector$IdentifierParser",
         "org.junit.platform.engine.discovery.UriSelector$IdentifierParser"
-      ]
-    },
-    "org.junit.platform:junit-platform-launcher": {
-      "org.junit.platform.launcher.TestExecutionListener": [
-        "org.junit.platform.launcher.listeners.UniqueIdTrackingListener"
-      ]
-    },
-    "org.junit.platform:junit-platform-reporting": {
-      "org.junit.platform.launcher.TestExecutionListener": [
-        "org.junit.platform.reporting.open.xml.OpenTestReportGeneratingListener"
-      ],
-      "org.opentest4j.reporting.tooling.spi.htmlreport.Contributor": [
-        "org.junit.platform.reporting.open.xml.JUnitContributor"
       ]
     },
     "org.projectlombok:lombok": {

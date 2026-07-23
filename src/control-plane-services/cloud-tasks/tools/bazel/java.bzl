@@ -1,20 +1,24 @@
 load("@rules_java//java:defs.bzl", _java_binary = "java_binary", _java_library = "java_library")
-load("@rules_java//java/common:java_info.bzl", "JavaInfo")
 load("@rules_shell//shell:sh_test.bzl", _sh_test = "sh_test")
 
-NV_JAVA_JAVACOPTS = [
+NVCT_JAVACOPTS = [
+    "--release",
+    "25",
+    "-Xep:CheckReturnValue:OFF",
+    "-Xep:ImpossibleNullComparison:OFF",
+    "-Xep:OptionalOfRedundantMethod:OFF",
     "-Xlint:deprecation",
 ]
 
-NV_LOMBOK_COMPILE_DEPS = [
+NVCT_LOMBOK_COMPILE_DEPS = [
     "//tools/bazel:lombok_annotations",
 ]
 
-NV_LOMBOK_PLUGINS = [
+NVCT_LOMBOK_PLUGINS = [
     "//tools/bazel:lombok_plugin",
 ]
 
-NV_JUNIT5_ARGS = [
+NVCT_JUNIT_ARGS = [
     "execute",
     "--details=flat",
     "--disable-ansi-colors",
@@ -23,11 +27,7 @@ NV_JUNIT5_ARGS = [
     "--fail-if-no-tests",
 ]
 
-NV_JUNIT5_RUNTIME_DEPS = [
-    "@nv_third_party_deps//:org_junit_platform_junit_platform_console_standalone",
-]
-
-NV_JUNIT5_COMPILE_DEPS = [
+NVCT_JUNIT_COMPILE_DEPS = [
     "@nv_third_party_deps//:org_assertj_assertj_core",
     "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_api",
     "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_params",
@@ -38,65 +38,31 @@ NV_JUNIT5_COMPILE_DEPS = [
     "@nv_third_party_deps//:org_springframework_spring_test",
 ]
 
-NV_MOCKITO_CORE = "@nv_third_party_deps//:org_mockito_mockito_core"
-
-NV_MOCKITO_AGENT_DATA = [
-    NV_MOCKITO_CORE,
+NVCT_JUNIT_RUNTIME_DEPS = [
+    "@nv_third_party_deps//:org_junit_platform_junit_platform_console_standalone",
 ]
 
-NV_MOCKITO_AGENT_JVM_FLAGS = [
-    "-javaagent:$(location %s)" % NV_MOCKITO_CORE,
-]
+NVCT_MOCKITO_CORE = "@nv_third_party_deps//:org_mockito_mockito_core"
 
-NV_JACOCO_AGENT = "@nv_third_party_deps//:org_jacoco_org_jacoco_agent_runtime"
+NVCT_JACOCO_AGENT = "@nv_third_party_deps//:org_jacoco_org_jacoco_agent_runtime"
 
-NV_JACOCO_AGENT_DATA = [
-    NV_JACOCO_AGENT,
-]
-
-NV_JACOCO_AGENT_JVM_FLAGS = [
+NVCT_JACOCO_JVM_FLAGS = [
     (
         "-javaagent:$(location %s)=destfile=jacoco.exec,append=false,"
         + "dumponexit=true,includes=com.nvidia.*"
-    ) % NV_JACOCO_AGENT,
+    ) % NVCT_JACOCO_AGENT,
 ]
 
-def _nv_boot_runtime_classpath_test_impl(ctx):
-    runtime_jars = ctx.attr.target[JavaInfo].transitive_runtime_jars.to_list()
-    leaked = []
+def _unique(values):
+    seen = {}
+    result = []
+    for value in values:
+        if value not in seen:
+            seen[value] = True
+            result.append(value)
+    return result
 
-    for jar in runtime_jars:
-        for artifact in ctx.attr.forbidden_artifacts:
-            if artifact in jar.basename:
-                leaked.append(jar.short_path)
-                break
-
-    if leaked:
-        fail(
-            "%s exports Maven-optional/provided runtime jars:\n%s" % (
-                ctx.attr.target.label,
-                "\n".join(sorted(leaked)),
-            ),
-        )
-
-    executable = ctx.actions.declare_file(ctx.label.name + ".sh")
-    ctx.actions.write(
-        output = executable,
-        content = "#!/bin/sh\nexit 0\n",
-        is_executable = True,
-    )
-    return [DefaultInfo(executable = executable)]
-
-nv_boot_runtime_classpath_test = rule(
-    implementation = _nv_boot_runtime_classpath_test_impl,
-    attrs = {
-        "forbidden_artifacts": attr.string_list(mandatory = True),
-        "target": attr.label(mandatory = True, providers = [JavaInfo]),
-    },
-    test = True,
-)
-
-def _nv_boot_workspace_runfiles_impl(ctx):
+def _nvct_workspace_runfiles_impl(ctx):
     symlinks = {}
     strip_prefix = ctx.attr.strip_prefix
 
@@ -113,15 +79,15 @@ def _nv_boot_workspace_runfiles_impl(ctx):
 
     return [DefaultInfo(runfiles = ctx.runfiles(symlinks = symlinks))]
 
-nv_boot_workspace_runfiles = rule(
-    implementation = _nv_boot_workspace_runfiles_impl,
+nvct_workspace_runfiles = rule(
+    implementation = _nvct_workspace_runfiles_impl,
     attrs = {
         "srcs": attr.label_list(allow_files = True),
         "strip_prefix": attr.string(),
     },
 )
 
-def nv_boot_library(
+def nvct_library(
         name,
         srcs,
         deps = [],
@@ -132,29 +98,28 @@ def nv_boot_library(
     _java_library(
         name = name,
         srcs = srcs,
-        deps = deps + NV_LOMBOK_COMPILE_DEPS,
-        javacopts = NV_JAVA_JAVACOPTS,
-        plugins = NV_LOMBOK_PLUGINS,
+        deps = deps + NVCT_LOMBOK_COMPILE_DEPS,
+        javacopts = NVCT_JAVACOPTS,
+        plugins = NVCT_LOMBOK_PLUGINS,
         resources = resources,
         resource_strip_prefix = resource_strip_prefix,
         runtime_deps = runtime_deps,
         visibility = visibility,
     )
 
-def nv_boot_library_test(
+def nvct_library_test(
         name,
-        srcs,
         deps,
         coverage_library,
         data = [],
-        junit_classpath = [],
         jvm_flags = [],
         resources = [],
         runtime_deps = [],
-        size = "small",
+        size = "large",
+        srcs = [],
         tags = [],
-        timeout = "short",
-        resource_strip_prefix = ""):
+        timeout = "long",
+        visibility = None):
     if type(coverage_library) != "string" or not coverage_library.startswith(":"):
         fail(
             "coverage_library must be the module library target as a local "
@@ -168,15 +133,19 @@ def nv_boot_library_test(
     _java_binary(
         name = junit_runner,
         srcs = srcs,
-        data = data + NV_MOCKITO_AGENT_DATA + NV_JACOCO_AGENT_DATA,
-        deps = deps + NV_LOMBOK_COMPILE_DEPS + NV_JUNIT5_COMPILE_DEPS,
-        javacopts = NV_JAVA_JAVACOPTS,
-        jvm_flags = NV_JACOCO_AGENT_JVM_FLAGS + NV_MOCKITO_AGENT_JVM_FLAGS + jvm_flags,
+        data = _unique(data + [
+            NVCT_JACOCO_AGENT,
+            NVCT_MOCKITO_CORE,
+        ]),
+        deps = _unique(deps + NVCT_LOMBOK_COMPILE_DEPS + NVCT_JUNIT_COMPILE_DEPS),
+        javacopts = NVCT_JAVACOPTS,
+        jvm_flags = NVCT_JACOCO_JVM_FLAGS + [
+            "-javaagent:$(location %s)" % NVCT_MOCKITO_CORE,
+        ] + jvm_flags,
         main_class = "org.junit.platform.console.ConsoleLauncher",
-        plugins = NV_LOMBOK_PLUGINS,
+        plugins = NVCT_LOMBOK_PLUGINS,
         resources = resources,
-        resource_strip_prefix = resource_strip_prefix,
-        runtime_deps = runtime_deps + NV_JUNIT5_RUNTIME_DEPS,
+        runtime_deps = runtime_deps + NVCT_JUNIT_RUNTIME_DEPS,
         tags = ["manual"],
         testonly = True,
         visibility = ["//visibility:private"],
@@ -191,20 +160,18 @@ def nv_boot_library_test(
             coverage_source_root if coverage_sourcefiles else "",
             native.package_name(),
             "$(location //tools/bazel:jacoco_cli)",
-        ] + NV_JUNIT5_ARGS + [
+        ] + NVCT_JUNIT_ARGS + [
             "--class-path=$(location :%s.jar)" % junit_runner,
             "--scan-classpath=$(location :%s.jar)" % junit_runner,
-        ] + [
-            "--class-path=%s" % path
-            for path in junit_classpath
         ],
-        data = [
+        data = _unique([
             ":" + junit_runner,
             ":%s.jar" % junit_runner,
             coverage_library,
             "//tools/bazel:jacoco_cli",
-        ] + coverage_sourcefiles,
+        ] + coverage_sourcefiles),
         size = size,
         tags = tags,
         timeout = timeout,
+        visibility = visibility,
     )

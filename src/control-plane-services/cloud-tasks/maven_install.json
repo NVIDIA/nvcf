@@ -6,20 +6,14 @@
     "com.github.ben-manes.caffeine:caffeine": 1100418982,
     "com.github.ben-manes.caffeine:guava": 1054685015,
     "com.github.java-json-tools:json-patch": -1031005245,
-    "com.google.code.findbugs:jsr305": 495355163,
-    "com.google.code.gson:gson": 597770368,
-    "com.google.errorprone:error_prone_annotations": -1035138750,
-    "com.google.guava:guava": 1943808618,
-    "com.google.j2objc:j2objc-annotations": 2003271689,
     "com.google.protobuf:protobuf-java": 1906581597,
     "com.google.protobuf:protobuf-java-util": -1626074784,
     "commons-codec:commons-codec": -1269462382,
     "io.cloudevents:cloudevents-core": -2103567774,
     "io.cloudevents:cloudevents-json-jackson": -1197487309,
-    "io.grpc:grpc-api": 1424099231,
-    "io.grpc:grpc-netty": -904974271,
-    "io.grpc:grpc-protobuf": 1036850648,
-    "io.grpc:grpc-stub": -26097747,
+    "io.grpc:grpc-api": 811923177,
+    "io.grpc:grpc-protobuf": 1083049616,
+    "io.grpc:grpc-stub": 1416868173,
     "io.micrometer:micrometer-registry-prometheus": 1865600799,
     "io.micrometer:micrometer-tracing-bridge-otel": -754588172,
     "io.nats:jnats": 572014237,
@@ -41,11 +35,8 @@
     "org.jacoco:org.jacoco.agent": -2069397525,
     "org.jacoco:org.jacoco.cli": -1856875155,
     "org.junit.jupiter:junit-jupiter-api": 194920406,
-    "org.junit.jupiter:junit-jupiter-engine": -1886863302,
     "org.junit.jupiter:junit-jupiter-params": 1082310006,
     "org.junit.platform:junit-platform-console-standalone": -1481831078,
-    "org.junit.platform:junit-platform-launcher": -354104948,
-    "org.junit.platform:junit-platform-reporting": 1896713402,
     "org.mockito:mockito-core": -554630660,
     "org.mockito:mockito-junit-jupiter": -1104541639,
     "org.ow2.asm:asm": -221905796,
@@ -77,7 +68,6 @@
     "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server-test": -1173625786,
     "org.springframework.boot:spring-boot-starter-test": -1561809354,
     "org.springframework.boot:spring-boot-starter-validation": 113118493,
-    "org.springframework.boot:spring-boot-starter-web": -1905796688,
     "org.springframework.boot:spring-boot-starter-webflux": 1788530073,
     "org.springframework.boot:spring-boot-starter-webflux-test": 5326534,
     "org.springframework.boot:spring-boot-starter-webmvc": 338400426,
@@ -103,8 +93,6 @@
     "tools.jackson.module:jackson-module-blackbird": -423541381
   },
   "__RESOLVED_ARTIFACTS_HASH": {
-    "aopalliance:aopalliance": -1763688673,
-    "aopalliance:aopalliance:jar:sources": 758113234,
     "args4j:args4j": -572028113,
     "args4j:args4j:jar:sources": 74047526,
     "at.yawk.lz4:lz4-java": -1985362494,
@@ -117,7 +105,7 @@
     "com.bucket4j:bucket4j-core:jar:sources": -559201191,
     "com.bucket4j:bucket4j_jdk17-core": -1244833112,
     "com.bucket4j:bucket4j_jdk17-core:jar:sources": -2075602285,
-    "com.datastax.cassandra:cassandra-driver-core": 197829386,
+    "com.datastax.cassandra:cassandra-driver-core": -1043458548,
     "com.datastax.cassandra:cassandra-driver-core:jar:sources": -2045236197,
     "com.datastax.oss:native-protocol": 447263174,
     "com.datastax.oss:native-protocol:jar:sources": 396473389,
@@ -133,9 +121,9 @@
     "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:sources": 1241536710,
     "com.fasterxml:classmate": -1468141616,
     "com.fasterxml:classmate:jar:sources": -179492269,
-    "com.github.ben-manes.caffeine:caffeine": 1925806502,
+    "com.github.ben-manes.caffeine:caffeine": 96455941,
     "com.github.ben-manes.caffeine:caffeine:jar:sources": -967473790,
-    "com.github.ben-manes.caffeine:guava": 2074933175,
+    "com.github.ben-manes.caffeine:guava": 1187631417,
     "com.github.ben-manes.caffeine:guava:jar:sources": 1956210603,
     "com.github.docker-java:docker-java-api": 1857041788,
     "com.github.docker-java:docker-java-api:jar:sources": 300128277,
@@ -170,19 +158,19 @@
     "com.google.api.grpc:proto-google-common-protos:jar:sources": 944916609,
     "com.google.code.findbugs:jsr305": -1038659426,
     "com.google.code.findbugs:jsr305:jar:sources": -1300148931,
-    "com.google.code.gson:gson": 1618556651,
-    "com.google.code.gson:gson:jar:sources": 389178860,
-    "com.google.errorprone:error_prone_annotations": 492382488,
-    "com.google.errorprone:error_prone_annotations:jar:sources": 456515251,
-    "com.google.guava:failureaccess": -268223546,
-    "com.google.guava:failureaccess:jar:sources": 2053502918,
-    "com.google.guava:guava": 1240305771,
-    "com.google.guava:guava:jar:sources": 1591586943,
+    "com.google.code.gson:gson": 328405842,
+    "com.google.code.gson:gson:jar:sources": -329485452,
+    "com.google.errorprone:error_prone_annotations": -1266099896,
+    "com.google.errorprone:error_prone_annotations:jar:sources": 936701586,
+    "com.google.guava:failureaccess": -56291903,
+    "com.google.guava:failureaccess:jar:sources": -820168004,
+    "com.google.guava:guava": -1132194940,
+    "com.google.guava:guava:jar:sources": -1505508770,
     "com.google.guava:listenablefuture": 1588902908,
-    "com.google.j2objc:j2objc-annotations": -596695707,
-    "com.google.j2objc:j2objc-annotations:jar:sources": 900785715,
+    "com.google.j2objc:j2objc-annotations": -2074422376,
+    "com.google.j2objc:j2objc-annotations:jar:sources": -597974451,
     "com.google.protobuf:protobuf-java": 1139989641,
-    "com.google.protobuf:protobuf-java-util": -1990628174,
+    "com.google.protobuf:protobuf-java-util": 404866093,
     "com.google.protobuf:protobuf-java-util:jar:sources": 1216176261,
     "com.google.protobuf:protobuf-java:jar:sources": -718827633,
     "com.jayway.jsonpath:json-path": 626712679,
@@ -221,38 +209,36 @@
     "io.cloudevents:cloudevents-core:jar:sources": 223693387,
     "io.cloudevents:cloudevents-json-jackson": -807987873,
     "io.cloudevents:cloudevents-json-jackson:jar:sources": -166751855,
-    "io.dropwizard.metrics:metrics-core": 1029463962,
-    "io.dropwizard.metrics:metrics-core:jar:sources": 1607397396,
-    "io.grpc:grpc-api": 1731222191,
+    "io.dropwizard.metrics:metrics-core": -1658658454,
+    "io.dropwizard.metrics:metrics-core:jar:sources": 1726519463,
+    "io.grpc:grpc-api": 716151037,
     "io.grpc:grpc-api:jar:sources": 234601049,
-    "io.grpc:grpc-context": 1511740056,
-    "io.grpc:grpc-context:jar:sources": -1094751930,
-    "io.grpc:grpc-core": 831039331,
-    "io.grpc:grpc-core:jar:sources": 691468151,
-    "io.grpc:grpc-inprocess": -1501508632,
+    "io.grpc:grpc-context": 721938541,
+    "io.grpc:grpc-context:jar:sources": 1478851124,
+    "io.grpc:grpc-core": -1513972768,
+    "io.grpc:grpc-core:jar:sources": -232667389,
+    "io.grpc:grpc-inprocess": 353730710,
     "io.grpc:grpc-inprocess:jar:sources": -676994554,
-    "io.grpc:grpc-netty": 1825797901,
-    "io.grpc:grpc-netty-shaded": -345312471,
+    "io.grpc:grpc-netty-shaded": 1759851352,
     "io.grpc:grpc-netty-shaded:jar:sources": 1478851124,
-    "io.grpc:grpc-netty:jar:sources": -231652768,
-    "io.grpc:grpc-protobuf": 45290816,
-    "io.grpc:grpc-protobuf-lite": 63739651,
+    "io.grpc:grpc-protobuf": -549393834,
+    "io.grpc:grpc-protobuf-lite": -1967256086,
     "io.grpc:grpc-protobuf-lite:jar:sources": -1659538303,
     "io.grpc:grpc-protobuf:jar:sources": -1849103116,
-    "io.grpc:grpc-services": -1598479097,
+    "io.grpc:grpc-services": 1483710115,
     "io.grpc:grpc-services:jar:sources": 2062893709,
-    "io.grpc:grpc-stub": 1646600797,
+    "io.grpc:grpc-stub": -1391817309,
     "io.grpc:grpc-stub:jar:sources": -1596678046,
-    "io.grpc:grpc-util": 1123291627,
-    "io.grpc:grpc-util:jar:sources": 661341860,
-    "io.gsonfire:gson-fire": -839915556,
+    "io.grpc:grpc-util": 188637273,
+    "io.grpc:grpc-util:jar:sources": -2003766127,
+    "io.gsonfire:gson-fire": -1955577022,
     "io.gsonfire:gson-fire:jar:sources": -237239617,
-    "io.kubernetes:client-java": -1707157006,
-    "io.kubernetes:client-java-api": -2039476626,
-    "io.kubernetes:client-java-api-fluent": 178640861,
+    "io.kubernetes:client-java": -1721476940,
+    "io.kubernetes:client-java-api": 1944060710,
+    "io.kubernetes:client-java-api-fluent": 889139695,
     "io.kubernetes:client-java-api-fluent:jar:sources": -1413457658,
     "io.kubernetes:client-java-api:jar:sources": -1450077171,
-    "io.kubernetes:client-java-extended": 1201157788,
+    "io.kubernetes:client-java-extended": 693015729,
     "io.kubernetes:client-java-extended:jar:sources": -483537505,
     "io.kubernetes:client-java-proto": -533144525,
     "io.kubernetes:client-java-proto:jar:sources": 396874650,
@@ -271,8 +257,8 @@
     "io.micrometer:micrometer-observation:jar:sources": 1279306785,
     "io.micrometer:micrometer-registry-prometheus": -104964751,
     "io.micrometer:micrometer-registry-prometheus:jar:sources": 769452823,
-    "io.micrometer:micrometer-tracing": -109714346,
-    "io.micrometer:micrometer-tracing-bridge-otel": 975863312,
+    "io.micrometer:micrometer-tracing": -1023327334,
+    "io.micrometer:micrometer-tracing-bridge-otel": 1199970811,
     "io.micrometer:micrometer-tracing-bridge-otel:jar:sources": 1300289348,
     "io.micrometer:micrometer-tracing:jar:sources": 266031561,
     "io.nats:jnats": 1273546329,
@@ -355,8 +341,8 @@
     "io.opentelemetry:opentelemetry-sdk-trace": 2083919234,
     "io.opentelemetry:opentelemetry-sdk-trace:jar:sources": 818630467,
     "io.opentelemetry:opentelemetry-sdk:jar:sources": -1478160490,
-    "io.perfmark:perfmark-api": -752483303,
-    "io.perfmark:perfmark-api:jar:sources": 1421329924,
+    "io.perfmark:perfmark-api": 2140534246,
+    "io.perfmark:perfmark-api:jar:sources": 1660808382,
     "io.projectreactor.netty:reactor-netty-core": -1310988391,
     "io.projectreactor.netty:reactor-netty-core:jar:sources": 160926198,
     "io.projectreactor.netty:reactor-netty-http": -1289714469,
@@ -401,15 +387,15 @@
     "net.bytebuddy:byte-buddy-agent": -1380713096,
     "net.bytebuddy:byte-buddy-agent:jar:sources": 564051985,
     "net.bytebuddy:byte-buddy:jar:sources": -1360611642,
-    "net.devh:grpc-common-spring-boot": -552555366,
+    "net.devh:grpc-common-spring-boot": 868090547,
     "net.devh:grpc-common-spring-boot:jar:sources": 1655513026,
-    "net.devh:grpc-server-spring-boot-starter": 265787149,
+    "net.devh:grpc-server-spring-boot-starter": 1078456931,
     "net.devh:grpc-server-spring-boot-starter:jar:sources": 1954333860,
     "net.java.dev.jna:jna": -1951542637,
     "net.java.dev.jna:jna:jar:sources": -545183654,
     "net.javacrumbs.shedlock:shedlock-core": 672475327,
     "net.javacrumbs.shedlock:shedlock-core:jar:sources": 69227555,
-    "net.javacrumbs.shedlock:shedlock-provider-cassandra": -460637299,
+    "net.javacrumbs.shedlock:shedlock-provider-cassandra": 1266553971,
     "net.javacrumbs.shedlock:shedlock-provider-cassandra:jar:sources": 1860167,
     "net.javacrumbs.shedlock:shedlock-spring": 2008414309,
     "net.javacrumbs.shedlock:shedlock-spring:jar:sources": 875349683,
@@ -417,13 +403,13 @@
     "net.minidev:accessors-smart:jar:sources": -124254155,
     "net.minidev:json-smart": 1673421716,
     "net.minidev:json-smart:jar:sources": -1084786431,
-    "org.apache.cassandra:java-driver-core": 42196324,
+    "org.apache.cassandra:java-driver-core": -474731455,
     "org.apache.cassandra:java-driver-core:jar:sources": -1508814165,
     "org.apache.cassandra:java-driver-guava-shaded": 568990261,
     "org.apache.cassandra:java-driver-guava-shaded:jar:sources": 1291502230,
-    "org.apache.cassandra:java-driver-metrics-micrometer": -93817708,
+    "org.apache.cassandra:java-driver-metrics-micrometer": 813209106,
     "org.apache.cassandra:java-driver-metrics-micrometer:jar:sources": -2019023443,
-    "org.apache.cassandra:java-driver-query-builder": 303143232,
+    "org.apache.cassandra:java-driver-query-builder": 572260414,
     "org.apache.cassandra:java-driver-query-builder:jar:sources": -1665027563,
     "org.apache.commons:commons-collections4": -321403372,
     "org.apache.commons:commons-collections4:jar:sources": -620214302,
@@ -459,10 +445,8 @@
     "org.bouncycastle:bcprov-lts8on:jar:sources": -196135755,
     "org.bouncycastle:bcutil-jdk18on": 686883151,
     "org.bouncycastle:bcutil-jdk18on:jar:sources": 1665148152,
-    "org.checkerframework:checker-qual": -2018582244,
-    "org.checkerframework:checker-qual:jar:sources": 2110417205,
-    "org.codehaus.mojo:animal-sniffer-annotations": -284157962,
-    "org.codehaus.mojo:animal-sniffer-annotations:jar:sources": 1440193403,
+    "org.codehaus.mojo:animal-sniffer-annotations": -1054702037,
+    "org.codehaus.mojo:animal-sniffer-annotations:jar:sources": -248345982,
     "org.hamcrest:hamcrest": 1116842741,
     "org.hamcrest:hamcrest:jar:sources": -996443755,
     "org.hdrhistogram:HdrHistogram": 1379183334,
@@ -503,10 +487,6 @@
     "org.junit.platform:junit-platform-console-standalone:jar:sources": -103511349,
     "org.junit.platform:junit-platform-engine": -748595950,
     "org.junit.platform:junit-platform-engine:jar:sources": -191078126,
-    "org.junit.platform:junit-platform-launcher": 1722101087,
-    "org.junit.platform:junit-platform-launcher:jar:sources": -717285440,
-    "org.junit.platform:junit-platform-reporting": 1847654060,
-    "org.junit.platform:junit-platform-reporting:jar:sources": -1771745730,
     "org.latencyutils:LatencyUtils": 1082471286,
     "org.latencyutils:LatencyUtils:jar:sources": 1894864087,
     "org.mockito:mockito-core": 734095861,
@@ -515,8 +495,6 @@
     "org.mockito:mockito-junit-jupiter:jar:sources": -1281757309,
     "org.objenesis:objenesis": 1083875484,
     "org.objenesis:objenesis:jar:sources": 703772823,
-    "org.opentest4j.reporting:open-test-reporting-tooling-spi": -1639379357,
-    "org.opentest4j.reporting:open-test-reporting-tooling-spi:jar:sources": 1632689314,
     "org.opentest4j:opentest4j": 793813175,
     "org.opentest4j:opentest4j:jar:sources": 1210936723,
     "org.ow2.asm:asm": 716467505,
@@ -554,10 +532,10 @@
     "org.springframework.boot:spring-boot-actuator:jar:sources": 1545596535,
     "org.springframework.boot:spring-boot-autoconfigure": -491644458,
     "org.springframework.boot:spring-boot-autoconfigure:jar:sources": 562322138,
-    "org.springframework.boot:spring-boot-cassandra": 1880514148,
+    "org.springframework.boot:spring-boot-cassandra": -1547665178,
     "org.springframework.boot:spring-boot-cassandra:jar:sources": -285158244,
-    "org.springframework.boot:spring-boot-data-cassandra": -1136414714,
-    "org.springframework.boot:spring-boot-data-cassandra-test": 1687171774,
+    "org.springframework.boot:spring-boot-data-cassandra": 317643841,
+    "org.springframework.boot:spring-boot-data-cassandra-test": 1607977176,
     "org.springframework.boot:spring-boot-data-cassandra-test:jar:sources": -601584645,
     "org.springframework.boot:spring-boot-data-cassandra:jar:sources": 73983427,
     "org.springframework.boot:spring-boot-data-commons": 1096447250,
@@ -580,8 +558,8 @@
     "org.springframework.boot:spring-boot-micrometer-metrics:jar:sources": -1326033951,
     "org.springframework.boot:spring-boot-micrometer-observation": -515345138,
     "org.springframework.boot:spring-boot-micrometer-observation:jar:sources": -1374159176,
-    "org.springframework.boot:spring-boot-micrometer-tracing": -1769177987,
-    "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry": 686601187,
+    "org.springframework.boot:spring-boot-micrometer-tracing": 1633930466,
+    "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry": 1193263452,
     "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry:jar:sources": 2058843242,
     "org.springframework.boot:spring-boot-micrometer-tracing:jar:sources": -531678236,
     "org.springframework.boot:spring-boot-netty": -1868279944,
@@ -615,8 +593,8 @@
     "org.springframework.boot:spring-boot-starter-actuator:jar:sources": -2079433447,
     "org.springframework.boot:spring-boot-starter-aspectj": 740892542,
     "org.springframework.boot:spring-boot-starter-aspectj:jar:sources": 1957689077,
-    "org.springframework.boot:spring-boot-starter-data-cassandra": -1305411192,
-    "org.springframework.boot:spring-boot-starter-data-cassandra-test": 1049224325,
+    "org.springframework.boot:spring-boot-starter-data-cassandra": -705283811,
+    "org.springframework.boot:spring-boot-starter-data-cassandra-test": -1214165647,
     "org.springframework.boot:spring-boot-starter-data-cassandra-test:jar:sources": 464889083,
     "org.springframework.boot:spring-boot-starter-data-cassandra:jar:sources": 62860247,
     "org.springframework.boot:spring-boot-starter-jackson": 211326145,
@@ -649,8 +627,6 @@
     "org.springframework.boot:spring-boot-starter-tomcat:jar:sources": 1319064174,
     "org.springframework.boot:spring-boot-starter-validation": -321633530,
     "org.springframework.boot:spring-boot-starter-validation:jar:sources": -1002865328,
-    "org.springframework.boot:spring-boot-starter-web": 1122240419,
-    "org.springframework.boot:spring-boot-starter-web:jar:sources": -768709610,
     "org.springframework.boot:spring-boot-starter-webflux": -818164168,
     "org.springframework.boot:spring-boot-starter-webflux-test": -415179163,
     "org.springframework.boot:spring-boot-starter-webflux-test:jar:sources": -1654084055,
@@ -687,17 +663,17 @@
     "org.springframework.cloud:spring-cloud-commons:jar:sources": 1320616004,
     "org.springframework.cloud:spring-cloud-context": 1118197933,
     "org.springframework.cloud:spring-cloud-context:jar:sources": -1413797918,
-    "org.springframework.cloud:spring-cloud-kubernetes-client-autoconfig": -1665956951,
+    "org.springframework.cloud:spring-cloud-kubernetes-client-autoconfig": -256822388,
     "org.springframework.cloud:spring-cloud-kubernetes-client-autoconfig:jar:sources": 758022911,
-    "org.springframework.cloud:spring-cloud-kubernetes-client-config": -325837469,
+    "org.springframework.cloud:spring-cloud-kubernetes-client-config": 954066893,
     "org.springframework.cloud:spring-cloud-kubernetes-client-config:jar:sources": -251471561,
     "org.springframework.cloud:spring-cloud-kubernetes-commons": -500725348,
     "org.springframework.cloud:spring-cloud-kubernetes-commons:jar:sources": -325491963,
     "org.springframework.cloud:spring-cloud-starter": -1812063683,
     "org.springframework.cloud:spring-cloud-starter-bootstrap": -1263482746,
     "org.springframework.cloud:spring-cloud-starter-bootstrap:jar:sources": 1965832056,
-    "org.springframework.cloud:spring-cloud-starter-kubernetes-client-config": -710796001,
-    "org.springframework.data:spring-data-cassandra": -1548120966,
+    "org.springframework.cloud:spring-cloud-starter-kubernetes-client-config": -251169345,
+    "org.springframework.data:spring-data-cassandra": -546629484,
     "org.springframework.data:spring-data-cassandra:jar:sources": -1628107854,
     "org.springframework.data:spring-data-commons": 1312199320,
     "org.springframework.data:spring-data-commons:jar:sources": 544548950,
@@ -744,7 +720,7 @@
     "org.springframework:spring-webmvc": 56813816,
     "org.springframework:spring-webmvc:jar:sources": -837106767,
     "org.testcontainers:testcontainers": 450183679,
-    "org.testcontainers:testcontainers-cassandra": 584880112,
+    "org.testcontainers:testcontainers-cassandra": 888108804,
     "org.testcontainers:testcontainers-cassandra:jar:sources": 2024290088,
     "org.testcontainers:testcontainers-database-commons": -1213526598,
     "org.testcontainers:testcontainers-database-commons:jar:sources": 315333060,
@@ -801,13 +777,6 @@
     "tools.jackson.module:jackson-module-blackbird:jar:sources": -9825245
   },
   "artifacts": {
-    "aopalliance:aopalliance": {
-      "shasums": {
-        "jar": "0addec670fedcd3f113c5c8091d783280d23f75e3acb841b61a9cdb079376a08",
-        "sources": "e6ef91d439ada9045f419c77543ebe0416c3cdfc5b063448343417a3e4a72123"
-      },
-      "version": "1.0"
-    },
     "args4j:args4j": {
       "shasums": {
         "jar": "11b029a602e787e2bc08eb3b77eda1a4f5e8b263d22e3c5d6220cd5c51f30b18",
@@ -1035,31 +1004,31 @@
     },
     "com.google.code.gson:gson": {
       "shasums": {
-        "jar": "d3999291855de495c94c743761b8ab5176cfeabe281a5ab0d8e8d45326fd703e",
-        "sources": "ba5bddb1a89eb721fcca39f3b34294532060f851e2407a82d82134a41eec4719"
+        "jar": "dd0ce1b55a3ed2080cb70f9c655850cda86c206862310009dcb5e5c95265a5e0",
+        "sources": "058974b69cb7b0a04712278e11870e84ee8cd8fb5f551bd8401e72ba6638bfef"
       },
-      "version": "2.8.9"
+      "version": "2.13.2"
     },
     "com.google.errorprone:error_prone_annotations": {
       "shasums": {
-        "jar": "ff80626baaf12a09342befd4e84cba9d50662f5fcd7f7a9b3490a6b7cf87e66c",
-        "sources": "bf08616e340f5e2ef50aaa84aea8baa086fd7bb2ad310501ff4e88ec77f8f31a"
+        "jar": "3b1003e51b8ae56fdbd7c71073e81d1683b97e6c4dff5a9151164d59b769d13c",
+        "sources": "69d2de7f69033ff914ba06f0858adb96ac7b1436959f04fca7de5805c834b281"
       },
-      "version": "2.5.1"
+      "version": "2.49.0"
     },
     "com.google.guava:failureaccess": {
       "shasums": {
-        "jar": "a171ee4c734dd2da837e4b16be9df4661afab72a41adaf31eb84dfdaf936ca26",
-        "sources": "092346eebbb1657b51aa7485a246bf602bb464cc0b0e2e1c7e7201fadce1e98f"
+        "jar": "cbfc3906b19b8f55dd7cfd6dfe0aa4532e834250d7f080bd8d211a3e246b59cb",
+        "sources": "6fef4dfd2eb9f961655f2a3c4ea87c023618d9fcbfb6b104c17862e5afe66b97"
       },
-      "version": "1.0.1"
+      "version": "1.0.3"
     },
     "com.google.guava:guava": {
       "shasums": {
-        "jar": "bd7fa227591fb8509677d0d1122cf95158f3b8a9f45653f58281d879f6dc48c5",
-        "sources": "9105dfc522fb440b39ff8da07cc56aacf65a9f765044c7803a9f32e36e05a22b"
+        "jar": "dc573e1fca4fd5454f4a5fd3d7da2df03002876a4175bafc14a95980dd7713b3",
+        "sources": "eff31867dd63a92d63ca856127a424a6836418d8bfa044162cac20430abd3500"
       },
-      "version": "32.0.1-jre"
+      "version": "33.6.0-jre"
     },
     "com.google.guava:listenablefuture": {
       "shasums": {
@@ -1069,10 +1038,10 @@
     },
     "com.google.j2objc:j2objc-annotations": {
       "shasums": {
-        "jar": "f02a95fa1a5e95edb3ed859fd0fb7df709d121a35290eff8b74dce2ab7f4d6ed",
-        "sources": "7413eed41f111453a08837f5ac680edded7faed466cbd35745e402e13f4cc3f5"
+        "jar": "84d3a150518485f8140ea99b8a985656749629f6433c92b80c75b36aba3b099b",
+        "sources": "295938307f4016b3f128f7347101b236ada1394808104519c9e93cd61b64602b"
       },
-      "version": "2.8"
+      "version": "3.1"
     },
     "com.google.protobuf:protobuf-java": {
       "shasums": {
@@ -1216,10 +1185,10 @@
     },
     "io.dropwizard.metrics:metrics-core": {
       "shasums": {
-        "jar": "5c6f685e41664d10c70c65837cba9e58d39ff3896811e3b5707a934b11c85ad0",
-        "sources": "773164a026ea78df51d14608def3a746a2270f630e9a2f5f6f99d6e155ad5bcf"
+        "jar": "a735eb5b62f425181efa53aefa5b7edad2b0e48cd0fa91105aa0ec1a45169e0b",
+        "sources": "da7c32215bb0e94f8e735f7ebd70acd08340ea36d4e0cdf150ae1435e3a25221"
       },
-      "version": "3.2.2"
+      "version": "4.1.18"
     },
     "io.grpc:grpc-api": {
       "shasums": {
@@ -1230,17 +1199,17 @@
     },
     "io.grpc:grpc-context": {
       "shasums": {
-        "jar": "fec0773020404a1f9b9610168692c8ed47fb77181c2ba37cc842ba7664bfc6b0",
-        "sources": "0a45ca2dc3452783be72412c0e75e0a57c276e76d29d778a22e331279f08d5c0"
+        "jar": "d7f50185bb858131d02314de23ea3cc797131ed98b215e845429f45a81dd5fed",
+        "sources": "a9032f8d2f795247bef60b45ee5fc3eb4693c705c05818cc12e9ed1deba440d4"
       },
-      "version": "1.74.0"
+      "version": "1.63.0"
     },
     "io.grpc:grpc-core": {
       "shasums": {
-        "jar": "5175e6223ee1f0a63cf93049aabe7bd5b675cc739b286fe3b320a88fa90c320e",
-        "sources": "2c7a8d053a2bfa7c423ca01f1b6462bf402ff710aea8c49a73c2d0d73ba8e358"
+        "jar": "246e4e583cc11c70ed15cc8f988eff8e76fed5c06426e8310d51c4da6f5cc81b",
+        "sources": "6d2f37cebce94495593d736e118d6df8ff05b877e2ebc2b5e472c140a5fa5559"
       },
-      "version": "1.74.0"
+      "version": "1.63.0"
     },
     "io.grpc:grpc-inprocess": {
       "shasums": {
@@ -1248,13 +1217,6 @@
         "sources": "55a86f1a031e1c7dfe4bae6b6350ff561003e0395ca2c3af5114a3aab8afaa22"
       },
       "version": "1.63.0"
-    },
-    "io.grpc:grpc-netty": {
-      "shasums": {
-        "jar": "8ead962173ff44752a1970b6e567225e1e9aeebb5c74af1e33e7786a45c9d620",
-        "sources": "cc8b33cf89f7ab51c14c8ac5eae47ffccb9836216ecd0bbe311f8e774f3aac86"
-      },
-      "version": "1.74.0"
     },
     "io.grpc:grpc-netty-shaded": {
       "shasums": {
@@ -1293,10 +1255,10 @@
     },
     "io.grpc:grpc-util": {
       "shasums": {
-        "jar": "296dc07438c43454afc1a7f2736086550feb1fc783f9547337ad2ae721e24350",
-        "sources": "ba7b02ef3f3a7ed93881c1c37db8b7372458215c7e2e7d57d1a7fc91725d94e1"
+        "jar": "b15006f22e76a6631dfb137a6930aaf9e0cb3a797499ec42394d79641fb770ee",
+        "sources": "969b6a21c1689ad8d71e4f557ccd76c9c3f422c037fe0e5c1e9c9b3f6eeb45d6"
       },
-      "version": "1.74.0"
+      "version": "1.63.0"
     },
     "io.gsonfire:gson-fire": {
       "shasums": {
@@ -1675,10 +1637,10 @@
     },
     "io.perfmark:perfmark-api": {
       "shasums": {
-        "jar": "c7b478503ec524e55df19b424d46d27c8a68aeb801664fadd4f069b71f52d0f6",
-        "sources": "311551ab29cf51e5a8abee6a019e88dee47d1ea71deb9fcd3649db9c51b237bc"
+        "jar": "b7d23e93a34537ce332708269a0d1404788a5b5e1949e82f5535fce51b3ea95b",
+        "sources": "7379e0fef0c32d69f3ebae8f271f426fc808613f1cfbc29e680757f348ba8aa4"
       },
-      "version": "0.27.0"
+      "version": "0.26.0"
     },
     "io.projectreactor.netty:reactor-netty-core": {
       "shasums": {
@@ -2037,19 +1999,12 @@
       },
       "version": "1.80.2"
     },
-    "org.checkerframework:checker-qual": {
-      "shasums": {
-        "jar": "e316255bbfcd9fe50d165314b85abb2b33cb2a66a93c491db648e498a82c2de1",
-        "sources": "443fa6151982bb4c6ce62e2938f53660085b13a7dceb517202777b87d0dea2c7"
-      },
-      "version": "3.33.0"
-    },
     "org.codehaus.mojo:animal-sniffer-annotations": {
       "shasums": {
-        "jar": "c720e6e5bcbe6b2f48ded75a47bccdb763eede79d14330102e0d352e3d89ed92",
-        "sources": "4270ce5531ed0f12e4234e08f240ef3b45ee3ceeb16e28d44abc61c12cf522ca"
+        "jar": "9ffe526bf43a6348e9d8b33b9cd6f580a7f5eed0cf055913007eda263de974d0",
+        "sources": "4878fcc6808dbc88085a4622db670e703867754bc4bc40312c52bf3a3510d019"
       },
-      "version": "1.24"
+      "version": "1.23"
     },
     "org.hamcrest:hamcrest": {
       "shasums": {
@@ -2191,20 +2146,6 @@
       },
       "version": "6.0.3"
     },
-    "org.junit.platform:junit-platform-launcher": {
-      "shasums": {
-        "jar": "315608372e4dc44bca0ccb3ae8a07ecc206b3367033fa05748a03ccd563f1301",
-        "sources": "4fcbdb81cc882c0c3e73f742878db5884d3d2f86facc08369ca953e32796d144"
-      },
-      "version": "6.0.3"
-    },
-    "org.junit.platform:junit-platform-reporting": {
-      "shasums": {
-        "jar": "f19c5be871c37ebed493f3152b67a909f89a44dff67c2db8016dfe34167d5730",
-        "sources": "bbdda2b9c002dbd1b05cfec144bab91e8cca46ed8d58525f51b547f3a0a84a7d"
-      },
-      "version": "6.0.3"
-    },
     "org.latencyutils:LatencyUtils": {
       "shasums": {
         "jar": "a32a9ffa06b2f4e01c5360f8f9df7bc5d9454a5d373cd8f361347fa5a57165ec",
@@ -2232,13 +2173,6 @@
         "sources": "d06164f8ca002c8ef193cef2d682822014dd330505616af93a3fb64226fc131d"
       },
       "version": "3.3"
-    },
-    "org.opentest4j.reporting:open-test-reporting-tooling-spi": {
-      "shasums": {
-        "jar": "04ac4ecfcaf60abe0e6d5b18e8306320aec7cd9cbf15e59eeac54fa9faa16902",
-        "sources": "efe9672e74111726c0ff85a2508a0bc78be611a7cbe460560dc7cd429ee0a4ce"
-      },
-      "version": "0.2.4"
     },
     "org.opentest4j:opentest4j": {
       "shasums": {
@@ -2706,13 +2640,6 @@
       "shasums": {
         "jar": "bc449f60bb483374e7358afcda3fccb6e01906e158c7e1e00d9035277a6545b7",
         "sources": "bc449f60bb483374e7358afcda3fccb6e01906e158c7e1e00d9035277a6545b7"
-      },
-      "version": "4.0.7"
-    },
-    "org.springframework.boot:spring-boot-starter-web": {
-      "shasums": {
-        "jar": "1ac009b240450c089df7ef1e5cc9b63df292bea22393ed5c7deca42c85944e3c",
-        "sources": "1ac009b240450c089df7ef1e5cc9b63df292bea22393ed5c7deca42c85944e3c"
       },
       "version": "4.0.7"
     },
@@ -3236,12 +3163,20 @@
   "conflict_resolution": {
     "com.github.jnr:jnr-ffi:2.2.11": "com.github.jnr:jnr-ffi:2.1.7",
     "com.github.jnr:jnr-posix:3.0.44": "com.github.jnr:jnr-posix:3.1.15",
+    "com.google.code.findbugs:jsr305:2.0.1": "com.google.code.findbugs:jsr305:3.0.2",
+    "com.google.errorprone:error_prone_annotations:2.18.0": "com.google.errorprone:error_prone_annotations:2.49.0",
+    "com.google.errorprone:error_prone_annotations:2.23.0": "com.google.errorprone:error_prone_annotations:2.49.0",
+    "com.google.errorprone:error_prone_annotations:2.41.0": "com.google.errorprone:error_prone_annotations:2.49.0",
+    "com.google.errorprone:error_prone_annotations:2.47.0": "com.google.errorprone:error_prone_annotations:2.49.0",
+    "com.google.guava:guava:19.0": "com.google.guava:guava:33.6.0-jre",
+    "com.google.guava:guava:32.1.3-android": "com.google.guava:guava:33.6.0-jre",
+    "com.google.guava:guava:32.1.3-jre": "com.google.guava:guava:33.6.0-jre",
+    "com.google.j2objc:j2objc-annotations:2.8": "com.google.j2objc:j2objc-annotations:3.1",
     "com.squareup.okio:okio-jvm:3.6.0": "com.squareup.okio:okio-jvm:3.16.1",
     "commons-io:commons-io:2.19.0": "commons-io:commons-io:2.20.0",
-    "io.grpc:grpc-core:1.63.0": "io.grpc:grpc-core:1.74.0",
-    "io.grpc:grpc-util:1.63.0": "io.grpc:grpc-util:1.74.0",
-    "io.perfmark:perfmark-api:0.26.0": "io.perfmark:perfmark-api:0.27.0",
+    "io.dropwizard.metrics:metrics-core:3.2.2": "io.dropwizard.metrics:metrics-core:4.1.18",
     "org.apache.commons:commons-compress:1.27.1": "org.apache.commons:commons-compress:1.28.0",
+    "org.hdrhistogram:HdrHistogram:2.1.12": "org.hdrhistogram:HdrHistogram:2.2.2",
     "org.jetbrains:annotations:13.0": "org.jetbrains:annotations:17.0.0"
   },
   "dependencies": {
@@ -3323,13 +3258,15 @@
     "com.google.api.grpc:proto-google-common-protos": [
       "com.google.protobuf:protobuf-java"
     ],
+    "com.google.code.gson:gson": [
+      "com.google.errorprone:error_prone_annotations"
+    ],
     "com.google.guava:guava": [
-      "com.google.code.findbugs:jsr305",
       "com.google.errorprone:error_prone_annotations",
       "com.google.guava:failureaccess",
       "com.google.guava:listenablefuture",
       "com.google.j2objc:j2objc-annotations",
-      "org.checkerframework:checker-qual"
+      "org.jspecify:jspecify"
     ],
     "com.google.protobuf:protobuf-java-util": [
       "com.google.code.findbugs:jsr305",
@@ -3399,18 +3336,6 @@
       "com.google.guava:guava",
       "io.grpc:grpc-api",
       "io.grpc:grpc-core"
-    ],
-    "io.grpc:grpc-netty": [
-      "com.google.errorprone:error_prone_annotations",
-      "com.google.guava:guava",
-      "io.grpc:grpc-api",
-      "io.grpc:grpc-core",
-      "io.grpc:grpc-util",
-      "io.netty:netty-codec-http2",
-      "io.netty:netty-handler-proxy",
-      "io.netty:netty-transport-native-unix-common",
-      "io.perfmark:perfmark-api",
-      "org.codehaus.mojo:animal-sniffer-annotations"
     ],
     "io.grpc:grpc-netty-shaded": [
       "com.google.errorprone:error_prone_annotations",
@@ -3537,7 +3462,6 @@
       "org.jspecify:jspecify"
     ],
     "io.micrometer:micrometer-tracing": [
-      "aopalliance:aopalliance",
       "io.micrometer:context-propagation",
       "io.micrometer:micrometer-observation",
       "org.jspecify:jspecify"
@@ -3849,8 +3773,10 @@
       "com.fasterxml.jackson.core:jackson-databind",
       "com.github.jnr:jnr-posix",
       "com.typesafe:config",
+      "io.dropwizard.metrics:metrics-core",
       "io.netty:netty-handler",
       "org.apache.cassandra:java-driver-guava-shaded",
+      "org.hdrhistogram:HdrHistogram",
       "org.reactivestreams:reactive-streams",
       "org.slf4j:slf4j-api"
     ],
@@ -3949,17 +3875,6 @@
       "org.junit.platform:junit-platform-commons",
       "org.opentest4j:opentest4j"
     ],
-    "org.junit.platform:junit-platform-launcher": [
-      "org.apiguardian:apiguardian-api",
-      "org.jspecify:jspecify",
-      "org.junit.platform:junit-platform-engine"
-    ],
-    "org.junit.platform:junit-platform-reporting": [
-      "org.apiguardian:apiguardian-api",
-      "org.jspecify:jspecify",
-      "org.junit.platform:junit-platform-launcher",
-      "org.opentest4j.reporting:open-test-reporting-tooling-spi"
-    ],
     "org.mockito:mockito-core": [
       "net.bytebuddy:byte-buddy",
       "net.bytebuddy:byte-buddy-agent",
@@ -3968,9 +3883,6 @@
     "org.mockito:mockito-junit-jupiter": [
       "org.junit.jupiter:junit-jupiter-api",
       "org.mockito:mockito-core"
-    ],
-    "org.opentest4j.reporting:open-test-reporting-tooling-spi": [
-      "org.apiguardian:apiguardian-api"
     ],
     "org.ow2.asm:asm-analysis": [
       "org.ow2.asm:asm-tree"
@@ -4270,12 +4182,6 @@
     "org.springframework.boot:spring-boot-starter-validation": [
       "org.springframework.boot:spring-boot-starter",
       "org.springframework.boot:spring-boot-validation"
-    ],
-    "org.springframework.boot:spring-boot-starter-web": [
-      "org.springframework.boot:spring-boot-http-converter",
-      "org.springframework.boot:spring-boot-starter-jackson",
-      "org.springframework.boot:spring-boot-starter-tomcat",
-      "org.springframework.boot:spring-boot-webmvc"
     ],
     "org.springframework.boot:spring-boot-starter-webflux": [
       "org.springframework.boot:spring-boot-reactor",
@@ -4645,10 +4551,6 @@
     ]
   },
   "packages": {
-    "aopalliance:aopalliance": [
-      "org.aopalliance.aop",
-      "org.aopalliance.intercept"
-    ],
     "args4j:args4j": [
       "org.kohsuke.args4j",
       "org.kohsuke.args4j.spi"
@@ -5345,9 +5247,6 @@
     ],
     "io.grpc:grpc-inprocess": [
       "io.grpc.inprocess"
-    ],
-    "io.grpc:grpc-netty": [
-      "io.grpc.netty"
     ],
     "io.grpc:grpc-netty-shaded": [
       "io.grpc.netty.shaded.io.grpc.netty",
@@ -7013,38 +6912,6 @@
       "org.bouncycastle.oer.its.template.ieee1609dot2.basetypes",
       "org.bouncycastle.oer.its.template.ieee1609dot2dot1"
     ],
-    "org.checkerframework:checker-qual": [
-      "org.checkerframework.checker.builder.qual",
-      "org.checkerframework.checker.calledmethods.qual",
-      "org.checkerframework.checker.compilermsgs.qual",
-      "org.checkerframework.checker.fenum.qual",
-      "org.checkerframework.checker.formatter.qual",
-      "org.checkerframework.checker.guieffect.qual",
-      "org.checkerframework.checker.i18n.qual",
-      "org.checkerframework.checker.i18nformatter.qual",
-      "org.checkerframework.checker.index.qual",
-      "org.checkerframework.checker.initialization.qual",
-      "org.checkerframework.checker.interning.qual",
-      "org.checkerframework.checker.lock.qual",
-      "org.checkerframework.checker.mustcall.qual",
-      "org.checkerframework.checker.nullness.qual",
-      "org.checkerframework.checker.optional.qual",
-      "org.checkerframework.checker.propkey.qual",
-      "org.checkerframework.checker.regex.qual",
-      "org.checkerframework.checker.signature.qual",
-      "org.checkerframework.checker.signedness.qual",
-      "org.checkerframework.checker.tainting.qual",
-      "org.checkerframework.checker.units.qual",
-      "org.checkerframework.common.aliasing.qual",
-      "org.checkerframework.common.initializedfields.qual",
-      "org.checkerframework.common.reflection.qual",
-      "org.checkerframework.common.returnsreceiver.qual",
-      "org.checkerframework.common.subtyping.qual",
-      "org.checkerframework.common.util.report.qual",
-      "org.checkerframework.common.value.qual",
-      "org.checkerframework.dataflow.qual",
-      "org.checkerframework.framework.qual"
-    ],
     "org.codehaus.mojo:animal-sniffer-annotations": [
       "org.codehaus.mojo.animal_sniffer"
     ],
@@ -7428,27 +7295,6 @@
       "org.junit.platform.engine.support.hierarchical",
       "org.junit.platform.engine.support.store"
     ],
-    "org.junit.platform:junit-platform-launcher": [
-      "org.junit.platform.launcher",
-      "org.junit.platform.launcher.core",
-      "org.junit.platform.launcher.jfr",
-      "org.junit.platform.launcher.listeners",
-      "org.junit.platform.launcher.listeners.discovery",
-      "org.junit.platform.launcher.listeners.session",
-      "org.junit.platform.launcher.tagexpression"
-    ],
-    "org.junit.platform:junit-platform-reporting": [
-      "org.junit.platform.reporting",
-      "org.junit.platform.reporting.legacy",
-      "org.junit.platform.reporting.legacy.xml",
-      "org.junit.platform.reporting.open.xml",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.events.api",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.events.core",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.events.git",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.events.java",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.events.root",
-      "org.junit.platform.reporting.shadow.org.opentest4j.reporting.schema"
-    ],
     "org.latencyutils:LatencyUtils": [
       "org.LatencyUtils"
     ],
@@ -7534,9 +7380,6 @@
       "org.objenesis.instantiator.sun",
       "org.objenesis.instantiator.util",
       "org.objenesis.strategy"
-    ],
-    "org.opentest4j.reporting:open-test-reporting-tooling-spi": [
-      "org.opentest4j.reporting.tooling.spi.htmlreport"
     ],
     "org.opentest4j:opentest4j": [
       "org.opentest4j"
@@ -9952,8 +9795,6 @@
   },
   "repositories": {
     "https://maven-central.storage-download.googleapis.com/maven2/": [
-      "aopalliance:aopalliance",
-      "aopalliance:aopalliance:jar:sources",
       "args4j:args4j",
       "args4j:args4j:jar:sources",
       "at.yawk.lz4:lz4-java",
@@ -10080,10 +9921,8 @@
       "io.grpc:grpc-core:jar:sources",
       "io.grpc:grpc-inprocess",
       "io.grpc:grpc-inprocess:jar:sources",
-      "io.grpc:grpc-netty",
       "io.grpc:grpc-netty-shaded",
       "io.grpc:grpc-netty-shaded:jar:sources",
-      "io.grpc:grpc-netty:jar:sources",
       "io.grpc:grpc-protobuf",
       "io.grpc:grpc-protobuf-lite",
       "io.grpc:grpc-protobuf-lite:jar:sources",
@@ -10308,8 +10147,6 @@
       "org.bouncycastle:bcprov-lts8on:jar:sources",
       "org.bouncycastle:bcutil-jdk18on",
       "org.bouncycastle:bcutil-jdk18on:jar:sources",
-      "org.checkerframework:checker-qual",
-      "org.checkerframework:checker-qual:jar:sources",
       "org.codehaus.mojo:animal-sniffer-annotations",
       "org.codehaus.mojo:animal-sniffer-annotations:jar:sources",
       "org.hamcrest:hamcrest",
@@ -10352,10 +10189,6 @@
       "org.junit.platform:junit-platform-console-standalone:jar:sources",
       "org.junit.platform:junit-platform-engine",
       "org.junit.platform:junit-platform-engine:jar:sources",
-      "org.junit.platform:junit-platform-launcher",
-      "org.junit.platform:junit-platform-launcher:jar:sources",
-      "org.junit.platform:junit-platform-reporting",
-      "org.junit.platform:junit-platform-reporting:jar:sources",
       "org.latencyutils:LatencyUtils",
       "org.latencyutils:LatencyUtils:jar:sources",
       "org.mockito:mockito-core",
@@ -10364,8 +10197,6 @@
       "org.mockito:mockito-junit-jupiter:jar:sources",
       "org.objenesis:objenesis",
       "org.objenesis:objenesis:jar:sources",
-      "org.opentest4j.reporting:open-test-reporting-tooling-spi",
-      "org.opentest4j.reporting:open-test-reporting-tooling-spi:jar:sources",
       "org.opentest4j:opentest4j",
       "org.opentest4j:opentest4j:jar:sources",
       "org.ow2.asm:asm",
@@ -10498,8 +10329,6 @@
       "org.springframework.boot:spring-boot-starter-tomcat:jar:sources",
       "org.springframework.boot:spring-boot-starter-validation",
       "org.springframework.boot:spring-boot-starter-validation:jar:sources",
-      "org.springframework.boot:spring-boot-starter-web",
-      "org.springframework.boot:spring-boot-starter-web:jar:sources",
       "org.springframework.boot:spring-boot-starter-webflux",
       "org.springframework.boot:spring-boot-starter-webflux-test",
       "org.springframework.boot:spring-boot-starter-webflux-test:jar:sources",
@@ -10650,8 +10479,6 @@
       "tools.jackson.module:jackson-module-blackbird:jar:sources"
     ],
     "https://repo.maven.apache.org/maven2/": [
-      "aopalliance:aopalliance",
-      "aopalliance:aopalliance:jar:sources",
       "args4j:args4j",
       "args4j:args4j:jar:sources",
       "at.yawk.lz4:lz4-java",
@@ -10778,10 +10605,8 @@
       "io.grpc:grpc-core:jar:sources",
       "io.grpc:grpc-inprocess",
       "io.grpc:grpc-inprocess:jar:sources",
-      "io.grpc:grpc-netty",
       "io.grpc:grpc-netty-shaded",
       "io.grpc:grpc-netty-shaded:jar:sources",
-      "io.grpc:grpc-netty:jar:sources",
       "io.grpc:grpc-protobuf",
       "io.grpc:grpc-protobuf-lite",
       "io.grpc:grpc-protobuf-lite:jar:sources",
@@ -11006,8 +10831,6 @@
       "org.bouncycastle:bcprov-lts8on:jar:sources",
       "org.bouncycastle:bcutil-jdk18on",
       "org.bouncycastle:bcutil-jdk18on:jar:sources",
-      "org.checkerframework:checker-qual",
-      "org.checkerframework:checker-qual:jar:sources",
       "org.codehaus.mojo:animal-sniffer-annotations",
       "org.codehaus.mojo:animal-sniffer-annotations:jar:sources",
       "org.hamcrest:hamcrest",
@@ -11050,10 +10873,6 @@
       "org.junit.platform:junit-platform-console-standalone:jar:sources",
       "org.junit.platform:junit-platform-engine",
       "org.junit.platform:junit-platform-engine:jar:sources",
-      "org.junit.platform:junit-platform-launcher",
-      "org.junit.platform:junit-platform-launcher:jar:sources",
-      "org.junit.platform:junit-platform-reporting",
-      "org.junit.platform:junit-platform-reporting:jar:sources",
       "org.latencyutils:LatencyUtils",
       "org.latencyutils:LatencyUtils:jar:sources",
       "org.mockito:mockito-core",
@@ -11062,8 +10881,6 @@
       "org.mockito:mockito-junit-jupiter:jar:sources",
       "org.objenesis:objenesis",
       "org.objenesis:objenesis:jar:sources",
-      "org.opentest4j.reporting:open-test-reporting-tooling-spi",
-      "org.opentest4j.reporting:open-test-reporting-tooling-spi:jar:sources",
       "org.opentest4j:opentest4j",
       "org.opentest4j:opentest4j:jar:sources",
       "org.ow2.asm:asm",
@@ -11196,8 +11013,6 @@
       "org.springframework.boot:spring-boot-starter-tomcat:jar:sources",
       "org.springframework.boot:spring-boot-starter-validation",
       "org.springframework.boot:spring-boot-starter-validation:jar:sources",
-      "org.springframework.boot:spring-boot-starter-web",
-      "org.springframework.boot:spring-boot-starter-web:jar:sources",
       "org.springframework.boot:spring-boot-starter-webflux",
       "org.springframework.boot:spring-boot-starter-webflux-test",
       "org.springframework.boot:spring-boot-starter-webflux-test:jar:sources",
@@ -11391,18 +11206,6 @@
       ],
       "io.grpc.NameResolverProvider": [
         "io.grpc.internal.DnsNameResolverProvider"
-      ]
-    },
-    "io.grpc:grpc-netty": {
-      "io.grpc.ManagedChannelProvider": [
-        "io.grpc.netty.NettyChannelProvider",
-        "io.grpc.netty.UdsNettyChannelProvider"
-      ],
-      "io.grpc.NameResolverProvider": [
-        "io.grpc.netty.UdsNameResolverProvider"
-      ],
-      "io.grpc.ServerProvider": [
-        "io.grpc.netty.NettyServerProvider"
       ]
     },
     "io.grpc:grpc-netty-shaded": {
@@ -11601,19 +11404,6 @@
         "org.junit.platform.engine.discovery.PackageSelector$IdentifierParser",
         "org.junit.platform.engine.discovery.UniqueIdSelector$IdentifierParser",
         "org.junit.platform.engine.discovery.UriSelector$IdentifierParser"
-      ]
-    },
-    "org.junit.platform:junit-platform-launcher": {
-      "org.junit.platform.launcher.TestExecutionListener": [
-        "org.junit.platform.launcher.listeners.UniqueIdTrackingListener"
-      ]
-    },
-    "org.junit.platform:junit-platform-reporting": {
-      "org.junit.platform.launcher.TestExecutionListener": [
-        "org.junit.platform.reporting.open.xml.OpenTestReportGeneratingListener"
-      ],
-      "org.opentest4j.reporting.tooling.spi.htmlreport.Contributor": [
-        "org.junit.platform.reporting.open.xml.JUnitContributor"
       ]
     },
     "org.projectlombok:lombok": {

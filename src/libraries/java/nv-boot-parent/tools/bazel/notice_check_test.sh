@@ -46,12 +46,8 @@ find_workspace() {
 }
 
 workspace="$(find_workspace)"
-# nv-boot-parent is its own standalone Bazel module: its module root is the
-# nv-boot-parent directory, so the notice tooling, its NOTICE, and its
-# maven_install.json all live at the workspace root.
-nvboot="${workspace}"
 
-PYTHONPATH="${nvboot}/tools/bazel" python3 - <<'PY'
+PYTHONPATH="${workspace}/tools/bazel" python3 - <<'PY'
 import pathlib
 import tempfile
 import zipfile
@@ -100,9 +96,9 @@ with tempfile.TemporaryDirectory() as directory:
         raise AssertionError("Runtime NOTICE accepted a stale lockfile version")
 PY
 
-exec python3 "${nvboot}/tools/bazel/generate_notice.py" \
+exec python3 "${workspace}/tools/bazel/generate_notice.py" \
     --maven-install "${workspace}/maven_install.json" \
-    --metadata "${nvboot}/tools/bazel/notice_metadata.json" \
-    --notice "${nvboot}/NOTICE" \
-    --root-manifest "${nvboot}/tools/bazel/notice_roots.json" \
+    --metadata "${workspace}/tools/bazel/notice_metadata.json" \
+    --notice "${workspace}/NOTICE" \
+    --root-manifest "${workspace}/tools/bazel/notice_roots.json" \
     --check

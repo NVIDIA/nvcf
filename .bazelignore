@@ -52,15 +52,13 @@ infra
 migrations
 tools
 
-# Standalone Java modules. Each has its own MODULE.bazel, @maven hub, and CI
-# matrix row in .github/workflows/bazel.yml; their BUILD files reference
-# module-local repos (@maven, @nvcf_java_rules, @nv_boot_parent) that the root
-# module does not define, so the root build must not recurse into them. rules/java
-# (module nvcf_java_rules) is intentionally NOT listed: its BUILD files declare no
-# targets that reference the root workspace, so it stays loadable at the root.
+# Standalone Java modules. Each has its own MODULE.bazel, its own
+# nv_third_party_deps hub, and a CI matrix row in .github/workflows/bazel.yml;
+# their BUILD files reference module-local repos (@nv_third_party_deps,
+# @nv_boot_parent) that the root module does not define, so the root build must
+# not recurse into them.
 src/libraries/java/nv-boot-parent
 src/control-plane-services/cloud-tasks
-examples/java-spring-boot-service
 
 # Vendored dependencies inside the two Phase 1 subtrees. Bazel resolves these
 # from MODULE.bazel via Gazelle's go_deps extension, not from on-disk vendor.

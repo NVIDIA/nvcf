@@ -1,9 +1,11 @@
 load("@rules_java//java:defs.bzl", "java_binary", "java_library", "java_plugin")
 load("@rules_proto_grpc//:defs.bzl", "proto_plugin")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
+    "generate_notice.sh",
     "jacoco_test_runner.sh",
     "notice_metadata.json",
 ])
@@ -20,21 +22,33 @@ proto_plugin(
     }),
 )
 
+sh_test(
+    name = "notice_check_test",
+    srcs = ["notice_check_test.sh"],
+    data = [
+        ":notice_metadata.json",
+        "//:NOTICE",
+        "//:maven_install.json",
+        "//nvct-service:app",
+        "@nv_boot_parent//tools/bazel:generate_notice.py",
+    ],
+)
+
 java_plugin(
     name = "lombok_plugin",
     generates_api = True,
     processor_class = "lombok.launch.AnnotationProcessorHider$AnnotationProcessor",
-    deps = ["@maven//:org_projectlombok_lombok"],
+    deps = ["@nv_third_party_deps//:org_projectlombok_lombok"],
 )
 
 java_binary(
     name = "jacoco_cli",
     main_class = "org.jacoco.cli.internal.Main",
-    runtime_deps = ["@maven//:org_jacoco_org_jacoco_cli"],
+    runtime_deps = ["@nv_third_party_deps//:org_jacoco_org_jacoco_cli"],
 )
 
 java_library(
     name = "lombok_annotations",
-    exports = ["@maven//:org_projectlombok_lombok"],
+    exports = ["@nv_third_party_deps//:org_projectlombok_lombok"],
     neverlink = True,
 )

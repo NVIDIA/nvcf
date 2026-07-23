@@ -148,16 +148,17 @@ use_repo(
 # Java / JVM
 #
 # Foundation for Spring Boot (and plain Java) services: Maven dependency
-# resolution via rules_jvm_external, JUnit 5 test support via contrib_rules_jvm,
-# and the nvcf_spring_boot_image macro in //rules/java. A new Java service wires
-# in by adding its Maven coordinates to maven.install below (re-pin with
-# `bazel run @maven//:pin`) and calling the macro from its BUILD.bazel.
+# resolution via rules_jvm_external and JUnit 5 test support via
+# contrib_rules_jvm. A new root-workspace Java target wires in by adding its
+# Maven coordinates to maven.install below and re-pinning with
+# `bazel run @nv_third_party_deps//:pin`.
 #
 # The pinned lock file (//:maven_install.json) makes resolution reproducible and
 # lets `bazel mod` run offline. Repositories intentionally lists only Maven
 # Central so the foundation builds anywhere, including the public GitHub mirror.
-# Internal services that depend on nv-boot add the internal Artifactory virtual
-# repo here; see rules/java/README.md.
+# Standalone Java modules (src/libraries/java/nv-boot-parent,
+# src/control-plane-services/cloud-tasks) instead own their own MODULE.bazel and
+# nv_third_party_deps hub and are ignored by the root build (see .bazelignore).
 # ============================================================================
 bazel_dep(name = "rules_java", version = "9.3.0")
 bazel_dep(name = "rules_jvm_external", version = "7.0")
@@ -289,7 +290,7 @@ maven.install(
         "org.wiremock:wiremock-standalone:3.13.2",
         "software.amazon.awssdk:regions:2.40.1",
         "tools.jackson.module:jackson-module-blackbird",
-        # examples/java-spring-boot-service (versions from the Spring Boot BOM).
+        # General Java test/web roots (versions from the Spring Boot BOM).
         "org.springframework.boot:spring-boot-starter-web",
         "org.junit.jupiter:junit-jupiter-api",
         "org.junit.jupiter:junit-jupiter-engine",

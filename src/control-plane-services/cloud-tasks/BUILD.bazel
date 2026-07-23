@@ -1,18 +1,12 @@
-load("@nvcf_java_rules//:bom_alignment.bzl", "bom_alignment_test")
-load("//tools/bazel:runfiles.bzl", "nvct_workspace_runfiles")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//tools/bazel:java.bzl", "nvct_workspace_runfiles")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
-    "MODULE.bazel",
     "NOTICE",
+    "maven_install.json",
 ])
-
-# Fails the build if this module's inlined maven.install boms drift from the
-# canonical SPRING_BOOT_BOM in @nvcf_java_rules//:platform.bzl.
-bom_alignment_test(
-    name = "bom_alignment_test",
-)
 
 filegroup(
     name = "integration_local_env_files",
@@ -27,17 +21,33 @@ filegroup(
 nvct_workspace_runfiles(
     name = "integration_local_env",
     srcs = [":integration_local_env_files"],
-    # After the umbrella relocation the runfiles short_path carries the subtree
-    # prefix; strip it so integration tests still resolve local_env/... relative
-    # to the runfiles root (test config references local_env/vault/secrets.json).
-    strip_prefix = "",
 )
 
-# NOTE: THIRD_PARTY_NOTICE generation (the former notice genrule, generate
-# binary, and tools/bazel notice check) read the Spring fat jar
-# (nvct-service app jar, BOOT-INF/lib/external/... layout). Converging onto
-# @nvcf_java_rules's exploded-classpath image removes that fat jar, so the fat-jar
-# NOTICE mechanism no longer has an input. Reworking NOTICE generation for the
-# exploded classpath is tracked as follow-up; it needs a change to the shared
-# nv-boot generate_notice.py, which is out of scope for this build-wiring
-# convergence.
+genrule(
+    name = "third_party_notice",
+    srcs = [
+        ":maven_install.json",
+        "//nvct-service:app",
+        "//tools/bazel:notice_metadata.json",
+        "@nv_boot_parent//tools/bazel:generate_notice.py",
+    ],
+    outs = ["THIRD_PARTY_NOTICE"],
+    cmd = """
+python3 "$(location @nv_boot_parent//tools/bazel:generate_notice.py)" \
+    --maven-install "$(location :maven_install.json)" \
+    --metadata "$(location //tools/bazel:notice_metadata.json)" \
+    --runtime-jar "$(location //nvct-service:app)" \
+    --first-party-group com.nvidia.nvct \
+    --output "$@" \
+    --write
+""",
+)
+
+sh_binary(
+    name = "generate_notice",
+    srcs = ["//tools/bazel:generate_notice.sh"],
+    data = [
+        "//nvct-service:app",
+        "@nv_boot_parent//tools/bazel:generate_notice.py",
+    ],
+)

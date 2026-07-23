@@ -329,7 +329,7 @@ class HelmChartBasedTaskCreationTest {
                 Arguments.of(URI.create("ftp://registry.example.com/chart.tgz")),
                 Arguments.of(URI.create("file:///path/to/chart.tgz")),
                 Arguments.of(URI.create("ldap://registry.example.com/chart")),
-                Arguments.of(URI.create("ssh://registry.example.com/chart.tgz")),
+                Arguments.of(URI.create("git://registry.example.com/chart.tgz")),
                 Arguments.of(URI.create(
                         "helm.stg.ngc.nvidia.com/test-org/charts/test-chart-1.0.0.tgz")),
                 Arguments.of(URI.create(
