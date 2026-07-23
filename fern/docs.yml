@@ -29,6 +29,9 @@ versions:
 - display-name: dev
   path: versions/dev.yml
   slug: dev
+- display-name: "0.6.1-rc"
+  path: versions/v0.6.1-rc.yml
+  slug: "v0.6.1-rc"
 - display-name: "0.6.0"
   path: versions/v0.6.0.yml
   slug: "v0.6.0"

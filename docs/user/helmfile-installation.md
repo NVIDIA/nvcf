@@ -191,7 +191,7 @@ Environment configuration files define how NVCF is deployed in your specific env
 Set `HELMFILE_ENV` to your environment name and copy the base configuration.
 The filename must match `HELMFILE_ENV` because Helmfile uses it to select the
 environment file. The template below shows the values to configure for Amazon
-EKS ([cp-env-eks-example.yaml](samples/configs/cp-env-eks-example.yaml)).
+EKS ([cp-env-eks-example.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/user/samples/configs/cp-env-eks-example.yaml)).
 
 ```bash
 cd path/to/nvcf-self-managed-stack
@@ -586,7 +586,7 @@ These credentials will then be used for function deployments. Note that if the r
 Copy the secrets template using the same `HELMFILE_ENV` value from Step 2. The
 filename must match `HELMFILE_ENV` because Helmfile loads the corresponding
 secrets file. The example below shows the required structure
-([example-secrets.yaml](samples/configs/cp-example-secrets.yaml)). You must
+([example-secrets.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/user/samples/configs/cp-example-secrets.yaml)). You must
 replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your
 actual base64-encoded registry credentials.
 
@@ -731,7 +731,7 @@ registry.
 If your `image` registry is private and your cluster nodes do not have built-in credential helpers, you must create Kubernetes `docker-registry` secrets in each NVCF namespace and configure the helmfile to reference them.
 
 1. Create the pull secret in each NVCF namespace
-   ([create-nvcr-pull-secrets.sh](samples/scripts/create-nvcr-pull-secrets.sh)):
+   ([create-nvcr-pull-secrets.sh](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/user/samples/scripts/create-nvcr-pull-secrets.sh)):
 
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"
