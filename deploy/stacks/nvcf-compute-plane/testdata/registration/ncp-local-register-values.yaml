@@ -1,0 +1,10 @@
+clusterName: my-local-cluster
+clusterID: de5f65fe-08d7-47e7-bf30-860e2fe88c57
+clusterGroupID: e1c9fcdd-5551-4824-816f-87a044a5dd33
+ncaID: nvcf-default
+region: us-east-1
+selfManaged:
+  identitySource: psat
+  icmsServiceURL: http://icms.example.invalid:8080
+  revalServiceURL: http://reval.example.invalid:8080
+  natsURL: nats://nats.example.invalid:4222

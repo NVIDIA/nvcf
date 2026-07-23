@@ -1,0 +1,84 @@
+---
+# Source: helm-nvca-operator/templates/pre-delete-cleanup-job.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nvca-operator-pre-delete-cleanup
+  namespace: nvca-operator
+  labels:
+    helm.sh/chart: helm-nvca-operator-1.14.0
+    app.kubernetes.io/name: nvca-operator
+    app.kubernetes.io/instance: nvca-operator
+    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: cleanup
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nvca-operator
+        app.kubernetes.io/instance: nvca-operator
+        app.kubernetes.io/component: cleanup
+    spec:
+      serviceAccountName: nvca-operator-pre-delete-cleanup
+      automountServiceAccountToken: true
+      imagePullSecrets:
+      - name: "nvcr-pull-secret"
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1010
+        fsGroup: 1010
+      containers:
+      - name: cleanup
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.0.4
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1010
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+        args:
+          - /tini
+          - --
+          - /usr/bin/nvca-operator-cleanup
+          - --namespace
+          - "nvca-operator"
+          - --cluster-role-name
+          - "nvca-operator"
+          - --cluster-role-binding-name
+          - "nvca-operator"
+          - --service-account-name
+          - "nvca-operator"
+          - --log-level
+          - "info"
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"

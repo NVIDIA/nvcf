@@ -1,0 +1,83 @@
+---
+# Source: helm-nvca-operator/templates/self-managed-nvcfbackend-cm.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvcfbackend-self-managed
+  namespace: nvca-operator
+  annotations:
+    release-artifact-nvca-image: "nvcr.io/0651155215864979/ncp-dev/nvca:3.0.4"
+    release-artifact-nvcf-image-credential-helper-image: "nvcr.io/0651155215864979/ncp-dev/nvcf-image-credential-helper:0.10.2"
+    release-artifact-samba-image: "nvcr.io/0651155215864979/ncp-dev/samba:1.0.5"
+  labels:
+    helm.sh/chart: helm-nvca-operator-1.14.0
+    app.kubernetes.io/name: nvca-operator
+    app.kubernetes.io/instance: nvca-operator
+    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/managed-by: Helm
+data:
+  cluster-dto.yaml: |
+    clusterId: "de5f65fe-08d7-47e7-bf30-860e2fe88c57"
+    clusterGroupId: "e1c9fcdd-5551-4824-816f-87a044a5dd33"
+    clusterName: "ncp-local"
+    clusterDescription: "ncp-local"
+    clusterGroupName: "nvcf-default"
+    ncaID: "nvcf-default"
+    nvcaVersion: "3.0.4"
+    oAuthClientId: ""
+    cloudProvider: "NCP"
+    region: "us-west-1"
+    attributes: []
+    capabilities: ["DynamicGPUDiscovery","InfraResourceOverhead","EnforceHelmFunctionResourceLimits","EnforceContainerFunctionResourceLimits","EnforceHelmTaskResourceLimits","EnforceContainerTaskResourceLimits"]
+    gpusB64: ""
+    cacheCSIVolumeMountOptionsConfig:
+      disabled: false
+      mountOptions: "ro,norecovery,nouuid"
+    icmsConfig:
+      publicKeysetEndpoint: ""
+      tokenURL: ""
+      icmsServiceURL: "http://api.sis.svc.cluster.local:8080"
+    miniService:
+      helmReValServiceURL: "http://reval.nvcf.svc.cluster.local:8080"
+    transportTls:
+      trustMode: "system"
+      trustBundleConfigMapName: "nvcf-transport-trust-bundle"
+      trustBundleKey: "nvcf-ca-bundle.pem"
+      trustBundleFingerprint: ""
+      installerImage: ""
+    imageCredentialHelper:
+      imageConfig:
+        repository: "nvcr.io/0651155215864979/ncp-dev/nvcf-image-credential-helper"
+        tag: "0.10.2"
+    sharedStorage:
+      imageRepository: "nvcr.io/0651155215864979/ncp-dev/samba"
+      imageTag: "1.0.5"
+    otelCollector:
+      enabled: false
+      imageConfig:
+        repository: "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
+        tag: "0.143.2"
+    agent:
+      natsURL: "nats://nats.nats-system.svc.cluster.local:4222"
+      helmReValStageOAuthTokenURL: ""
+      helmReValStageOAuthPublicKeysetEndpoint: ""
+      helmReValProdOAuthTokenURL: ""
+      helmReValProdOAuthPublicKeysetEndpoint: ""
+      functionDeploymentStagesStageOAuthTokenURL: ""
+      functionDeploymentStagesStageOAuthPublicKeysetEndpoint: ""
+      functionDeploymentStagesProdOAuthTokenURL: ""
+      functionDeploymentStagesProdOAuthPublicKeysetEndpoint: ""

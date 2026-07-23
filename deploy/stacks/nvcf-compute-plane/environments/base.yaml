@@ -41,6 +41,13 @@ global:
       # NATS URL — required; set per environment.
       natsURL: ""
       natsHostOverride: ""
+      # Feature gates enabled on this cluster. Extra gates set here are added on
+      # top of a default set that the helmfile template always appends (see
+      # nvca-operator.featureGateValues in helmfile.d/02-nvca.yaml.gotmpl). To
+      # turn off a default gate, disable it explicitly by including "-<gate>",
+      # for example "-InfraResourceOverhead".
+      # Example: ["SelfHosted", "LogPosting"]
+      featureGateValues: []
 
   # =============================================================================
   # Node Selector / Toleration Overlays
