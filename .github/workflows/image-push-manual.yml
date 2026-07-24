@@ -121,6 +121,7 @@ jobs:
         env:
           SVC_PATH: ${{ github.event.inputs.service_path }}
           TAG: ${{ steps.meta.outputs.tag }}
+          NVCF_VERSION: ${{ steps.meta.outputs.tag }}
           REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
         run: |
           set -euo pipefail
@@ -145,7 +146,7 @@ jobs:
             mkdir -p ci-ghcr
             printf 'load("@rules_oci//oci:defs.bzl", "oci_push")\n\noci_push(\n    name = "push",\n    image = "%s",\n    repository = "%s",\n    remote_tags = ["%s", "latest-dispatch"],\n)\n' \
               "$tgt" "$dest" "$TAG" > ci-ghcr/BUILD.bazel
-            bazel run --remote_cache= --disk_cache="${BAZEL_DISK_CACHE}" //ci-ghcr:push
+            bazel run --stamp --remote_cache= --disk_cache="${BAZEL_DISK_CACHE}" //ci-ghcr:push
             rm -rf ci-ghcr
           done
           echo "Done: pushed ${#indexes[@]} image(s) under ${REGISTRY}/ at tag ${TAG}"

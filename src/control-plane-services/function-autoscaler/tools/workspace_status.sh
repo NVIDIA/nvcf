@@ -24,11 +24,28 @@ if [ "$COMMIT" != "unknown" ] && [ -n "$(git status --porcelain 2>/dev/null)" ];
 fi
 
 # CI overrides for VERSION (from git tag or MR sha) and BUILD_USER.
-# When unset, fall back to the values the legacy nvcf-cli Makefile computed.
+# When unset, use only tags that belong to this service. `git describe
+# --exact-match` is unsafe in the monorepo because a commit can also have
+# stack/chart tags such as deploy/stacks/nvcf-compute-plane/v...
+TAG_PREFIX="src/control-plane-services/function-autoscaler/v"
+LEGACY_TAG_PREFIX="nvcf-function-autoscaler-v"
+
+version_from_exact_tag() {
+    local prefix tag
+    for prefix in "$@"; do
+        tag=$(git tag --points-at HEAD --list "${prefix}*" 2>/dev/null | sort -V | tail -n1 || true)
+        if [ -n "${tag}" ]; then
+            printf '%s\n' "${tag#"${prefix}"}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 if [ -n "${NVCF_VERSION:-}" ]; then
     VERSION="${NVCF_VERSION}"
-elif TAG=$(git describe --tags --exact-match HEAD 2>/dev/null); then
-    VERSION="${TAG}"
+elif VERSION=$(version_from_exact_tag "${TAG_PREFIX}" "${LEGACY_TAG_PREFIX}"); then
+    :
 else
     VERSION="mr-${COMMIT}"
 fi
