@@ -182,12 +182,14 @@ openbao:
         matchExpressions:
           - key: kubernetes.io/metadata.name
             operator: In
+            # nvcf-ui is appended by global.yaml.gotmpl only when the
+            # addons.nvcfUi addon is enabled, so the disabled-by-default path
+            # leaves the injector's namespace selector unchanged.
             values:
               - api-keys
               - ess
               - nats-system
               - nvcf
-              - nvcf-ui
               - sis
 
 addons:

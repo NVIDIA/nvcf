@@ -1108,7 +1108,7 @@ HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress sync
 Verify only when the addon is present and enabled:
 
 ```bash
-kubectl get deploy,svc -n nvcf-ui 
+kubectl get deploy,svc -n nvcf-ui
 kubectl get httproute -A | grep -i nvcf-ui
 curl -i -H "Host: nvcf-ui.<domain>" "http://<gateway-address>/status"
 ```

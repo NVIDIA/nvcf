@@ -136,9 +136,15 @@ openbao:
     {{- . | nindent 4 }}
     {{- end }}
     replicas: {{ .Values.openbao.injector.replicas }}
+    {{- $nvcfUiEnabled := dig "addons" "nvcfUi" "enabled" false .Values }}
     {{- with .Values.openbao.injector.webhook }}
     webhook:
-      {{- toYaml . | nindent 6 }}
+      {{- $webhook := deepCopy . }}
+      {{- if $nvcfUiEnabled }}
+      {{- $expr := index $webhook.namespaceSelector.matchExpressions 0 }}
+      {{- $_ := set $expr "values" (append $expr.values "nvcf-ui") }}
+      {{- end }}
+      {{- toYaml $webhook | nindent 6 }}
     {{- end }}
     podDisruptionBudget:
       minAvailable: 1

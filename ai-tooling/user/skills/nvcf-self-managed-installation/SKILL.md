@@ -275,59 +275,14 @@ routes.
 
 ### 7. Enable NVCF UI (optional)
 
-NVCF UI is optional and disabled by default. It is available only in
-stack packages that include the NVCF UI addon. If your extracted stack
-package does not contain a `nvcf-ui` release and `nvcfUi` route
-values, skip this section until you use a stack package that includes them.
+NVCF UI is an optional, customer-facing admin-panel UI. It is disabled by
+default and available only in stack packages that include the NVCF UI addon. If
+your extracted stack package does not contain a `nvcf-ui` release and `nvcfUi`
+route values, skip this section. The NVCF UI admin panel is currently
+unauthenticated; do not expose it to the public internet.
 
-Enable it only when you need a customer-facing NVCF admin-panel UI
-
-If the stack package includes the addon, enable it in
-`environments/<env-name>.yaml`:
-
-```yaml
-addons:
-  nvcfUi:
-    enabled: true
-```
-
-Create namespace and image pull secret (if using a private registry)
-```bash
-kubectl create namespace nvcf-ui --dry-run=client -o yaml | kubectl apply -f -
-
-# Only if pulling from a private registry (e.g., NGC nvcr.io)
-export NGC_API_KEY="<your-key>"
-kubectl create secret docker-registry nvcr-creds \
-  --docker-server=nvcr.io \
-  --docker-username='$oauthtoken' \
-  --docker-password="$NGC_API_KEY" \
-  --namespace=nvcf-ui \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
-The default route host is `nvcf-ui.<domain>` and the backend is
-`nvcf-ui.nvcf-ui:8300`.
-
-After confirming the package includes the `nvcf-ui` release, preview and
-apply the service and route:
-
-```bash
-HELMFILE_ENV=<env-name> helmfile --selector name=nvcf-ui template
-HELMFILE_ENV=<env-name> helmfile --selector name=nvcf-ui sync
-HELMFILE_ENV=<env-name> helmfile --selector release-group=ingress sync
-```
-
-Verify the route only when the addon is present and enabled:
-
-```bash
-kubectl get deploy,svc -n nvcf-ui
-kubectl get httproute -A | grep -i nvcf-ui
-curl -i -H "Host: nvcf-ui.<domain>" "http://<gateway-address>/status"
-```
-
-The NVCF UI admin panel is currently unauthenticated. Do not expose it to the
-public internet. Restrict access to a trusted network, VPN, or an
-authenticating proxy in front of the `nvcf-ui` route.
+For enablement, namespace and pull secret setup, apply, and verification steps,
+see [NVCF UI Addon](references/nvcf-ui-addon.md).
 
 ### 8. Install the separate compute-plane stack
 
