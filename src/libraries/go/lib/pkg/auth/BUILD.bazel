@@ -17,7 +17,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "auth",
-    srcs = ["auth_token_fetcher.go"],
+    srcs = [
+        "auth_token_fetcher.go",
+        "authorizer.go",
+    ],
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth",
     visibility = ["//visibility:public"],
     deps = [
@@ -29,7 +32,10 @@ go_library(
 
 go_test(
     name = "auth_test",
-    srcs = ["auth_token_fetcher_test.go"],
+    srcs = [
+        "auth_token_fetcher_test.go",
+        "authorizer_test.go",
+    ],
     data = glob(["test/**"]),
     embed = [":auth"],
     deps = [
