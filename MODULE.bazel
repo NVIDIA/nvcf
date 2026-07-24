@@ -151,8 +151,26 @@ oci.pull(
     ],
     tag = "21-jre",
 )
+
+# NVIDIA distroless java: the base for Java service images, matching the
+# distroless_go / distroless_cc bases the Go and Rust services use and the base
+# the pre-Bazel nvct-service Dockerfile used (25-jdk-v4.0.8). Publicly
+# pullable, multi-arch. Pinned by digest like the other distroless bases.
+# JDK 25 matches --java_language_version=25 above.
+oci.pull(
+    name = "distroless_java",
+    digest = "sha256:cc9dbc2560e39f6e0a67cd85421370e46fd818b1660800b507b82819a79ea21f",
+    image = "nvcr.io/nvidia/distroless/java",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
 use_repo(
     oci,
+    "distroless_java",
+    "distroless_java_linux_amd64",
+    "distroless_java_linux_arm64_v8",
     "temurin_jre",
     "temurin_jre_linux_amd64",
     "temurin_jre_linux_arm64_v8",
