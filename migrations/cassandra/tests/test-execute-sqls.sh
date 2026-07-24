@@ -40,7 +40,7 @@ for replica_count in 1 3 2147483647; do
     fail "execute_sqls.sh rejects valid replica count ${replica_count}"
   fi
 done
-for replica_count in 0 -1 invalid 2147483648 99999999999; do
+for replica_count in 0 01 -1 invalid 2147483648 99999999999; do
   if REPLICA_COUNT="${replica_count}" sh -c "${replica_count_validation}" 2>/dev/null; then
     fail "execute_sqls.sh accepts invalid replica count ${replica_count}"
   fi

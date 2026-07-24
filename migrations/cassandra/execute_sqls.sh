@@ -16,13 +16,13 @@
 
 REPLICA_COUNT=${REPLICA_COUNT:-3}
 case "$REPLICA_COUNT" in
-  ''|*[!0-9]*|0)
-    echo "REPLICA_COUNT must be an integer from 1 to 2147483647" >&2
+  ''|*[!0-9]*|0*)
+    echo "ERROR: REPLICA_COUNT must be an integer from 1 to 2147483647, got: $REPLICA_COUNT" >&2
     exit 1
     ;;
 esac
 if [ "${#REPLICA_COUNT}" -gt 10 ] || [ "$REPLICA_COUNT" -gt 2147483647 ]; then
-  echo "REPLICA_COUNT must be an integer from 1 to 2147483647" >&2
+  echo "ERROR: REPLICA_COUNT must be an integer from 1 to 2147483647, got: $REPLICA_COUNT" >&2
   exit 1
 fi
 export REPLICA_COUNT
