@@ -34,7 +34,7 @@ ensure_otelcol_binary() {
     if [ -z "${OTEL_COLLECTOR_VERSION:-}" ]; then
         echo "Building otelcol-contrib from checked-in otelcol module"
         GOWORK=off CGO_ENABLED="${CGO_ENABLED:-0}" GOMAXPROCS="${GOMAXPROCS:-2}" \
-            go -C otelcol build -trimpath -o ../_output/bin/otelcol-contrib .
+            go -C otelcol build -p "${GO_BUILD_P:-1}" -trimpath -o ../_output/bin/otelcol-contrib .
         return
     fi
 
@@ -83,6 +83,11 @@ run_with_timeout() {
 
 validate_otel_config() {
     local config_path="$1"
+
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        echo "Runtime startup validation skipped on non-Linux host"
+        return
+    fi
 
     set +e
     timeout_output=$(run_with_timeout 2 ./_output/bin/otelcol-contrib --config="$config_path" 2>&1)

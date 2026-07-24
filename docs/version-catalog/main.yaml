@@ -4,6 +4,9 @@
 version: 1
 target: main
 registries:
+  alpine-upstream-images:
+    host: docker.io
+    namespace: alpine
   public-helm:
     host: https://helm.ngc.nvidia.com
     namespace: nvidia/nvcf
@@ -14,6 +17,9 @@ registries:
   public-resources:
     host: nvcr.io
     namespace: nvidia/nvcf
+  nats-upstream-images:
+    host: docker.io
+    namespace: natsio
   selfhosted-ga:
     host: nvcr.io
     namespace: 0833294136851237/selfhosted-ga
@@ -110,8 +116,7 @@ publications:
     registry: public-images
   - name: alpine-k8s
     version: 1.36.1
-    published_version: 1.36.1-ea
-    registry: selfhosted-ga
+    registry: alpine-upstream-images
   - name: llm-api-gateway
     version: 0.8.3
     published_version: 0.8.3-ea
@@ -122,8 +127,7 @@ publications:
     registry: selfhosted-ga
   - name: nats-server-config-reloader
     version: 0.23.0
-    published_version: 0.23.0-ea
-    registry: selfhosted-ga
+    registry: nats-upstream-images
   - name: nvcf-openbao
     version: 2.5.4-nv-1.3.0
     published_version: 2.5.4-nv-1.3.0-ea
@@ -383,6 +387,7 @@ manifest:
       kind: service-image
       requirement: required
       description: Provides Kubernetes command-line utilities for deployment jobs.
+      github_url: https://github.com/alpine-docker/k8s
     - artifact_id: cert-manager-cainjector
       plane: control
       kind: service-image
@@ -699,6 +704,7 @@ artifacts:
   - name: alpine-k8s
     type: image
     registry: staging
+    repository_name: k8s
     version: 1.36.1
   - name: bitnami-cassandra
     type: image

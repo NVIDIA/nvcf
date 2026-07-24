@@ -8,8 +8,18 @@ environments:
 
 repositories:
   - name: nvcf
+{{- if dig "global" "helm" "sources" "url" "" .Values }}
+    url: {{ .Values.global.helm.sources.url | quote }}
+    {{- if dig "global" "helm" "sources" "username" "" .Values }}
+    username: {{ dig "global" "helm" "sources" "username" "" .Values | quote }}
+    {{- end }}
+    {{- if dig "global" "helm" "sources" "password" "" .Values }}
+    password: {{ dig "global" "helm" "sources" "password" "" .Values | quote }}
+    {{- end }}
+{{- else }}
     url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
     oci: true
+{{- end }}
 
 helmDefaults:
   createNamespace: true

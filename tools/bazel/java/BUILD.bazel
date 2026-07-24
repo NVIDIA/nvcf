@@ -1,0 +1,81 @@
+load("@rules_java//java:defs.bzl", "java_binary", "java_library", "java_plugin")
+load("@rules_proto_grpc//:defs.bzl", "proto_plugin")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# Root-owned executable helpers and shared build targets for Java subtrees.
+# Reusable Starlark macros live under //rules/java and reference these targets.
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "generate_notice.py",
+    "jacoco_test_runner.sh",
+    "license_aliases.json",
+    "lcov_to_sonar_generic.py",
+    "notice_diff_test.sh",
+])
+
+# Lombok annotation processing (shared by both Java compile profiles).
+java_plugin(
+    name = "lombok_plugin",
+    generates_api = True,
+    processor_class = "lombok.launch.AnnotationProcessorHider$AnnotationProcessor",
+    deps = ["@nv_third_party_deps//:org_projectlombok_lombok"],
+)
+
+java_library(
+    name = "lombok_annotations",
+    exports = ["@nv_third_party_deps//:org_projectlombok_lombok"],
+    neverlink = True,
+)
+
+# JaCoCo CLI used by the shared coverage test runner.
+java_binary(
+    name = "jacoco_cli",
+    main_class = "org.jacoco.cli.internal.Main",
+    runtime_deps = ["@nv_third_party_deps//:org_jacoco_org_jacoco_cli"],
+)
+
+# NOTICE generator (root-owned). Service NOTICE metadata stays service-local;
+# this tool only implements the generation/drift algorithm.
+py_binary(
+    name = "generate_notice_tool",
+    srcs = ["generate_notice.py"],
+    main = "generate_notice.py",
+    python_version = "3.11",
+)
+
+py_library(
+    name = "generate_notice_lib",
+    srcs = ["generate_notice.py"],
+    imports = ["."],
+)
+
+py_test(
+    name = "generate_notice_test",
+    srcs = ["generate_notice_test.py"],
+    deps = [":generate_notice_lib"],
+    main = "generate_notice_test.py",
+    python_version = "3.11",
+    size = "small",
+)
+
+# gRPC-Java codegen plugin (pinned native binary, version tracks GRPC_VERSION
+# in the root MODULE.bazel). Consumed by //rules/java:proto.bzl.
+proto_plugin(
+    name = "grpc_java_1_63_plugin",
+    out = "{name}_grpc.jar",
+    tool = select({
+        "@rules_proto_grpc//platforms:darwin_arm64": "@grpc_java_plugin_osx_aarch_64//file:protoc-gen-grpc-java.exe",
+        "@rules_proto_grpc//platforms:darwin_x86_64": "@grpc_java_plugin_osx_x86_64//file:protoc-gen-grpc-java.exe",
+        "@rules_proto_grpc//platforms:linux_aarch64": "@grpc_java_plugin_linux_aarch_64//file:protoc-gen-grpc-java.exe",
+        "@rules_proto_grpc//platforms:linux_x86_64": "@grpc_java_plugin_linux_x86_64//file:protoc-gen-grpc-java.exe",
+        "@rules_proto_grpc//platforms:windows_x86_64": "@grpc_java_plugin_windows_x86_64//file:protoc-gen-grpc-java.exe",
+    }),
+)
+
+sh_test(
+    name = "lcov_to_sonar_generic_test",
+    srcs = ["lcov_to_sonar_generic_test.sh"],
+    data = [":lcov_to_sonar_generic.py"],
+)

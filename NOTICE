@@ -306,6 +306,7 @@ The following third-party licenses are included in this repository:
     src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/LICENSE
     src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml/LICENSE
     src/compute-plane-services/nvsnap/NOTICE
+    src/control-plane-services/cloud-tasks/NOTICE
     src/invocation-plane-services/llm-api-gateway/NOTICE
     src/invocation-plane-services/ratelimiter/NOTICE
     src/libraries/go/lib/vendor/cloud.google.com/go/compute/metadata/LICENSE

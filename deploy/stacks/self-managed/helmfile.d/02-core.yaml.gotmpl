@@ -8,8 +8,19 @@ environments:
 
 repositories:
   - name: nvcf
+{{- if dig "global" "helm" "sources" "url" "" .Values }}
+    url: {{ .Values.global.helm.sources.url | quote }}
+    {{- if dig "global" "helm" "sources" "username" "" .Values }}
+    username: {{ dig "global" "helm" "sources" "username" "" .Values | quote }}
+    {{- end }}
+    {{- if dig "global" "helm" "sources" "password" "" .Values }}
+    password: {{ dig "global" "helm" "sources" "password" "" .Values | quote }}
+    {{- end }}
+{{- else }}
     url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
     oci: true
+{{- end }}
+
 
 helmDefaults:
   createNamespace: true
@@ -45,7 +56,7 @@ releases:
       - template: service
 
   - name: api
-    version: 1.23.8
+    version: 1.23.9
     namespace: nvcf
     inherit:
       - template: service
@@ -60,7 +71,7 @@ releases:
       - template: service
 
   - name: invocation-service
-    version: 1.5.5
+    version: 1.5.6
     namespace: nvcf
     inherit:
       - template: service
@@ -188,13 +199,26 @@ releases:
     labels:
       release-group: services
 
+  - name: nvcf-ui
+    chart: nvcf/helm-nvcf-ui
+    version: 1.1.1
+    namespace: nvcf-ui
+    condition: addons.nvcfUi.enabled
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: services
+
   # --- Gateway API Ingress ---
   - name: ingress
     chart: nvcf/nvcf-gateway-routes
-    version: 1.13.4
+    version: 1.15.0
     needs:
       - nvcf/notary-service
       - api-keys/api-keys
+      {{- if dig "addons" "nvcfUi" "enabled" false .Values }}
+      - nvcf-ui/nvcf-ui
+      {{- end }}
     namespace: {{ .Values.ingress.gatewayApi.controllerNamespace }}
     condition: ingress.gatewayApi.enabled
     values:

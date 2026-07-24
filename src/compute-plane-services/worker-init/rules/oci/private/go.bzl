@@ -19,7 +19,7 @@ load("@rules_pkg//pkg:mappings.bzl", "strip_prefix")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("//rules/oci/private:common.bzl", "DEFAULT_BASE", "create_oci_image")
 
-def _go_oci_image_impl(name, visibility, binary, base, entrypoint, registry, tags):
+def _go_oci_image_impl(name, visibility, binary, base, entrypoint, registry, tags, extra_layers):
     layer_name = name + "_layer"
 
     # Place the binary at /<basename> in the layer tarball. Without
@@ -46,7 +46,7 @@ def _go_oci_image_impl(name, visibility, binary, base, entrypoint, registry, tag
 
     create_oci_image(
         name = name,
-        tars = [layer_name],
+        tars = [layer_name] + list(extra_layers),
         base = base,
         entrypoint = entry,
         visibility = visibility,
@@ -66,6 +66,10 @@ go_oci_image = macro(
         "base": attr.label(
             doc = "Base OCI image.",
             default = DEFAULT_BASE,
+            configurable = False,
+        ),
+        "extra_layers": attr.label_list(
+            doc = "Additional pkg_tar layers to stack on top of the binary layer.",
             configurable = False,
         ),
         "entrypoint": attr.string_list(

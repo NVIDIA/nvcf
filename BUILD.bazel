@@ -21,25 +21,28 @@ exports_files(
 )
 
 # Root module identity + third-party lock + NOTICE index, consumed by the
-# nv-boot-parent NOTICE generation/verification tooling now that its Maven
-# closure is owned by the root module.
+# Java subtrees' NOTICE generation/verification tooling now that their Maven
+# closure is owned by the single root module.
 exports_files(
     [
         "MODULE.bazel",
         "NOTICE",
         "maven_install.json",
     ],
-    visibility = ["//src/libraries/java/nv-boot-parent:__subpackages__"],
+    visibility = [
+        "//src/control-plane-services/cloud-tasks:__subpackages__",
+        "//src/libraries/java/nv-boot-parent:__subpackages__",
+    ],
 )
 
-# Phase 1 scope: only the native Go subtrees listed in go.work.bazel are
-# managed by Bazel.
-# Everything else is excluded so Gazelle does not descend into vendored
-# directories of upstream-owned subtrees. Their source is owned upstream, and
-# local-only changes would be clobbered by the next commit-pin refresh.
+# Gazelle manages only the native Go subtrees listed in go.work.bazel.
+# nv-boot-parent and Cloud Tasks are also owned by the root Bazel module, but
+# their checked-in Java BUILD files are maintained manually and remain outside
+# Gazelle's scope. Other upstream-owned subtrees stay excluded so Gazelle does
+# not descend into vendored directories.
 #
-# When promoting an upstream to native (Phase B), remove the corresponding
-# exclude line below and add a per-subtree BUILD.bazel with the right prefix.
+# When onboarding another subtree, remove only the exclusions needed by its
+# language-specific build integration.
 # gazelle:exclude .bazel-cache
 # gazelle:exclude .worktrees
 # gazelle:exclude .cursor

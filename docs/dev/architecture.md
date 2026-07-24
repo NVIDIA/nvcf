@@ -85,13 +85,13 @@ NVCF supports four workload types on the compute plane:
 
 Each component ships an `AGENTS.md` with detailed internals, data flows, and API contracts:
 
-- [`src/compute-plane-services/nvca/AGENTS.md`](../../src/compute-plane-services/nvca/AGENTS.md)
-- [`src/compute-plane-services/ess-agent/AGENTS.md`](../../src/compute-plane-services/ess-agent/AGENTS.md)
-- [`src/compute-plane-services/byoo-otel-collector/AGENTS.md`](../../src/compute-plane-services/byoo-otel-collector/AGENTS.md)
-- [`src/invocation-plane-services/http-invocation/AGENTS.md`](../../src/invocation-plane-services/http-invocation/AGENTS.md)
-- [`src/invocation-plane-services/grpc-proxy/AGENTS.md`](../../src/invocation-plane-services/grpc-proxy/AGENTS.md)
-- [`src/invocation-plane-services/llm-api-gateway/AGENTS.md`](../../src/invocation-plane-services/llm-api-gateway/AGENTS.md)
-- [`src/invocation-plane-services/ratelimiter/AGENTS.md`](../../src/invocation-plane-services/ratelimiter/AGENTS.md)
-- [`src/control-plane-services/nats-auth-callout/AGENTS.md`](../../src/control-plane-services/nats-auth-callout/AGENTS.md)
-- [`src/control-plane-services/function-autoscaler/AGENTS.md`](../../src/control-plane-services/function-autoscaler/AGENTS.md)
-- [`examples/AGENTS.md`](../../examples/AGENTS.md)
+- [src/compute-plane-services/nvca/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/AGENTS.md)
+- [src/compute-plane-services/ess-agent/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/ess-agent/AGENTS.md)
+- [src/compute-plane-services/byoo-otel-collector/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/byoo-otel-collector/AGENTS.md)
+- [src/invocation-plane-services/http-invocation/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/invocation-plane-services/http-invocation/AGENTS.md)
+- [src/invocation-plane-services/grpc-proxy/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/invocation-plane-services/grpc-proxy/AGENTS.md)
+- [src/invocation-plane-services/llm-api-gateway/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/invocation-plane-services/llm-api-gateway/AGENTS.md)
+- [src/invocation-plane-services/ratelimiter/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/invocation-plane-services/ratelimiter/AGENTS.md)
+- [src/control-plane-services/nats-auth-callout/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/control-plane-services/nats-auth-callout/AGENTS.md)
+- [src/control-plane-services/function-autoscaler/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/src/control-plane-services/function-autoscaler/AGENTS.md)
+- [examples/AGENTS.md](https://github.com/NVIDIA/nvcf/blob/main/examples/AGENTS.md)

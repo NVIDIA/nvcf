@@ -1,4 +1,4 @@
-load("//src/libraries/java/nv-boot-parent/tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_workspace_runfiles")
+load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_workspace_runfiles")
 
 RELOADABLE_PROPERTIES_COMPILE_DEPS = [
     "@nv_third_party_deps//:com_github_ben_manes_caffeine_guava",

@@ -174,7 +174,7 @@ above.
 
 2. Skip the credential steps above. When the cluster authenticates to the registry
    automatically (the node or workload identity has pull access), the pull needs no
-   Kubernetes secret, so you do not need: the per-namespace `nvcr-pull-secret` from step 1
+   Kubernetes secret, so you do not need: the per-namespace `nvcr-creds` from step 1
    (still create the namespaces, just not the secret), the `global.imagePullSecrets` entry,
    or the `docker login`/`helm registry login nvcr.io` from step 2.
 
@@ -217,7 +217,7 @@ Helmfile deploys in order with dependencies:
 | Phase | Selector | Services | Wait time |
 |-------|----------|----------|-----------|
 | 1 | `release-group=dependencies` | NATS, OpenBao, Cassandra | 5-10 min |
-| 2 | `release-group=services` | API, SIS, ESS, invocation, grpc-proxy, notary, api-keys, optional LLM gateway/router, optional Vanity Gateway when the stack package includes the addon | 5-10 min |
+| 2 | `release-group=services` | API, SIS, ESS, invocation, grpc-proxy, notary, api-keys, optional LLM gateway/router, optional Vanity Gateway, NVCF UI when the stack package includes the addon | 5-10 min |
 | 3 | `release-group=ingress` | Gateway routes | 1-2 min |
 | 4 | `release-group=observability` | Observability stack (if enabled) | 1-2 min |
 
@@ -273,7 +273,18 @@ Do not enable Vanity Gateway for standard API, API Keys, invocation, LLM
 invocation, or gRPC traffic. Those routes are provided by the base gateway
 routes.
 
-### 7. Install the separate compute-plane stack
+### 7. Enable NVCF UI (optional)
+
+NVCF UI is an optional, customer-facing admin-panel UI. It is disabled by
+default and available only in stack packages that include the NVCF UI addon. If
+your extracted stack package does not contain a `nvcf-ui` release and `nvcfUi`
+route values, skip this section. The NVCF UI admin panel is currently
+unauthenticated; do not expose it to the public internet.
+
+For enablement, namespace and pull secret setup, apply, and verification steps,
+see [NVCF UI Addon](references/nvcf-ui-addon.md).
+
+### 8. Install the separate compute-plane stack
 
 The control-plane stack does not install compute-plane components. After it is healthy, choose exactly one compute-plane handoff:
 
@@ -290,7 +301,7 @@ for commands, EKS routing, pull secrets, verification, and teardown order.
 Destroy every compute plane before the control plane, using the teardown for
 the same handoff; see [Split Compute-Plane Installation](references/compute-plane-installation.md#teardown).
 
-Scope: Only destroy releases managed by this control-plane helmfile stack. The NVCF releases are: `nats`, `openbao-server`, `cassandra`, `api-keys`, `sis`, `api`, `invocation-service`, `grpc-proxy`, `ess-api`, `notary-service`, optional `vanity-gateway`, `admin-issuer-proxy`, and `ingress`; `cert-manager` is included only when `certManager.enabled: true`. The control-plane namespace inventory also includes `cert-manager`, but default namespace cleanup preserves it. Namespace preservation does not preserve the Helm release. External cert-manager must use `certManager.enabled: false`; otherwise Helmfile treats the release as stack-managed. Do not delete other helm releases or namespaces on the cluster.
+Scope: Only destroy releases managed by this control-plane helmfile stack. The NVCF releases are: `nats`, `openbao-server`, `cassandra`, `api-keys`, `sis`, `api`, `invocation-service`, `grpc-proxy`, `ess-api`, `notary-service`, optional `vanity-gateway`, `nvcf-ui`, `admin-issuer-proxy`, and `ingress`; `cert-manager` is included only when `certManager.enabled: true`. The control-plane namespace inventory also includes `cert-manager`, but default namespace cleanup preserves it. Namespace preservation does not preserve the Helm release. External cert-manager must use `certManager.enabled: false`; otherwise Helmfile treats the release as stack-managed. Do not delete other helm releases or namespaces on the cluster.
 
 Before control-plane destroy, identify whether cert-manager is external. For an external installation, require effective `certManager.enabled: false` and abort if it is true. For an intended stack-managed release with effective `certManager.enabled: true`, verify matching stack Helm release metadata and abort on missing or mismatched evidence. Preserve the namespace by default; only plan its removal after verifying namespace provenance and getting explicit confirmation.
 
@@ -305,7 +316,7 @@ HELMFILE_ENV=<env-name> helmfile destroy
 ### Delete namespaces
 
 ```bash
-for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis nvcf-ui vault-system; do
   kubectl delete namespace "$ns" --ignore-not-found
 done
 ```
@@ -405,7 +416,7 @@ helm install kyverno kyverno/kyverno -n kyverno --create-namespace
 # 2. Create pull secret in each namespace
 export NGC_API_KEY="<your-key>"
 for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system cert-manager; do
-  kubectl create secret docker-registry nvcr-pull-secret \
+  kubectl create secret docker-registry nvcr-creds \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
     --docker-password="$NGC_API_KEY" \
@@ -417,11 +428,11 @@ done
 kubectl apply -f kyverno-imagepullsecret-policy.yaml
 ```
 
-The policy mutates every pod at admission time, adding `imagePullSecrets: [{name: nvcr-pull-secret}]`. Verify with:
+The policy mutates every pod at admission time, adding `imagePullSecrets: [{name: nvcr-creds}]`. Verify with:
 
 ```bash
 kubectl get pod -n <namespace> <pod-name> -o jsonpath='{.spec.imagePullSecrets}'
-# Should show: [{"name":"nvcr-pull-secret"}]
+# Should show: [{"name":"nvcr-creds"}]
 ```
 
 Not needed if using a CSP built-in credential helper (e.g., ECR with IAM node roles).

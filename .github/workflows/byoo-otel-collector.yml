@@ -1,0 +1,152 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: byoo-otel-collector
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: byoo-otel-collector-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    name: detect BYOO OTel collector changes
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes
+        id: detect
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+
+          run_all=false
+          changed=""
+
+          case "$EVENT" in
+            workflow_dispatch)
+              run_all=true
+              ;;
+            pull_request)
+              if ! changed=$(git diff --name-only "${BASE_SHA}...HEAD" 2>/dev/null); then
+                echo "diff against pull request base failed; running BYOO OTel collector checks"
+                run_all=true
+              fi
+              ;;
+            push)
+              if [ -z "${BEFORE_SHA}" ] || [ "${BEFORE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+                run_all=true
+              elif ! changed=$(git diff --name-only "${BEFORE_SHA}..${HEAD_SHA}" 2>/dev/null); then
+                echo "diff ${BEFORE_SHA}..${HEAD_SHA} failed; running BYOO OTel collector checks"
+                run_all=true
+              fi
+              ;;
+            merge_group)
+              if [ -n "${MERGE_GROUP_BASE_SHA}" ]; then
+                if ! changed=$(git diff --name-only "${MERGE_GROUP_BASE_SHA}...HEAD" 2>/dev/null); then
+                  echo "diff against merge group base failed; running BYOO OTel collector checks"
+                  run_all=true
+                fi
+              else
+                run_all=true
+              fi
+              ;;
+            *)
+              run_all=true
+              ;;
+          esac
+
+          if [ "$REF" = "refs/heads/main" ]; then
+            run_all=true
+          fi
+
+          if [ "$run_all" = "true" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if printf "%s\n" "$changed" | grep -qE '^(src/compute-plane-services/byoo-otel-collector/|tools/ci/check-byoo-otel-collector-version|tools/ci/test-check-byoo-otel-collector-version|\.github/workflows/byoo-otel-collector\.yml$)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  version:
+    name: check VERSION update
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run version gate tests
+        run: ./tools/ci/test-check-byoo-otel-collector-version
+
+      - name: Check BYOO OTel collector VERSION changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: ./tools/ci/check-byoo-otel-collector-version
+
+  validate:
+    name: validate configs (${{ matrix.mode }})
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode:
+          - vm-container
+          - vm-helm
+          - k8s-container
+          - k8s-helm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # The generated otelcol module says `go 1.25.0`, but Linux
+          # builds of OTel v0.157.0 need the patched toolchain line used
+          # by this subtree's Bazel module.
+          go-version-file: src/compute-plane-services/byoo-otel-collector/go.work
+
+      - name: Validate generated collector configs
+        working-directory: src/compute-plane-services/byoo-otel-collector
+        env:
+          GOCACHE: ${{ runner.temp }}/go-cache
+          GO_BUILD_P: "1"
+        run: ./scripts/validate-otelconfig.sh "${{ matrix.mode }}"

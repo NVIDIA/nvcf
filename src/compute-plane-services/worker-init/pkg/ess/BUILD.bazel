@@ -14,6 +14,8 @@
 # limitations under the License.
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 
 go_library(
     name = "ess",
@@ -37,4 +39,20 @@ go_test(
     deps = [
         "@com_github_hashicorp_hcl_v2//hclsimple",
     ],
+)
+
+# Raw ESS configuration consumed by SetupEssAgent from /etc/ess.
+pkg_files(
+    name = "ess_config_files",
+    srcs = glob(["configs/*"]),
+    prefix = "/etc/ess",
+    strip_prefix = strip_prefix.from_pkg("configs"),
+    visibility = ["//visibility:private"],
+)
+
+pkg_tar(
+    name = "ess_config_layer",
+    srcs = [":ess_config_files"],
+    extension = "tar.gz",
+    visibility = ["//cmd:__pkg__"],
 )

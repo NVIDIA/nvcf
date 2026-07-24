@@ -27,10 +27,14 @@ const (
 	defaultMetadataPrefix = "log.chunk"
 )
 
-// Config controls oversized log body handling.
+// Config controls oversized log body and attribute handling.
 type Config struct {
-	// MaxBodyBytes is the maximum UTF-8 encoded log body size before the record is
-	// considered oversized. Zero disables the processor.
+	// MaxPayloadBytes is the maximum log body and attribute payload size before
+	// the record is considered oversized. Zero disables the processor.
+	MaxPayloadBytes int `mapstructure:"max_payload_bytes"`
+	// MaxBodyBytes is a deprecated alias for MaxPayloadBytes.
+	//
+	// Deprecated: use MaxPayloadBytes / max_payload_bytes.
 	MaxBodyBytes int `mapstructure:"max_body_bytes"`
 	// DryRun records oversized log metrics and warnings without mutating logs.
 	DryRun bool `mapstructure:"dry_run"`
@@ -40,18 +44,19 @@ type Config struct {
 
 func createDefaultConfig() *Config {
 	return &Config{
-		MaxBodyBytes:   0,
-		DryRun:         false,
-		MetadataPrefix: defaultMetadataPrefix,
+		MaxPayloadBytes: 0,
+		DryRun:          false,
+		MetadataPrefix:  defaultMetadataPrefix,
 	}
 }
 
 func (cfg *Config) Validate() error {
-	if cfg.MaxBodyBytes < 0 {
-		return fmt.Errorf("max_body_bytes must be greater than or equal to 0")
+	maxPayloadBytes := cfg.effectiveMaxPayloadBytes()
+	if maxPayloadBytes < 0 {
+		return fmt.Errorf("max_payload_bytes must be greater than or equal to 0")
 	}
-	if cfg.MaxBodyBytes > 0 && cfg.MaxBodyBytes < utf8.UTFMax {
-		return fmt.Errorf("max_body_bytes must be 0 or at least %d to preserve UTF-8 chunk boundaries", utf8.UTFMax)
+	if maxPayloadBytes > 0 && maxPayloadBytes < utf8.UTFMax {
+		return fmt.Errorf("max_payload_bytes must be 0 or at least %d to preserve UTF-8 chunk boundaries", utf8.UTFMax)
 	}
 	if cfg.MetadataPrefix == "" {
 		return fmt.Errorf("metadata_prefix must not be empty")
@@ -61,14 +66,22 @@ func (cfg *Config) Validate() error {
 
 func (cfg *Config) normalized() Config {
 	normalized := *cfg
+	normalized.MaxPayloadBytes = normalized.effectiveMaxPayloadBytes()
 	if normalized.MetadataPrefix == "" {
 		normalized.MetadataPrefix = defaultMetadataPrefix
 	}
 	return normalized
 }
 
+func (cfg Config) effectiveMaxPayloadBytes() int {
+	if cfg.MaxPayloadBytes == 0 && cfg.MaxBodyBytes != 0 {
+		return cfg.MaxBodyBytes
+	}
+	return cfg.MaxPayloadBytes
+}
+
 func (cfg Config) enabled() bool {
-	return cfg.MaxBodyBytes > 0
+	return cfg.MaxPayloadBytes > 0
 }
 
 func (cfg Config) mode() string {
