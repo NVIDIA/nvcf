@@ -669,6 +669,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Cap concurrency here too (see the bazel job) so the docker-host rows
+      # do not add to the simultaneous actions/checkout burst.
+      max-parallel: 4
       matrix:
         subtree: ${{ fromJson(needs.detect.outputs.matrix_docker) }}
     steps:
@@ -728,7 +731,7 @@ jobs:
           retention-days: 14
 
   bazel-verification:
-    name: bazel verification
+    name: bazel required checks
     needs: [detect, bazel, bazel-docker]
     if: ${{ always() }}
     runs-on: ubuntu-latest
