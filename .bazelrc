@@ -68,14 +68,29 @@ common --incompatible_enable_proto_toolchain_resolution
 build --workspace_status_command=./tools/workspace_status.sh
 build --nostamp
 
-# Java: build and run against a hermetic remotejdk 21 regardless of the host
-# JDK, so Java service builds are reproducible on any developer machine and in
-# CI. Language version 21 is the current Spring Boot 3.x baseline.
+# Java baseline: Java 25 for the whole monorepo (nv-boot-parent and the Java
+# control-plane services). local_jdk is the approved runtime. The pinned
+# bazel-ci image supplies Temurin 25 through JAVA_HOME; the bare
+# Docker-integration lane supplies it through actions/setup-java. The Java
+# build and test jobs prove that both environments satisfy this contract.
+# Full javac (header compilation off) is required because Lombok-generated APIs
+# in the imported projects are not compatible with Bazel's Turbine header
+# compiler.
 build --java_language_version=25
-build --java_runtime_version=remotejdk_25
 build --tool_java_language_version=25
-build --tool_java_runtime_version=remotejdk_25
+build --java_runtime_version=local_jdk
+build --tool_java_runtime_version=local_jdk
 build --java_header_compilation=false
+
+# rules_spring 2.6.3 (cloud-tasks Spring Boot packaging) still uses bare Java
+# rules/providers in its own BUILD and .bzl files; Bazel 9 requires these
+# symbols to be autoloaded for that external repo.
+common --incompatible_autoload_externally=+@rules_java
+
+# Downloader rewrites for repository-rule downloads (e.g. rules that hardcode
+# repo1.maven.org). Coursier maven.install still uses the repositories declared
+# in MODULE.bazel. Public, credentials-free mappings only.
+common --downloader_config=.bazel_downloader_config
 
 test --test_output=errors
 # Bazel's sandbox strips HOME, but a lot of Go code (cobra/viper config,

@@ -1,50 +1,19 @@
+load("//rules/java:notice.bzl", "nvcf_notice")
+
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["NOTICE"])
+# NOTICE and its generator inputs are owned by this subtree. The third-party
+# artifact lock is the single root //:maven_install.json; the generation
+# algorithm is the root-owned //tools/bazel/java:generate_notice_tool.
+exports_files([
+    "NOTICE",
+    "notice_metadata.json",
+    "notice_roots.json",
+])
 
-genrule(
-    name = "third_party_notice",
-    srcs = [
-        "//:maven_install.json",
-        "//src/libraries/java/nv-boot-parent/tools/bazel:notice_metadata.json",
-        "//src/libraries/java/nv-boot-parent/tools/bazel:notice_roots.json",
-    ],
-    tools = ["//src/libraries/java/nv-boot-parent/tools/bazel:generate_notice_tool"],
-    outs = ["THIRD_PARTY_NOTICE"],
-    cmd = """
-set -eu
-"$(execpath //src/libraries/java/nv-boot-parent/tools/bazel:generate_notice_tool)" \
-    --maven-install "$(location //:maven_install.json)" \
-    --metadata "$(location //src/libraries/java/nv-boot-parent/tools/bazel:notice_metadata.json)" \
-    --root-manifest "$(location //src/libraries/java/nv-boot-parent/tools/bazel:notice_roots.json)" \
-    --output "$@" \
-    --write
-""",
-)
-
-genrule(
-    name = "generate_notice",
-    srcs = [
-        "//:maven_install.json",
-        "//src/libraries/java/nv-boot-parent/tools/bazel:notice_metadata.json",
-        "//src/libraries/java/nv-boot-parent/tools/bazel:notice_roots.json",
-    ],
-    tools = ["//src/libraries/java/nv-boot-parent/tools/bazel:generate_notice_tool"],
-    outs = ["generate_notice.sh"],
-    cmd = """
-cat > "$@" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-workspace="$${BUILD_WORKSPACE_DIRECTORY:-$$(pwd)}"
-exec "$(execpath //src/libraries/java/nv-boot-parent/tools/bazel:generate_notice_tool)" \
-    --maven-install "$(location //:maven_install.json)" \
-    --metadata "$${workspace}/tools/bazel/notice_metadata.json" \
-    --notice "$${workspace}/NOTICE" \
-    --root-manifest "$(location //src/libraries/java/nv-boot-parent/tools/bazel:notice_roots.json)" \
-    "$$@"
-EOF
-chmod +x "$@"
-""",
-    executable = True,
+nvcf_notice(
+    checked_notice = ":NOTICE",
+    inventory_name = "nv_boot_runtime_inventory",
+    metadata = ":notice_metadata.json",
+    root_manifests = [":notice_roots.json"],
 )
