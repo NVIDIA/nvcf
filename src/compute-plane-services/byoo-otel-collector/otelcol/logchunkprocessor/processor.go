@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -37,22 +38,23 @@ import (
 type chunkIDFunc func(plog.LogRecord, string) (string, error)
 
 type chunkedAttribute struct {
-	key          string
-	value        pcommon.Value
-	keyBytes     int
-	payloadBytes int
-	kind         chunkedFieldKind
+	key   string
+	value pcommon.Value
 }
 
 type chunkedField struct {
-	body        bool
-	key         string
-	keyBytes    int
-	stringValue string
-	bytesValue  []byte
-	value       pcommon.Value
-	valueBytes  int
-	kind        chunkedFieldKind
+	body         bool
+	key          string
+	keyBytes     int
+	stringValue  string
+	bytesValue   []byte
+	value        pcommon.Value
+	valueBytes   int
+	kind         chunkedFieldKind
+	structured   bool
+	rootType     pcommon.ValueType
+	path         []valuePathElement
+	structuredID string
 }
 
 type chunkedFieldKind int
@@ -63,23 +65,29 @@ const (
 	chunkedFieldValue
 )
 
+type valuePathElement struct {
+	key     string
+	index   int
+	isIndex bool
+}
+
 type logRecordChunk struct {
-	body         string
-	bodyValue    pcommon.Value
-	hasBodyValue bool
-	stringAttr   map[string]string
-	bytesAttr    map[string][]byte
-	valueAttr    map[string]pcommon.Value
-	offset       int
-	bytes        int
-	hasFields    bool
+	body            string
+	bodyValue       pcommon.Value
+	hasBodyValue    bool
+	stringAttr      map[string]string
+	bytesAttr       map[string][]byte
+	valueAttr       map[string]pcommon.Value
+	structuredPaths []string
+	offset          int
+	bytes           int
+	hasFields       bool
 }
 
 type logRecordChunkPlan struct {
 	body           string
 	bodyBytes      int
 	hasBody        bool
-	bodyKind       chunkedFieldKind
 	attributes     []chunkedAttribute
 	chunks         []logRecordChunk
 	originalBytes  int
@@ -196,13 +204,10 @@ func (p *logChunkProcessor) chunkPlan(record plog.LogRecord) (logRecordChunkPlan
 	var plan logRecordChunkPlan
 
 	body := record.Body()
-	bodyKind := valueFieldKind(body)
 	bodyBytes := valuePayloadBytes(body)
-	if body.Type() == pcommon.ValueTypeStr {
-		bodyStr := body.Str()
+	if body.Type() != pcommon.ValueTypeEmpty {
 		plan.hasBody = true
-		plan.body = bodyStr
-		plan.bodyKind = chunkedFieldString
+		plan.body = body.AsString()
 		plan.bodyBytes = bodyBytes
 		plan.originalBytes += bodyBytes
 	}
@@ -211,11 +216,8 @@ func (p *logChunkProcessor) chunkPlan(record plog.LogRecord) (logRecordChunkPlan
 		valueBytes := valuePayloadBytes(value)
 		keyBytes := len(key)
 		plan.attributes = append(plan.attributes, chunkedAttribute{
-			key:          key,
-			value:        value,
-			keyBytes:     keyBytes,
-			payloadBytes: valueBytes,
-			kind:         valueFieldKind(value),
+			key:   key,
+			value: value,
 		})
 		attributeBytes := keyBytes + valueBytes
 		plan.originalBytes += attributeBytes
@@ -226,32 +228,17 @@ func (p *logChunkProcessor) chunkPlan(record plog.LogRecord) (logRecordChunkPlan
 	var fields []chunkedField
 	if body.Type() == pcommon.ValueTypeStr {
 		if bodyBytes > 0 {
-			fields = append(fields, chunkedField{
-				body:        true,
-				stringValue: body.Str(),
-				valueBytes:  bodyBytes,
-				kind:        chunkedFieldString,
-			})
+			fields = append(fields, valueFields(true, "", body)...)
 		}
-	} else if len(plan.attributes) > 0 && body.Type() != pcommon.ValueTypeEmpty {
-		plan.hasBody = true
-		plan.body = body.AsString()
-		plan.bodyKind = bodyKind
-		plan.bodyBytes = bodyBytes
-		plan.originalBytes += bodyBytes
-		fields = append(fields, chunkedField{
-			body:       true,
-			value:      body,
-			valueBytes: bodyBytes,
-			kind:       bodyKind,
-		})
+	} else if body.Type() != pcommon.ValueTypeEmpty {
+		fields = append(fields, valueFields(true, "", body)...)
 	}
 
 	sort.Slice(plan.attributes, func(i, j int) bool {
 		return plan.attributes[i].key < plan.attributes[j].key
 	})
 	for _, attr := range plan.attributes {
-		fields = append(fields, attr.field())
+		fields = append(fields, attr.fields()...)
 	}
 
 	if plan.originalBytes <= p.cfg.MaxPayloadBytes {
@@ -262,21 +249,123 @@ func (p *logChunkProcessor) chunkPlan(record plog.LogRecord) (logRecordChunkPlan
 	return plan, len(plan.chunks) > 0
 }
 
-func (attr chunkedAttribute) field() chunkedField {
+func (attr chunkedAttribute) fields() []chunkedField {
+	return valueFields(false, attr.key, attr.value)
+}
+
+func valueFields(body bool, key string, value pcommon.Value) []chunkedField {
+	fields := make([]chunkedField, 0)
+	appendValueFields(&fields, body, key, value, value.Type(), nil)
+	return fields
+}
+
+// appendValueFields flattens maps and slices in deterministic order. Chunks
+// rebuild partial typed containers from the path retained on each leaf.
+func appendValueFields(
+	fields *[]chunkedField,
+	body bool,
+	key string,
+	value pcommon.Value,
+	rootType pcommon.ValueType,
+	path []valuePathElement,
+) {
+	switch value.Type() {
+	case pcommon.ValueTypeMap:
+		valueMap := value.Map()
+		if valueMap.Len() > 0 {
+			keys := make([]string, 0, valueMap.Len())
+			valueMap.Range(func(childKey string, _ pcommon.Value) bool {
+				keys = append(keys, childKey)
+				return true
+			})
+			sort.Strings(keys)
+			for _, childKey := range keys {
+				child, _ := valueMap.Get(childKey)
+				childPath := appendPathElement(path, valuePathElement{key: childKey})
+				appendValueFields(fields, body, key, child, rootType, childPath)
+			}
+			return
+		}
+	case pcommon.ValueTypeSlice:
+		valueSlice := value.Slice()
+		if valueSlice.Len() > 0 {
+			for i := 0; i < valueSlice.Len(); i++ {
+				childPath := appendPathElement(path, valuePathElement{index: i, isIndex: true})
+				appendValueFields(fields, body, key, valueSlice.At(i), rootType, childPath)
+			}
+			return
+		}
+	}
+
 	field := chunkedField{
-		key:        attr.key,
-		keyBytes:   attr.keyBytes,
-		value:      attr.value,
-		valueBytes: attr.payloadBytes,
-		kind:       attr.kind,
+		body:       body,
+		key:        key,
+		keyBytes:   pathPayloadBytes(body, key, path),
+		value:      value,
+		valueBytes: valuePayloadBytes(value),
+		kind:       valueFieldKind(value),
+		structured: rootType == pcommon.ValueTypeMap || rootType == pcommon.ValueTypeSlice,
+		rootType:   rootType,
+		path:       append([]valuePathElement(nil), path...),
 	}
-	switch attr.kind {
+	if field.structured {
+		field.structuredID = structuredPath(body, key, path)
+	}
+	switch field.kind {
 	case chunkedFieldString:
-		field.stringValue = attr.value.Str()
+		field.stringValue = value.Str()
 	case chunkedFieldBytes:
-		field.bytesValue = attr.value.Bytes().AsRaw()
+		field.bytesValue = value.Bytes().AsRaw()
 	}
-	return field
+	*fields = append(*fields, field)
+}
+
+func appendPathElement(path []valuePathElement, element valuePathElement) []valuePathElement {
+	out := make([]valuePathElement, len(path)+1)
+	copy(out, path)
+	out[len(path)] = element
+	return out
+}
+
+func pathPayloadBytes(body bool, key string, path []valuePathElement) int {
+	total := 0
+	if !body {
+		total = len(key)
+	}
+	for _, element := range path {
+		if element.isIndex {
+			total += len(strconv.Itoa(element.index))
+			continue
+		}
+		total += len(element.key)
+	}
+	return total
+}
+
+func structuredPath(body bool, key string, path []valuePathElement) string {
+	var builder strings.Builder
+	if body {
+		builder.WriteString("/body")
+	} else {
+		builder.WriteString("/attributes/")
+		builder.WriteString(escapePathToken(key))
+	}
+	for _, element := range path {
+		builder.WriteByte('/')
+		if element.isIndex {
+			builder.WriteString(strconv.Itoa(element.index))
+			continue
+		}
+		builder.WriteString(escapePathToken(element.key))
+	}
+	return builder.String()
+}
+
+// escapePathToken applies JSON Pointer escaping so consumers can parse
+// structured_paths without ambiguity.
+func escapePathToken(token string) string {
+	token = strings.ReplaceAll(token, "~", "~0")
+	return strings.ReplaceAll(token, "/", "~1")
 }
 
 func (p *logChunkProcessor) processLogRecords(ctx context.Context, src plog.LogRecordSlice, dst plog.LogRecordSlice) {
@@ -325,13 +414,18 @@ func (p *logChunkProcessor) chunkRecord(ctx context.Context, record plog.LogReco
 		for key, value := range chunk.valueAttr {
 			value.CopyTo(attrs.PutEmpty(key))
 		}
-		p.setChunkAttributes(attrs, chunkID, i, len(plan.chunks), chunk.offset, plan.originalBytes)
+		p.setChunkAttributes(attrs, chunkID, i, len(plan.chunks), chunk.offset, plan.originalBytes, chunk.structuredPaths)
 	}
 
 	p.metrics.recordChunks(ctx, p.cfg.mode(), int64(len(plan.chunks)), int64(plan.originalBytes))
 }
 
-func (p *logChunkProcessor) setChunkAttributes(attrs pcommon.Map, chunkID string, index, count, offset, originalBytes int) {
+func (p *logChunkProcessor) setChunkAttributes(
+	attrs pcommon.Map,
+	chunkID string,
+	index, count, offset, originalBytes int,
+	structuredPaths []string,
+) {
 	prefix := p.cfg.MetadataPrefix
 	attrs.PutStr(prefix+".id", chunkID)
 	attrs.PutInt(prefix+".index", int64(index))
@@ -339,6 +433,12 @@ func (p *logChunkProcessor) setChunkAttributes(attrs pcommon.Map, chunkID string
 	attrs.PutInt(prefix+".offset_bytes", int64(offset))
 	attrs.PutInt(prefix+".original_size_bytes", int64(originalBytes))
 	attrs.PutBool(prefix+".final", index == count-1)
+	if len(structuredPaths) > 0 {
+		paths := attrs.PutEmptySlice(prefix + ".structured_paths")
+		for _, path := range structuredPaths {
+			paths.AppendEmpty().SetStr(path)
+		}
+	}
 }
 
 func (plan logRecordChunkPlan) chunkIDSource() string {
@@ -352,9 +452,40 @@ func (plan logRecordChunkPlan) chunkIDSource() string {
 		builder.WriteByte('\n')
 		builder.WriteString(attr.key)
 		builder.WriteByte('=')
-		builder.WriteString(attr.value.AsString())
+		appendValueFingerprint(&builder, attr.value)
 	}
 	return builder.String()
+}
+
+func appendValueFingerprint(builder *strings.Builder, value pcommon.Value) {
+	builder.WriteString(strconv.Itoa(int(value.Type())))
+	builder.WriteByte(':')
+	switch value.Type() {
+	case pcommon.ValueTypeMap:
+		valueMap := value.Map()
+		keys := make([]string, 0, valueMap.Len())
+		valueMap.Range(func(key string, _ pcommon.Value) bool {
+			keys = append(keys, key)
+			return true
+		})
+		sort.Strings(keys)
+		for _, key := range keys {
+			child, _ := valueMap.Get(key)
+			builder.WriteString(strconv.Itoa(len(key)))
+			builder.WriteByte(':')
+			builder.WriteString(key)
+			appendValueFingerprint(builder, child)
+		}
+	case pcommon.ValueTypeSlice:
+		valueSlice := value.Slice()
+		for i := 0; i < valueSlice.Len(); i++ {
+			appendValueFingerprint(builder, valueSlice.At(i))
+		}
+	case pcommon.ValueTypeBytes:
+		builder.Write(value.Bytes().AsRaw())
+	default:
+		builder.WriteString(value.AsString())
+	}
 }
 
 func chunkFields(fields []chunkedField, limit int) []logRecordChunk {
@@ -408,7 +539,7 @@ func chunkFields(fields []chunkedField, limit int) []logRecordChunk {
 			value := field.bytesValue
 			for len(value) > 0 {
 				partBudget := remaining - field.keyBytes
-				if field.body {
+				if field.body && !field.structured {
 					partBudget = remaining
 				}
 				if partBudget <= 0 && current.hasFields {
@@ -443,7 +574,7 @@ func chunkFields(fields []chunkedField, limit int) []logRecordChunk {
 			}
 
 			partBudget := remaining - field.keyBytes
-			if field.body {
+			if field.body && !field.structured {
 				partBudget = remaining
 			}
 			if partBudget <= 0 && current.hasFields {
@@ -510,7 +641,9 @@ func (chunk *logRecordChunk) addEmpty(field chunkedField) {
 }
 
 func (chunk *logRecordChunk) addString(field chunkedField, part string) {
-	if field.body {
+	if field.structured {
+		chunk.addStructuredValue(field, pcommon.NewValueStr(part))
+	} else if field.body {
 		chunk.body += part
 	} else {
 		chunk.stringAttr[field.key] += part
@@ -520,6 +653,14 @@ func (chunk *logRecordChunk) addString(field chunkedField, part string) {
 }
 
 func (chunk *logRecordChunk) addBytes(field chunkedField, part []byte) {
+	if field.structured {
+		value := pcommon.NewValueBytes()
+		value.Bytes().FromRaw(part)
+		chunk.addStructuredValue(field, value)
+		chunk.bytes += field.keyBytes + len(part)
+		chunk.hasFields = true
+		return
+	}
 	if field.body {
 		chunk.bodyValue = pcommon.NewValueBytes()
 		chunk.bodyValue.Bytes().FromRaw(part)
@@ -534,6 +675,12 @@ func (chunk *logRecordChunk) addBytes(field chunkedField, part []byte) {
 }
 
 func (chunk *logRecordChunk) addValue(field chunkedField) {
+	if field.structured {
+		chunk.addStructuredValue(field, field.value)
+		chunk.bytes += field.fullBytes()
+		chunk.hasFields = true
+		return
+	}
 	if field.body {
 		chunk.bodyValue = field.value
 		chunk.hasBodyValue = true
@@ -544,6 +691,69 @@ func (chunk *logRecordChunk) addValue(field chunkedField) {
 	chunk.valueAttr[field.key] = field.value
 	chunk.bytes += field.fullBytes()
 	chunk.hasFields = true
+}
+
+func (chunk *logRecordChunk) addStructuredValue(field chunkedField, value pcommon.Value) {
+	var root pcommon.Value
+	if field.body {
+		if !chunk.hasBodyValue {
+			chunk.bodyValue = newStructuredRoot(field.rootType)
+			chunk.hasBodyValue = true
+		}
+		root = chunk.bodyValue
+	} else {
+		var ok bool
+		root, ok = chunk.valueAttr[field.key]
+		if !ok {
+			root = newStructuredRoot(field.rootType)
+			chunk.valueAttr[field.key] = root
+		}
+	}
+	copyValueAtPath(root, field.path, value)
+	for _, path := range chunk.structuredPaths {
+		if path == field.structuredID {
+			return
+		}
+	}
+	chunk.structuredPaths = append(chunk.structuredPaths, field.structuredID)
+}
+
+func newStructuredRoot(rootType pcommon.ValueType) pcommon.Value {
+	if rootType == pcommon.ValueTypeSlice {
+		return pcommon.NewValueSlice()
+	}
+	return pcommon.NewValueMap()
+}
+
+func copyValueAtPath(destination pcommon.Value, path []valuePathElement, value pcommon.Value) {
+	if len(path) == 0 {
+		value.CopyTo(destination)
+		return
+	}
+
+	element := path[0]
+	var child pcommon.Value
+	if element.isIndex {
+		if destination.Type() != pcommon.ValueTypeSlice {
+			destination.SetEmptySlice()
+		}
+		valueSlice := destination.Slice()
+		for valueSlice.Len() <= element.index {
+			valueSlice.AppendEmpty()
+		}
+		child = valueSlice.At(element.index)
+	} else {
+		if destination.Type() != pcommon.ValueTypeMap {
+			destination.SetEmptyMap()
+		}
+		valueMap := destination.Map()
+		var ok bool
+		child, ok = valueMap.Get(element.key)
+		if !ok {
+			child = valueMap.PutEmpty(element.key)
+		}
+	}
+	copyValueAtPath(child, path[1:], value)
 }
 
 func (field chunkedField) fullBytes() int {
@@ -561,13 +771,28 @@ func valueFieldKind(value pcommon.Value) chunkedFieldKind {
 }
 
 func valuePayloadBytes(value pcommon.Value) int {
-	if value.Type() == pcommon.ValueTypeStr {
+	switch value.Type() {
+	case pcommon.ValueTypeStr:
 		return len(value.Str())
-	}
-	if value.Type() == pcommon.ValueTypeBytes {
+	case pcommon.ValueTypeBytes:
 		return len(value.Bytes().AsRaw())
+	case pcommon.ValueTypeMap:
+		total := 0
+		value.Map().Range(func(key string, child pcommon.Value) bool {
+			total += len(key) + valuePayloadBytes(child)
+			return true
+		})
+		return total
+	case pcommon.ValueTypeSlice:
+		total := 0
+		valueSlice := value.Slice()
+		for i := 0; i < valueSlice.Len(); i++ {
+			total += valuePayloadBytes(valueSlice.At(i))
+		}
+		return total
+	default:
+		return len(value.AsString())
 	}
-	return len(value.AsString())
 }
 
 func splitBytesPrefix(bytes []byte, limit int) ([]byte, []byte) {

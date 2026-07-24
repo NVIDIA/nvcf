@@ -341,8 +341,8 @@ func TestChunksBytesAttributesWithoutChangingType(t *testing.T) {
 	require.Equal(t, []byte{1, 2, 3, 4, 5, 6}, concatenateBytesAttribute(records, "bin"))
 }
 
-func TestChunksStructuredAttributesOnceWithoutChangingType(t *testing.T) {
-	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 10, MetadataPrefix: defaultMetadataPrefix})
+func TestChunksStructuredAttributesRecursivelyWithoutChangingType(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 6, MetadataPrefix: defaultMetadataPrefix})
 	input := makeLogs(pcommon.NewValueStr("abcd"))
 	attrs := firstRecord(input).Attributes()
 	nested := attrs.PutEmptyMap("m")
@@ -350,38 +350,33 @@ func TestChunksStructuredAttributesOnceWithoutChangingType(t *testing.T) {
 	list := attrs.PutEmptySlice("s")
 	list.AppendEmpty().SetStr("a")
 	list.AppendEmpty().SetStr("b")
+	originalMap, _ := attrs.Get("m")
+	originalSlice, _ := attrs.Get("s")
 
 	output, err := processor.processLogs(context.Background(), input)
 
 	require.NoError(t, err)
 	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
 	require.Equal(t, 3, records.Len())
-	require.Equal(t, "abcd", records.At(0).Body().Str())
-	requireAttributeAbsent(t, records.At(0).Attributes(), "m")
-	requireAttributeAbsent(t, records.At(0).Attributes(), "s")
+	for i := 0; i < records.Len(); i++ {
+		require.LessOrEqual(t, payloadBytes(records.At(i), defaultMetadataPrefix), 6)
+	}
 
-	mapValue, ok := records.At(1).Attributes().Get("m")
-	require.True(t, ok)
-	require.Equal(t, pcommon.ValueTypeMap, mapValue.Type())
-	nestedValue, ok := mapValue.Map().Get("x")
-	require.True(t, ok)
-	require.Equal(t, "y", nestedValue.Str())
-	requireAttributeAbsent(t, records.At(1).Attributes(), "s")
-	require.LessOrEqual(t, payloadBytes(records.At(1), defaultMetadataPrefix), 10)
-
-	sliceValue, ok := records.At(2).Attributes().Get("s")
-	require.True(t, ok)
-	require.Equal(t, pcommon.ValueTypeSlice, sliceValue.Type())
-	require.Equal(t, "a", sliceValue.Slice().At(0).Str())
-	require.Equal(t, "b", sliceValue.Slice().At(1).Str())
-	requireAttributeAbsent(t, records.At(2).Attributes(), "m")
-	require.LessOrEqual(t, payloadBytes(records.At(2), defaultMetadataPrefix), 10)
+	mergedMap := mergeStructuredAttribute(t, records, "m")
+	require.Equal(t, pcommon.ValueTypeMap, mergedMap.Type())
+	require.Equal(t, originalMap.AsRaw(), mergedMap.AsRaw())
+	mergedSlice := mergeStructuredAttribute(t, records, "s")
+	require.Equal(t, pcommon.ValueTypeSlice, mergedSlice.Type())
+	require.Equal(t, originalSlice.AsRaw(), mergedSlice.AsRaw())
+	requireStructuredPath(t, records, "/attributes/m/x")
+	requireStructuredPath(t, records, "/attributes/s/0")
+	requireStructuredPath(t, records, "/attributes/s/1")
 }
 
-func TestChunksNonStringBodyOnceWhenAttributesForceChunking(t *testing.T) {
+func TestChunksStructuredBodyWhenAttributesForceChunking(t *testing.T) {
 	body := pcommon.NewValueMap()
 	body.Map().PutStr("x", "y")
-	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 10, MetadataPrefix: defaultMetadataPrefix})
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 5, MetadataPrefix: defaultMetadataPrefix})
 	input := makeLogs(body)
 	firstRecord(input).Attributes().PutStr("a", "12345")
 
@@ -390,17 +385,94 @@ func TestChunksNonStringBodyOnceWhenAttributesForceChunking(t *testing.T) {
 	require.NoError(t, err)
 	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
 	require.Equal(t, 2, records.Len())
-	require.Equal(t, pcommon.ValueTypeMap, records.At(0).Body().Type())
-	bodyValue, ok := records.At(0).Body().Map().Get("x")
-	require.True(t, ok)
-	require.Equal(t, "y", bodyValue.Str())
-	requireAttributeAbsent(t, records.At(0).Attributes(), "a")
-	require.LessOrEqual(t, payloadBytes(records.At(0), defaultMetadataPrefix), 10)
+	for i := 0; i < records.Len(); i++ {
+		require.LessOrEqual(t, payloadBytes(records.At(i), defaultMetadataPrefix), 5)
+	}
+	mergedBody := mergeStructuredBody(records)
+	require.Equal(t, body.AsRaw(), mergedBody.AsRaw())
+	require.Equal(t, "12345", concatenateStringAttribute(records, "a"))
+	requireStructuredPath(t, records, "/body/x")
+}
 
-	require.Equal(t, pcommon.ValueTypeStr, records.At(1).Body().Type())
-	require.Empty(t, records.At(1).Body().Str())
-	requireAttributeStr(t, records.At(1).Attributes(), "a", "12345")
-	require.LessOrEqual(t, payloadBytes(records.At(1), defaultMetadataPrefix), 10)
+func TestChunksGiantSinglePayloadMapRepresentativeOfOTLPLogs(t *testing.T) {
+	const limit = 256 * 1024
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: limit, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("openai.request"))
+	payload := firstRecord(input).Attributes().PutEmptyMap("payload")
+	payload.PutStr("model", "meta/llama-3.1-405b-instruct")
+	payload.PutInt("max_tokens", 4096)
+	payload.PutBool("stream", true)
+	messages := payload.PutEmptySlice("messages")
+	systemMessage := messages.AppendEmpty().SetEmptyMap()
+	systemMessage.PutStr("role", "system")
+	systemMessage.PutStr("content", "You are a helpful assistant.")
+	userMessage := messages.AppendEmpty().SetEmptyMap()
+	userMessage.PutStr("role", "user")
+	userMessage.PutStr("content", strings.Repeat("representative prompt content 🙂 ", 50_000))
+	originalPayload, _ := firstRecord(input).Attributes().Get("payload")
+	require.Greater(t, valuePayloadBytes(originalPayload), 1024*1024)
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Greater(t, records.Len(), 4)
+	for i := 0; i < records.Len(); i++ {
+		record := records.At(i)
+		require.LessOrEqual(t, payloadBytes(record, defaultMetadataPrefix), limit)
+		value, ok := record.Attributes().Get("payload")
+		if ok {
+			require.Equal(t, pcommon.ValueTypeMap, value.Type())
+			requireNestedContentUTF8(t, value)
+		}
+	}
+
+	mergedPayload := mergeStructuredAttribute(t, records, "payload")
+	require.Equal(t, originalPayload.AsRaw(), mergedPayload.AsRaw())
+	require.Greater(t, countStructuredPath(records, "/attributes/payload/messages/1/content"), 1)
+}
+
+func TestChunksOversizedNestedBytesAndEscapedMapKeys(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 32, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("x"))
+	payload := firstRecord(input).Attributes().PutEmptyMap("pay/load")
+	nested := payload.PutEmptyMap("a~b")
+	nested.PutEmptyBytes("attachment").FromRaw([]byte(strings.Repeat("0123456789", 10)))
+	originalPayload, _ := firstRecord(input).Attributes().Get("pay/load")
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Greater(t, records.Len(), 1)
+	for i := 0; i < records.Len(); i++ {
+		require.LessOrEqual(t, payloadBytes(records.At(i), defaultMetadataPrefix), 32)
+	}
+	mergedPayload := mergeStructuredAttribute(t, records, "pay/load")
+	require.Equal(t, originalPayload.AsRaw(), mergedPayload.AsRaw())
+	require.Greater(t, countStructuredPath(records, "/attributes/pay~1load/a~0b/attachment"), 1)
+}
+
+func TestChunksEmptyStructuredValuesWithoutLosingType(t *testing.T) {
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 5, MetadataPrefix: defaultMetadataPrefix})
+	input := makeLogs(pcommon.NewValueStr("abcdef"))
+	attrs := firstRecord(input).Attributes()
+	attrs.PutEmptyMap("m")
+	attrs.PutEmptySlice("s")
+
+	output, err := processor.processLogs(context.Background(), input)
+
+	require.NoError(t, err)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 2, records.Len())
+	emptyMap := mergeStructuredAttribute(t, records, "m")
+	require.Equal(t, pcommon.ValueTypeMap, emptyMap.Type())
+	require.Empty(t, emptyMap.Map().AsRaw())
+	emptySlice := mergeStructuredAttribute(t, records, "s")
+	require.Equal(t, pcommon.ValueTypeSlice, emptySlice.Type())
+	require.Empty(t, emptySlice.Slice().AsRaw())
+	requireStructuredPath(t, records, "/attributes/m")
+	requireStructuredPath(t, records, "/attributes/s")
 }
 
 func TestChunksEmptyAttributesOnce(t *testing.T) {
@@ -484,23 +556,23 @@ func TestChunksFitFourByteUTF8RunesWithinLimit(t *testing.T) {
 	}
 }
 
-func TestNonStringBodyIsUnchanged(t *testing.T) {
+func TestChunksOversizedStructuredBody(t *testing.T) {
 	body := pcommon.NewValueMap()
 	body.Map().PutStr("message", "abcdef")
-	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 4, MetadataPrefix: defaultMetadataPrefix})
+	processor := newTestProcessor(t, &Config{MaxPayloadBytes: 10, MetadataPrefix: defaultMetadataPrefix})
 	input := makeLogs(body)
 
 	output, err := processor.processLogs(context.Background(), input)
 
 	require.NoError(t, err)
-	require.Equal(t, 1, output.LogRecordCount())
-	record := firstRecord(output)
-	require.Equal(t, pcommon.ValueTypeMap, record.Body().Type())
-	value, ok := record.Body().Map().Get("message")
-	require.True(t, ok)
-	require.Equal(t, "abcdef", value.Str())
-	_, ok = record.Attributes().Get(defaultMetadataPrefix + ".id")
-	require.False(t, ok)
+	records := output.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	require.Equal(t, 2, records.Len())
+	for i := 0; i < records.Len(); i++ {
+		require.LessOrEqual(t, payloadBytes(records.At(i), defaultMetadataPrefix), 10)
+	}
+	mergedBody := mergeStructuredBody(records)
+	require.Equal(t, body.AsRaw(), mergedBody.AsRaw())
+	requireStructuredPath(t, records, "/body/message")
 }
 
 func requireAttributeStr(t *testing.T, attrs pcommon.Map, key string, want string) {
@@ -557,9 +629,9 @@ func requireSharesFirstRecord(t *testing.T, input plog.Logs, output plog.Logs) {
 }
 
 func payloadBytes(record plog.LogRecord, metadataPrefix string) int {
-	total := 0
-	if record.Body().Type() == pcommon.ValueTypeStr {
-		total += len(record.Body().Str())
+	total := valuePayloadBytes(record.Body())
+	if record.Body().Type() == pcommon.ValueTypeEmpty {
+		total = 0
 	}
 	record.Attributes().Range(func(key string, value pcommon.Value) bool {
 		if strings.HasPrefix(key, metadataPrefix+".") {
@@ -569,6 +641,122 @@ func payloadBytes(record plog.LogRecord, metadataPrefix string) int {
 		return true
 	})
 	return total
+}
+
+func mergeStructuredAttribute(t *testing.T, records plog.LogRecordSlice, key string) pcommon.Value {
+	t.Helper()
+	merged := pcommon.NewValueEmpty()
+	found := false
+	for i := 0; i < records.Len(); i++ {
+		value, ok := records.At(i).Attributes().Get(key)
+		if !ok {
+			continue
+		}
+		found = true
+		mergePartialValue(merged, value)
+	}
+	require.True(t, found, "missing structured attribute %s", key)
+	return merged
+}
+
+func mergeStructuredBody(records plog.LogRecordSlice) pcommon.Value {
+	merged := pcommon.NewValueEmpty()
+	for i := 0; i < records.Len(); i++ {
+		body := records.At(i).Body()
+		if body.Type() != pcommon.ValueTypeMap && body.Type() != pcommon.ValueTypeSlice {
+			continue
+		}
+		mergePartialValue(merged, body)
+	}
+	return merged
+}
+
+func mergePartialValue(destination pcommon.Value, fragment pcommon.Value) {
+	switch fragment.Type() {
+	case pcommon.ValueTypeEmpty:
+		return
+	case pcommon.ValueTypeMap:
+		if destination.Type() != pcommon.ValueTypeMap {
+			destination.SetEmptyMap()
+		}
+		fragment.Map().Range(func(key string, child pcommon.Value) bool {
+			target, ok := destination.Map().Get(key)
+			if !ok {
+				target = destination.Map().PutEmpty(key)
+			}
+			mergePartialValue(target, child)
+			return true
+		})
+	case pcommon.ValueTypeSlice:
+		if destination.Type() != pcommon.ValueTypeSlice {
+			destination.SetEmptySlice()
+		}
+		target := destination.Slice()
+		source := fragment.Slice()
+		for target.Len() < source.Len() {
+			target.AppendEmpty()
+		}
+		for i := 0; i < source.Len(); i++ {
+			mergePartialValue(target.At(i), source.At(i))
+		}
+	case pcommon.ValueTypeStr:
+		if destination.Type() == pcommon.ValueTypeStr {
+			destination.SetStr(destination.Str() + fragment.Str())
+			return
+		}
+		fragment.CopyTo(destination)
+	case pcommon.ValueTypeBytes:
+		if destination.Type() == pcommon.ValueTypeBytes {
+			combined := append([]byte(nil), destination.Bytes().AsRaw()...)
+			combined = append(combined, fragment.Bytes().AsRaw()...)
+			destination.SetEmptyBytes().FromRaw(combined)
+			return
+		}
+		fragment.CopyTo(destination)
+	default:
+		fragment.CopyTo(destination)
+	}
+}
+
+func requireStructuredPath(t *testing.T, records plog.LogRecordSlice, want string) {
+	t.Helper()
+	require.Greater(t, countStructuredPath(records, want), 0, "missing structured path %q", want)
+}
+
+func countStructuredPath(records plog.LogRecordSlice, want string) int {
+	key := defaultMetadataPrefix + ".structured_paths"
+	count := 0
+	for i := 0; i < records.Len(); i++ {
+		value, ok := records.At(i).Attributes().Get(key)
+		if !ok {
+			continue
+		}
+		paths := value.Slice()
+		for j := 0; j < paths.Len(); j++ {
+			if paths.At(j).Str() == want {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func requireNestedContentUTF8(t *testing.T, payload pcommon.Value) {
+	t.Helper()
+	messages, ok := payload.Map().Get("messages")
+	if !ok || messages.Type() != pcommon.ValueTypeSlice || messages.Slice().Len() < 2 {
+		return
+	}
+	message := messages.Slice().At(1)
+	if message.Type() != pcommon.ValueTypeMap {
+		return
+	}
+	content, ok := message.Map().Get("content")
+	if !ok {
+		return
+	}
+	require.Equal(t, pcommon.ValueTypeStr, content.Type())
+	require.True(t, utf8.ValidString(content.Str()))
 }
 
 func concatenateBodies(records plog.LogRecordSlice) string {

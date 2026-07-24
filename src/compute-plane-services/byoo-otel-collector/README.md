@@ -122,7 +122,7 @@ The configuration produced by otelconfig-generator guarantees that only `otlp` t
 
 ### 🧩 Oversized Log Chunking
 
-Some telemetry backends reject a single log entry when its body and attributes are larger than the backend's per-entry size limit. The BYOO collector can insert a custom `logchunk/byoo` processor into the logs pipeline to split oversized UTF-8 string log bodies plus string/bytes attributes into correlated chunks before export. Non-string attribute values are counted toward the payload limit and emitted once without changing their type.
+Some telemetry backends reject a single log entry when its body and attributes are larger than the backend's per-entry size limit. The BYOO collector can insert a custom `logchunk/byoo` processor into the logs pipeline to split oversized log bodies and attributes into correlated chunks before export. Maps and slices are traversed recursively, their string and byte leaves can be split, and each emitted fragment keeps the original partial map or slice type. Scalar values remain atomic.
 
 Chunking is disabled by default. Configure it with:
 
@@ -144,6 +144,9 @@ When chunking is enabled, each emitted chunk preserves the original log metadata
 - `log.chunk.offset_bytes`
 - `log.chunk.original_size_bytes`
 - `log.chunk.final`
+- `log.chunk.structured_paths` when a chunk contains map or slice fragments
+
+`log.chunk.structured_paths` contains escaped JSON Pointer paths such as `/attributes/payload/messages/0/content`. Consumers can merge partial maps and slices by path in chunk-index order, concatenating repeated string or byte leaves.
 
 The processor emits `otelcol_processor_logchunk_*` metrics for oversized records, original bytes, emitted chunks, output bytes, and errors. The metric `mode` attribute distinguishes active chunking (`mode=chunk`) from dry run (`mode=dry_run`).
 
