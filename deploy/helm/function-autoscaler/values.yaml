@@ -51,6 +51,13 @@ functionautoscaler:
     role: nvcf-autoscaler-service
     authPath: auth/jwt
 
+    # Enable only for deployments that provision the OpenBao JWT signing path.
+    # When disabled, the app falls back to OAuth2 credentials or auth-disabled
+    # mode without the Vault Agent dereferencing this optional secret.
+    staticNvcfApiToken:
+      enabled: false
+      path: services/nvcf-api/jwt/sign/nvcf-autoscaler-service
+
   podAnnotations: {}
   podLabels: {}
   podSecurityContext: {}

@@ -14,6 +14,14 @@
 # limitations under the License.
 
 {{ if .Values.functionautoscaler.vault.enabled }}
+{{- $open := "{{" -}}
+{{- $close := "}}" -}}
+{{- $staticTokenMarker := printf "%s/* NVCF_API_TOKEN_BLOCK */%s" $open $close -}}
+{{- $staticTokenBlock := "" -}}
+{{- if .Values.functionautoscaler.vault.staticNvcfApiToken.enabled -}}
+{{- $staticTokenPath := required "A valid static NVCF API token path (.Values.functionautoscaler.vault.staticNvcfApiToken.path) is required when staticNvcfApiToken.enabled=true!" .Values.functionautoscaler.vault.staticNvcfApiToken.path -}}
+{{- $staticTokenBlock = printf "%s- with secret %q %s\n  \"nvcfApiToken\": \"%s .Data.token %s\",\n  %s- end %s" $open $staticTokenPath $close $open $close $open $close -}}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -23,5 +31,5 @@ metadata:
     {{- include "function-autoscaler.labels" . | nindent 4 }}
 data:
   secrets.json.tmpl: |-
-{{ .Files.Get "vault-agent-templates/secrets.json.tmpl" | indent 4 }}
+{{ replace $staticTokenMarker $staticTokenBlock (.Files.Get "vault-agent-templates/secrets.json.tmpl") | indent 4 }}
 {{- end }}
