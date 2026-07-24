@@ -22,6 +22,7 @@ common --enable_bzlmod
 build --incompatible_strict_action_env
 common --enable_platform_specific_config
 common --incompatible_enable_proto_toolchain_resolution
+common --@com_google_protobuf//bazel/toolchains:allow_nonstandard_protoc
 
 test --test_output=errors
 test --test_env=HOME=/tmp

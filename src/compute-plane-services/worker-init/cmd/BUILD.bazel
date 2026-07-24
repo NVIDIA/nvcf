@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//rules/oci:defs.bzl", "go_oci_image")
 
 go_library(
@@ -46,6 +46,15 @@ go_oci_image(
     name = "image",
     base = "@distroless_go",
     binary = ":worker-init",
+    # SetupEssAgent reads these files when a function uses secrets.
+    extra_layers = ["//pkg/ess:ess_config_layer"],
     tags = ["nvcf-worker-init"],
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "image_ess_config_test",
+    srcs = ["image_ess_config_test.go"],
+    args = ["-image_tar=$(location :image.tar)"],
+    data = [":image.tar"],
 )
