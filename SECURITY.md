@@ -81,10 +81,11 @@ expected impact and exposure.
 
 1. Authorization and tenant-routing confusion
 
-   The HTTP invocation service protects `/v2/nvcf/exec`,
-   `/v2/nvcf/pexec`, transparent load-balancer routes, and worker attach routes
-   in
+   The HTTP invocation service protects legacy invocation routes retained only
+   for backward compatibility, transparent load-balancer routes, and worker
+   attach routes in
    `src/invocation-plane-services/http-invocation/crates/server/src/app.rs`.
+   The legacy routes are deprecated and must not be used for new integrations.
    It delegates function authorization through
    `nvcf_api/mod.rs`. The gRPC proxy independently uses bearer tokens,
    `function-id`, function-version metadata, request IDs, and connection state
