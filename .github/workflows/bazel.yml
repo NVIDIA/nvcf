@@ -713,9 +713,22 @@ jobs:
             https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64
           sudo chmod +x /usr/local/bin/bazel
           bazel version
+      # This lane runs on a bare runner with no bazel-ci prewarm and cannot
+      # reach the internal Buildbarn cache, so builds are otherwise fully cold
+      # (cloud-tasks / nv-boot-parent recompile the whole graph every run). Give
+      # it a persisted --disk_cache so compiled action outputs are restored
+      # across runs. Keyed per-subtree, seeded from the newest prior cache.
+      - name: Cache Bazel disk cache (docker lane)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bazel-disk
+          key: bazel-docker-disk-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}-${{ github.sha }}
+          restore-keys: |
+            bazel-docker-disk-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}-
+            bazel-docker-disk-${{ matrix.subtree.id }}-
       - name: bazel build (${{ matrix.subtree.id }})
         working-directory: ${{ matrix.subtree.workdir }}
-        run: bazel build ${{ matrix.subtree.scope }}
+        run: bazel build --remote_cache= --disk_cache="$RUNNER_TEMP/bazel-disk" ${{ matrix.subtree.scope }}
       - name: bazel test (${{ matrix.subtree.id }})
         working-directory: ${{ matrix.subtree.workdir }}
         # Full suite, NO tag filter: runs the subtree's unit AND requires-docker
@@ -724,7 +737,7 @@ jobs:
         # bazel exit 4 (no test targets in scope) is treated as success.
         run: |
           set +e
-          bazel test ${{ matrix.subtree.scope }} \
+          bazel test --remote_cache= --disk_cache="$RUNNER_TEMP/bazel-disk" ${{ matrix.subtree.scope }} \
             --test_output=errors \
             --flaky_test_attempts=2
           rc=$?
