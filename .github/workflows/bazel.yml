@@ -4,11 +4,12 @@
 # Bazel build + test on the public NVIDIA/nvcf mirror.
 #
 # The detect job computes dependency-aware subtree selection, including shared
-# Java triggers and framework-to-service reverse dependencies. Current policy
-# deliberately forces the full matrix on every PR and push for regression
-# safety; the change-aware result remains implemented and locally validated so
-# that policy can be restored later by removing the documented run_all=true
-# override. workflow_dispatch and unsafe/unknown diffs also use the full matrix.
+# Java triggers and framework-to-service reverse dependencies. A change is
+# scheduled only for the subtrees it touches: each subtree is an isolated Bazel
+# module, so a change under one service cannot break another. workflow_dispatch,
+# a change to this workflow, and unsafe/unknown diffs (unreadable or rewritten
+# history, a new branch) fall back to the full matrix so an untrustworthy
+# changeset is never under-tested.
 #
 # Matrix entries reference subtrees that have their Bazel scaffold
 # mirrored to GitHub (each subtree's upstream .oss-allowlist controls
@@ -170,13 +171,17 @@ jobs:
               fi
               ;;
           esac
-          # Policy: run the full test matrix on every PR and push so no subtree's
-          # tests are skipped because an unrelated path changed (regression safety
-          # over queue latency; the remote cache keeps unaffected targets to cache
-          # hits). The change-aware detection above and the reverse-dependency
-          # edges below are retained but inert while this is set; delete the next
-          # line to restore change-aware scheduling.
-          run_all=true
+          # Change-aware scheduling. Each subtree is an isolated Bazel module, so
+          # a change under src/<service> only affects that service's own //...
+          # build+test and can never break another module. Select only the
+          # subtrees a change actually touches (path prefix), plus the
+          # reverse-dependency edges below (shared Java config -> every Java row;
+          # a Java framework -> every Java service) and ROOT_GLOBS -> root row. A
+          # docs-only or helm-only change touches no subtree and runs nothing.
+          # The full-matrix fallbacks stay in the case above (workflow_dispatch,
+          # an unreadable or rewritten diff, a new branch) so an untrustworthy
+          # changeset is never under-tested.
+          #
           # A change to this workflow itself revalidates everything.
           if printf '%s\n' "$changed" | grep -q '^\.github/workflows/bazel\.yml$'; then
             run_all=true
@@ -197,9 +202,8 @@ jobs:
 
           # Root-owned Java dependencies and reusable Java rules/tools affect
           # every root-scoped Java component even though the changed path is
-          # outside that component's subtree. Keep these explicit edges correct
-          # while run_all=true; they become active automatically if change-aware
-          # scheduling is restored.
+          # outside that component's subtree, so a change to any of them schedules
+          # every Java row (edge applied below).
           JAVA_SHARED_GLOBS=(
             MODULE.bazel
             MODULE.bazel.lock
