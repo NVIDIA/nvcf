@@ -157,6 +157,16 @@ impl SecretFileWatcher {
         let guard = self.config.read().unwrap();
         guard.kv.clone()
     }
+
+    pub fn get_nvcf_api_token(&self) -> Option<String> {
+        let guard = self.config.read().unwrap();
+        guard
+            .nvcf_api_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(str::to_owned)
+    }
 }
 
 #[cfg(test)]
@@ -232,6 +242,29 @@ mod tests {
         let secrets_file_watcher = SecretFileWatcher::new(&test_file.path).await.unwrap();
         let config = secrets_file_watcher.get_config();
         assert_eq!(config.cassandra.as_ref().unwrap().username, "test_username");
+        test_file.cleanup();
+    }
+
+    #[tokio::test]
+    async fn test_secrets_file_watcher_reads_nvcf_api_token() {
+        let test_file = TestSecretFile::new();
+        let creds_with_token = r#"{
+            "nvcfApiToken": "  bearer-token  ",
+            "kv": {
+                "cassandra": {
+                    "username": "test_username",
+                    "password": "test_password"
+                }
+            }
+        }"#;
+        std::fs::create_dir_all(test_file.path.parent().unwrap()).unwrap();
+        fs::write(&test_file.path, creds_with_token).unwrap();
+        let secrets_file_watcher = SecretFileWatcher::new(&test_file.path).await.unwrap();
+
+        assert_eq!(
+            secrets_file_watcher.get_nvcf_api_token().as_deref(),
+            Some("bearer-token")
+        );
         test_file.cleanup();
     }
 

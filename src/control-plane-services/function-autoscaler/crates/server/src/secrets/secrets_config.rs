@@ -19,6 +19,8 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Secrets {
+    #[serde(rename = "nvcfApiToken")]
+    pub nvcf_api_token: Option<String>,
     pub kv: CredentialsData,
 }
 

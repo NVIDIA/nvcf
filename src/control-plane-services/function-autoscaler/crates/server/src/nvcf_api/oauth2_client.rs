@@ -136,6 +136,10 @@ impl OAuth2Client {
     }
 
     pub async fn get_jwt_token(&self) -> Result<String, Box<dyn std::error::Error>> {
+        if let Some(token) = self.secrets_watcher.get_nvcf_api_token() {
+            return Ok(token);
+        }
+
         // Check if we have a cached valid token
         {
             let cache = self.token_cache.read().await;
@@ -164,6 +168,10 @@ impl OAuth2Client {
         secrets_watcher: &Arc<SecretFileWatcher>,
         http_client: &reqwest_middleware::ClientWithMiddleware,
     ) -> Result<String, Box<dyn std::error::Error>> {
+        if let Some(token) = secrets_watcher.get_nvcf_api_token() {
+            return Ok(token);
+        }
+
         // Get current secrets
         let secrets = secrets_watcher.get_config();
 
@@ -305,6 +313,26 @@ mod tests {
         (temp_dir, secrets_file)
     }
 
+    async fn create_test_secrets_file_with_static_token() -> (TempDir, std::path::PathBuf) {
+        let temp_dir = TempDir::new().unwrap();
+        let secrets_file = temp_dir.path().join("secrets.json");
+
+        let secrets_content = serde_json::json!({
+            "nvcfApiToken": "openbao-rendered-token",
+            "kv": {
+                "nvcf_api": {
+                    "client_id": "test_client_id",
+                    "client_secret": "test_client_secret"
+                }
+            }
+        });
+
+        fs::write(&secrets_file, secrets_content.to_string())
+            .await
+            .unwrap();
+        (temp_dir, secrets_file)
+    }
+
     #[tokio::test]
     async fn test_cached_token() {
         let (_temp_dir, secrets_file) = create_test_secrets_file().await;
@@ -323,6 +351,23 @@ mod tests {
         let creds = secrets.nvcf_api.unwrap();
         assert_eq!(creds.client_id, "test_client_id");
         assert_eq!(creds.client_secret, "test_client_secret");
+    }
+
+    #[tokio::test]
+    async fn test_static_nvcf_api_token_takes_precedence() {
+        let (_temp_dir, secrets_file) = create_test_secrets_file_with_static_token().await;
+        let secrets_watcher = SecretFileWatcher::new(&secrets_file).await.unwrap();
+        let oauth2_client = OAuth2Client::new(
+            "http://127.0.0.1:1".to_string(),
+            TEST_SCOPE.to_string(),
+            Arc::new(secrets_watcher),
+        )
+        .unwrap();
+
+        let token = oauth2_client.get_jwt_token().await.unwrap();
+
+        assert_eq!(token, "openbao-rendered-token");
+        assert!(oauth2_client.token_cache.read().await.is_none());
     }
 
     #[tokio::test]
