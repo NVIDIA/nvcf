@@ -292,6 +292,11 @@ func NewRateLimiter(config Config, olricConfig *olricConfig.Config) (*RateLimite
 	// Wrap the NVCF client with caching to reduce redundant gRPC calls
 	cachedNVCFClient := NewCachedNVCFClient(nvcfApiClient, cacheTTL)
 
+	stopCaches := func() {
+		cache.Stop()
+		indexedPoliciesCache.Stop()
+	}
+
 	c := make(chan struct{})
 	olricConfig.Started = func() {
 		close(c)
@@ -300,7 +305,8 @@ func NewRateLimiter(config Config, olricConfig *olricConfig.Config) (*RateLimite
 	// Create a new Olric instance.
 	db, err := olric.New(olricConfig)
 	if err != nil {
-		zap.L().Error("Failed to create Olric instance", zap.Error(err))
+		stopCaches()
+		return nil, fmt.Errorf("failed to create olric instance: %w", err)
 	}
 
 	errChannel := make(chan error, 1)
@@ -318,12 +324,17 @@ func NewRateLimiter(config Config, olricConfig *olricConfig.Config) (*RateLimite
 	case <-c:
 		break
 	case err := <-errChannel:
+		stopCaches()
 		return nil, err
 	}
 
 	store, err := NewStore(db.NewEmbeddedClient())
 	if err != nil {
 		zap.L().Error("Failed to create a Olric store", zap.Error(err))
+		stopCaches()
+		if shutdownErr := db.Shutdown(context.Background()); shutdownErr != nil {
+			zap.L().Error("Failed to shut down olric instance", zap.Error(shutdownErr))
+		}
 		return nil, err
 	}
 
@@ -583,7 +594,7 @@ func (r *RateLimiter) loadPerNcaIdLimiters(ctx context.Context, cacheKey CacheKe
 // loadPerUserLimiters creates a per-user rate limiter for the requested
 // (clientAuthSubject, ncaId, functionVersionId). When perUserRate is configured
 // on the policy, the same single rate is enforced individually against every
-// unique caller — counters are kept distinct via the clientAuthSubject in the
+// unique caller; counters are kept distinct via the clientAuthSubject in the
 // cache key and Olric prefix. Returns nil when the policy has no perUserRate
 // configured, so downstream code falls through to NCA-tier-only behavior.
 func (r *RateLimiter) loadPerUserLimiters(ctx context.Context, cacheKey CacheKey, originalRequest *pb.RateLimitRequest) (*ttlcache.Item[CacheKey, LimiterEntry], error) {
@@ -738,7 +749,7 @@ func (r *RateLimiter) RateLimit(ctx context.Context, request *pb.RateLimitReques
 func (r *RateLimiter) collectTiers(ctx context.Context, request *pb.RateLimitRequest) []tierCheck {
 	tiers := make([]tierCheck, 0, 2)
 
-	// User tier — only when caller identity is present.
+	// User tier; only when caller identity is present.
 	if request.ClientAuthSubject != "" {
 		userKey := NewPerUserCacheKey(request.ClientAuthSubject, request.NcaId, request.FunctionVersionId)
 		userLimiters := r.Limiters.Get(userKey, ttlcache.WithLoader(ttlcache.LoaderFunc[CacheKey, LimiterEntry](func(c *ttlcache.Cache[CacheKey, LimiterEntry], k CacheKey) *ttlcache.Item[CacheKey, LimiterEntry] {
@@ -758,7 +769,7 @@ func (r *RateLimiter) collectTiers(ctx context.Context, request *pb.RateLimitReq
 		}
 	}
 
-	// NCA tier — per-NCA-ID config takes precedence over global.
+	// NCA tier; per-NCA-ID config takes precedence over global.
 	perNcaIdKey := NewPerNcaIdCacheKey(request.NcaId, request.FunctionVersionId)
 	perNcaIdLimiters := r.Limiters.Get(perNcaIdKey, ttlcache.WithLoader(ttlcache.LoaderFunc[CacheKey, LimiterEntry](func(c *ttlcache.Cache[CacheKey, LimiterEntry], k CacheKey) *ttlcache.Item[CacheKey, LimiterEntry] {
 		item, err := r.loadPerNcaIdLimiters(ctx, k, request)
