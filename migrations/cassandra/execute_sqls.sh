@@ -14,6 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+REPLICA_COUNT=${REPLICA_COUNT:-3}
+case "$REPLICA_COUNT" in
+  ''|*[!0-9]*|0)
+    echo "REPLICA_COUNT must be an integer from 1 to 2147483647" >&2
+    exit 1
+    ;;
+esac
+if [ "${#REPLICA_COUNT}" -gt 10 ] || [ "$REPLICA_COUNT" -gt 2147483647 ]; then
+  echo "REPLICA_COUNT must be an integer from 1 to 2147483647" >&2
+  exit 1
+fi
+export REPLICA_COUNT
 
 # Verify the superuser and the cqlsh listener is available
 max_retries=10 # 10 * 1s = 10s
@@ -35,8 +47,6 @@ echo "Cassandra cqlsh superuser is available"
 #
 # SECURITY: Only explicitly listed variables are substituted to prevent
 # unintended substitution of other environment variables
-REPLICA_COUNT=${REPLICA_COUNT:-3}
-export REPLICA_COUNT
 # shellcheck disable=SC2016
 ENVSUBST_VARS='$SERVICE_ROLE_PASSWORD $REPLICA_COUNT'
 

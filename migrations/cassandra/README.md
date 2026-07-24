@@ -66,7 +66,7 @@ The container reads the following environment variables:
 
 For each keyspace under `keyspaces/`, the container:
 
-1. Pre-processes any `*.up.sql` and `*.cql` files via `envsubst` so that `${SERVICE_ROLE_PASSWORD}` and `${REPLICA_COUNT}` are substituted (other environment variables are intentionally not substituted).
+1. Pre-processes any `*.sql` and `*.cql` files via `envsubst` so that `${SERVICE_ROLE_PASSWORD}` and `${REPLICA_COUNT}` are substituted (other environment variables are intentionally not substituted).
 2. Runs `migrate up` with the `cassandra://` driver, using the keyspace name as the migrations table name.
 
 A failure in any keyspace's migration set stops the run.

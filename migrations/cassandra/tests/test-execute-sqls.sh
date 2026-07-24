@@ -31,6 +31,21 @@ if ! grep -F -q 'REPLICA_COUNT=${REPLICA_COUNT:-3}' "${script}"; then
   fail "execute_sqls.sh does not preserve the default replica count"
 fi
 
+# shellcheck disable=SC2016
+replica_count_validation=$(
+  sed -n '/^REPLICA_COUNT=${REPLICA_COUNT:-3}$/,/^export REPLICA_COUNT$/p' "${script}"
+)
+for replica_count in 1 3 2147483647; do
+  if ! REPLICA_COUNT="${replica_count}" sh -c "${replica_count_validation}"; then
+    fail "execute_sqls.sh rejects valid replica count ${replica_count}"
+  fi
+done
+for replica_count in 0 -1 invalid 2147483648 99999999999; do
+  if REPLICA_COUNT="${replica_count}" sh -c "${replica_count_validation}" 2>/dev/null; then
+    fail "execute_sqls.sh accepts invalid replica count ${replica_count}"
+  fi
+done
+
 for migration in "${keyspaces}"/*/01_init_keyspace.up.sql; do
   rendered=$(
     REPLICA_COUNT=2 SERVICE_ROLE_PASSWORD=test-password \
@@ -46,7 +61,7 @@ for migration in "${keyspaces}"/*/01_init_keyspace.up.sql; do
   fi
 done
 
-if grep -q 'nc -z' "${script}"; then
+if grep -Eq '(^|[[:space:]])nc([[:space:]]|$)' "${script}"; then
   fail "execute_sqls.sh depends on netcat even though the image does not install it"
 fi
 
