@@ -17,10 +17,11 @@
 # non-Java subtree's OSS-flip MR merges upstream. Java components are
 # discovered from component-local bazel-java-ci.json files.
 #
-# Image push targets, internal NGC registry pulls, and the nvcfbarn
-# remote cache are all internal-only; this workflow runs build + test
-# only. The bazel-ci image is built by the internal nvcf/bazel-ci-templates
-# project and mirrored to GHCR for this public workflow.
+# Image push targets and internal NGC registry pulls are internal-only; this
+# workflow runs build + test only, using the public EC2 Buildbarn remote cache
+# reachable from GitHub-hosted runners. The bazel-ci image is built by the
+# internal nvcf/bazel-ci-templates project and mirrored to GHCR for this
+# public workflow.
 
 name: bazel
 
@@ -375,10 +376,9 @@ jobs:
           restore-keys: |
             byoo-gomod-
 
-      # Decide the remote cache to use. The internal nvcfbarn Buildbarn
-      # (the .bazelrc `--config=remote` default) is unreachable from
-      # GitHub-hosted runners; the public EC2 Buildbarn is reachable over
-      # grpcs with a bearer token. When the token secret is present
+      # Decide the remote cache to use. The public EC2 Buildbarn is reachable
+      # from GitHub-hosted runners over grpcs with a bearer token. When the
+      # token secret is present
       # (same-repo PRs and main pushes; never fork PRs), materialize the
       # CA cert and enable the cache; otherwise build cacheless.
       #
