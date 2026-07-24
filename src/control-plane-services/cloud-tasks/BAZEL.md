@@ -689,9 +689,11 @@ top-level path rollup, run `./tools/scripts/update-license`.
 The monorepo uses `.github/workflows/bazel.yml`. There are no GitLab
 `ENABLE_BAZEL_*` variables for this subtree.
 
-The workflow detects Cloud Tasks or shared Java changes and selects the
-appropriate service lane. The build-container lane excludes `requires-docker`
-tests at query time. The Docker-host lane receives Java 25 through
+The detector models Cloud Tasks, nv-boot, and shared Java changes, but current
+policy deliberately runs the full matrix on every PR and push. If change-aware
+scheduling is restored later, those relationships select the appropriate
+service lane. The build-container lane excludes `requires-docker` tests at
+query time. The Docker-host lane receives Java 25 through
 `actions/setup-java`, uses the host Docker daemon, and runs the complete Cloud
 Tasks test scope, including unit and Testcontainers tests. Changes to nv-boot
 or shared Java tooling must also select Cloud Tasks as a reverse-dependency
@@ -781,6 +783,25 @@ shell test wrapper rather than the individual JUnit tests. The root-owned
 `tools/ci/stage-bazel-java-artifacts` helper copies through Bazel's `bazel-bin`
 and `bazel-testlogs` symlinks so the download contains real files after the CI
 runner is destroyed.
+
+## Maven Coexistence
+
+Maven and Bazel remain independent during coexistence. Maven consumers use the
+Maven build and its published artifacts. Bazel consumers use source targets
+from the monorepo and do not consume Maven-shaped project artifacts generated
+by Bazel.
+
+Run the Maven reactor from the Cloud Tasks subtree:
+
+```bash
+(
+  cd src/control-plane-services/cloud-tasks
+  mvn clean install
+)
+```
+
+Maven writes under the modules' `target` directories. It does not consume
+`bazel-bin`, and the Bazel build does not consume Maven `target` outputs.
 
 ## Clean
 

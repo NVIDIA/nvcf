@@ -3,12 +3,12 @@
 #
 # Bazel build + test on the public NVIDIA/nvcf mirror.
 #
-# Change-aware: a cheap detect job diffs the push/PR and expands the
-# build matrix to only the subtrees whose files changed. A docs-only
-# mirror sync spawns zero build jobs instead of twelve, keeping the
-# org-shared hosted-runner queue clear. workflow_dispatch, changes to
-# this workflow file, and any diff that cannot be computed safely fall
-# back to the full matrix.
+# The detect job computes dependency-aware subtree selection, including shared
+# Java triggers and framework-to-service reverse dependencies. Current policy
+# deliberately forces the full matrix on every PR and push for regression
+# safety; the change-aware result remains implemented and locally validated so
+# that policy can be restored later by removing the documented run_all=true
+# override. workflow_dispatch and unsafe/unknown diffs also use the full matrix.
 #
 # Matrix entries reference subtrees that have their Bazel scaffold
 # mirrored to GitHub (each subtree's upstream .oss-allowlist controls
