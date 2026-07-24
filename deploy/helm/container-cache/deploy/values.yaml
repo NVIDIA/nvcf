@@ -56,21 +56,35 @@ cache:
   # under heavy concurrent large transfers, which starved even /healthz and
   # tripped the liveness probe.
   workerConnection: 16384
+  # Size of the nginx "default" thread pool (aio threads / aio_write). Sized
+  # to absorb backing-store latency: threads park on slow IO so worker event
+  # loops never block on disk and health endpoints stay answerable.
+  aioThreads: 64
+  # Concurrent-connection cap on the NGC file-serving (xfiles) server
+  # block. Excess requests fail fast with 503 (ranged download clients
+  # retry per chunk) instead of queuing on a storage-bound tier; sized
+  # well above normal concurrency so it only engages under herd load.
+  # 0 disables the cap.
+  maxConnsPerServer: 512
 
-# Liveness/readiness probe tuning for the nginx-proxy container. /healthz is
-# served on a dedicated port but by the same worker processes, so under heavy
-# load a 1s timeout can fail and restart the pod mid-transfer. Liveness is kept
-# lenient so only a wedged proxy is restarted; readiness is tighter so an
-# overloaded pod can shed traffic without being killed.
+# Probe tuning for the nginx-proxy container. Liveness is a TCP accept on the
+# healthz port: HTTP liveness is answered by the same worker processes that
+# serve the data plane, and under sustained heavy transfer load it times out
+# and restarts a proxy that is merely busy, aborting all in-flight transfers
+# and amplifying load into a restart loop. The TCP probe detects only a dead
+# process or closed listener - a busy (or even wedged-but-listening) proxy is
+# deliberately not restarted, because restarts cannot fix overload. Readiness
+# stays HTTP on /healthz so an overloaded pod sheds new traffic (degrades)
+# without being killed (crashes).
 probes:
   liveness:
     timeoutSeconds: 5
     periodSeconds: 10
     failureThreshold: 6
   readiness:
-    timeoutSeconds: 3
+    timeoutSeconds: 5
     periodSeconds: 10
-    failureThreshold: 3
+    failureThreshold: 5
 
 # Resource requests/limits for nginx-proxy container.
 resources:
