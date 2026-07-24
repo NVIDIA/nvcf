@@ -331,9 +331,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history so the root row can diff a PR against its base to
-          # compute affected targets (see "Determine build targets").
-          fetch-depth: 0
+          # Only the root row (path ".") needs full history: it diffs a PR
+          # against its base to compute affected targets (see "Determine build
+          # targets"). Every other row builds its whole scope regardless, so a
+          # shallow checkout there skips a full-history clone. (GHA treats 0 as
+          # falsy, so the ternary is written non-root-first to return 0 for root.)
+          fetch-depth: ${{ matrix.subtree.path != '.' && 1 || 0 }}
 
       # A subtree can be selected but not yet have its Bazel scaffold on
       # the mirror (its upstream OSS-flip MR is still open, or the
@@ -717,7 +720,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          # docker-host rows never build the root scope, so no git history is
+          # needed here; a shallow checkout is enough.
+          fetch-depth: 1
       # The Java tree builds with local_jdk (root .bazelrc). Unlike the fast
       # matrix, this lane runs on a bare runner rather than the bazel-ci image,
       # so provide JDK 25 explicitly for the Java requires-docker tests.
