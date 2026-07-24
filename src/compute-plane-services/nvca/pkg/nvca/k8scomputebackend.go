@@ -285,6 +285,7 @@ func (c K8sComputeBackend) translateFunctionLaunchSpecification(
 		},
 		DefaultStargateAddress: c.bk8s.cfg.Workload.DefaultStargateAddress,
 		StargateQUICInsecure:   c.bk8s.cfg.Workload.StargateQUICInsecure,
+		LLMSidecarRunAsUser:    c.bk8s.cfg.Workload.LLMSidecarRunAsUser,
 	}
 
 	if reqType == ftContainer {

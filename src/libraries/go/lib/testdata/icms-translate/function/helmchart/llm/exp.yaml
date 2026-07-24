@@ -419,6 +419,8 @@ spec:
     - mountPath: /var/run/nvcf/info
       name: instance-data
   restartPolicy: Always
+  securityContext:
+    fsGroup: 1000
   serviceAccountName: my-sa
   terminationGracePeriodSeconds: 120
   tolerations:

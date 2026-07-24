@@ -46,6 +46,10 @@ type TranslateConfig struct {
 	// Whether to use QUIC insecure mode for stargate connections
 	// If not set, "--quick-insecure" is omitted
 	StargateQUICInsecure bool `json:"stargateQUICInsecure,omitempty"`
+
+	// LLMSidecarRunAsUser is the UID both LLM sidecars run as (default 1000).
+	// Negative leaves runAsUser unset so the platform (e.g. OpenShift) assigns.
+	LLMSidecarRunAsUser *int64 `json:"llmSidecarRunAsUser,omitempty"`
 }
 
 func Translate(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {

@@ -85,6 +85,7 @@ func (r *Reconciler) translateFunctionWorkload(
 		TranslateConfig:        cmnTCfg,
 		DefaultStargateAddress: r.cfg.Workload.DefaultStargateAddress,
 		StargateQUICInsecure:   r.cfg.Workload.StargateQUICInsecure,
+		LLMSidecarRunAsUser:    r.cfg.Workload.LLMSidecarRunAsUser,
 	}
 
 	msg := function.CreationQueueMessage{

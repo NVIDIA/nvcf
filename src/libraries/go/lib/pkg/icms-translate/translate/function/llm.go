@@ -41,20 +41,50 @@ const (
 	llmDirMountPath    = "/var/run/llm"
 	llmWorkerTokenPath = llmDirMountPath + "/worker-token"
 
-	// pylon's image user (nvs). Both LLM sidecars run as this UID so pylon can
-	// read the 0600 worker-token the credential-manager writes to the shared
-	// emptyDir; the customer container runs as its own user and cannot.
-	llmSidecarRunAsUser int64 = 1000
+	// pylon's image user (nvs); both LLM sidecars share it so pylon can read
+	// the credential-manager's 0600 worker-token. Override via
+	// TranslateConfig.LLMSidecarRunAsUser (negative = unset for OpenShift SCC).
+	defaultLLMSidecarRunAsUser int64 = 1000
 )
+
+// resolveLLMSidecarRunAsUser returns the shared sidecar UID, or nil to leave
+// it unset for the platform to assign.
+func resolveLLMSidecarRunAsUser(tcfg TranslateConfig) *int64 {
+	if tcfg.LLMSidecarRunAsUser == nil {
+		uid := defaultLLMSidecarRunAsUser
+		return &uid
+	}
+	if *tcfg.LLMSidecarRunAsUser < 0 {
+		return nil
+	}
+	return tcfg.LLMSidecarRunAsUser
+}
 
 // newLLMSidecarSecurityContext runs both LLM sidecars as the same UID so they
 // can exchange the worker-token on the shared emptyDir.
-func newLLMSidecarSecurityContext() *corev1.SecurityContext {
-	uid := llmSidecarRunAsUser
-	return &corev1.SecurityContext{
-		RunAsUser:  &uid,
-		RunAsGroup: &uid,
+func newLLMSidecarSecurityContext(tcfg TranslateConfig) *corev1.SecurityContext {
+	uid := resolveLLMSidecarRunAsUser(tcfg)
+	if uid == nil {
+		return nil
 	}
+	return &corev1.SecurityContext{
+		RunAsUser:  uid,
+		RunAsGroup: uid,
+	}
+}
+
+// applyLLMPodSecurityContext sets the pod fsGroup to the sidecar UID so the
+// non-root sidecars can write the shared worker-token emptyDir. No-op when the
+// UID is platform-managed.
+func applyLLMPodSecurityContext(pod *corev1.Pod, tcfg TranslateConfig) {
+	uid := resolveLLMSidecarRunAsUser(tcfg)
+	if uid == nil {
+		return
+	}
+	if pod.Spec.SecurityContext == nil {
+		pod.Spec.SecurityContext = &corev1.PodSecurityContext{}
+	}
+	pod.Spec.SecurityContext.FSGroup = uid
 }
 
 func normalizeLLMRequestRouterAddressEnvAliases(envSet map[string]string) {
@@ -158,7 +188,7 @@ func newLLMRouterClientContainer(
 		Name:            LLMWorkerContainerName,
 		Image:           llmRouterClientImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		SecurityContext: newLLMSidecarSecurityContext(),
+		SecurityContext: newLLMSidecarSecurityContext(tcfg),
 		Args:            args,
 		Env:             common.SortEnvs(envs),
 		Resources: corev1.ResourceRequirements{
@@ -190,7 +220,7 @@ func newLLMRouterClientContainer(
 	return c, nil
 }
 
-func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateConfig) (corev1.Container, error) {
+func newLLMCredentialManagerContainer(allEnvSet map[string]string, tcfg TranslateConfig) (corev1.Container, error) {
 	llmCredentialManagerImage := allEnvSet[llmCredentialManagerImageEnv]
 	if llmCredentialManagerImage == "" {
 		llmCredentialManagerImage = llmCredentialManagerImageDefault
@@ -233,7 +263,7 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 		Name:            "llm-credential-manager",
 		Image:           llmCredentialManagerImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		SecurityContext: newLLMSidecarSecurityContext(),
+		SecurityContext: newLLMSidecarSecurityContext(tcfg),
 		Env:             common.SortEnvs(envs),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{

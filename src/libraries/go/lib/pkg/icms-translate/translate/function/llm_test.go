@@ -434,28 +434,64 @@ func envSliceToMap(envs []corev1.EnvVar) map[string]string {
 
 // TestLLMSidecarsShareRunAsUser guards the fix for the worker-token permission
 // bug: the credential-manager writes the token 0600, so it and pylon must run
-// as the same non-root UID for pylon to read it (and to keep it from the
-// customer workload container).
+// as the same UID for pylon to read it. The UID is configurable for platforms
+// (e.g. OpenShift) whose SCC stipulates the allowed range.
 func TestLLMSidecarsShareRunAsUser(t *testing.T) {
 	allEnvSet := map[string]string{
 		"LLM_REQUEST_ROUTER_ADDRESS": "llm-router.example.com:443",
 		"INFERENCE_PORT":             "8080",
 	}
-
-	pylon, err := newLLMRouterClientContainer(&LaunchSpecification{}, allEnvSet, TranslateConfig{}, "inst-123", false)
-	require.NoError(t, err)
-	cred, err := newLLMCredentialManagerContainer(allEnvSet, TranslateConfig{})
-	require.NoError(t, err)
-
-	for name, sc := range map[string]*corev1.SecurityContext{"pylon": pylon.SecurityContext, "credential-manager": cred.SecurityContext} {
-		require.NotNilf(t, sc, "%s must set a security context", name)
-		require.NotNilf(t, sc.RunAsUser, "%s must set runAsUser", name)
-		assert.Equalf(t, llmSidecarRunAsUser, *sc.RunAsUser, "%s runAsUser", name)
-		require.NotNilf(t, sc.RunAsGroup, "%s must set runAsGroup", name)
-		assert.Equalf(t, llmSidecarRunAsUser, *sc.RunAsGroup, "%s runAsGroup", name)
-		assert.NotZerof(t, *sc.RunAsUser, "%s must be non-root", name)
+	ptr := func(v int64) *int64 { return &v }
+	build := func(t *testing.T, tcfg TranslateConfig) (corev1.Container, corev1.Container) {
+		t.Helper()
+		pylon, err := newLLMRouterClientContainer(&LaunchSpecification{}, allEnvSet, tcfg, "inst-123", false)
+		require.NoError(t, err)
+		cred, err := newLLMCredentialManagerContainer(allEnvSet, tcfg)
+		require.NoError(t, err)
+		return pylon, cred
 	}
 
-	assert.Equal(t, *pylon.SecurityContext.RunAsUser, *cred.SecurityContext.RunAsUser,
-		"both sidecars must share a UID so pylon can read the credential-manager's 0600 token")
+	t.Run("default is the shared non-root pylon UID", func(t *testing.T) {
+		pylon, cred := build(t, TranslateConfig{})
+		for name, sc := range map[string]*corev1.SecurityContext{"pylon": pylon.SecurityContext, "credential-manager": cred.SecurityContext} {
+			require.NotNilf(t, sc, "%s security context", name)
+			require.NotNilf(t, sc.RunAsUser, "%s runAsUser", name)
+			assert.Equalf(t, defaultLLMSidecarRunAsUser, *sc.RunAsUser, "%s runAsUser", name)
+			require.NotNilf(t, sc.RunAsGroup, "%s runAsGroup", name)
+			assert.Equalf(t, defaultLLMSidecarRunAsUser, *sc.RunAsGroup, "%s runAsGroup", name)
+			assert.NotZerof(t, *sc.RunAsUser, "%s must be non-root", name)
+		}
+	})
+
+	t.Run("configured UID overrides the default on both sidecars", func(t *testing.T) {
+		pylon, cred := build(t, TranslateConfig{LLMSidecarRunAsUser: ptr(2000)})
+		require.NotNil(t, pylon.SecurityContext.RunAsUser)
+		require.NotNil(t, cred.SecurityContext.RunAsUser)
+		assert.Equal(t, int64(2000), *pylon.SecurityContext.RunAsUser)
+		assert.Equal(t, *pylon.SecurityContext.RunAsUser, *cred.SecurityContext.RunAsUser)
+	})
+
+	t.Run("negative UID leaves runAsUser unset for the platform", func(t *testing.T) {
+		pylon, cred := build(t, TranslateConfig{LLMSidecarRunAsUser: ptr(-1)})
+		assert.Nil(t, pylon.SecurityContext)
+		assert.Nil(t, cred.SecurityContext)
+	})
+}
+
+func TestApplyLLMPodSecurityContext(t *testing.T) {
+	ptr := func(v int64) *int64 { return &v }
+
+	t.Run("sets fsGroup to the sidecar UID", func(t *testing.T) {
+		pod := &corev1.Pod{}
+		applyLLMPodSecurityContext(pod, TranslateConfig{})
+		require.NotNil(t, pod.Spec.SecurityContext)
+		require.NotNil(t, pod.Spec.SecurityContext.FSGroup)
+		assert.Equal(t, defaultLLMSidecarRunAsUser, *pod.Spec.SecurityContext.FSGroup)
+	})
+
+	t.Run("negative UID leaves the pod security context unset", func(t *testing.T) {
+		pod := &corev1.Pod{}
+		applyLLMPodSecurityContext(pod, TranslateConfig{LLMSidecarRunAsUser: ptr(-1)})
+		assert.Nil(t, pod.Spec.SecurityContext)
+	})
 }

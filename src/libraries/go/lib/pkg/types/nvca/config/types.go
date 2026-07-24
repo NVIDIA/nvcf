@@ -704,6 +704,10 @@ type WorkloadConfig struct {
 	DefaultStargateAddress string `yaml:",omitempty"`
 	StargateQUICInsecure   bool   `yaml:",omitempty"`
 
+	// LLMSidecarRunAsUser is the UID both LLM sidecars run as (default 1000).
+	// Negative leaves runAsUser unset so the platform (e.g. OpenShift) assigns.
+	LLMSidecarRunAsUser *int64 `yaml:",omitempty"`
+
 	// TransportTLS configures trust material used by workload transport clients.
 	TransportTLS *TransportTLSConfig `yaml:",omitempty"`
 }

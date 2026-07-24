@@ -366,6 +366,7 @@ func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 			return nil, err
 		}
 		utilsPod.Spec.Containers = append(utilsPod.Spec.Containers, llmCredentialManagerContainer)
+		applyLLMPodSecurityContext(utilsPod, tcfg)
 	}
 
 	if hasTelemetries {

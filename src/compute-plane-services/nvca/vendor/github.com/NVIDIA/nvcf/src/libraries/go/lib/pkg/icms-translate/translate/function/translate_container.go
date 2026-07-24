@@ -446,6 +446,7 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 				return nil, err
 			}
 			pod.Spec.Containers = append(pod.Spec.Containers, llmCredentialManagerContainer)
+			applyLLMPodSecurityContext(pod, tcfg)
 		}
 
 		// Setup telemetry for the pod

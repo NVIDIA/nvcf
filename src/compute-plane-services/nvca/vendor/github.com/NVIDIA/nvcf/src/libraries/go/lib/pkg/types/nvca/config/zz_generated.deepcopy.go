@@ -695,6 +695,11 @@ func (in *WorkloadConfig) DeepCopyInto(out *WorkloadConfig) {
 			(*out)[key] = val
 		}
 	}
+	if in.LLMSidecarRunAsUser != nil {
+		in, out := &in.LLMSidecarRunAsUser, &out.LLMSidecarRunAsUser
+		*out = new(int64)
+		**out = **in
+	}
 	if in.TransportTLS != nil {
 		in, out := &in.TransportTLS, &out.TransportTLS
 		*out = new(TransportTLSConfig)
