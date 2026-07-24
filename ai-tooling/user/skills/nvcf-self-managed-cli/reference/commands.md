@@ -19,7 +19,7 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | `self-hosted uninstall --compute-plane --cluster-name=X` | Per-plane primitive: `helmfile destroy` on one compute plane (no ICMS unregister, no drain) | progress | Just the helm releases on that compute plane |
 | `self-hosted uninstall --control-plane [--force-with-registered-clusters]` | Per-plane primitive: `helmfile destroy` on the control plane | progress | Refuses if compute planes still registered unless `--force-with-registered-clusters` |
 | `self-hosted uninstall --no-apply <plane>` | Render delete YAML via `helm get manifest` per release | YAML on stdout | GitOps; pipe to `kubectl delete -f -` or commit + Argo applies. Mirrors `install --no-apply` |
-| `self-hosted down --cluster-name=X [--drain-active=true\|false\|prompt] [--remove-persistent]` | Orchestrator: drain → uninstall --compute-plane → cluster delete in ICMS | progress | Symmetric companion to `up --cluster-name=X` |
+| `self-hosted down --cluster-name=X [--drain-active] [--remove-persistent]` | Orchestrator: drain → uninstall --compute-plane → cluster delete in ICMS | progress | Symmetric companion to `up --cluster-name=X` |
 | `self-hosted down --all [--confirm]` | Orchestrator: tear down every registered compute plane + control plane | progress | Bounded parallelism via `--all-concurrency` (default 4); `--confirm` required in non-interactive |
 | `self-hosted down --plan-only ...` | Orchestrator dry-run: phases + helm releases + ICMS rows + ETAs (no helm/helmfile contact) | JSONL | **Always run before any actual `down`** |
 
@@ -27,9 +27,8 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 
 | Command | Purpose | Notes |
 |---|---|---|
-| `cluster register --name=X --nca-id=Y --region=Z [--ignore-existing]` | Register a JWKS+OIDC with ICMS | Used by `up` Phase 5 internally; standalone for manual registration |
+| `cluster register --name=X --nca-id=Y [--region=Z] [--ignore-existing]` | Register a JWKS+OIDC with ICMS | Used by `up` Phase 5 internally; standalone for manual registration |
 | `cluster list` | List registered clusters | Output is YAML by default; `--json` for machine |
-| `cluster get --cluster-id=ID` | Get one cluster's metadata | |
 | `cluster rotate --cluster-id=ID` | Re-fetch JWKS from K8s and PUT to ICMS | After K8s API server signing key rotation |
 | `cluster delete --cluster-id=ID` | Remove ICMS row | **DESTRUCTIVE: confirm with user** |
 
@@ -76,7 +75,7 @@ Task commands require `NVCF_API_KEY` set to a task-scoped key and `NVCF_BASE_NVC
 | `api-key generate [--for function\|task] [--description=…] [--expires-in=…]` | Mint API keys | Default (no `--for`): generates both a function key and a task key; `--for function` or `--for task` generates one only; `--scopes` requires `--for` |
 | `api-key generate --validate` | Mint and immediately validate each generated key | Validates each key against its correct audience (NVCF for function keys, NVCT for task keys) |
 | `api-key list` | List API keys for current owner | Lists NVCF-scoped keys only |
-| `api-key delete --id=ID` / `api-key revoke --id=ID` | Remove an API key | **Confirm with user** |
+| `api-key delete KEY-ID` / `api-key revoke KEY-ID` | Remove an API key | **Confirm with user** |
 | `api-key show` | Show currently saved API key from state | |
 
 ## Agent skill
