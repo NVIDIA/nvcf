@@ -13,8 +13,8 @@ root.
 - Python: 3.11 through `rules_python` for Bazel NOTICE actions
 - Docker: required for Testcontainers-backed tests such as Cassandra tests
 
-The root `.bazelrc` selects the local Java 25 JDK. The GitHub matrix image
-provides Temurin 25 through `JAVA_HOME`; the Docker-capable lane uses
+The root `.bazelrc` selects the local Java 25 JDK. The GitHub build-container
+lane gets Temurin 25 from its pinned CI image; the Docker-host lane uses
 `actions/setup-java`.
 
 Local command examples use one portable cache location. Set it once per shell:
@@ -442,13 +442,89 @@ The monorepo uses `.github/workflows/bazel.yml`; there is no GitLab
 `ENABLE_BAZEL_BUILD` variable for this subtree. The workflow detects nv-boot,
 shared Java tooling, root dependency, or consumer changes and selects:
 
-- the containerized fast lane for tests that do not require Docker;
-- the per-service Docker lane for complete Testcontainers scopes; and
+- the build-container lane for tests that do not require a Docker daemon;
+- the Docker-host lane for complete Testcontainers scopes; and
 - reverse-dependency consumer validation, including Cloud Tasks when nv-boot
   changes.
 
 GitHub CI builds and tests Bazel source targets. It does not publish
 Maven-shaped nv-boot artifacts.
+
+The component-local `bazel-java-ci.json` registers nv-boot with the root
+workflow. The detector infers the component path from that file and reads:
+
+```text
+id
+ci_lane
+component_kind
+tests_skip
+```
+
+`component_kind: java-framework` makes framework changes select every
+discovered `java-service`. Shared root Java configuration, rules, and tools
+select every discovered Java component. Do not add parallel component-name
+lists to `.github/workflows/bazel.yml`.
+
+### CI Execution Environments
+
+The `ci_lane` descriptor field chooses where GitHub Actions executes Bazel:
+
+- `build-container`: the job runs inside the pinned
+  `ghcr.io/nvidia/nvcf/bazel-ci` image. Java, Bazelisk, and other build tools
+  are already installed. The host Docker daemon is not exposed there, so this
+  lane cannot run Testcontainers tests or build Docker images.
+- `docker-host`: the job runs directly on GitHub's `ubuntu-latest` virtual
+  machine. The workflow installs Java and Bazelisk, and the host Docker daemon
+  is available to Testcontainers and Docker commands.
+
+This is CI routing, not a Maven-versus-Bazel difference. Local Maven and Bazel
+commands both use Docker Desktop when their tests need containers. nv-boot uses
+`docker-host` because its complete test scope includes Testcontainers tests. A
+future Java component without such tests may use `build-container`. Under the
+current one-lane-per-component policy, even one `requires-docker` test routes
+the component's complete suite to `docker-host`.
+
+### Bazel Scope
+
+Every discovered Java component is part of the monorepo root Bazel module.
+The workflow runs Bazel from the repository root and uses a scoped target such
+as:
+
+```text
+//src/libraries/java/nv-boot-parent/...
+```
+
+The first version of the descriptor called this `scope_mode: root`. The field
+was removed because there is no supported alternative for Java components.
+Some existing non-Java components are independent nested Bazel modules and run
+from their own directories with `//...`, but imported Java frameworks and
+services must not create nested `MODULE.bazel` files.
+
+### Downloading CI Reports
+
+Open the completed GitHub Actions workflow run and download:
+
+```text
+bazel-nv-boot-parent-verification-<run-attempt>
+```
+
+The artifact is retained for 14 days and contains:
+
+```text
+generated/THIRD_PARTY_NOTICE
+generated/runtime_inventory.json
+testlogs/<module>/tests/test.log
+testlogs/<module>/tests/test.outputs/junit/TEST-junit-jupiter.xml
+testlogs/<module>/tests/test.outputs/jacoco.exec
+testlogs/<module>/tests/test.outputs/jacoco.xml
+testlogs/<module>/tests/test.outputs/index.html
+```
+
+Use the XML under `test.outputs/junit`; Bazel's outer `test.xml` describes the
+shell test wrapper rather than the individual JUnit tests. The root-owned
+`tools/ci/stage-bazel-java-artifacts` helper copies through Bazel's `bazel-bin`
+and `bazel-testlogs` symlinks so the download contains real files after the CI
+runner is destroyed.
 
 ## Build And Test Like `mvn clean install`
 

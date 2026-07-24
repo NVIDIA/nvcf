@@ -690,16 +690,97 @@ The monorepo uses `.github/workflows/bazel.yml`. There are no GitLab
 `ENABLE_BAZEL_*` variables for this subtree.
 
 The workflow detects Cloud Tasks or shared Java changes and selects the
-appropriate service lane. The containerized fast lane excludes
-`requires-docker` tests at query time. The per-service `bazel-docker` lane
-receives Java 25 through `actions/setup-java`, uses the host Docker daemon, and
-runs the complete Cloud Tasks test scope, including unit and Testcontainers
-tests. Changes to nv-boot or shared Java tooling must also select Cloud Tasks
-as a reverse-dependency validation target.
+appropriate service lane. The build-container lane excludes `requires-docker`
+tests at query time. The Docker-host lane receives Java 25 through
+`actions/setup-java`, uses the host Docker daemon, and runs the complete Cloud
+Tasks test scope, including unit and Testcontainers tests. Changes to nv-boot
+or shared Java tooling must also select Cloud Tasks as a reverse-dependency
+validation target.
 
-GitHub CI currently proves build and test behavior. Container publication and
-layered NOTICE enforcement are later phases. Bazel never publishes
-Maven-shaped project artifacts.
+GitHub CI proves build, test, coverage, and layered NOTICE behavior. Public
+container publication remains a separate release-policy decision. Bazel never
+publishes Maven-shaped project artifacts.
+
+The component-local `bazel-java-ci.json` registers Cloud Tasks with the root
+workflow. The detector infers the component path from that file. A future Java
+service adds its own descriptor with:
+
+```json
+{
+  "ci_lane": "docker-host",
+  "component_kind": "java-service",
+  "id": "service-id",
+  "tests_skip": false
+}
+```
+
+That one descriptor supplies shared Java triggers, nv-boot reverse-dependency
+validation, CI execution-environment routing, and report upload. Do not add the
+service name to parallel lists in `.github/workflows/bazel.yml`.
+
+### CI Execution Environments
+
+The `ci_lane` descriptor field has two supported values:
+
+- `build-container`: GitHub Actions runs the job inside the pinned
+  `ghcr.io/nvidia/nvcf/bazel-ci` image. Its build tools are preinstalled, but
+  it does not expose the host Docker daemon. Use it only when the component's
+  complete test scope does not require Testcontainers or Docker commands.
+- `docker-host`: GitHub Actions runs directly on the `ubuntu-latest` virtual
+  machine. The workflow installs Java and Bazelisk, and Docker is available.
+  Cloud Tasks uses this lane because its tests start Cassandra containers.
+
+This distinction belongs to the GitHub CI environment, not to Bazel itself.
+On a developer machine, Maven and Bazel both use Docker Desktop when their
+tests require containers. Under the current one-lane-per-component policy, a
+component with even one `requires-docker` test uses `docker-host` for its
+complete suite. A Java component with no Docker-dependent tests may use
+`build-container`.
+
+### Bazel Scope
+
+Cloud Tasks is part of the monorepo root Bazel module. CI invokes Bazel from
+the repository root with:
+
+```text
+//src/control-plane-services/cloud-tasks/...
+```
+
+The descriptor no longer contains `scope_mode`. Earlier,
+`scope_mode: root` stated that CI must run from the monorepo root instead of
+entering Cloud Tasks and expecting a nested `MODULE.bazel`. All Java components
+now use that root scope implicitly. Some existing non-Java components remain
+independent nested Bazel modules, but that is not a supported option for Java
+components integrated into this monorepo.
+
+### Downloading CI Reports
+
+Open the completed GitHub Actions workflow run and download:
+
+```text
+bazel-cloud-tasks-verification-<run-attempt>
+```
+
+The artifact is retained for 14 days and contains:
+
+```text
+generated/THIRD_PARTY_NOTICE
+generated/runtime_inventory.json
+generated/osrb_dependency_delta.json
+generated/osrb_dependency_delta.md
+testlogs/nvct-core/tests/test.log
+testlogs/nvct-core/tests/test.outputs/junit/TEST-junit-jupiter.xml
+testlogs/nvct-core/tests/test.outputs/jacoco.exec
+testlogs/nvct-core/tests/test.outputs/jacoco.xml
+testlogs/nvct-core/tests/test.outputs/index.html
+testlogs/nvct-service/tests/test.outputs/...
+```
+
+Use the XML under `test.outputs/junit`; Bazel's outer `test.xml` describes the
+shell test wrapper rather than the individual JUnit tests. The root-owned
+`tools/ci/stage-bazel-java-artifacts` helper copies through Bazel's `bazel-bin`
+and `bazel-testlogs` symlinks so the download contains real files after the CI
+runner is destroyed.
 
 ## Clean
 
