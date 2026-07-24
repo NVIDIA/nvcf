@@ -289,7 +289,7 @@ addons:
 # stage-01 Cassandra/OpenBao migrations and a Prometheus-compatible TSDB.
 functionAutoscaler:
   enabled: false
-  chartVersion: "1.18.6"
+  chartVersion: "0.1.0"
   image:
     tag: "1.18.6"
     pullPolicy: IfNotPresent

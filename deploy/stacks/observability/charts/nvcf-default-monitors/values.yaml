@@ -72,10 +72,8 @@ controlPlane:
       enabled: true
       selector:
         app.kubernetes.io/instance: llm-api-gateway
-    # Off until the packaged Invocation Service chart can configure
-    # server.metrics.exporters with a pod-reachable Prometheus endpoint.
     - name: invocation-service
-      enabled: false
+      enabled: true
       selector:
         app.kubernetes.io/instance: invocation-service
         app.kubernetes.io/name: helm-nvcf-invocation-service

@@ -587,20 +587,38 @@ stateMetrics:
 
 {{- $observabilityNamespace := dig "observability" "namespace" "monitoring" .Values }}
 {{- $victoriaMetricsNamespace := dig "victoriaMetrics" "namespace" $observabilityNamespace .Values }}
-{{- $functionAutoscalerValues := dig "functionAutoscaler" (dig "functionautoscaler" dict .Values) .Values }}
-{{- $functionAutoscalerImageValues := dig "image" dict $functionAutoscalerValues }}
-{{- $functionAutoscalerTimeseriesDbValues := dig "timeseriesDb" dict $functionAutoscalerValues }}
-{{- $functionAutoscalerNvcfApiValues := dig "nvcfApi" dict $functionAutoscalerValues }}
-{{- $functionAutoscalerCassandraValues := dig "cassandra" dict $functionAutoscalerValues }}
-{{- $functionAutoscalerCassandraSslValues := dig "ssl" dict $functionAutoscalerCassandraValues }}
-{{- $functionAutoscalerTsdbURL := (dig "timeseriesDbUrl" "" $functionAutoscalerValues) | default (dig "url" "" $functionAutoscalerTimeseriesDbValues) }}
+{{- $functionAutoscalerValues := (index .Values "functionAutoscaler") | default (index .Values "functionautoscaler") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerValues) }}
+{{- fail "functionAutoscaler must be a map" }}
+{{- end }}
+{{- $functionAutoscalerImageValues := (index $functionAutoscalerValues "image") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerImageValues) }}
+{{- fail "functionAutoscaler.image must be a map" }}
+{{- end }}
+{{- $functionAutoscalerTimeseriesDbValues := (index $functionAutoscalerValues "timeseriesDb") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerTimeseriesDbValues) }}
+{{- fail "functionAutoscaler.timeseriesDb must be a map" }}
+{{- end }}
+{{- $functionAutoscalerNvcfApiValues := (index $functionAutoscalerValues "nvcfApi") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerNvcfApiValues) }}
+{{- fail "functionAutoscaler.nvcfApi must be a map" }}
+{{- end }}
+{{- $functionAutoscalerCassandraValues := (index $functionAutoscalerValues "cassandra") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerCassandraValues) }}
+{{- fail "functionAutoscaler.cassandra must be a map" }}
+{{- end }}
+{{- $functionAutoscalerCassandraSslValues := (index $functionAutoscalerCassandraValues "ssl") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerCassandraSslValues) }}
+{{- fail "functionAutoscaler.cassandra.ssl must be a map" }}
+{{- end }}
+{{- $functionAutoscalerTsdbURL := (index $functionAutoscalerValues "timeseriesDbUrl") | default (index $functionAutoscalerTimeseriesDbValues "url") | default "" }}
 {{- if and (not $functionAutoscalerTsdbURL) (ne $victoriaMetricsNamespace "monitoring") }}
 {{- $functionAutoscalerTsdbURL = printf "http://vmsingle.%s.svc.cluster.local:8428" $victoriaMetricsNamespace }}
 {{- end }}
-{{- $functionAutoscalerCassandraContactPoints := (dig "cassandraContactPoints" "" $functionAutoscalerValues) | default (dig "contactPoints" "" $functionAutoscalerCassandraValues) }}
-{{- $functionAutoscalerGrpcAddress := (dig "nvcfApiGrpcAddress" "" $functionAutoscalerValues) | default (dig "grpcAddress" "" $functionAutoscalerNvcfApiValues) }}
-{{- $functionAutoscalerOauthURL := (dig "oauth2TokenApiAddress" "" $functionAutoscalerValues) | default (dig "oauth2TokenApiAddress" "" $functionAutoscalerNvcfApiValues) }}
-{{- $functionAutoscalerImageRepository := (dig "repository" "" $functionAutoscalerImageValues) | default (printf "%s/nvcf-autoscaler-service" .Values.global.image.repository) }}
+{{- $functionAutoscalerCassandraContactPoints := (index $functionAutoscalerValues "cassandraContactPoints") | default (index $functionAutoscalerCassandraValues "contactPoints") | default "" }}
+{{- $functionAutoscalerGrpcAddress := (index $functionAutoscalerValues "nvcfApiGrpcAddress") | default (index $functionAutoscalerNvcfApiValues "grpcAddress") | default "" }}
+{{- $functionAutoscalerOauthURL := (index $functionAutoscalerValues "oauth2TokenApiAddress") | default (index $functionAutoscalerNvcfApiValues "oauth2TokenApiAddress") | default "" }}
+{{- $functionAutoscalerImageRepository := (index $functionAutoscalerImageValues "repository") | default (printf "%s/nvcf-autoscaler-service" .Values.global.image.repository) }}
 {{- $functionAutoscalerHasEnvOverrides := or $functionAutoscalerTsdbURL $functionAutoscalerCassandraContactPoints $functionAutoscalerGrpcAddress $functionAutoscalerOauthURL (hasKey $functionAutoscalerTimeseriesDbValues "disableAuth") (hasKey $functionAutoscalerTimeseriesDbValues "env") (hasKey $functionAutoscalerTimeseriesDbValues "ignoreEnv") (hasKey $functionAutoscalerCassandraValues "port") (hasKey $functionAutoscalerCassandraValues "keyspace") (hasKey $functionAutoscalerCassandraSslValues "enabled") (hasKey $functionAutoscalerNvcfApiValues "disableAuth") }}
 functionautoscaler:
   {{- if .Values.global.imagePullSecrets }}
@@ -610,10 +628,10 @@ functionautoscaler:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ $functionAutoscalerImageRepository }}
-    {{- with dig "tag" "" $functionAutoscalerImageValues }}
+    {{- with (index $functionAutoscalerImageValues "tag") }}
     tag: {{ . | quote }}
     {{- end }}
-    {{- with dig "pullPolicy" "" $functionAutoscalerImageValues }}
+    {{- with (index $functionAutoscalerImageValues "pullPolicy") }}
     pullPolicy: {{ . | quote }}
     {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
@@ -628,25 +646,25 @@ functionautoscaler:
     TIMESERIES_DB__TIMESERIES_DB_URL: {{ $functionAutoscalerTsdbURL | quote }}
     {{- end }}
     {{- if hasKey $functionAutoscalerTimeseriesDbValues "disableAuth" }}
-    TIMESERIES_DB__DISABLE_AUTH: {{ get $functionAutoscalerTimeseriesDbValues "disableAuth" | quote }}
+    TIMESERIES_DB__DISABLE_AUTH: {{ index $functionAutoscalerTimeseriesDbValues "disableAuth" | quote }}
     {{- end }}
-    {{- with dig "env" "" $functionAutoscalerTimeseriesDbValues }}
+    {{- with (index $functionAutoscalerTimeseriesDbValues "env") }}
     TIMESERIES_DB__ENV: {{ . | quote }}
     {{- end }}
     {{- if hasKey $functionAutoscalerTimeseriesDbValues "ignoreEnv" }}
-    TIMESERIES_DB__IGNORE_ENV: {{ get $functionAutoscalerTimeseriesDbValues "ignoreEnv" | quote }}
+    TIMESERIES_DB__IGNORE_ENV: {{ index $functionAutoscalerTimeseriesDbValues "ignoreEnv" | quote }}
     {{- end }}
     {{- with $functionAutoscalerCassandraContactPoints }}
     CASSANDRA__CONTACT_POINTS: {{ $functionAutoscalerCassandraContactPoints | quote }}
     {{- end }}
-    {{- with dig "port" "" $functionAutoscalerCassandraValues }}
+    {{- with (index $functionAutoscalerCassandraValues "port") }}
     CASSANDRA__PORT: {{ . | quote }}
     {{- end }}
-    {{- with dig "keyspace" "" $functionAutoscalerCassandraValues }}
+    {{- with (index $functionAutoscalerCassandraValues "keyspace") }}
     CASSANDRA__KEYSPACE: {{ . | quote }}
     {{- end }}
     {{- if hasKey $functionAutoscalerCassandraSslValues "enabled" }}
-    CASSANDRA__SSL__ENABLED: {{ get $functionAutoscalerCassandraSslValues "enabled" | quote }}
+    CASSANDRA__SSL__ENABLED: {{ index $functionAutoscalerCassandraSslValues "enabled" | quote }}
     {{- end }}
     {{- with $functionAutoscalerGrpcAddress }}
     NVCF_API__NVCF_API_GRPC_ADDRESS: {{ $functionAutoscalerGrpcAddress | quote }}
@@ -655,7 +673,7 @@ functionautoscaler:
     NVCF_API__OAUTH2_TOKEN_API_ADDRESS: {{ $functionAutoscalerOauthURL | quote }}
     {{- end }}
     {{- if hasKey $functionAutoscalerNvcfApiValues "disableAuth" }}
-    NVCF_API__DISABLE_AUTH: {{ get $functionAutoscalerNvcfApiValues "disableAuth" | quote }}
+    NVCF_API__DISABLE_AUTH: {{ index $functionAutoscalerNvcfApiValues "disableAuth" | quote }}
     {{- end }}
   {{- end }}
 

@@ -49,14 +49,23 @@ environments:
 {{- if and $installMode (hasKey (dig "opentelemetryOperator" dict .Values) "enabled") (not (dig "opentelemetryOperator" "enabled" true .Values)) }}
 {{- fail "observability.mode=install owns the OpenTelemetry Operator; remove opentelemetryOperator.enabled=false or use observability.mode=existing" }}
 {{- end }}
-{{- $functionAutoscalerValues := dig "functionAutoscaler" (dig "functionautoscaler" dict .Values) .Values }}
-{{- $functionAutoscalerTimeseriesDbValues := dig "timeseriesDb" dict $functionAutoscalerValues }}
-{{- $functionAutoscalerNvcfApiValues := dig "nvcfApi" dict $functionAutoscalerValues }}
-{{- $functionAutoscalerEnabled := dig "enabled" false $functionAutoscalerValues }}
-{{- $functionAutoscalerChartVersion := dig "chartVersion" "" $functionAutoscalerValues }}
-{{- $functionAutoscalerTsdbURL := (dig "timeseriesDbUrl" "" $functionAutoscalerValues) | default (dig "url" "" $functionAutoscalerTimeseriesDbValues) }}
-{{- $functionAutoscalerOauthURL := (dig "oauth2TokenApiAddress" "" $functionAutoscalerValues) | default (dig "oauth2TokenApiAddress" "" $functionAutoscalerNvcfApiValues) }}
-{{- $functionAutoscalerAuthEnabled := and (hasKey $functionAutoscalerNvcfApiValues "disableAuth") (not (get $functionAutoscalerNvcfApiValues "disableAuth")) }}
+{{- $functionAutoscalerValues := (index .Values "functionAutoscaler") | default (index .Values "functionautoscaler") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerValues) }}
+{{- fail "functionAutoscaler must be a map" }}
+{{- end }}
+{{- $functionAutoscalerTimeseriesDbValues := (index $functionAutoscalerValues "timeseriesDb") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerTimeseriesDbValues) }}
+{{- fail "functionAutoscaler.timeseriesDb must be a map" }}
+{{- end }}
+{{- $functionAutoscalerNvcfApiValues := (index $functionAutoscalerValues "nvcfApi") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerNvcfApiValues) }}
+{{- fail "functionAutoscaler.nvcfApi must be a map" }}
+{{- end }}
+{{- $functionAutoscalerEnabled := (index $functionAutoscalerValues "enabled") | default false }}
+{{- $functionAutoscalerChartVersion := (index $functionAutoscalerValues "chartVersion") | default "" }}
+{{- $functionAutoscalerTsdbURL := (index $functionAutoscalerValues "timeseriesDbUrl") | default (index $functionAutoscalerTimeseriesDbValues "url") | default "" }}
+{{- $functionAutoscalerOauthURL := (index $functionAutoscalerValues "oauth2TokenApiAddress") | default (index $functionAutoscalerNvcfApiValues "oauth2TokenApiAddress") | default "" }}
+{{- $functionAutoscalerAuthEnabled := and (hasKey $functionAutoscalerNvcfApiValues "disableAuth") (not (index $functionAutoscalerNvcfApiValues "disableAuth")) }}
 {{- if and $functionAutoscalerEnabled (eq $mode "disabled") }}
 {{- fail "functionAutoscaler.enabled requires observability.mode to be install or existing" }}
 {{- end }}
