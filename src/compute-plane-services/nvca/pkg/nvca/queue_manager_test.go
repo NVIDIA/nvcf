@@ -644,6 +644,47 @@ func TestSyncQueuesWithBk8s(t *testing.T) {
 	require.EventuallyWithT(t, verifyPodsDeleted, 120*time.Second, 100*time.Millisecond)
 }
 
+// TestSyncQueuesTerminationErrorNotMasked verifies that a termination queue
+// pull error keeps the manager status not OK, even when the creation queue
+// pull succeeds.
+func TestSyncQueuesTerminationErrorNotMasked(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	clients := mockKubeClients()
+	b := NewBackendk8sCacheBuilder().
+		WithNamespaceLabels(labels.Set{"foo": "bar"}).
+		WithClients(clients).
+		WithStaticGPUCapacity(10)
+	bc, _, err := b.Start(ctx)
+	require.NoError(t, err)
+
+	// Use distinct queue URLs (mod=true) so the termination queue can fail
+	// independently of the creation queue.
+	queueCreds := getTestQueueCreds(true)
+	createQueue := queueCreds.CreationQueues[testGPUNameDefault]
+
+	qc := &mockqueue.Client{
+		Use10MillisForWaits: true,
+		FailReceiveQueueURL: queueCreds.TerminationQueue.QueueURL,
+		FailReceiveErr:      fmt.Errorf("simulated termination queue pull failure"),
+	}
+	qc.AddMessage(createQueue.QueueURL, queue.ReceiveMessageOutput{
+		MessageID:     creationMessageId,
+		ReceiptHandle: "randomIdTermFail",
+		Body:          []byte(goodCM),
+	})
+
+	bsc := newMockBackendStatusCacheFromK8s(t, bc)
+	metrics := nvcametrics.FromContext(ctx)
+	qm := NewQueueManager(bc, bsc, qc, queueCreds, featureflag.DefaultFetcher, types.MaintenanceModeNone, metrics)
+	assert.True(t, qm.StatusOK())
+
+	err = qm.SyncQueues(ctx)
+	assert.NoError(t, err)
+	assert.False(t, qm.StatusOK(), "status must not be OK when termination queue pull fails")
+}
+
 func TestSyncQueuesWithBk8sFailedCaching(t *testing.T) {
 	origUUID := GetUseUUIDForRequestObjName()
 	SetUseUUIDForRequestObjName(false)

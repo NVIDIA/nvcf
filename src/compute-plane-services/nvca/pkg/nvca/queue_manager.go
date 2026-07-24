@@ -449,9 +449,10 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 
 	// Hydrate the creation messages with the new request message IDs in matrics
 	// based on round-robin starting index.
-	creationMessagesByGPU, anyQueuePullError := createCreationMessageMatricesByGPU(
+	creationMessagesByGPU, hasCreationErrors := createCreationMessageMatricesByGPU(
 		log, qwInputs, qwOutputs, currQueueRingMetadata, existingMsgIDs,
 	)
+	anyQueuePullError = anyQueuePullError || hasCreationErrors
 
 	// Create worker pool to the number of termination messages plus the unique number of GPUs
 	// Termination requests can act in parallel while creation requests must be locked to a single GPU type per goroutine
