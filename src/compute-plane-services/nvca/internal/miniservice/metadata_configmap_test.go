@@ -463,7 +463,7 @@ func TestBuildMiniserviceMetadata_RoundtripWithConfigMap(t *testing.T) {
 		GeneralLabels:      generalLabels,
 		GeneralAnnotations: generalAnnotations,
 		OTelCollectorEnvVars: []corev1.EnvVar{
-			{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
+			{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
 		},
 	})
 	require.NoError(t, err)

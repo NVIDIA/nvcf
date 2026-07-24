@@ -323,7 +323,7 @@ func (c K8sComputeBackend) translateFunctionLaunchSpecification(
 			if !ok {
 				continue
 			}
-			k8sutil.AddBYOOEnvVarsToPodSpec(&pod.Spec, envs)
+			k8sutil.AddBYOOOTelCollectorEnvVarsToPodSpec(&pod.Spec, envs)
 		}
 	}
 

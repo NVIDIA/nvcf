@@ -785,7 +785,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		metaInput.OTelCollectorEnvVars = append(metaInput.OTelCollectorEnvVars, collectorEnvs...)
 		// The webhook special-cases Helm utils pods and skips metadata-carried collector
 		// env injection, so inject the envs directly into the BYOO collector sidecar.
-		k8sutil.AddBYOOEnvVarsToPodSpec(&utilsPod.Spec, collectorEnvs)
+		k8sutil.AddBYOOOTelCollectorEnvVarsToPodSpec(&utilsPod.Spec, collectorEnvs)
 	}
 
 	// Task-specific mutators.
