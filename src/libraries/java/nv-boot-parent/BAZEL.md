@@ -343,27 +343,98 @@ sonar.coverageReportPaths=<path-to-sonar-generic-coverage.xml>
 
 ## License And Notice
 
-The root owns the generator under `//tools/bazel/java`; nv-boot owns its
-checked-in `NOTICE`, `notice_roots.json`, and `notice_metadata.json` under:
+The monorepo has two NOTICE levels:
+
+1. nv-boot's Bazel target generates and checks the complete third-party NOTICE
+   for the nv-boot libraries.
+2. The existing root `tools/scripts/collect-notices` process records the
+   nv-boot NOTICE path in the monorepo's top-level `NOTICE`.
+
+The root owns the shared implementation:
 
 ```text
-//src/libraries/java/nv-boot-parent
+//rules/java:notice.bzl
+//tools/bazel/java:generate_notice_tool
 ```
 
-The generator is Bazel-native: it does not run Maven, invoke
-`license-maven-plugin`, or read project POMs. The final layered NOTICE and
-OSRB integration is Phase 4 work. The current diagnostic target is:
+nv-boot owns three component files:
+
+```text
+src/libraries/java/nv-boot-parent/NOTICE
+src/libraries/java/nv-boot-parent/notice_roots.json
+src/libraries/java/nv-boot-parent/notice_metadata.json
+```
+
+Their roles are deliberately different:
+
+- `NOTICE` is the complete, human-readable generated result checked into Git.
+- `notice_roots.json` lists the production dependency entry points for the
+  nv-boot library collection. It is required because nv-boot has no single
+  executable jar whose contents represent every public starter.
+- `notice_metadata.json` contains the reusable name, URL, and license metadata
+  for nv-boot's third-party runtime dependencies. OSS services reuse this
+  shared metadata instead of copying it.
+
+The generator is Bazel-native. Normal generation reads the root
+`maven_install.json`, not project POM files, and does not run Maven or
+`license-maven-plugin`.
+
+Regenerate the checked-in nv-boot NOTICE:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  run //src/libraries/java/nv-boot-parent:generate_notice -- --check
+  run //src/libraries/java/nv-boot-parent:generate_notice -- --write
 ```
 
-At the end of Phase 3 the checked-in nv-boot NOTICE is stale for
-`com.google.code.findbugs:jsr305` (`2.0.1` versus resolved `3.0.2`). Phase 4
-will finish deterministic regenerate/check targets, shared metadata reuse by
-services, and license-grouped OSRB delta output. Do not describe NOTICE as a
-required passing CI gate until that work is complete.
+When a new runtime dependency lacks metadata, refresh the component-owned
+metadata and NOTICE together:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  run //src/libraries/java/nv-boot-parent:generate_notice -- \
+  --update-metadata --write
+```
+
+The metadata-update mode may read an upstream dependency POM from the local
+Maven cache or configured artifact repository to obtain its published name,
+URL, and license declaration. That is metadata discovery only; it does not run
+a Maven project build.
+
+Check for drift exactly as CI does:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  test //src/libraries/java/nv-boot-parent:notice_check_test \
+  --cache_test_results=no \
+  --test_output=errors
+```
+
+Build the machine-readable nv-boot runtime inventory:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build //src/libraries/java/nv-boot-parent:nv_boot_runtime_inventory
+
+cat bazel-bin/src/libraries/java/nv-boot-parent/runtime_inventory.json
+```
+
+The nv-boot inventory is the input for its OSRB comparison. An
+`nv_boot_osrb_dependency_delta` target is intentionally not defined yet
+because the monorepo does not have a checked-in approved-baseline inventory to
+subtract. Do not compare nv-boot with an empty baseline and describe every
+dependency as newly introduced. Once OSRB establishes the approved public
+baseline, add that inventory as the explicit baseline and generate nv-boot's
+license-grouped delta from the exact versioned-coordinate difference.
+
+After component NOTICE files are updated, validate the existing monorepo root
+rollup:
+
+```bash
+./tools/ci/check-license
+```
+
+`check-license` requires Bash 4 or newer. To intentionally refresh the
+top-level path rollup, run `./tools/scripts/update-license`.
 
 ## GitHub CI
 

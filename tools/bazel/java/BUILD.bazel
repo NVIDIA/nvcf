@@ -1,6 +1,6 @@
 load("@rules_java//java:defs.bzl", "java_binary", "java_library", "java_plugin")
 load("@rules_proto_grpc//:defs.bzl", "proto_plugin")
-load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Root-owned executable helpers and shared build targets for Java subtrees.
@@ -10,7 +10,9 @@ package(default_visibility = ["//visibility:public"])
 exports_files([
     "generate_notice.py",
     "jacoco_test_runner.sh",
+    "license_aliases.json",
     "lcov_to_sonar_generic.py",
+    "notice_diff_test.sh",
 ])
 
 # Lombok annotation processing (shared by both Java compile profiles).
@@ -41,6 +43,21 @@ py_binary(
     srcs = ["generate_notice.py"],
     main = "generate_notice.py",
     python_version = "3.11",
+)
+
+py_library(
+    name = "generate_notice_lib",
+    srcs = ["generate_notice.py"],
+    imports = ["."],
+)
+
+py_test(
+    name = "generate_notice_test",
+    srcs = ["generate_notice_test.py"],
+    deps = [":generate_notice_lib"],
+    main = "generate_notice_test.py",
+    python_version = "3.11",
+    size = "small",
 )
 
 # gRPC-Java codegen plugin (pinned native binary, version tracks GRPC_VERSION

@@ -1,2 +1,3 @@
-# Root-owned reusable Java Starlark APIs. See defs.bzl, spring.bzl, proto.bzl.
+# Root-owned reusable Java Starlark APIs. See defs.bzl, notice.bzl, proto.bzl,
+# and spring.bzl.
 package(default_visibility = ["//visibility:public"])

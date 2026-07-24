@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Generates the third-party NOTICE file from Bazel dependency metadata.
 
-The build/test path is hermetic: it reads checked-in root manifests,
-`maven_install.json`, and generated upstream POM metadata. The update path can
-refresh the metadata from local Maven POM cache files or remote Maven
-repositories, similar to repinning `maven_install.json`.
+The build/test path is hermetic: it reads `maven_install.json`, checked-in
+component metadata, and either declared library roots or a packaged runtime
+jar. Only the explicit metadata-update path reads dependency POMs from a local
+Maven cache or remote Maven-compatible repository.
 """
 
 import argparse
@@ -65,6 +65,70 @@ def versioned_coordinate(group_id, artifact_id, version):
 
 def load_json(path):
     return json.loads(path.read_text())
+
+
+def metadata_artifacts(metadata):
+    return metadata.get("artifacts", {})
+
+
+def merge_metadata(shared_documents, primary_document, reject_primary_overlap=True):
+    """Merges shared metadata with component-owned metadata."""
+    merged = {}
+    for source, document in shared_documents:
+        for coordinate, entry in metadata_artifacts(document).items():
+            existing = merged.get(coordinate)
+            if existing is not None and existing != entry:
+                raise ValueError(
+                    f"Conflicting shared NOTICE metadata for {coordinate}: {source}"
+                )
+            merged[coordinate] = entry
+
+    for coordinate, entry in metadata_artifacts(primary_document).items():
+        existing = merged.get(coordinate)
+        if existing is not None:
+            if existing != entry:
+                raise ValueError(
+                    f"Component NOTICE metadata conflicts with shared metadata for {coordinate}"
+                )
+            if reject_primary_overlap:
+                raise ValueError(
+                    f"Component NOTICE metadata duplicates shared metadata for {coordinate}"
+                )
+        merged[coordinate] = entry
+
+    return {"artifacts": merged}
+
+
+def prune_shared_metadata(primary_document, shared_documents):
+    """Removes exact shared entries from component-owned metadata."""
+    shared = merge_metadata(shared_documents, {"artifacts": {}}, False)
+    artifacts = {}
+    for coordinate, entry in metadata_artifacts(primary_document).items():
+        shared_entry = metadata_artifacts(shared).get(coordinate)
+        if shared_entry is not None:
+            if shared_entry != entry:
+                raise ValueError(
+                    f"Component NOTICE metadata conflicts with shared metadata for {coordinate}"
+                )
+            continue
+        artifacts[coordinate] = entry
+    return {
+        "generated_by": primary_document.get(
+            "generated_by",
+            "tools/bazel/java/generate_notice.py",
+        ),
+        "artifacts": {key: artifacts[key] for key in sorted(artifacts)},
+    }
+
+
+def load_license_aliases(path):
+    if not path:
+        return {}
+    return load_json(path).get("aliases", {})
+
+
+def normalized_licenses(licenses, aliases):
+    return sorted({aliases.get(license_name, license_name) for license_name in licenses})
 
 
 def load_root_manifests(paths):
@@ -199,15 +263,104 @@ def generated_notice(coordinates, maven_install, metadata):
         raise ValueError(
             "Missing NOTICE metadata for:\n"
             + "\n".join(f"  {coordinate}" for coordinate in missing)
-            + "\nRun: python3 tools/bazel/generate_notice.py --update-metadata --write"
+            + "\nRun the component's Bazel generate_notice target with "
+            "--update-metadata --write"
         )
     if incomplete:
         raise ValueError(
             "Incomplete NOTICE metadata for:\n"
             + "\n".join(f"  {coordinate}" for coordinate in incomplete)
-            + "\nFix tools/bazel/notice_metadata.json or rerun metadata generation after POM metadata is available."
+            + "\nFix the component notice_metadata.json or rerun metadata "
+            "generation after POM metadata is available."
         )
     lines.append("")
+    return "\n".join(lines)
+
+
+def generated_inventory(coordinates, maven_install, metadata, aliases):
+    dependencies = []
+    for key in coordinates:
+        artifact = maven_install["artifacts"].get(key)
+        if not artifact:
+            continue
+        group_id, artifact_id = key.split(":", 1)
+        coordinate = versioned_coordinate(
+            group_id,
+            artifact_id,
+            artifact["version"],
+        )
+        entry = metadata_artifacts(metadata).get(coordinate)
+        if not entry:
+            raise ValueError(f"Missing NOTICE metadata for {coordinate}")
+        dependencies.append(
+            {
+                "coordinate": coordinate,
+                "licenses": normalized_licenses(entry.get("licenses", []), aliases),
+                "name": entry.get("name") or artifact_id,
+                "url": entry.get("url") or "",
+            }
+        )
+    return {
+        "generated_by": "tools/bazel/java/generate_notice.py",
+        "dependencies": dependencies,
+    }
+
+
+def inventory_coordinates(inventory):
+    return {
+        dependency["coordinate"]
+        for dependency in inventory.get("dependencies", [])
+    }
+
+
+def generated_delta(inventory, baseline_inventories):
+    baseline_coordinates = set()
+    for baseline in baseline_inventories:
+        baseline_coordinates.update(inventory_coordinates(baseline))
+
+    dependencies = [
+        dependency
+        for dependency in inventory.get("dependencies", [])
+        if dependency["coordinate"] not in baseline_coordinates
+    ]
+    dependencies.sort(key=lambda dependency: dependency["coordinate"])
+
+    groups = {}
+    for dependency in dependencies:
+        licenses = dependency.get("licenses") or ["UNKNOWN"]
+        group = " / ".join(sorted(licenses))
+        groups.setdefault(group, []).append(dependency)
+
+    return {
+        "generated_by": "tools/bazel/java/generate_notice.py",
+        "dependencies": dependencies,
+        "groups": {key: groups[key] for key in sorted(groups)},
+    }
+
+
+def generated_delta_markdown(delta):
+    dependencies = delta["dependencies"]
+    lines = [
+        "# OSRB Dependency Delta",
+        "",
+        (
+            f"{len(dependencies)} new or additional third-party "
+            "dependencies require review."
+        ),
+        "",
+    ]
+    if not dependencies:
+        lines.extend(["No new or additional dependencies were found.", ""])
+        return "\n".join(lines)
+
+    for license_group, entries in delta["groups"].items():
+        lines.extend([f"## {license_group}", ""])
+        for entry in entries:
+            suffix = f" - {entry['url']}" if entry.get("url") else ""
+            lines.append(
+                f"- `{entry['coordinate']}` - {entry['name']}{suffix}"
+            )
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -381,9 +534,15 @@ class PomMetadataResolver:
         return result
 
 
-def update_metadata(coordinates, maven_install, existing_metadata):
+def update_metadata(
+    coordinates,
+    maven_install,
+    existing_metadata,
+    shared_metadata=None,
+):
     resolver = PomMetadataResolver(maven_install)
     artifacts = dict(existing_metadata.get("artifacts", {}))
+    shared_artifacts = metadata_artifacts(shared_metadata or {})
     for key in coordinates:
         artifact = maven_install["artifacts"].get(key)
         if not artifact:
@@ -391,6 +550,8 @@ def update_metadata(coordinates, maven_install, existing_metadata):
         group_id, artifact_id = key.split(":", 1)
         version = artifact["version"]
         versioned = versioned_coordinate(group_id, artifact_id, version)
+        if versioned in shared_artifacts:
+            continue
         resolved = resolver.resolve(group_id, artifact_id, version)
         artifacts[versioned] = {
             "licenses": resolved["licenses"],
@@ -398,7 +559,7 @@ def update_metadata(coordinates, maven_install, existing_metadata):
             "url": resolved["url"],
         }
     return {
-        "generated_by": "tools/bazel/generate_notice.py --update-metadata",
+        "generated_by": "tools/bazel/java/generate_notice.py --update-metadata",
         "artifacts": {key: artifacts[key] for key in sorted(artifacts)},
     }
 
@@ -417,22 +578,81 @@ def current_notice_coordinates(path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--maven-install", default="maven_install.json")
-    parser.add_argument("--metadata", default="tools/bazel/notice_metadata.json")
+    parser.add_argument("--metadata")
+    parser.add_argument("--shared-metadata", action="append", default=[])
     parser.add_argument("--notice", default="NOTICE")
     parser.add_argument("--root-manifest", action="append", default=[])
     parser.add_argument("--runtime-jar", action="append", default=[])
     parser.add_argument("--first-party-group", action="append", default=[])
+    parser.add_argument("--license-aliases")
     parser.add_argument("--output")
+    parser.add_argument("--inventory-output")
+    parser.add_argument("--delta-inventory")
+    parser.add_argument("--baseline-inventory", action="append", default=[])
+    parser.add_argument("--delta-json-output")
+    parser.add_argument("--delta-markdown-output")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--update-metadata", action="store_true")
+    parser.add_argument("--prune-shared-metadata", action="store_true")
     args = parser.parse_args()
+
+    if args.delta_inventory:
+        if not args.delta_json_output or not args.delta_markdown_output:
+            parser.error(
+                "--delta-inventory requires --delta-json-output and "
+                "--delta-markdown-output"
+            )
+        inventory = load_json(pathlib.Path(args.delta_inventory))
+        baselines = [
+            load_json(pathlib.Path(path))
+            for path in args.baseline_inventory
+        ]
+        delta = generated_delta(inventory, baselines)
+        pathlib.Path(args.delta_json_output).write_text(
+            json.dumps(delta, indent=2, sort_keys=True) + "\n"
+        )
+        pathlib.Path(args.delta_markdown_output).write_text(
+            generated_delta_markdown(delta)
+        )
+        print(
+            f"OSRB delta generated for {len(delta['dependencies'])} "
+            "new or additional dependencies"
+        )
+        return 0
+
+    if not args.metadata:
+        parser.error("--metadata is required for NOTICE generation")
 
     maven_install_path = pathlib.Path(args.maven_install)
     metadata_path = pathlib.Path(args.metadata)
     notice_path = pathlib.Path(args.notice)
     maven_install = load_json(maven_install_path)
-    metadata = load_json(metadata_path) if metadata_path.exists() else {"artifacts": {}}
+    primary_metadata = (
+        load_json(metadata_path)
+        if metadata_path.exists()
+        else {"artifacts": {}}
+    )
+    shared_documents = [
+        (path, load_json(pathlib.Path(path)))
+        for path in args.shared_metadata
+    ]
+
+    if args.prune_shared_metadata:
+        primary_metadata = prune_shared_metadata(
+            primary_metadata,
+            shared_documents,
+        )
+        metadata_path.write_text(
+            json.dumps(primary_metadata, indent=2, sort_keys=True) + "\n"
+        )
+
+    shared_metadata = merge_metadata(
+        shared_documents,
+        {"artifacts": {}},
+        False,
+    )
+    metadata = merge_metadata(shared_documents, primary_metadata)
 
     first_party_groups = tuple(FIRST_PARTY_GROUPS) + tuple(args.first_party_group)
     roots = load_root_manifests([pathlib.Path(path) for path in args.root_manifest])
@@ -448,8 +668,16 @@ def main():
         raise ValueError("At least one --root-manifest or --runtime-jar is required")
 
     if args.update_metadata:
-        metadata = update_metadata(coordinates, maven_install, metadata)
-        metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+        primary_metadata = update_metadata(
+            coordinates,
+            maven_install,
+            primary_metadata,
+            shared_metadata,
+        )
+        metadata_path.write_text(
+            json.dumps(primary_metadata, indent=2, sort_keys=True) + "\n"
+        )
+        metadata = merge_metadata(shared_documents, primary_metadata)
 
     notice = generated_notice(coordinates, maven_install, metadata)
     output_path = pathlib.Path(args.output) if args.output else notice_path
@@ -457,10 +685,25 @@ def main():
     if diff:
         sys.stderr.write(diff)
         sys.stderr.write(
-            "\nRun: python3 tools/bazel/generate_notice.py --update-metadata --write "
-            "with the same --root-manifest or --runtime-jar inputs\n"
+            "\nRun the component's Bazel generate_notice target with --write "
+            "(and --update-metadata when dependency metadata changed)\n"
         )
         return 1
+
+    if args.inventory_output:
+        inventory = generated_inventory(
+            coordinates,
+            maven_install,
+            metadata,
+            load_license_aliases(
+                pathlib.Path(args.license_aliases)
+                if args.license_aliases
+                else None
+            ),
+        )
+        pathlib.Path(args.inventory_output).write_text(
+            json.dumps(inventory, indent=2, sort_keys=True) + "\n"
+        )
 
     if args.check:
         generated_coordinates = set()

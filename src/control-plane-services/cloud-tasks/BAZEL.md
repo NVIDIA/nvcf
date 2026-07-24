@@ -591,31 +591,98 @@ the selected test execution.
 
 ## License/NOTICE Generation
 
-NOTICE generation is the Bazel-native replacement for the aggregate
-third-party inventory previously produced through `license-maven-plugin`. It
-must derive the shipped coordinates from the jars nested in:
+The monorepo has two NOTICE levels:
+
+1. Cloud Tasks' Bazel target generates and checks the complete third-party
+   NOTICE for the application.
+2. The existing root `tools/scripts/collect-notices` process records the Cloud
+   Tasks NOTICE path in the monorepo's top-level `NOTICE`.
+
+Cloud Tasks derives its actual shipped coordinates from the jars nested in:
 
 ```text
 //src/control-plane-services/cloud-tasks/nvct-service:app
 ```
 
-The root owns the generator under `//tools/bazel/java`; Cloud Tasks owns its
-checked-in `NOTICE` and service-specific `notice_metadata.json`. The generator
-does not read project POM files and does not invoke Maven.
+The root owns the shared rule and generator under `//rules/java` and
+`//tools/bazel/java`. Cloud Tasks owns:
 
-The final layered NOTICE integration is Phase 4 work. The current diagnostic
-target is intentionally tagged `manual` and exposes the metadata gap:
+```text
+src/control-plane-services/cloud-tasks/NOTICE
+src/control-plane-services/cloud-tasks/notice_metadata.json
+```
+
+Cloud Tasks does not need `notice_roots.json`: the executable `app.jar` is the
+authoritative runtime closure. Its metadata file contains only dependencies
+additional to nv-boot. The shared rule reads common metadata from:
+
+```text
+//src/libraries/java/nv-boot-parent:notice_metadata.json
+```
+
+It selects only shared entries actually present in `app.jar`, merges the
+service-owned entries, and fails on missing, conflicting, or duplicated
+metadata. The generated Cloud Tasks NOTICE is complete and standalone; it is
+not a concatenation of or link to nv-boot's NOTICE.
+
+Regenerate the checked-in NOTICE:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //src/control-plane-services/cloud-tasks:third_party_notice
+  run //src/control-plane-services/cloud-tasks:generate_notice -- --write
 ```
 
-At the end of Phase 3 this reports missing service/shared metadata, beginning
-with `aopalliance:aopalliance:1.0`. Do not treat the current target or
-checked-in NOTICE as the completed CI contract. Phase 4 will add deterministic
-regenerate, check, complete-runtime NOTICE, and license-grouped OSRB-delta
-commands here.
+When a new service runtime dependency lacks metadata, refresh only the
+service-owned metadata and NOTICE:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  run //src/control-plane-services/cloud-tasks:generate_notice -- \
+  --update-metadata --write
+```
+
+The metadata-update mode may read an upstream dependency POM from the local
+Maven cache or configured artifact repository to obtain its published name,
+URL, and license declaration. That is metadata discovery only; it does not run
+a Maven project build.
+
+Check NOTICE drift exactly as CI does:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  test //src/control-plane-services/cloud-tasks:notice_check_test \
+  --cache_test_results=no \
+  --test_output=errors
+```
+
+Build the complete runtime inventory and NVBug-ready dependency delta:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build \
+  //src/control-plane-services/cloud-tasks:cloud_tasks_runtime_inventory \
+  //src/control-plane-services/cloud-tasks:osrb_dependency_delta
+
+cat bazel-bin/src/control-plane-services/cloud-tasks/runtime_inventory.json
+cat bazel-bin/src/control-plane-services/cloud-tasks/osrb_dependency_delta.json
+cat bazel-bin/src/control-plane-services/cloud-tasks/osrb_dependency_delta.md
+```
+
+The delta compares exact versioned Cloud Tasks runtime coordinates with the
+nv-boot runtime inventory and groups only the additional dependencies by
+normalized license. Use that Markdown as the dependency portion of the NVBug
+6040004 approval comment. Ambiguous and custom license expressions remain
+explicit for OSRB review.
+
+After component NOTICE files are updated, validate the existing monorepo root
+rollup:
+
+```bash
+./tools/ci/check-license
+```
+
+`check-license` requires Bash 4 or newer. To intentionally refresh the
+top-level path rollup, run `./tools/scripts/update-license`.
 
 ## GitHub CI
 

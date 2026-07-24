@@ -1,5 +1,5 @@
-load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//rules/java:defs.bzl", "nvct_workspace_runfiles")
+load("//rules/java:notice.bzl", "nvcf_notice", "nvcf_notice_delta")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -9,7 +9,6 @@ package(default_visibility = ["//visibility:public"])
 exports_files([
     "NOTICE",
     "notice_metadata.json",
-    "generate_notice.sh",
 ])
 
 filegroup(
@@ -32,38 +31,20 @@ nvct_workspace_runfiles(
     strip_prefix = "src/control-plane-services/cloud-tasks/",
 )
 
-genrule(
-    name = "third_party_notice",
-    srcs = [
-        "//:maven_install.json",
-        "//src/control-plane-services/cloud-tasks/nvct-service:app",
-        ":notice_metadata.json",
-        "//tools/bazel/java:generate_notice.py",
+nvcf_notice(
+    checked_notice = ":NOTICE",
+    first_party_groups = ["com.nvidia.nvct"],
+    inventory_name = "cloud_tasks_runtime_inventory",
+    metadata = ":notice_metadata.json",
+    runtime_target = "//src/control-plane-services/cloud-tasks/nvct-service:app",
+    shared_metadata = [
+        "//src/libraries/java/nv-boot-parent:notice_metadata.json",
     ],
-    outs = ["THIRD_PARTY_NOTICE"],
-    # Excluded from wildcard builds: the service NOTICE metadata does not yet
-    # cover every transitive resolved through the single merged root hub (for
-    # example aopalliance:aopalliance:1.0). Reconciling service NOTICE metadata
-    # against the merged root closure is the layered-NOTICE work deferred to the
-    # shared-tooling pilot in the monorepo Java architecture. Run explicitly
-    # with `bazel build //src/control-plane-services/cloud-tasks:third_party_notice`.
-    tags = ["manual"],
-    cmd = """
-python3 "$(location //tools/bazel/java:generate_notice.py)" \
-    --maven-install "$(location //:maven_install.json)" \
-    --metadata "$(location :notice_metadata.json)" \
-    --runtime-jar "$(location //src/control-plane-services/cloud-tasks/nvct-service:app)" \
-    --first-party-group com.nvidia.nvct \
-    --output "$@" \
-    --write
-""",
 )
 
-sh_binary(
-    name = "generate_notice",
-    srcs = [":generate_notice.sh"],
-    data = [
-        "//src/control-plane-services/cloud-tasks/nvct-service:app",
-        "//tools/bazel/java:generate_notice.py",
+nvcf_notice_delta(
+    baseline_inventories = [
+        "//src/libraries/java/nv-boot-parent:runtime_inventory.json",
     ],
+    inventory = ":runtime_inventory.json",
 )

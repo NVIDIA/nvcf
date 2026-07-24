@@ -1509,5 +1509,5 @@
       "url": "https://github.com/FasterXML/jackson-modules-base"
     }
   },
-  "generated_by": "tools/bazel/generate_notice.py --update-metadata"
+  "generated_by": "tools/bazel/java/generate_notice.py --update-metadata"
 }
