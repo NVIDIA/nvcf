@@ -236,6 +236,7 @@ func buildModelMapping(
 		if entry.OutgoingPathOverride != "" {
 			pathOverride = &entry.OutgoingPathOverride
 		}
+		initializeShadowDropMetrics(entry.ShadowModelNames)
 		modelNameToNVCFUrl[modelName] = FunctionInfo{
 			functionId:                     entry.FunctionId,
 			functionVersionId:              entry.FunctionVersionId,
