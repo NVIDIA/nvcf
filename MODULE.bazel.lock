@@ -379,7 +379,7 @@
     "@@rules_oci+//oci:extensions.bzl%oci": {
       "general": {
         "bzlTransitiveDigest": "IPpbSHX7+8yLBfvZyia9qXU/WRxkP+dWAO8m5+BsBY8=",
-        "usagesDigest": "OlwIdJhTnYJJAA+ezJIG6rT/iRycvHf0Yuf0EPuhO7c=",
+        "usagesDigest": "HCv5iVmsywJDYi04nXaMJHFn8CwQx+Ryy/HVpSiPdaQ=",
         "recordedInputs": [
           "REPO_MAPPING:aspect_bazel_lib+,bazel_tools bazel_tools",
           "REPO_MAPPING:bazel_features+,bazel_tools bazel_tools",
@@ -471,6 +471,49 @@
                 "@@platforms//cpu:x86_64": "@temurin_jre_linux_amd64"
               },
               "bzlmod_repository": "temurin_jre",
+              "reproducible": true
+            }
+          },
+          "distroless_java_linux_amd64": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/java",
+              "identifier": "sha256:cc9dbc2560e39f6e0a67cd85421370e46fd818b1660800b507b82819a79ea21f",
+              "platform": "linux/amd64",
+              "target_name": "distroless_java_linux_amd64",
+              "bazel_tags": []
+            }
+          },
+          "distroless_java_linux_arm64_v8": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/java",
+              "identifier": "sha256:cc9dbc2560e39f6e0a67cd85421370e46fd818b1660800b507b82819a79ea21f",
+              "platform": "linux/arm64/v8",
+              "target_name": "distroless_java_linux_arm64_v8",
+              "bazel_tags": []
+            }
+          },
+          "distroless_java": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_alias",
+            "attributes": {
+              "target_name": "distroless_java",
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/java",
+              "identifier": "sha256:cc9dbc2560e39f6e0a67cd85421370e46fd818b1660800b507b82819a79ea21f",
+              "platforms": {
+                "@@platforms//cpu:x86_64": "@distroless_java_linux_amd64",
+                "@@platforms//cpu:arm64": "@distroless_java_linux_arm64_v8"
+              },
+              "bzlmod_repository": "distroless_java",
               "reproducible": true
             }
           },
@@ -595,7 +638,10 @@
             "ubuntu_noble_linux_amd64",
             "temurin_jre",
             "temurin_jre_linux_arm64_v8",
-            "temurin_jre_linux_amd64"
+            "temurin_jre_linux_amd64",
+            "distroless_java",
+            "distroless_java_linux_amd64",
+            "distroless_java_linux_arm64_v8"
           ],
           "explicitRootModuleDirectDevDeps": [],
           "useAllRepos": "NO",
