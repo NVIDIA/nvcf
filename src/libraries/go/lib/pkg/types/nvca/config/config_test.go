@@ -196,6 +196,29 @@ agent:
 	assert.Equal(t, cfg, gotDecodedCfg)
 }
 
+func TestConfig_EncodeDecode_BYOOConfigSwitches(t *testing.T) {
+	cfg, err := DecodeConfig([]byte(`
+agent:
+  byooLogChunking:
+    enabled: true
+    maxBodyBytes: 131072
+    maxPayloadBytes: 262144
+  byooDebugMode:
+    enabled: true
+  byooOtelCollector:
+    exporterHelper:
+      timeout: 30s
+`))
+	require.NoError(t, err)
+
+	completed := cfg.Complete()
+	assert.True(t, completed.Agent.BYOOLogChunking.Enabled)
+	assert.Equal(t, int64(262144), completed.Agent.BYOOLogChunking.MaxPayloadBytes)
+	assert.Equal(t, int64(131072), completed.Agent.BYOOLogChunking.MaxBodyBytes)
+	assert.True(t, completed.Agent.BYOODebugMode.Enabled)
+	assert.Equal(t, "30s", completed.Agent.BYOOOTelCollector.ExporterHelper.Timeout)
+}
+
 func TestConfig_EncodeDecode_Tolerations(t *testing.T) {
 	cfg := Config{
 		Agent: AgentConfig{

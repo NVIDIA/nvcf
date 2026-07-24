@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+import_roots=(
+  "src/libraries/java/nv-boot-parent"
+  "src/control-plane-services/cloud-tasks"
+)
+
+root_owned_files=(
+  ".bazel_downloader_config"
+  ".bazelignore"
+  ".bazelrc"
+  ".bazelversion"
+  "MODULE.bazel"
+  "MODULE.bazel.lock"
+  "WORKSPACE"
+  "WORKSPACE.bazel"
+  "maven_install.json"
+)
+
+failed=false
+
+for import_root in "${import_roots[@]}"; do
+  for root_owned_file in "${root_owned_files[@]}"; do
+    path="${repo_root}/${import_root}/${root_owned_file}"
+    if [[ -e "${path}" ]]; then
+      echo "ERROR: root-owned Bazel file reintroduced: ${import_root}/${root_owned_file}" >&2
+      failed=true
+    fi
+  done
+
+  while IFS= read -r migration_dir; do
+    [[ -z "${migration_dir}" ]] && continue
+    echo "ERROR: standalone migration directory reintroduced: ${migration_dir#${repo_root}/}" >&2
+    failed=true
+  done < <(
+    find "${repo_root}/${import_root}" -type d \
+      \( -name bazel-enablement -o -name bazel-migration \) -print
+  )
+done
+
+if [[ "${failed}" == true ]]; then
+  cat >&2 <<'EOF'
+nv-boot-parent and Cloud Tasks are packages in the root nvcf Bazel module.
+Keep Bazel root configuration and dependency locks at the repository root, and
+keep standalone migration records out of imported source trees.
+EOF
+  exit 1
+fi
+
+echo "Java import boundaries: PASS"

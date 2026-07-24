@@ -1,0 +1,1513 @@
+{
+  "artifacts": {
+    "aopalliance:aopalliance:1.0": {
+      "licenses": [
+        "Public Domain"
+      ],
+      "name": "AOP alliance",
+      "url": "http://aopalliance.sourceforge.net"
+    },
+    "at.yawk.lz4:lz4-java:1.10.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "LZ4 Java Compression",
+      "url": "https://github.com/yawkat/lz4-java"
+    },
+    "ch.qos.logback:logback-classic:1.5.34": {
+      "licenses": [
+        "EPL-2.0",
+        "LGPL-2.1-only"
+      ],
+      "name": "Logback Classic Module",
+      "url": "http://logback.qos.ch"
+    },
+    "ch.qos.logback:logback-core:1.5.34": {
+      "licenses": [
+        "EPL-2.0",
+        "LGPL-2.1-only"
+      ],
+      "name": "Logback Core Module",
+      "url": "http://logback.qos.ch"
+    },
+    "com.datastax.oss:native-protocol:1.5.2": {
+      "licenses": [
+        "Apache 2"
+      ],
+      "name": "An implementation of the Apache Cassandra\u00ae native protocol",
+      "url": "https://github.com/datastax/native-protocol"
+    },
+    "com.fasterxml.jackson.core:jackson-annotations:2.21": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-annotations",
+      "url": "https://github.com/FasterXML/jackson"
+    },
+    "com.fasterxml.jackson.core:jackson-core:2.21.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-core",
+      "url": "https://github.com/FasterXML/jackson-core"
+    },
+    "com.fasterxml.jackson.core:jackson-databind:2.21.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jackson-databind",
+      "url": "https://github.com/FasterXML/jackson"
+    },
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-dataformat-YAML",
+      "url": "https://github.com/FasterXML/jackson-dataformats-text"
+    },
+    "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.21.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson datatype: JSR310",
+      "url": "https://github.com/FasterXML/jackson-modules-java8"
+    },
+    "com.fasterxml:classmate:1.7.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "ClassMate",
+      "url": "https://github.com/FasterXML/java-classmate"
+    },
+    "com.github.ben-manes.caffeine:caffeine:3.2.4": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Caffeine cache",
+      "url": "https://github.com/ben-manes/caffeine"
+    },
+    "com.github.ben-manes.caffeine:guava:3.2.4": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Caffeine cache",
+      "url": "https://github.com/ben-manes/caffeine"
+    },
+    "com.github.java-json-tools:btf:1.3": {
+      "licenses": [
+        "Lesser General Public License, version 3 or greater",
+        "Apache Software License, version 2.0"
+      ],
+      "name": "btf",
+      "url": "https://github.com/java-json-tools/btf"
+    },
+    "com.github.java-json-tools:jackson-coreutils:2.0": {
+      "licenses": [
+        "Lesser General Public License, version 3 or greater",
+        "Apache Software License, version 2.0"
+      ],
+      "name": "jackson-coreutils",
+      "url": "https://github.com/java-json-tools/jackson-coreutils"
+    },
+    "com.github.java-json-tools:json-patch:1.13": {
+      "licenses": [
+        "Lesser General Public License, version 3 or greater",
+        "Apache Software License, version 2.0"
+      ],
+      "name": "json-patch",
+      "url": "https://github.com/java-json-tools/json-patch"
+    },
+    "com.github.java-json-tools:msg-simple:1.2": {
+      "licenses": [
+        "Lesser General Public License, version 3 or greater",
+        "Apache Software License, version 2.0"
+      ],
+      "name": "msg-simple",
+      "url": "https://github.com/java-json-tools/msg-simple"
+    },
+    "com.github.jnr:jffi:1.2.16": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jffi",
+      "url": "http://github.com/jnr/jffi"
+    },
+    "com.github.jnr:jnr-constants:0.10.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jnr-constants",
+      "url": "http://github.com/jnr/jnr-constants"
+    },
+    "com.github.jnr:jnr-ffi:2.1.7": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jnr-ffi",
+      "url": "http://github.com/jnr/jnr-ffi"
+    },
+    "com.github.jnr:jnr-posix:3.1.15": {
+      "licenses": [
+        "Eclipse Public License - v 2.0",
+        "GNU General Public License Version 2",
+        "GNU Lesser General Public License Version 2.1"
+      ],
+      "name": "jnr-posix",
+      "url": "http://nexus.sonatype.org/oss-repository-hosting.html"
+    },
+    "com.github.jnr:jnr-x86asm:1.0.2": {
+      "licenses": [
+        "MIT License"
+      ],
+      "name": "jnr-x86asm",
+      "url": "http://github.com/jnr/jnr-x86asm"
+    },
+    "com.github.stephenc.jcip:jcip-annotations:1.0-1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "JCIP Annotations under Apache License",
+      "url": "http://stephenc.github.com/jcip-annotations"
+    },
+    "com.google.code.findbugs:jsr305:2.0.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "FindBugs-jsr305",
+      "url": "http://findbugs.sourceforge.net/"
+    },
+    "com.google.code.findbugs:jsr305:3.0.2": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "FindBugs-jsr305",
+      "url": "http://findbugs.sourceforge.net/"
+    },
+    "com.google.errorprone:error_prone_annotations:2.49.0": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "error-prone annotations",
+      "url": "https://errorprone.info"
+    },
+    "com.google.errorprone:error_prone_annotations:2.5.1": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "error-prone annotations",
+      "url": "http://nexus.sonatype.org/oss-repository-hosting.html"
+    },
+    "com.google.guava:failureaccess:1.0.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Guava InternalFutureFailureAccess and InternalFutures",
+      "url": "https://github.com/google/guava"
+    },
+    "com.google.guava:failureaccess:1.0.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Guava InternalFutureFailureAccess and InternalFutures",
+      "url": "https://github.com/google/guava"
+    },
+    "com.google.guava:guava:32.0.1-jre": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Guava: Google Core Libraries for Java",
+      "url": "https://github.com/google/guava"
+    },
+    "com.google.guava:guava:33.6.0-jre": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Guava: Google Core Libraries for Java",
+      "url": "https://github.com/google/guava"
+    },
+    "com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Guava ListenableFuture only",
+      "url": "https://github.com/google/guava"
+    },
+    "com.google.j2objc:j2objc-annotations:2.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "J2ObjC Annotations",
+      "url": "https://github.com/google/j2objc/"
+    },
+    "com.google.j2objc:j2objc-annotations:3.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "J2ObjC Annotations",
+      "url": "https://github.com/google/j2objc/"
+    },
+    "com.nimbusds:content-type:2.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Nimbus Content Type",
+      "url": "https://bitbucket.org/connect2id/nimbus-content-type"
+    },
+    "com.nimbusds:lang-tag:1.7": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Nimbus LangTag",
+      "url": "https://bitbucket.org/connect2id/nimbus-language-tags"
+    },
+    "com.nimbusds:nimbus-jose-jwt:10.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Nimbus JOSE+JWT",
+      "url": "https://bitbucket.org/connect2id/nimbus-jose-jwt"
+    },
+    "com.nimbusds:oauth2-oidc-sdk:11.26.1": {
+      "licenses": [
+        "Apache License, version 2.0"
+      ],
+      "name": "OAuth 2.0 SDK with OpenID Connect extensions",
+      "url": "https://bitbucket.org/connect2id/oauth-2.0-sdk-with-openid-connect-extensions"
+    },
+    "com.squareup.okhttp3:okhttp-jvm:5.2.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "okhttp",
+      "url": "https://square.github.io/okhttp/"
+    },
+    "com.squareup.okio:okio-jvm:3.16.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "okio",
+      "url": "https://github.com/square/okio/"
+    },
+    "com.typesafe:config:1.4.1": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "config",
+      "url": "https://github.com/lightbend/config"
+    },
+    "commons-codec:commons-codec:1.19.0": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Codec",
+      "url": "https://commons.apache.org/proper/commons-codec/"
+    },
+    "commons-logging:commons-logging:1.3.6": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Logging",
+      "url": "https://commons.apache.org/proper/commons-logging/"
+    },
+    "io.cloudevents:cloudevents-api:4.1.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "CloudEvents - API",
+      "url": "https://cloudevents.github.io/sdk-java/"
+    },
+    "io.cloudevents:cloudevents-core:4.1.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "CloudEvents - Core",
+      "url": "https://cloudevents.github.io/sdk-java/"
+    },
+    "io.cloudevents:cloudevents-json-jackson:4.1.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "CloudEvents - JSON Jackson",
+      "url": "https://cloudevents.github.io/sdk-java/"
+    },
+    "io.micrometer:context-propagation:1.2.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "context-propagation",
+      "url": "https://github.com/micrometer-metrics/context-propagation"
+    },
+    "io.micrometer:micrometer-commons:1.16.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-commons",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
+    "io.micrometer:micrometer-core:1.16.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-core",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
+    "io.micrometer:micrometer-jakarta9:1.16.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-jakarta9",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
+    "io.micrometer:micrometer-observation:1.16.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-observation",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
+    "io.micrometer:micrometer-tracing-bridge-otel:1.6.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-tracing-bridge-otel",
+      "url": "https://github.com/micrometer-metrics/tracing"
+    },
+    "io.micrometer:micrometer-tracing:1.6.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-tracing",
+      "url": "https://github.com/micrometer-metrics/tracing"
+    },
+    "io.nats:jnats:2.23.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "jnats",
+      "url": "https://github.com/nats-io/nats.java"
+    },
+    "io.netty:netty-buffer:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Buffer",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-base:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Base",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-classes-quic:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Classes/Quic",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-compression:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Compression",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-dns:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/DNS",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-http2:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/HTTP2",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-http3:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Http3",
+      "url": "https://netty.io/netty-codec-http3/"
+    },
+    "io.netty:netty-codec-http:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/HTTP",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-socks:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Socks",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-common:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Common",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-handler-proxy:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Handler/Proxy",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-handler:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Handler",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-resolver-dns:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-resolver:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-transport-native-unix-common:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Native/Unix/Common",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-transport:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport",
+      "url": "https://netty.io/"
+    },
+    "io.opentelemetry.semconv:opentelemetry-semconv:1.37.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Semantic Conventions Java",
+      "url": "https://github.com/open-telemetry/semantic-conventions-java"
+    },
+    "io.opentelemetry:opentelemetry-api:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-common:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-context:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-exporter-common:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-exporter-otlp-common:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-exporter-otlp:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-exporter-sender-okhttp:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-extension-trace-propagators:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-sdk-common:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-sdk-extension-autoconfigure-spi:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-sdk-logs:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-sdk-metrics:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-sdk-trace:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-sdk:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.projectreactor.netty:reactor-netty-core:1.3.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Core functionality for the Reactor Netty library",
+      "url": "https://github.com/reactor/reactor-netty"
+    },
+    "io.projectreactor.netty:reactor-netty-http:1.3.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "HTTP functionality for the Reactor Netty library",
+      "url": "https://github.com/reactor/reactor-netty"
+    },
+    "io.projectreactor:reactor-core:3.8.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Non-Blocking Reactive Foundation for the JVM",
+      "url": "https://github.com/reactor/reactor-core"
+    },
+    "io.swagger.core.v3:swagger-annotations-jakarta:2.2.47": {
+      "licenses": [
+        "Apache License 2.0"
+      ],
+      "name": "swagger-annotations-jakarta",
+      "url": "https://github.com/swagger-api/swagger-core"
+    },
+    "io.swagger.core.v3:swagger-core-jakarta:2.2.47": {
+      "licenses": [
+        "Apache License 2.0"
+      ],
+      "name": "swagger-core-jakarta",
+      "url": "https://github.com/swagger-api/swagger-core"
+    },
+    "io.swagger.core.v3:swagger-models-jakarta:2.2.47": {
+      "licenses": [
+        "Apache License 2.0"
+      ],
+      "name": "swagger-models-jakarta",
+      "url": "https://github.com/swagger-api/swagger-core"
+    },
+    "jakarta.activation:jakarta.activation-api:2.1.4": {
+      "licenses": [
+        "EDL 1.0"
+      ],
+      "name": "Jakarta Activation API",
+      "url": "https://github.com/jakartaee/jaf-api"
+    },
+    "jakarta.annotation:jakarta.annotation-api:3.0.0": {
+      "licenses": [
+        "EPL 2.0",
+        "GPL2 w/ CPE"
+      ],
+      "name": "Jakarta Annotations API",
+      "url": "https://projects.eclipse.org/projects/ee4j.ca"
+    },
+    "jakarta.validation:jakarta.validation-api:3.1.1": {
+      "licenses": [
+        "Apache License 2.0"
+      ],
+      "name": "Jakarta Validation API",
+      "url": "https://beanvalidation.org"
+    },
+    "jakarta.xml.bind:jakarta.xml.bind-api:4.0.5": {
+      "licenses": [
+        "Eclipse Distribution License - v 1.0"
+      ],
+      "name": "Jakarta XML Binding API",
+      "url": "https://github.com/jakartaee/jaxb-api"
+    },
+    "net.minidev:accessors-smart:2.6.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "ASM based accessors helper used by json-smart",
+      "url": "https://urielch.github.io/"
+    },
+    "net.minidev:json-smart:2.6.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "JSON Small and Fast Parser",
+      "url": "https://urielch.github.io/"
+    },
+    "org.apache.cassandra:java-driver-core:4.19.3": {
+      "licenses": [
+        "Apache 2"
+      ],
+      "name": "Apache Cassandra Java Driver - core",
+      "url": "https://github.com/datastax/java-driver"
+    },
+    "org.apache.cassandra:java-driver-guava-shaded:4.19.3": {
+      "licenses": [
+        "Apache 2"
+      ],
+      "name": "Apache Cassandra Java Driver - guava shaded dep",
+      "url": "https://github.com/datastax/java-driver"
+    },
+    "org.apache.cassandra:java-driver-metrics-micrometer:4.19.3": {
+      "licenses": [
+        "Apache 2"
+      ],
+      "name": "Apache Cassandra Java Driver - Metrics - Micrometer",
+      "url": "https://github.com/datastax/java-driver"
+    },
+    "org.apache.cassandra:java-driver-query-builder:4.19.3": {
+      "licenses": [
+        "Apache 2"
+      ],
+      "name": "Apache Cassandra Java Driver - query builder",
+      "url": "https://github.com/datastax/java-driver"
+    },
+    "org.apache.commons:commons-lang3:3.20.0": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Lang",
+      "url": "https://commons.apache.org/proper/commons-lang/"
+    },
+    "org.apache.logging.log4j:log4j-api:2.25.4": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Log4j API",
+      "url": "https://logging.apache.org/log4j/2.x/"
+    },
+    "org.apache.logging.log4j:log4j-to-slf4j:2.25.4": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Log4j API to SLF4J Adapter",
+      "url": "https://logging.apache.org/log4j/2.x/"
+    },
+    "org.apache.tomcat.embed:tomcat-embed-el:11.0.22": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "tomcat-embed-el",
+      "url": "https://tomcat.apache.org/"
+    },
+    "org.bouncycastle:bcprov-jdk18on:1.84": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle Provider",
+      "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
+    },
+    "org.bouncycastle:bcprov-lts8on:2.73.8": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle Provider (LTS Distribution)",
+      "url": "https://www.bouncycastle.org/lts-java"
+    },
+    "org.checkerframework:checker-qual:3.33.0": {
+      "licenses": [
+        "The MIT License"
+      ],
+      "name": "Checker Qual",
+      "url": "https://checkerframework.org/"
+    },
+    "org.hdrhistogram:HdrHistogram:2.2.2": {
+      "licenses": [
+        "Public Domain, per Creative Commons CC0",
+        "BSD-2-Clause"
+      ],
+      "name": "HdrHistogram",
+      "url": "http://hdrhistogram.github.io/HdrHistogram/"
+    },
+    "org.hibernate.validator:hibernate-validator:9.0.1.Final": {
+      "licenses": [
+        "Apache License 2.0"
+      ],
+      "name": "Hibernate Validator Engine",
+      "url": "https://hibernate.org/validator"
+    },
+    "org.jboss.logging:jboss-logging:3.6.3.Final": {
+      "licenses": [
+        "Apache License 2.0"
+      ],
+      "name": "JBoss Logging 3",
+      "url": "https://www.jboss.org"
+    },
+    "org.jetbrains.kotlin:kotlin-stdlib:2.2.21": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Kotlin Stdlib",
+      "url": "https://kotlinlang.org/"
+    },
+    "org.jetbrains:annotations:17.0.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "JetBrains Java Annotations",
+      "url": "https://github.com/JetBrains/java-annotations"
+    },
+    "org.jspecify:jspecify:1.0.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "JSpecify annotations",
+      "url": "http://jspecify.org/"
+    },
+    "org.latencyutils:LatencyUtils:2.0.3": {
+      "licenses": [
+        "Public Domain, per Creative Commons CC0"
+      ],
+      "name": "LatencyUtils",
+      "url": "http://latencyutils.github.io/LatencyUtils/"
+    },
+    "org.ow2.asm:asm-analysis:9.9": {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "asm-analysis",
+      "url": "http://asm.ow2.io/"
+    },
+    "org.ow2.asm:asm-commons:9.9": {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "asm-commons",
+      "url": "http://asm.ow2.io/"
+    },
+    "org.ow2.asm:asm-tree:9.9": {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "asm-tree",
+      "url": "http://asm.ow2.io/"
+    },
+    "org.ow2.asm:asm-util:9.9": {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "asm-util",
+      "url": "http://asm.ow2.io/"
+    },
+    "org.ow2.asm:asm:9.9": {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "asm",
+      "url": "http://asm.ow2.io/"
+    },
+    "org.projectlombok:lombok:1.18.46": {
+      "licenses": [
+        "The MIT License"
+      ],
+      "name": "Project Lombok",
+      "url": "https://projectlombok.org"
+    },
+    "org.reactivestreams:reactive-streams:1.0.4": {
+      "licenses": [
+        "MIT-0"
+      ],
+      "name": "reactive-streams",
+      "url": "http://www.reactive-streams.org/"
+    },
+    "org.slf4j:jul-to-slf4j:2.0.18": {
+      "licenses": [
+        "MIT"
+      ],
+      "name": "JUL to SLF4J bridge",
+      "url": "http://www.slf4j.org"
+    },
+    "org.slf4j:slf4j-api:2.0.18": {
+      "licenses": [
+        "MIT"
+      ],
+      "name": "SLF4J API Module",
+      "url": "http://www.slf4j.org"
+    },
+    "org.springdoc:springdoc-openapi-starter-common:3.0.3": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "springdoc-openapi-starter-common",
+      "url": "https://springdoc.org/"
+    },
+    "org.springdoc:springdoc-openapi-starter-webflux-api:3.0.3": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "springdoc-openapi-starter-webflux-api",
+      "url": "https://springdoc.org/"
+    },
+    "org.springdoc:springdoc-openapi-starter-webmvc-api:3.0.3": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "springdoc-openapi-starter-webmvc-api",
+      "url": "https://springdoc.org/"
+    },
+    "org.springframework.boot:spring-boot-actuator-autoconfigure:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-actuator-autoconfigure",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-actuator:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-actuator",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-autoconfigure:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-autoconfigure",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-cassandra:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-cassandra",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-data-cassandra:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-data-cassandra",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-data-commons:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-data-commons",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-health:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-health",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-http-client:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-http-client",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-http-codec:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-http-codec",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-http-converter:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-http-converter",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-jackson:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-jackson",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-micrometer-metrics:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-micrometer-metrics",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-micrometer-observation:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-micrometer-observation",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-micrometer-tracing-opentelemetry",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-micrometer-tracing:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-micrometer-tracing",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-netty:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-netty",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-opentelemetry:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-opentelemetry",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-persistence:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-persistence",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-reactor-netty:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-reactor-netty",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-reactor:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-reactor",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-security-oauth2-client:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-security-oauth2-client",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-security-oauth2-resource-server:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-security-oauth2-resource-server",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-security:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-security",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-servlet:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-servlet",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-actuator:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-actuator",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-data-cassandra:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-data-cassandra",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-jackson:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-jackson",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-logging:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-logging",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-micrometer-metrics:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-micrometer-metrics",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-reactor-netty:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-reactor-netty",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-security-oauth2-client:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-security-oauth2-client",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-security-oauth2-resource-server",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-security:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-security",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-validation:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-validation",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-webflux:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-webflux",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-validation:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-validation",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-web-server:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-web-server",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-webclient:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-webclient",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-webflux:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-webflux",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-webmvc:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-webmvc",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.cloud:spring-cloud-commons:5.0.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Cloud Commons",
+      "url": "https://projects.spring.io/spring-cloud/spring-cloud-commons/"
+    },
+    "org.springframework.cloud:spring-cloud-context:5.0.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Cloud Context",
+      "url": "https://projects.spring.io/spring-cloud/spring-cloud-context/"
+    },
+    "org.springframework.cloud:spring-cloud-starter-bootstrap:5.0.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-cloud-starter-bootstrap",
+      "url": "https://projects.spring.io/spring-cloud"
+    },
+    "org.springframework.cloud:spring-cloud-starter:5.0.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-cloud-starter",
+      "url": "https://projects.spring.io/spring-cloud"
+    },
+    "org.springframework.data:spring-data-cassandra:5.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Data for Apache Cassandra Core",
+      "url": "https://projects.spring.io/spring-data-cassandra/"
+    },
+    "org.springframework.data:spring-data-commons:4.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Data Core",
+      "url": "https://spring.io/projects/spring-data"
+    },
+    "org.springframework.security:spring-security-config:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-config",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-core:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-core",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-crypto:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-crypto",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-oauth2-client:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-oauth2-client",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-oauth2-core:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-oauth2-core",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-oauth2-jose:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-oauth2-jose",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-oauth2-resource-server:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-oauth2-resource-server",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-web:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-web",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework:spring-aop:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring AOP",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-beans:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Beans",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-context:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Context",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-core:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Core",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-expression:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Expression Language (SpEL)",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-tx:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Transaction",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-web:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Web",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-webflux:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring WebFlux",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-webmvc:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Web MVC",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.wiremock:wiremock-standalone:3.13.2": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "WireMock",
+      "url": "http://wiremock.org"
+    },
+    "org.yaml:snakeyaml:2.5": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "SnakeYAML",
+      "url": "https://bitbucket.org/snakeyaml/snakeyaml"
+    },
+    "software.amazon.awssdk:annotations:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Annotations",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:checksums-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Checksums SPI",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:checksums:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Checksums",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:endpoints-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Endpoints SPI",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:http-auth-aws:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: HTTP Auth AWS",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:http-auth-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: HTTP Auth SPI",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:http-client-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: HTTP Client Interface",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:identity-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Identity SPI",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:json-utils:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Core :: Protocols :: Json Utils",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:metrics-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Metrics SPI",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:profiles:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Profiles",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:regions:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Regions",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:retries-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Retries API",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:retries:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Retries",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:sdk-core:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: SDK Core",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:third-party-jackson-core:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Third Party :: Jackson-core",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:utils:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Utilities",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "tools.jackson.core:jackson-core:3.1.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-core",
+      "url": "https://github.com/FasterXML/jackson-core"
+    },
+    "tools.jackson.core:jackson-databind:3.1.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jackson-databind",
+      "url": "https://github.com/FasterXML/jackson"
+    },
+    "tools.jackson.module:jackson-module-blackbird:3.1.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson module: Blackbird",
+      "url": "https://github.com/FasterXML/jackson-modules-base"
+    }
+  },
+  "generated_by": "tools/bazel/java/generate_notice.py --update-metadata"
+}

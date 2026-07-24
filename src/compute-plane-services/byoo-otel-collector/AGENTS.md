@@ -34,9 +34,9 @@ otelconfig validation. Do not add a subtree `.gitlab-ci.yml`.
 Use the script instead of editing version strings by hand:
 
 ```bash
-./scripts/update-collector-version.sh v0.153.0 v1.59.0
+./scripts/update-collector-version.sh v0.157.0 v1.63.0
 # If service release tags are already ahead of the collector patch:
-./scripts/update-collector-version.sh v0.153.0 v1.59.0 0.153.2
+./scripts/update-collector-version.sh v0.157.0 v1.63.0 0.153.2
 ```
 
 The script updates version references in `otel-collector-build.yaml`,
@@ -44,7 +44,7 @@ The script updates version references in `otel-collector-build.yaml`,
 `Dockerfile.nvcf-otel-collector`, `scripts/regenerate-otelcol.sh`, and
 `VERSION`. It also updates `.gitlab-ci.yml` when that file exists. Run it from
 the BYOO collector root. You can pass versions with or without the `v` prefix
-(for example, `v0.153.0` or `0.153.0`). Pass the optional `v1.x.y` provider
+(for example, `v0.157.0` or `0.157.0`). Pass the optional `v1.x.y` provider
 version when the stable collector modules need a matching release, and pass the
 optional app release override when existing service tags require the next BYOO
 patch version. The app release major/minor must match the collector
