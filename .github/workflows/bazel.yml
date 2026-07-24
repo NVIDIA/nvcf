@@ -692,6 +692,12 @@ jobs:
     needs: detect
     if: needs.detect.outputs.matrix_docker != '[]'
     runs-on: ubuntu-latest
+    # Same public EC2 Buildbarn remote cache the container matrix uses, sourced
+    # from a repo secret/var. Bare runners reach it over grpcs with a bearer
+    # token; fork PRs have no secret and fall back to cacheless automatically.
+    env:
+      CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
+      CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     strategy:
       fail-fast: false
       matrix:
@@ -713,38 +719,84 @@ jobs:
             https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64
           sudo chmod +x /usr/local/bin/bazel
           bazel version
-      # This lane runs on a bare runner with no bazel-ci prewarm and cannot
-      # reach the internal Buildbarn cache, so builds are otherwise fully cold
-      # (cloud-tasks / nv-boot-parent recompile the whole graph every run). Give
-      # it a persisted --disk_cache so compiled action outputs are restored
-      # across runs. Keyed per-subtree, seeded from the newest prior cache.
-      - name: Cache Bazel disk cache (docker lane)
+      # Cache Bazel's install base + repository cache (external deps: Maven
+      # artifacts, toolchains) across runs. Compiled action outputs come from
+      # the remote cache below.
+      - name: Cache Bazel repository + disk caches
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/bazel-disk
-          key: bazel-docker-disk-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}-${{ github.sha }}
+          path: |
+            ~/.cache/bazel/*/install
+            ~/.cache/bazel/*/cache
+          key: bazel-docker-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
           restore-keys: |
-            bazel-docker-disk-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}-
-            bazel-docker-disk-${{ matrix.subtree.id }}-
+            bazel-docker-${{ matrix.subtree.id }}-
+      # Enable the public EC2 Buildbarn remote cache when the token+endpoint are
+      # present. Upload only on main pushes so PRs are read-only and cannot
+      # poison the shared cache.
+      - name: Prepare remote cache
+        run: |
+          if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
+            printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
+            echo "CACHE_READY=1" >> "$GITHUB_ENV"
+            upload=false
+            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then upload=true; fi
+            echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
+            echo "remote cache ready (upload=$upload)"
+          else
+            echo "CACHE_READY=0" >> "$GITHUB_ENV"
+            echo "remote cache unavailable: cacheless build"
+          fi
       - name: bazel build (${{ matrix.subtree.id }})
         working-directory: ${{ matrix.subtree.workdir }}
-        run: bazel build --remote_cache= --disk_cache="$RUNNER_TEMP/bazel-disk" ${{ matrix.subtree.scope }}
+        run: |
+          CACHE=(--remote_cache=)
+          if [ "${CACHE_READY:-0}" = "1" ]; then
+            CACHE=(--remote_cache="$CACHE_ENDPOINT"
+                   --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+                   --remote_header="authorization=Bearer $CACHE_TOKEN"
+                   --remote_cache_compression --remote_download_all
+                   --remote_timeout=120 --remote_retries=5)
+            if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
+              CACHE+=(--remote_upload_local_results=true)
+            else
+              CACHE+=(--remote_upload_local_results=false)
+            fi
+          fi
+          if ! bazel build "${CACHE[@]}" ${{ matrix.subtree.scope }}; then
+            [ "${CACHE_READY:-0}" = "1" ] || exit 1
+            echo "::warning::remote cache build failed; retrying cacheless"
+            bazel build --remote_cache= ${{ matrix.subtree.scope }}
+          fi
       - name: bazel test (${{ matrix.subtree.id }})
         working-directory: ${{ matrix.subtree.workdir }}
-        # Full suite, NO tag filter: runs the subtree's unit AND requires-docker
-        # (Testcontainers) tests against the host Docker daemon. A subtree whose
-        # only tests are requires-docker still runs them all here.
-        # bazel exit 4 (no test targets in scope) is treated as success.
+        # Full suite, NO tag filter: unit AND requires-docker (Testcontainers)
+        # tests against the host Docker daemon. bazel exit 4 (no test targets in
+        # scope) is treated as success.
         run: |
+          CACHE=(--remote_cache=)
+          if [ "${CACHE_READY:-0}" = "1" ]; then
+            CACHE=(--remote_cache="$CACHE_ENDPOINT"
+                   --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+                   --remote_header="authorization=Bearer $CACHE_TOKEN"
+                   --remote_cache_compression --remote_download_all
+                   --remote_timeout=120 --remote_retries=5)
+            if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
+              CACHE+=(--remote_upload_local_results=true)
+            else
+              CACHE+=(--remote_upload_local_results=false)
+            fi
+          fi
           set +e
-          bazel test --remote_cache= --disk_cache="$RUNNER_TEMP/bazel-disk" ${{ matrix.subtree.scope }} \
-            --test_output=errors \
-            --flaky_test_attempts=2
+          bazel test "${CACHE[@]}" ${{ matrix.subtree.scope }} \
+            --test_output=errors --flaky_test_attempts=2
           rc=$?
           set -e
-          if [ "$rc" -eq 4 ]; then
-            echo "::warning::${{ matrix.subtree.id }}: no test targets in scope"
-            exit 0
+          [ "$rc" -eq 4 ] && { echo "::warning::${{ matrix.subtree.id }}: no test targets in scope"; exit 0; }
+          if [ "$rc" -ne 0 ] && [ "${CACHE_READY:-0}" = "1" ]; then
+            echo "::warning::remote cache test failed; retrying cacheless"
+            set +e; bazel test --remote_cache= ${{ matrix.subtree.scope }} --test_output=errors --flaky_test_attempts=2; rc=$?; set -e
+            [ "$rc" -eq 4 ] && exit 0
           fi
           exit "$rc"
 
