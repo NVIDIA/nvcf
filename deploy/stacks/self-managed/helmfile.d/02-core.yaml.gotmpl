@@ -199,13 +199,26 @@ releases:
     labels:
       release-group: services
 
+  - name: nvcf-ui
+    chart: nvcf/helm-nvcf-ui
+    version: 1.1.1
+    namespace: nvcf-ui
+    condition: addons.nvcfUi.enabled
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: services
+
   # --- Gateway API Ingress ---
   - name: ingress
     chart: nvcf/nvcf-gateway-routes
-    version: 1.13.4
+    version: 1.15.0
     needs:
       - nvcf/notary-service
       - api-keys/api-keys
+      {{- if dig "addons" "nvcfUi" "enabled" false .Values }}
+      - nvcf-ui/nvcf-ui
+      {{- end }}
     namespace: {{ .Values.ingress.gatewayApi.controllerNamespace }}
     condition: ingress.gatewayApi.enabled
     values:
