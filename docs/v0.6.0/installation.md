@@ -1,6 +1,6 @@
 # Deployment
 
-Self-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available. Vanity Gateway routing is available only in stack packages that include the Vanity Gateway addon.
+Self-hosted NVCF installation includes the core components required for NVCF inference. Optional components such as caching and low latency streaming support are also available.
 
 For a local k3d fresh install, start with the [Quickstart](./quickstart.md). The quickstart uses `nvcf-cli self-hosted up` to install the control plane, register the local k3d cluster, install NVCA, and run basic health checks.
 
@@ -48,7 +48,7 @@ Every installation path follows the same high-level sequence:
 
 6. Install Low Latency Streaming if needed for streaming workloads. See [LLS Installation](./lls-installation.md).
 
-7. Install optional enhancements, such as caches, low latency streaming, or Vanity Gateway routing when your stack package includes that addon. See [Optional Enhancements](./optional-enhancements.md).
+7. Install optional enhancements, such as caches or low latency streaming. See [Optional Enhancements](./optional-enhancements.md).
 
 ## Kubernetes Cluster Requirements
 

@@ -191,7 +191,7 @@ Environment configuration files define how NVCF is deployed in your specific env
 Set `HELMFILE_ENV` to your environment name and copy the base configuration.
 The filename must match `HELMFILE_ENV` because Helmfile uses it to select the
 environment file. The template below shows the values to configure for Amazon
-EKS ([cp-env-eks-example.yaml](samples/configs/cp-env-eks-example.yaml)).
+EKS ([cp-env-eks-example.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.6.0/samples/configs/cp-env-eks-example.yaml)).
 
 ```bash
 cd path/to/nvcf-self-managed-stack
@@ -586,7 +586,7 @@ These credentials will then be used for function deployments. Note that if the r
 Copy the secrets template using the same `HELMFILE_ENV` value from Step 2. The
 filename must match `HELMFILE_ENV` because Helmfile loads the corresponding
 secrets file. The example below shows the required structure
-([example-secrets.yaml](samples/configs/cp-example-secrets.yaml)). You must
+([example-secrets.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.6.0/samples/configs/cp-example-secrets.yaml)). You must
 replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your
 actual base64-encoded registry credentials.
 
@@ -731,7 +731,7 @@ registry.
 If your `image` registry is private and your cluster nodes do not have built-in credential helpers, you must create Kubernetes `docker-registry` secrets in each NVCF namespace and configure the helmfile to reference them.
 
 1. Create the pull secret in each NVCF namespace
-   ([create-nvcr-pull-secrets.sh](samples/scripts/create-nvcr-pull-secrets.sh)):
+   ([create-nvcr-pull-secrets.sh](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.6.0/samples/scripts/create-nvcr-pull-secrets.sh)):
 
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"
@@ -1004,52 +1004,9 @@ If dependencies are corrupted or you prefer a clean slate, follow the complete
 [Uninstalling](#uninstalling) steps, fix your configuration, then redeploy from
 Step 1.
 
-#### Enabling Vanity Gateway
-
-Vanity Gateway is optional and disabled by default. It is available only in
-stack packages that include the Vanity Gateway addon. If your extracted stack
-package does not contain a `vanity-gateway` release and `vanityGateway` route
-values, skip this section until you use a stack package that includes them.
-
-Enable it only when you need a customer-facing hostname or path mapping layer in
-front of the standard NVCF service routes.
-
-In stack packages that include the addon, set the value shape in your
-environment file:
-
-```yaml
-addons:
-  vanityGateway:
-    enabled: true
-    mappingConfig: {}
-```
-
-By default, the route host is `vanity.<domain>` and the backend is
-`vanity-gateway.nvcf:8080`. Put deployment-specific host and path mappings under
-`addons.vanityGateway.mappingConfig`. If your deployment needs custom vanity
-hosts, use the route hostname overrides supported by your stack package and
-create matching DNS records.
-
-After confirming your stack package includes the `vanity-gateway` release,
-preview and apply the service plus gateway routes:
-
-```bash
-HELMFILE_ENV=<environment-name> helmfile --selector name=vanity-gateway template
-HELMFILE_ENV=<environment-name> helmfile --selector name=vanity-gateway sync
-HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress sync
-```
-
-Verify only when the addon is present and enabled:
-
-```bash
-kubectl get deploy,svc -n nvcf -l app.kubernetes.io/name=vanity-gateway
-kubectl get httproute -A | grep -i vanity
-curl -H "Host: vanity.<domain>" "http://<gateway-address>/health"
-```
-
 #### Recovering from Gateway Address Changes
 
-If your Gateway or its underlying load balancer was deleted and recreated (e.g., due to a TCPRoute misconfiguration or infrastructure change), the external address will change. Services that depend on the `domain` value -- including Gateway API routes, SIS cluster registration, API hostname resolution, and the optional Vanity Gateway route -- will break until the new address is propagated.
+If your Gateway or its underlying load balancer was deleted and recreated (e.g., due to a TCPRoute misconfiguration or infrastructure change), the external address will change. Services that depend on the `domain` value -- including Gateway API routes, SIS cluster registration, and API hostname resolution -- will break until the new address is propagated.
 
 1. Get the new Gateway address:
 

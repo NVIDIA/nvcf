@@ -1,0 +1,60 @@
+---
+# Source: grove-charts/templates/configmap-operator.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grove-operator-cm-b77904eb
+  namespace: grove-system
+  labels:
+    chart: "grove-charts-v0.1.0-alpha.9"
+    release: "grove-operator"
+    app.kubernetes.io/component: operator-configmap
+    app.kubernetes.io/name: grove-operator
+    app.kubernetes.io/part-of: grove
+immutable: true
+data:
+  config.yaml: |
+    apiVersion: operator.config.grove.io/v1alpha1
+    kind: OperatorConfiguration
+    runtimeClientConnection:
+      qps: 100
+      burst: 150
+    leaderElection:
+      enabled: true
+      leaseDuration: 15s
+      renewDeadline: 10s
+      retryPeriod: 2s
+      resourceLock: leases
+      resourceName: grove-operator-leader-election
+      resourceNamespace: grove-system
+    server:
+      webhooks:
+        port: 9443
+        serverCertDir: /etc/grove-operator/webhook-certs
+        secretName: grove-webhook-server-cert
+        certProvisionMode: auto
+      healthProbes:
+        port: 9444
+      metrics:
+        port: 9445
+    controllers:
+      podCliqueSet:
+        concurrentSyncs: 3
+      podClique:
+        concurrentSyncs: 3
+      podCliqueScalingGroup:
+        concurrentSyncs: 3
+    scheduler:
+      profiles:
+      - name: default-scheduler
+      - name: kai-scheduler
+    debugging:
+      enableProfiling: false
+      pprofBindHost: "127.0.0.1"
+      pprofBindPort: 2753
+    logLevel: info
+    logFormat: json
+    topologyAwareScheduling:
+      enabled: false
+    network:
+      autoMNNVLEnabled: false

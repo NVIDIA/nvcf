@@ -1,0 +1,38 @@
+---
+# Source: grove-charts/templates/pcs-defaulting-webhook-config.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: podcliqueset-defaulting-webhook
+  labels:
+    chart: "grove-charts-v0.1.0-alpha.9"
+    release: "grove-operator"
+    app.kubernetes.io/component: operator-pcs-defaulting-webhook
+    app.kubernetes.io/name: pcs-defaulting-webhook
+    app.kubernetes.io/part-of: grove
+webhooks:
+  - admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: grove-operator
+        namespace: grove-system
+        path: /webhooks/default-podcliqueset
+        port: 9443
+    failurePolicy: Fail
+    matchPolicy: Exact
+    name: pcs.defaulting.webhooks.grove.io
+    namespaceSelector: { }
+    rules:
+      - apiGroups:
+          - "grove.io"
+        apiVersions:
+          - "v1alpha1"
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - podcliquesets
+        scope: "Namespaced"
+    sideEffects: None
+    timeoutSeconds: 10

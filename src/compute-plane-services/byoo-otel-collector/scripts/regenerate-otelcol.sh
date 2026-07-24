@@ -28,7 +28,7 @@ set -euo pipefail
 # Pinned to the OpenTelemetry release line that all the receivers/
 # processors/etc. in otel-collector-build.yaml are tagged for. Bump in
 # lockstep with the gomod versions in that YAML.
-OTEL_BUILDER_VERSION="${OTEL_BUILDER_VERSION:-v0.153.0}"
+OTEL_BUILDER_VERSION="${OTEL_BUILDER_VERSION:-v0.157.0}"
 
 # OCB writes a temporary module under output/; keep parent go.work from
 # overriding that generated module's replacements.
@@ -84,7 +84,7 @@ if ! grep -Fq 'logchunkprocessor "github.com/NVIDIA/nvcf/src/compute-plane-servi
     echo "regenerate-otelcol: failed to insert logchunkprocessor factory into ${COMPONENTS_GO}" >&2
     exit 1
   }
-  perl -0pi -e 's/(\n\t\ttransformprocessor\.NewFactory\(\)\.Type\(\): "github\.com\/open-telemetry\/opentelemetry-collector-contrib\/processor\/transformprocessor v0\.153\.0",\n)/$1\t\tlogchunkprocessor.NewFactory().Type(): "github.com\/NVIDIA\/nvcf\/src\/compute-plane-services\/byoo-otel-collector\/otelcol\/logchunkprocessor v0.0.0",\n/' "${COMPONENTS_GO}"
+  perl -0pi -e 's/(\n\t\ttransformprocessor\.NewFactory\(\)\.Type\(\): "github\.com\/open-telemetry\/opentelemetry-collector-contrib\/processor\/transformprocessor v0\.[0-9]+\.[0-9]+",\n)/$1\t\tlogchunkprocessor.NewFactory().Type(): "github.com\/NVIDIA\/nvcf\/src\/compute-plane-services\/byoo-otel-collector\/otelcol\/logchunkprocessor v0.0.0",\n/' "${COMPONENTS_GO}"
   grep -Fq 'logchunkprocessor.NewFactory().Type(): "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor v0.0.0"' "${COMPONENTS_GO}" || {
     echo "regenerate-otelcol: failed to insert logchunkprocessor module metadata into ${COMPONENTS_GO}" >&2
     exit 1

@@ -1,0 +1,146 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring:
+  cassandra:
+    contact-points: ${CASSANDRA_CONTACT_POINTS:cassandra.cassandra-system.svc.cluster.local}
+    keyspace-name: nvct_api
+    local-datacenter: ${CASSANDRA_DATACENTER:ncp}
+    username: cassandra
+    password: cassandra
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://nvct-api.nvcf.svc.cluster.local
+          jwk-set-uri: http://openbao-server.vault-system.svc.cluster.local:8200/v1/services/nvct-api/jwt/jwks
+      client:
+        registration:
+          api-keys:
+            client-id: unused      # Override the inherited expression from application.yaml
+            client-secret: unused
+          icms:
+            client-id: unused
+            client-secret: unused
+          nvcf:
+            client-id: unused
+            client-secret: unused
+          notary:
+            # For validating jwt.sub == client-id as Notary Svc signs with sub nvct-api
+            client-id: nvct-api
+            client-secret: unused
+          ess:
+            client-id: unused
+            client-secret: unused
+          reval:
+            client-id: unused
+            client-secret: unused
+        provider:
+          api-keys:
+            token-uri: unused
+          icms:
+            token-uri: unused
+          nvcf:
+            token-uri: unused
+          notary:
+            token-uri: unused
+          ess:
+            token-uri: unused
+          reval:
+            token-uri: unused
+
+management:
+  tracing:
+    export:
+      enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: https://dummy:8282
+          headers:
+            lightstep-access-token: unused
+
+nvct:
+  aws:
+    region: ncp
+  fqdn: http://nvct-api.nvcf.svc.cluster.local:8080
+  global-fqdn-grpc: http://nvct-api.nvcf.svc.cluster.local:9090
+  sidecars:
+    tracing-key: unused
+    hostname: nvcr.io
+    repository: nv-cf/nvcf-core
+    # Sidecar container images are configured in configData in the colocated
+    # deploy values (nvct-api/values.yaml).
+    init-container: dummy
+    utils-container: dummy
+    otel-container: dummy
+    ess-agent-container: dummy
+    otel-collector-container: dummy
+  scheduled-routines:
+    lock-consistency: LOCAL_QUORUM
+  ess:
+    base-url: http://ess-api.ess.svc.cluster.local:8080
+    static:
+      token: ${kv.tokens.ess}
+  notary:
+    audiences:
+      ess: ess-api
+      nvct: nvct-api
+    base-url: http://notary.nvcf.svc.cluster.local:8080
+    static:
+      token: ${kv.tokens.notary}
+  nvcf:
+    cache-ttl: PT5M
+    base-url: http://api.nvcf.svc.cluster.local:8080
+    static:
+      token: ${kv.tokens.nvcf}
+  reval:
+    enabled: false
+    base-url: http://reval.nvcf.svc.cluster.local:8080
+    static:
+      token: ${kv.tokens.reval}
+  icms:
+    base-url: http://api.sis.svc.cluster.local:8080
+    # base-url: http://api.icms.svc.cluster.local:8080 -- Use when self-hosted stack is ready
+    static:
+      token: ${kv.tokens.icms}
+  api-keys:
+    base-url: http://api-keys.api-keys.svc.cluster.local:8080
+    # base-url: http://api-keys.nvcf.svc.cluster.local:8080 -- Use when self-hosted stack is ready
+    static:
+      token: ${kv.tokens.api-keys}
+  registries:
+    recognized:
+      container:
+        ngc:
+          hostname: "nvcr.io"
+      helm:
+        ngc:
+          hostname: "helm.ngc.nvidia.com"
+          oauth2:
+            base-url: https://authn.nvidia.com
+            group-scope: ngc
+      model:
+        ngc:
+          hostname: "api.ngc.nvidia.com"
+          oauth2:
+            base-url: https://authn.nvidia.com
+            group-scope: ngc
+      resource:
+        ngc:
+          hostname: "api.ngc.nvidia.com"
+          oauth2:
+            base-url: https://authn.nvidia.com
+            group-scope: ngc

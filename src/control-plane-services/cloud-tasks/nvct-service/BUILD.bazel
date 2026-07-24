@@ -1,0 +1,76 @@
+load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
+load("//rules/java:spring.bzl", "spring_boot_app")
+
+package(default_visibility = ["//visibility:public"])
+
+NVCT_SERVICE_SRCS = glob(["src/main/java/**/*.java"])
+
+NVCT_SERVICE_RESOURCES = glob(["src/main/resources/**"])
+
+NVCT_SERVICE_TEST_SRCS = glob(["src/test/java/**/*.java"])
+
+NVCT_SERVICE_TEST_RESOURCES = glob(["src/test/resources/**"]) + [
+    "//src/control-plane-services/cloud-tasks:integration_local_env_files",
+]
+
+NVCT_SERVICE_DEPS = [
+    "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_loader",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_tracing",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_security",
+]
+
+nvct_library(
+    name = "app_classes",
+    srcs = NVCT_SERVICE_SRCS,
+    deps = NVCT_SERVICE_DEPS,
+    resource_strip_prefix = "src/control-plane-services/cloud-tasks/nvct-service/src/main/resources",
+    resources = NVCT_SERVICE_RESOURCES,
+    visibility = ["//visibility:private"],
+)
+
+spring_boot_app(
+    name = "app",
+    application = ":app_classes",
+    artifact_id = "nvct-service-oss",
+    artifact_name = "NVCT Service OSS",
+    artifact_version = "0.0.1-SNAPSHOT",
+    description = "NVIDIA Cloud Tasks OSS executable",
+    group_id = "com.nvidia.nvct",
+    main_class = "com.nvidia.nvct.App",
+)
+
+nvct_library_test(
+    name = "tests",
+    coverage_library = ":app_classes",
+    srcs = NVCT_SERVICE_TEST_SRCS,
+    deps = [
+        ":app_classes",
+        "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core",
+        "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core_test_fixtures",
+        "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
+        "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_testing",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_web_server",
+        "@nv_third_party_deps//:org_springframework_spring_beans",
+        "@nv_third_party_deps//:org_springframework_spring_web",
+        "@nv_third_party_deps//:org_springframework_spring_webmvc",
+        "@nv_third_party_deps//:org_testcontainers_testcontainers",
+        "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
+    ],
+    data = [
+        "//src/control-plane-services/cloud-tasks:integration_local_env",
+    ],
+    resources = NVCT_SERVICE_TEST_RESOURCES,
+    tags = [
+        "exclusive",
+        "requires-docker",
+    ],
+    timeout = "long",
+)

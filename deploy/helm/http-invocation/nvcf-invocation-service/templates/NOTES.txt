@@ -1,0 +1,9 @@
+1. Get the application URL by running these commands:
+  export POD_NAME=$(kubectl get pods --namespace {{ .Values.invocation.namespace }} -l "app.kubernetes.io/name={{ include "nvcf-invocation-service.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
+  
+  Client Ingress Port: {{ (index .Values.invocation.service.ports 0).port }}
+  
+  Service Name: invocation.{{ .Values.invocation.namespace }}.svc.cluster.local
+
+2. View the logs:
+  kubectl --namespace {{ .Values.invocation.namespace }} logs $POD_NAME

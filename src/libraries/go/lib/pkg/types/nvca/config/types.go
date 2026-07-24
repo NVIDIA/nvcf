@@ -16,6 +16,8 @@
 package nvcaconfig
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -53,48 +55,63 @@ type ResourceRequirements struct {
 }
 
 const (
-	// BYOOLogChunkMaxBodyBytesEnv is the BYOO collector env var that enables log chunking.
+	// BYOOLogChunkMaxPayloadBytesEnv is the BYOO collector env var for the log chunk payload size override.
+	BYOOLogChunkMaxPayloadBytesEnv = "BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES"
+	// BYOOLogChunkMaxBodyBytesEnv is the deprecated BYOO collector env var for the log chunk size override.
+	//
+	// Deprecated: use BYOOLogChunkMaxPayloadBytesEnv.
 	BYOOLogChunkMaxBodyBytesEnv = "BYOO_LOG_CHUNK_MAX_BODY_BYTES"
 	// BYOOLogChunkDryRunEnv is the BYOO collector env var that records chunking metrics without mutating logs.
 	BYOOLogChunkDryRunEnv = "BYOO_LOG_CHUNK_DRY_RUN"
-	// BYOOLogExporterBatchMaxSizeBytesEnv is the BYOO collector env var for exporterhelper byte batch splitting.
-	BYOOLogExporterBatchMaxSizeBytesEnv = "BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES"
+	// BYOOLogChunkingEnabledEnv is the BYOO collector env var that enables log chunking.
+	BYOOLogChunkingEnabledEnv = "BYOO_LOG_CHUNKING_ENABLED"
+	// BYOODebugModeEnv is the BYOO collector env var that enables collector debug mode.
+	BYOODebugModeEnv = "BYOO_DEBUG_MODE"
 	// BYOOMetricSubsetEnabledEnv is the BYOO collector env var that enables the metric subset pipeline.
 	BYOOMetricSubsetEnabledEnv = "BYOO_METRIC_SUBSET_ENABLED"
 	// BYOOMetricSubsetFilterConfigEnv is the BYOO collector env var for metric subset filter config YAML.
 	BYOOMetricSubsetFilterConfigEnv = "BYOO_METRIC_SUBSET_FILTER_CONFIG"
 	// BYOOWorkloadMetricsDropLabelsEnv is the BYOO collector env var for workload metrics resource labels to drop.
 	BYOOWorkloadMetricsDropLabelsEnv = "BYOO_WORKLOAD_METRICS_DROP_LABELS"
-
-	// DefaultBYOOLogExporterBatchMaxSizeBytes keeps serialized exporter batches near the backend limit.
-	DefaultBYOOLogExporterBatchMaxSizeBytes int64 = 1000000
+	// BYOOOTelCollectorConfigEnv is the BYOO collector env var for structured collector config.
+	BYOOOTelCollectorConfigEnv = "BYOO_OTEL_COLLECTOR_CONFIG_B64"
 )
 
 type BYOOLogChunkingConfig struct {
-	MaxBodyBytes              int64  `yaml:"maxBodyBytes,omitempty"`
-	DryRun                    bool   `yaml:"dryRun,omitempty"`
-	ExporterBatchMaxSizeBytes *int64 `yaml:"exporterBatchMaxSizeBytes,omitempty"`
+	Enabled         bool  `mapstructure:"enabled" yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	MaxPayloadBytes int64 `mapstructure:"maxPayloadBytes" yaml:"maxPayloadBytes,omitempty" json:"maxPayloadBytes,omitempty"`
+	// MaxBodyBytes is a deprecated alias for MaxPayloadBytes.
+	//
+	// Deprecated: use MaxPayloadBytes / maxPayloadBytes.
+	MaxBodyBytes int64 `mapstructure:"maxBodyBytes" yaml:"maxBodyBytes,omitempty" json:"maxBodyBytes,omitempty"`
+	DryRun       bool  `mapstructure:"dryRun" yaml:"dryRun,omitempty" json:"dryRun,omitempty"`
 }
 
 func (c BYOOLogChunkingConfig) IsZero() bool {
-	return c.MaxBodyBytes == 0 && !c.DryRun && c.ExporterBatchMaxSizeBytes == nil
+	return !c.Enabled && c.MaxPayloadBytes == 0 && c.MaxBodyBytes == 0 && !c.DryRun
 }
 
 func (c BYOOLogChunkingConfig) Complete() BYOOLogChunkingConfig {
-	if c.ExporterBatchMaxSizeBytes == nil {
-		defaultValue := DefaultBYOOLogExporterBatchMaxSizeBytes
-		c.ExporterBatchMaxSizeBytes = &defaultValue
+	if c.MaxPayloadBytes == 0 && c.MaxBodyBytes != 0 {
+		c.MaxPayloadBytes = c.MaxBodyBytes
 	}
 	return c
 }
 
 // EnvVars returns BYOO collector env vars for the supplied config.
 func (c BYOOLogChunkingConfig) EnvVars() []corev1.EnvVar {
+	c = c.Complete()
 	envs := []corev1.EnvVar{}
-	if c.MaxBodyBytes > 0 {
+	if c.Enabled {
 		envs = append(envs, corev1.EnvVar{
-			Name:  BYOOLogChunkMaxBodyBytesEnv,
-			Value: strconv.FormatInt(c.MaxBodyBytes, 10),
+			Name:  BYOOLogChunkingEnabledEnv,
+			Value: strconv.FormatBool(c.Enabled),
+		})
+	}
+	if c.MaxPayloadBytes > 0 {
+		envs = append(envs, corev1.EnvVar{
+			Name:  BYOOLogChunkMaxPayloadBytesEnv,
+			Value: strconv.FormatInt(c.MaxPayloadBytes, 10),
 		})
 	}
 	if c.DryRun {
@@ -103,18 +120,25 @@ func (c BYOOLogChunkingConfig) EnvVars() []corev1.EnvVar {
 			Value: strconv.FormatBool(c.DryRun),
 		})
 	}
-	if c.ExporterBatchMaxSizeBytes != nil && *c.ExporterBatchMaxSizeBytes > 0 {
-		envs = append(envs, corev1.EnvVar{
-			Name:  BYOOLogExporterBatchMaxSizeBytesEnv,
-			Value: strconv.FormatInt(*c.ExporterBatchMaxSizeBytes, 10),
-		})
-	}
 	return envs
 }
 
-// BYOOLogChunkingEnvVars returns BYOO collector env vars for the supplied config.
-func BYOOLogChunkingEnvVars(config BYOOLogChunkingConfig) []corev1.EnvVar {
-	return config.EnvVars()
+type BYOODebugModeConfig struct {
+	Enabled bool `yaml:"enabled,omitempty"`
+}
+
+func (c BYOODebugModeConfig) IsZero() bool {
+	return !c.Enabled
+}
+
+func (c BYOODebugModeConfig) EnvVars() []corev1.EnvVar {
+	if !c.Enabled {
+		return nil
+	}
+	return []corev1.EnvVar{{
+		Name:  BYOODebugModeEnv,
+		Value: strconv.FormatBool(c.Enabled),
+	}}
 }
 
 type BYOOMetricSubsetConfig struct {
@@ -160,6 +184,135 @@ func (c BYOOWorkloadMetricsConfig) EnvVars() []corev1.EnvVar {
 		Name:  BYOOWorkloadMetricsDropLabelsEnv,
 		Value: strings.Join(c.DropLabels, ","),
 	}}
+}
+
+// BYOOOTelCollectorConfig configures BYOO OTel collector rendering behavior.
+type BYOOOTelCollectorConfig struct {
+	ExporterHelper BYOOOTelExporterHelperConfig `mapstructure:"exporterHelper" yaml:"exporterHelper,omitempty" json:"exporterHelper,omitempty"`
+	MemoryLimiter  BYOOOTelMemoryLimiterConfig  `mapstructure:"memoryLimiter" yaml:"memoryLimiter,omitempty" json:"memoryLimiter,omitempty"`
+	Batch          BYOOOTelBatchConfig          `mapstructure:"batch" yaml:"batch,omitempty" json:"batch,omitempty"`
+	LogBatch       BYOOOTelBatchConfig          `mapstructure:"logBatch" yaml:"logBatch,omitempty" json:"logBatch,omitempty"`
+}
+
+// IsZero returns true when no collector rendering overrides are configured.
+func (c BYOOOTelCollectorConfig) IsZero() bool {
+	return c.ExporterHelper.IsZero() &&
+		c.MemoryLimiter.IsZero() &&
+		c.Batch.IsZero() &&
+		c.LogBatch.IsZero()
+}
+
+// EnvVars returns the BYOO collector env vars for the structured config.
+func (c BYOOOTelCollectorConfig) EnvVars() []corev1.EnvVar {
+	if c.IsZero() {
+		return nil
+	}
+	data, err := json.Marshal(c)
+	if err != nil {
+		panic(fmt.Sprintf("code bug: marshal BYOO OTel collector config: %v", err))
+	}
+	return []corev1.EnvVar{{
+		Name:  BYOOOTelCollectorConfigEnv,
+		Value: base64.StdEncoding.EncodeToString(data),
+	}}
+}
+
+// BYOOOTelExporterHelperConfig configures common exporterhelper settings for BYOO exporters.
+type BYOOOTelExporterHelperConfig struct {
+	Timeout        string                       `mapstructure:"timeout" yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	RetryOnFailure BYOOOTelRetryOnFailureConfig `mapstructure:"retryOnFailure" yaml:"retryOnFailure,omitempty" json:"retryOnFailure,omitempty"`
+	SendingQueue   BYOOOTelSendingQueueConfig   `mapstructure:"sendingQueue" yaml:"sendingQueue,omitempty" json:"sendingQueue,omitempty"`
+}
+
+// IsZero returns true when no exporterhelper overrides are configured.
+func (c BYOOOTelExporterHelperConfig) IsZero() bool {
+	return c.Timeout == "" && c.RetryOnFailure.IsZero() && c.SendingQueue.IsZero()
+}
+
+// BYOOOTelRetryOnFailureConfig configures exporterhelper retry_on_failure settings.
+type BYOOOTelRetryOnFailureConfig struct {
+	Enabled         *bool  `mapstructure:"enabled" yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	InitialInterval string `mapstructure:"initialInterval" yaml:"initialInterval,omitempty" json:"initialInterval,omitempty"`
+	MaxInterval     string `mapstructure:"maxInterval" yaml:"maxInterval,omitempty" json:"maxInterval,omitempty"`
+	MaxElapsedTime  string `mapstructure:"maxElapsedTime" yaml:"maxElapsedTime,omitempty" json:"maxElapsedTime,omitempty"`
+}
+
+// IsZero returns true when no retry_on_failure overrides are configured.
+func (c BYOOOTelRetryOnFailureConfig) IsZero() bool {
+	return c.Enabled == nil && c.InitialInterval == "" && c.MaxInterval == "" && c.MaxElapsedTime == ""
+}
+
+// BYOOOTelSendingQueueConfig configures exporterhelper sending_queue settings.
+type BYOOOTelSendingQueueConfig struct {
+	Enabled         *bool                           `mapstructure:"enabled" yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	NumConsumers    *int64                          `mapstructure:"numConsumers" yaml:"numConsumers,omitempty" json:"numConsumers,omitempty"`
+	QueueSize       *int64                          `mapstructure:"queueSize" yaml:"queueSize,omitempty" json:"queueSize,omitempty"`
+	Sizer           string                          `mapstructure:"sizer" yaml:"sizer,omitempty" json:"sizer,omitempty"`
+	Storage         string                          `mapstructure:"storage" yaml:"storage,omitempty" json:"storage,omitempty"`
+	BlockOnOverflow *bool                           `mapstructure:"blockOnOverflow" yaml:"blockOnOverflow,omitempty" json:"blockOnOverflow,omitempty"`
+	WaitForResult   *bool                           `mapstructure:"waitForResult" yaml:"waitForResult,omitempty" json:"waitForResult,omitempty"`
+	Batch           BYOOOTelSendingQueueBatchConfig `mapstructure:"batch" yaml:"batch,omitempty" json:"batch,omitempty"`
+}
+
+// IsZero returns true when no sending_queue overrides are configured.
+func (c BYOOOTelSendingQueueConfig) IsZero() bool {
+	return c.Enabled == nil &&
+		c.NumConsumers == nil &&
+		c.QueueSize == nil &&
+		c.Sizer == "" &&
+		c.Storage == "" &&
+		c.BlockOnOverflow == nil &&
+		c.WaitForResult == nil &&
+		c.Batch.IsZero()
+}
+
+// BYOOOTelSendingQueueBatchConfig configures exporterhelper sending_queue.batch settings.
+type BYOOOTelSendingQueueBatchConfig struct {
+	FlushTimeout string `mapstructure:"flushTimeout" yaml:"flushTimeout,omitempty" json:"flushTimeout,omitempty"`
+	Sizer        string `mapstructure:"sizer" yaml:"sizer,omitempty" json:"sizer,omitempty"`
+	MinSize      *int64 `mapstructure:"minSize" yaml:"minSize,omitempty" json:"minSize,omitempty"`
+	MaxSize      *int64 `mapstructure:"maxSize" yaml:"maxSize,omitempty" json:"maxSize,omitempty"`
+}
+
+// IsZero returns true when no sending_queue.batch overrides are configured.
+func (c BYOOOTelSendingQueueBatchConfig) IsZero() bool {
+	return c.FlushTimeout == "" && c.Sizer == "" && c.MinSize == nil && c.MaxSize == nil
+}
+
+// BYOOOTelMemoryLimiterConfig configures the BYOO collector memory_limiter processor.
+type BYOOOTelMemoryLimiterConfig struct {
+	CheckInterval        string `mapstructure:"checkInterval" yaml:"checkInterval,omitempty" json:"checkInterval,omitempty"`
+	LimitMiB             *int64 `mapstructure:"limitMiB" yaml:"limitMiB,omitempty" json:"limitMiB,omitempty"`
+	SpikeLimitMiB        *int64 `mapstructure:"spikeLimitMiB" yaml:"spikeLimitMiB,omitempty" json:"spikeLimitMiB,omitempty"`
+	LimitPercentage      *int64 `mapstructure:"limitPercentage" yaml:"limitPercentage,omitempty" json:"limitPercentage,omitempty"`
+	SpikeLimitPercentage *int64 `mapstructure:"spikeLimitPercentage" yaml:"spikeLimitPercentage,omitempty" json:"spikeLimitPercentage,omitempty"`
+}
+
+// IsZero returns true when no memory_limiter overrides are configured.
+func (c BYOOOTelMemoryLimiterConfig) IsZero() bool {
+	return c.CheckInterval == "" &&
+		c.LimitMiB == nil &&
+		c.SpikeLimitMiB == nil &&
+		c.LimitPercentage == nil &&
+		c.SpikeLimitPercentage == nil
+}
+
+// BYOOOTelBatchConfig configures the BYOO collector batch processor.
+type BYOOOTelBatchConfig struct {
+	Timeout                  string   `mapstructure:"timeout" yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	SendBatchSize            *int64   `mapstructure:"sendBatchSize" yaml:"sendBatchSize,omitempty" json:"sendBatchSize,omitempty"`
+	SendBatchMaxSize         *int64   `mapstructure:"sendBatchMaxSize" yaml:"sendBatchMaxSize,omitempty" json:"sendBatchMaxSize,omitempty"`
+	MetadataKeys             []string `mapstructure:"metadataKeys" yaml:"metadataKeys,omitempty" json:"metadataKeys,omitempty"`
+	MetadataCardinalityLimit *int64   `mapstructure:"metadataCardinalityLimit" yaml:"metadataCardinalityLimit,omitempty" json:"metadataCardinalityLimit,omitempty"`
+}
+
+// IsZero returns true when no batch processor overrides are configured.
+func (c BYOOOTelBatchConfig) IsZero() bool {
+	return c.Timeout == "" &&
+		c.SendBatchSize == nil &&
+		c.SendBatchMaxSize == nil &&
+		len(c.MetadataKeys) == 0 &&
+		c.MetadataCardinalityLimit == nil
 }
 
 func (r *ResourceRequirements) ToK8sResourceRequirements() corev1.ResourceRequirements {
@@ -390,14 +543,20 @@ type AgentConfig struct {
 	// Quantities must be strings.
 	BYOOFluentBitResources ResourceRequirements `yaml:",omitempty"`
 
-	// BYOOLogChunking contains BYOO OTel collector log chunking and exporter batch settings.
-	BYOOLogChunking BYOOLogChunkingConfig `yaml:",omitempty"`
+	// BYOOLogChunking contains BYOO OTel collector log chunking settings.
+	BYOOLogChunking BYOOLogChunkingConfig `mapstructure:"byooLogChunking" yaml:"byooLogChunking,omitempty" json:"byooLogChunking,omitempty"`
+
+	// BYOODebugMode enables BYOO OTel collector debug logs and debug exporter fanout.
+	BYOODebugMode BYOODebugModeConfig `mapstructure:"byooDebugMode" yaml:"byooDebugMode,omitempty" json:"byooDebugMode,omitempty"`
 
 	// BYOOMetricSubset contains BYOO OTel collector metric subset pipeline settings.
 	BYOOMetricSubset BYOOMetricSubsetConfig `yaml:"byooMetricSubset,omitempty"`
 
 	// BYOOWorkloadMetrics contains settings for the generated workload metrics pipeline.
 	BYOOWorkloadMetrics BYOOWorkloadMetricsConfig `yaml:"byooWorkloadMetrics,omitempty"`
+
+	// BYOOOTelCollector contains structured BYOO OTel collector rendering settings.
+	BYOOOTelCollector BYOOOTelCollectorConfig `mapstructure:"byooOtelCollector" yaml:"byooOtelCollector,omitempty"`
 }
 
 func (t AgentConfig) Complete(env Environment) AgentConfig {
@@ -413,8 +572,10 @@ func (t AgentConfig) Complete(env Environment) AgentConfig {
 // BYOOOTelCollectorEnvVars returns env vars that must be set only on the BYOO OTel collector container.
 func (t AgentConfig) BYOOOTelCollectorEnvVars() []corev1.EnvVar {
 	envs := t.BYOOLogChunking.EnvVars()
+	envs = append(envs, t.BYOODebugMode.EnvVars()...)
 	envs = append(envs, t.BYOOMetricSubset.EnvVars()...)
-	return append(envs, t.BYOOWorkloadMetrics.EnvVars()...)
+	envs = append(envs, t.BYOOWorkloadMetrics.EnvVars()...)
+	return append(envs, t.BYOOOTelCollector.EnvVars()...)
 }
 
 const (
