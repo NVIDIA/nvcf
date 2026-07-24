@@ -52,13 +52,19 @@ concurrency:
   group: bazel-${{ github.ref }}
   cancel-in-progress: true
 
-# NOTE: keep the bazel-ci image tag as a string literal in
-# container.image and any tag-bump bookkeeping. GitHub Actions
-# evaluates job-level `container.image` before the workflow-level
-# `env:` context is reliably available, so referencing
-# `${{ env.BAZEL_CI_IMAGE }}` here causes the matrix to expand to
-# zero jobs on push events (validated empirically; PR-event runs
-# happen to work). The duplication is intentional.
+# The bazel-ci job container comes from the repository variable
+# BAZEL_CI_IMAGE, so the image is bumped in one place (repo settings) instead
+# of being edited in every workflow that runs in it.
+#
+# It must be `vars`, NOT `env`. GitHub Actions evaluates job-level
+# `container.image` before the workflow-level `env:` context is reliably
+# available, so `${{ env.BAZEL_CI_IMAGE }}` made the matrix expand to zero jobs
+# on push events (validated empirically; PR-event runs happened to work). The
+# `vars` context does not have that ordering problem.
+#
+# The `||` fallback keeps CI working if the variable is unset or unavailable
+# (for example on a fork). Keep the fallback in step with the variable; it is a
+# safety net, not the source of truth.
 
 jobs:
   detect:
@@ -314,7 +320,7 @@ jobs:
       # Bazelisk then selects the root .bazelversion release. Update this tag
       # only after the corresponding internal image has been published and
       # mirrored.
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.13.0
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.13.0' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

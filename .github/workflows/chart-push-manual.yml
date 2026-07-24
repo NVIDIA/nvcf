@@ -34,7 +34,7 @@ jobs:
     name: package + push chart to ncp-dev
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.8.0
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.13.0' }}
     defaults:
       run:
         # In container jobs Actions falls back to plain `sh` (dash), which
