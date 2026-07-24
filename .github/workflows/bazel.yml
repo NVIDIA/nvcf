@@ -358,6 +358,23 @@ jobs:
           restore-keys: |
             bazel-${{ matrix.subtree.id }}-
 
+      # byoo-otel-collector's binary is built by a no-sandbox genrule that shells
+      # out to `go build` (ocb-generated source) and fetches the whole otel
+      # collector module graph from GOPROXY. That download is outside Bazel's
+      # dependency graph and the Bazel cache above, so cache the genrule's Go
+      # module + build cache separately, keyed on the collector go.sum, so cold
+      # runners restore it instead of re-downloading. See NVIDIA/nvcf#373.
+      - name: Cache byoo-otel-collector Go module cache
+        if: matrix.subtree.id == 'byoo-otel-collector' && steps.precheck.outputs.skip == 'false'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/byoo-gomodcache
+            ${{ runner.temp }}/byoo-gocache
+          key: byoo-gomod-${{ hashFiles('src/compute-plane-services/byoo-otel-collector/otelcol/go.sum') }}
+          restore-keys: |
+            byoo-gomod-
+
       # Decide the remote cache to use. The internal nvcfbarn Buildbarn
       # (the .bazelrc `--config=remote` default) is unreachable from
       # GitHub-hosted runners; the public EC2 Buildbarn is reachable over
@@ -501,6 +518,15 @@ jobs:
           COMMON=()
           if [ "${{ matrix.subtree.id }}" = "byoo-otel-collector" ]; then
             COMMON+=(--jobs=1)
+            # Persist the collector genrule's Go module + build cache across CI
+            # runs so cold runners restore instead of re-downloading the whole
+            # otel module graph. The genrule is no-sandbox and honours these via
+            # --action_env; paths sit under RUNNER_TEMP so the byoo cache step can
+            # save/restore them. Must match on build AND test or Bazel re-runs the
+            # genrule cacheless. See NVIDIA/nvcf#373.
+            COMMON+=(--action_env="GOMODCACHE=$RUNNER_TEMP/byoo-gomodcache"
+                     --action_env="GOCACHE=$RUNNER_TEMP/byoo-gocache"
+                     --action_env="GOPATH=$RUNNER_TEMP/byoo-gopath")
           fi
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
@@ -598,6 +624,11 @@ jobs:
           COMMON=(--flaky_test_attempts=3 --test_tag_filters=-requires-docker)
           if [ "${{ matrix.subtree.id }}" = "byoo-otel-collector" ]; then
             COMMON+=(--jobs=1)
+            # Match the build step's --action_env so the collector genrule reuses
+            # the cached Go module/build cache instead of re-running (see #373).
+            COMMON+=(--action_env="GOMODCACHE=$RUNNER_TEMP/byoo-gomodcache"
+                     --action_env="GOCACHE=$RUNNER_TEMP/byoo-gocache"
+                     --action_env="GOPATH=$RUNNER_TEMP/byoo-gopath")
           fi
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
