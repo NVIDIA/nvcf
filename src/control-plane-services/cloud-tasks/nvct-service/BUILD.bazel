@@ -1,5 +1,6 @@
 load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
 load("//rules/java:spring.bzl", "spring_boot_app")
+load("//rules/oci:defs.bzl", "java_oci_image")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -41,6 +42,19 @@ spring_boot_app(
     description = "NVIDIA Cloud Tasks OSS executable",
     group_id = "com.nvidia.nvct",
     main_class = "com.nvidia.nvct.App",
+)
+
+# Release image. Push the _index label (multi-arch amd64 + arm64), never
+# :nvct-service-oss-image, which is the single host-arch image.
+#
+# Parity with the pre-Bazel nvct-service/Dockerfile: same distroless java base
+# (nvcr.io/nvidia/distroless/java 25-jdk, pinned by digest in //MODULE.bazel),
+# same executable Spring Boot jar at /app.jar, same java -jar entrypoint behind
+# the base's shelless_ulimit shim.
+java_oci_image(
+    name = "nvct-service-oss-image",
+    jar = ":app",
+    jar_path = "/app.jar",
 )
 
 nvct_library_test(
