@@ -15,18 +15,6 @@
 # limitations under the License.
 
 
-timeout=120
-interval=5
-while [ $timeout -gt 0 ]; do
-  if nc -z -w 1 ${CASSANDRA_HOSTS} 9042; then
-    echo "Cassandra hosts are up"
-    break
-  fi
-  echo "Waiting for Cassandra hosts to be available..."
-  sleep $interval
-  timeout=$((timeout - interval))
-done
-
 # Verify the superuser and the cqlsh listener is available
 max_retries=10 # 10 * 1s = 10s
 attempt=1
@@ -43,11 +31,14 @@ echo "Cassandra cqlsh superuser is available"
 
 #
 # Pre-process SQL files with environment variable substitution
-# This allows configurable values like SERVICE_ROLE_PASSWORD
+# This allows configurable values like SERVICE_ROLE_PASSWORD and REPLICA_COUNT
 #
 # SECURITY: Only explicitly listed variables are substituted to prevent
 # unintended substitution of other environment variables
-ENVSUBST_VARS='$SERVICE_ROLE_PASSWORD'
+REPLICA_COUNT=${REPLICA_COUNT:-3}
+export REPLICA_COUNT
+# shellcheck disable=SC2016
+ENVSUBST_VARS='$SERVICE_ROLE_PASSWORD $REPLICA_COUNT'
 
 TEMP_KEYSPACES="/tmp/keyspaces"
 echo "Pre-processing SQL files with environment variable substitution..."
