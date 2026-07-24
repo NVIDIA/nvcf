@@ -369,6 +369,11 @@ curl -v -H 'Host: api.example.com' localhost:10081/health
 curl -v localhost:10083/metrics
 ```
 
+`nvcf_ai_api_gateway_shadow_requests_dropped_total` counts shadow dispatches
+dropped before replay. The `openai_model_name` label identifies the shadow
+target. The `reason` label is one of `body_read_error`, `body_rewrite_error`,
+or `concurrency_limit`.
+
 ## Running a Local OpenAI-compatible Model
 
 Use this only when validating OpenAI-compatible request bodies against a local model server.
