@@ -29,7 +29,7 @@ The following example copies one public NVCF chart into an OCI registry:
 
 ```bash
 export CHART_NAME="helm-nvcf-api"
-export CHART_VERSION="1.22.5"
+export CHART_VERSION="1.23.9"
 export TARGET_REGISTRY="<registry-host>"
 export TARGET_REPOSITORY="<repository>"
 
