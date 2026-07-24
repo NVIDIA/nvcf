@@ -50,13 +50,12 @@ try-import %workspace%/tools/bazel/internal.bazelrc
 # the caller cannot reach.
 #   - GitHub mirror CI: the bazel workflow sets --remote_cache to the public
 #     EC2 Buildbarn (with a bearer token and CA cert) and controls upload per
-#     trigger (read-only on PRs, read-write on main). The internal nvcfbarn
-#     cache below is unreachable from GitHub-hosted runners.
+#     trigger (read-only on PRs, read-write on main).
 #   - Internal GitLab CI / on-VPN devs: opt in with --config=remote (read-only)
-#     or --config=remote-write (read+write) to the internal nvcfbarn cache
-#     defined below, e.g. `bazel build --config=remote-write //...` or a
-#     persistent `build --config=remote` in ~/.bazelrc.user (try-imported at
-#     the bottom of this file).
+#     or --config=remote-write (read+write) and supply the cache endpoint with
+#     --remote_cache, e.g. `bazel build --config=remote-write //...` or a
+#     persistent `build --config=remote` plus `--remote_cache=...` in
+#     ~/.bazelrc.user (try-imported at the bottom of this file).
 
 # Required for toolchains_protoc to register a prebuilt protoc instead
 # of falling back to the C++ protoc baked into @@protobuf+. Default
@@ -127,12 +126,12 @@ build:ci --stamp
 #                          BAZEL_REMOTE_FLAGS=--config=remote-write
 #                          when the cache probe succeeds.
 #
-# The endpoint below is the team read-only cache. CI writes through to it on
-# every default-branch and MR build, so its hit rate climbs as commits land.
-# If you are on VPN and see slow / wedging cold builds, your in-flight RPCs
-# may be losing the VPN race; either run locally (--remote_cache=) or point at
-# a closer cache via ~/.bazelrc.user (see try-import at the top of this file).
-build:remote --remote_cache=grpc://nvcfbarn.nvidia.com:8980
+# This profile carries the read-only cache policy and tuning flags only; the
+# caller supplies the endpoint (and credentials) via --remote_cache. CI points
+# it at the public EC2 Buildbarn and writes through on every default-branch and
+# MR build, so its hit rate climbs as commits land. Devs can point at a closer
+# cache via ~/.bazelrc.user (see try-import at the top of this file), or run
+# fully local with --remote_cache= to disable the cache for a build.
 build:remote --remote_upload_local_results=false
 
 # zstd compression for cache blobs. Cuts upload bandwidth ~5-10x for

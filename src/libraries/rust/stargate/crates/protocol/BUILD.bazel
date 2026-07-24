@@ -7,7 +7,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # build.rs invokes `capnpc::CompilerCommand::new().file("quic.capnp")`,
 # which spawns the host `capnp` binary. The bazel-ci image installs
-# capnproto via apt (see ci/Dockerfile.bazel); cargo_build_script
+# capnproto via apt (provided by the bazel-ci image); cargo_build_script
 # inherits PATH, so the binary is found there. Switching to a fully
 # hermetic capnp toolchain is a follow-up.
 cargo_build_script(

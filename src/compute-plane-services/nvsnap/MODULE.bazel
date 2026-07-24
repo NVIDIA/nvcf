@@ -51,8 +51,8 @@ oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 # nvsnap is amd64-only at runtime (GPU hosts). All oci.pull blocks
 # below are scoped to linux/amd64 -- arm64 layers are NOT pulled and
 # image targets are single-arch. hermetic_cc_toolchain (zig SDK) is
-# intentionally NOT registered; the Bazel CI image
-# (ci/Dockerfile.bazel) ships system gcc on ubuntu:22.04, which is
+# intentionally NOT registered; the bazel-ci image ships
+# system gcc (ubuntu 24.04), which is
 # the same glibc ABI as the nvsnap-agent runtime container, so C/C++
 # targets link against the same runtime they ship into.
 oci.pull(
