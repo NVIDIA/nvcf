@@ -603,6 +603,10 @@ stateMetrics:
 {{- if not (kindIs "map" $functionAutoscalerNvcfApiValues) }}
 {{- fail "functionAutoscaler.nvcfApi must be a map" }}
 {{- end }}
+{{- $functionAutoscalerVaultValues := (index $functionAutoscalerValues "vault") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerVaultValues) }}
+{{- fail "functionAutoscaler.vault must be a map" }}
+{{- end }}
 {{- $functionAutoscalerCassandraValues := (index $functionAutoscalerValues "cassandra") | default dict }}
 {{- if not (kindIs "map" $functionAutoscalerCassandraValues) }}
 {{- fail "functionAutoscaler.cassandra must be a map" }}
@@ -634,6 +638,10 @@ functionautoscaler:
     {{- with (index $functionAutoscalerImageValues "pullPolicy") }}
     pullPolicy: {{ . | quote }}
     {{- end }}
+  {{- with $functionAutoscalerVaultValues }}
+  vault:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}

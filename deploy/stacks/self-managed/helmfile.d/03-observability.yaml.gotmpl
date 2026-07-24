@@ -61,11 +61,19 @@ environments:
 {{- if not (kindIs "map" $functionAutoscalerNvcfApiValues) }}
 {{- fail "functionAutoscaler.nvcfApi must be a map" }}
 {{- end }}
+{{- $functionAutoscalerVaultValues := (index $functionAutoscalerValues "vault") | default dict }}
+{{- if not (kindIs "map" $functionAutoscalerVaultValues) }}
+{{- fail "functionAutoscaler.vault must be a map" }}
+{{- end }}
 {{- $functionAutoscalerEnabled := (index $functionAutoscalerValues "enabled") | default false }}
 {{- $functionAutoscalerChartVersion := (index $functionAutoscalerValues "chartVersion") | default "" }}
 {{- $functionAutoscalerTsdbURL := (index $functionAutoscalerValues "timeseriesDbUrl") | default (index $functionAutoscalerTimeseriesDbValues "url") | default "" }}
 {{- $functionAutoscalerOauthURL := (index $functionAutoscalerValues "oauth2TokenApiAddress") | default (index $functionAutoscalerNvcfApiValues "oauth2TokenApiAddress") | default "" }}
 {{- $functionAutoscalerAuthEnabled := and (hasKey $functionAutoscalerNvcfApiValues "disableAuth") (not (index $functionAutoscalerNvcfApiValues "disableAuth")) }}
+{{- $functionAutoscalerVaultEnabled := true }}
+{{- if hasKey $functionAutoscalerVaultValues "enabled" }}
+{{- $functionAutoscalerVaultEnabled = index $functionAutoscalerVaultValues "enabled" }}
+{{- end }}
 {{- if and $functionAutoscalerEnabled (eq $mode "disabled") }}
 {{- fail "functionAutoscaler.enabled requires observability.mode to be install or existing" }}
 {{- end }}
@@ -78,8 +86,8 @@ environments:
 {{- if and $functionAutoscalerEnabled $existingMode (not $functionAutoscalerTsdbURL) }}
 {{- fail "functionAutoscaler.timeseriesDbUrl or functionAutoscaler.timeseriesDb.url is required when observability.mode=existing" }}
 {{- end }}
-{{- if and $functionAutoscalerEnabled $functionAutoscalerAuthEnabled (not $functionAutoscalerOauthURL) }}
-{{- fail "functionAutoscaler.nvcfApi.oauth2TokenApiAddress is required when functionAutoscaler.enabled=true and nvcfApi.disableAuth=false" }}
+{{- if and $functionAutoscalerEnabled $functionAutoscalerAuthEnabled (not $functionAutoscalerOauthURL) (not $functionAutoscalerVaultEnabled) }}
+{{- fail "functionAutoscaler.nvcfApi.oauth2TokenApiAddress is required when functionAutoscaler.enabled=true, nvcfApi.disableAuth=false, and functionAutoscaler.vault.enabled=false" }}
 {{- end }}
 
 repositories:
