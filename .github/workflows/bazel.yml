@@ -52,13 +52,19 @@ concurrency:
   group: bazel-${{ github.ref }}
   cancel-in-progress: true
 
-# NOTE: keep the bazel-ci image tag as a string literal in
-# container.image and any tag-bump bookkeeping. GitHub Actions
-# evaluates job-level `container.image` before the workflow-level
-# `env:` context is reliably available, so referencing
-# `${{ env.BAZEL_CI_IMAGE }}` here causes the matrix to expand to
-# zero jobs on push events (validated empirically; PR-event runs
-# happen to work). The duplication is intentional.
+# The bazel-ci job container comes from the repository variable
+# BAZEL_CI_IMAGE, so the image is bumped in one place (repo settings) instead
+# of being edited in every workflow that runs in it.
+#
+# It must be `vars`, NOT `env`. GitHub Actions evaluates job-level
+# `container.image` before the workflow-level `env:` context is reliably
+# available, so `${{ env.BAZEL_CI_IMAGE }}` made the matrix expand to zero jobs
+# on push events (validated empirically; PR-event runs happened to work). The
+# `vars` context does not have that ordering problem.
+#
+# The `||` fallback keeps CI working if the variable is unset or unavailable
+# (for example on a fork). Keep the fallback in step with the variable; it is a
+# safety net, not the source of truth.
 
 jobs:
   detect:
@@ -314,7 +320,7 @@ jobs:
       # Bazelisk then selects the root .bazelversion release. Update this tag
       # only after the corresponding internal image has been published and
       # mirrored.
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.13.0
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.13.0' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -331,9 +337,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history so the root row can diff a PR against its base to
-          # compute affected targets (see "Determine build targets").
-          fetch-depth: 0
+          # Only the root row (path ".") needs full history: it diffs a PR
+          # against its base to compute affected targets (see "Determine build
+          # targets"). Every other row builds its whole scope regardless, so a
+          # shallow checkout there skips a full-history clone. (GHA treats 0 as
+          # falsy, so the ternary is written non-root-first to return 0 for root.)
+          fetch-depth: ${{ matrix.subtree.path != '.' && 1 || 0 }}
 
       # A subtree can be selected but not yet have its Bazel scaffold on
       # the mirror (its upstream OSS-flip MR is still open, or the
@@ -717,7 +726,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          # docker-host rows never build the root scope, so no git history is
+          # needed here; a shallow checkout is enough.
+          fetch-depth: 1
       # The Java tree builds with local_jdk (root .bazelrc). Unlike the fast
       # matrix, this lane runs on a bare runner rather than the bazel-ci image,
       # so provide JDK 25 explicitly for the Java requires-docker tests.

@@ -429,13 +429,20 @@ build).
 
 ## CI
 
-The public GitHub Bazel matrix in `.github/workflows/bazel.yml` consumes
-`ghcr.io/nvidia/nvcf/bazel-ci:0.12.0`. That image is built in the internal
+Every workflow that needs the Bazel toolchain runs in the `bazel-ci` job
+container, sourced from the repository variable `BAZEL_CI_IMAGE` (currently
+`ghcr.io/nvidia/nvcf/bazel-ci`). Each workflow carries the current pin as a
+`||` fallback so CI still runs when the variable is unavailable, for example on
+a fork.
+
+That image is built in the internal
 [`nvcf/bazel-ci-templates`](https://gitlab-master.nvidia.com/nvcf/bazel-ci-templates)
 project, stamped with a version, and mirrored to GHCR. The mirror is currently
 manual; automation is planned. To change the image's Bazel, Java, or operating
 system tooling, update the internal template first, publish and mirror a new
-tag, and only then update the pinned `container.image` in `.github/workflows/bazel.yml`.
+tag, then update the `BAZEL_CI_IMAGE` repository variable. Do not hardcode the
+tag per workflow: it drifted to three different versions across workflows and
+this document before the variable was introduced.
 
 The root `ci/Dockerfile.bazel` and `.github/workflows/bazel-ci-image.yml` were a
 stale, divergent copy (no Java, older Bazel) and have been removed. The image is
