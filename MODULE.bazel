@@ -39,7 +39,12 @@ bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_oci", version = "2.2.7")
 bazel_dep(name = "rules_pkg", version = "1.2.0")
 bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
-bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
+
+bazel_dep(
+    name = "hermetic_cc_toolchain",
+    version = "4.1.0",
+    dev_dependency = True,
+)
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
@@ -98,11 +103,20 @@ use_repo(go_deps, "cat_dario_mergo", "com_github_aws_aws_sdk_go_v2", "com_github
 # C++ cross-compilation (multi-arch container builds).
 # Only register the cross toolchain; native arch uses host gcc.
 # ============================================================================
-zig = use_extension("@hermetic_cc_toolchain//toolchain:ext.bzl", "toolchains")
+# The upstream extension only creates zig_sdk for the root module, which makes
+# its use_repo declaration invalid when nvcf is consumed as a dependency. This
+# root-owned adapter keeps the cross toolchain active here and drops the entire
+# usage for external consumers.
+zig = use_extension(
+    "//tools/bazel:root_zig.bzl",
+    "root_zig",
+    dev_dependency = True,
+)
 use_repo(zig, "zig_sdk")
 
 register_toolchains(
     "@zig_sdk//toolchain:linux_arm64_gnu.2.38",
+    dev_dependency = True,
 )
 
 # ============================================================================
