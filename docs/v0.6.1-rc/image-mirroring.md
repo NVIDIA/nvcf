@@ -195,7 +195,7 @@ First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nv
 
 ```bash
 # Set stack versions
-export STACK_VERSION="0.6.0"
+export STACK_VERSION="0.6.0-rc.118"
 export COMPUTE_STACK_VERSION="1.0.6"
 
 # Download a specific control-plane stack version
@@ -225,7 +225,7 @@ and its listed artifact versions are QA-qualified together.
 
 ```bash
 # Set the version
-export VERSION="0.6.0"
+export VERSION="0.6.0-rc.118"
 
 ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VERSION}" && \
    mkdir -p nvcf-self-managed-stack && \
