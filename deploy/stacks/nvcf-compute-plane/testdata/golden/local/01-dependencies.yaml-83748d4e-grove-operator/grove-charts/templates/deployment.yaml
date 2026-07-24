@@ -1,0 +1,115 @@
+---
+# Source: grove-charts/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grove-operator
+  namespace: grove-system
+  labels:
+    chart: "grove-charts-v0.1.0-alpha.9"
+    release: "grove-operator"
+    app.kubernetes.io/component: operator-deployment
+    app.kubernetes.io/name: grove-operator
+    app.kubernetes.io/part-of: grove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      
+      app.kubernetes.io/component: operator-deployment
+      app.kubernetes.io/name: grove-operator
+      app.kubernetes.io/part-of: grove
+  template:
+    metadata:
+      labels:
+        chart: "grove-charts-v0.1.0-alpha.9"
+        release: "grove-operator"
+        app.kubernetes.io/component: operator-deployment
+        app.kubernetes.io/name: grove-operator
+        app.kubernetes.io/part-of: grove
+    spec:
+      restartPolicy: Always
+      serviceAccountName: grove-operator
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: crd-installer
+          image: ghcr.io/ai-dynamo/grove/grove-install-crds:v0.1.0-alpha.9
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: kube-api-access-grove
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      containers:
+        - name: grove-operator
+          image: ghcr.io/ai-dynamo/grove/grove-operator:v0.1.0-alpha.9
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config=/etc/grove-operator/config/config.yaml
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9444
+              scheme: HTTP
+            initialDelaySeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9444
+              scheme: HTTP
+            initialDelaySeconds: 10
+            timeoutSeconds: 5
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              ephemeral-storage: 128Mi
+              memory: 128Mi
+          volumeMounts:
+            - name: operator-config
+              mountPath: /etc/grove-operator/config
+            - name: kube-api-access-grove
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: grove-webhook-server-cert
+              mountPath: /etc/grove-operator/webhook-certs
+              readOnly: true
+          env:
+            - name: GROVE_OPERATOR_SERVICE_ACCOUNT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            - name: GROVE_INIT_CONTAINER_IMAGE
+              value: ghcr.io/ai-dynamo/grove/grove-initc
+      volumes:
+        - name: kube-api-access-grove
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 43200 # 12 hours
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                  - key: ca.crt
+                    path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
+                        apiVersion: v1
+        - name: operator-config
+          configMap:
+            name: grove-operator-cm-b77904eb
+        - name: grove-webhook-server-cert
+          # Mount the Secret volume containing webhook certificates
+          secret:
+            secretName: grove-webhook-server-cert
+            defaultMode: 420
+            optional: true

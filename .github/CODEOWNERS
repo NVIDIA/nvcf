@@ -1,5 +1,59 @@
 # CODEOWNERS for the NVCF monorepo.
+# Order matters: the last matching pattern wins.
+# Some subgroup teams may be created after this file lands; keep the intended
+# ownership routing here.
+
+# Default fallback for paths not otherwise matched.
 * @NVIDIA/nvcf-dev
 
 # This CODEOWNERS file.
 /.github/CODEOWNERS @NVIDIA/nvcf-admin
+
+# CI, automation, and developer tooling.
+/.github/workflows/ @NVIDIA/nvcf-ci-dev
+/ci/ @NVIDIA/nvcf-ci-dev
+/tools/ @NVIDIA/nvcf-ci-dev
+
+# Documentation.
+/docs/ @NVIDIA/nvcf-docs-dev
+
+# Infrastructure foundations.
+/deploy/helm/cassandra/ @NVIDIA/nvcf-infra-dev
+/deploy/helm/nats/ @NVIDIA/nvcf-infra-dev
+/deploy/helm/openbao/ @NVIDIA/nvcf-infra-dev
+/infra/cassandra/ @NVIDIA/nvcf-infra-dev
+/migrations/cassandra/ @NVIDIA/nvcf-infra-dev
+/migrations/openbao/ @NVIDIA/nvcf-infra-dev
+
+# Control-plane services and charts.
+# Includes the NVCF API, rate limiter, invocation service, gRPC proxy, event
+# ledger, deployment stages, NVCT API, vanity gateway, autoscaler, Helm ReVal,
+# LLM gateway, LLM request router, SIS, and Stargate.
+/src/control-plane-services/ @NVIDIA/nvcf-control-plane-dev
+/src/invocation-plane-services/ @NVIDIA/nvcf-control-plane-dev
+/src/libraries/rust/stargate/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/admin-token-issuer-proxy/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/api-keys-colocated/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/function-autoscaler/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/gateway-routes/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/grpc-proxy/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/helm-reval/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/http-invocation/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/llm-api-gateway/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/llm-request-router/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/nats-auth-callout/ @NVIDIA/nvcf-control-plane-dev
+/deploy/helm/ratelimiter/ @NVIDIA/nvcf-control-plane-dev
+/migrations/cassandra/keyspaces/api_keys_api/ @NVIDIA/nvcf-control-plane-dev
+/migrations/cassandra/keyspaces/ess_api/ @NVIDIA/nvcf-control-plane-dev
+/migrations/cassandra/keyspaces/event_ledger/ @NVIDIA/nvcf-control-plane-dev
+/migrations/cassandra/keyspaces/nvcf_api/ @NVIDIA/nvcf-control-plane-dev
+/migrations/cassandra/keyspaces/sis_api/ @NVIDIA/nvcf-control-plane-dev
+
+# Compute-plane services and charts.
+# Includes NVCA, BYOO, Dynamo operator integration, and future Nsight operator
+# integration.
+/src/compute-plane-services/ @NVIDIA/nvcf-compute-plane-dev
+/deploy/helm/container-cache/ @NVIDIA/nvcf-compute-plane-dev
+/deploy/helm/nvca-operator/ @NVIDIA/nvcf-compute-plane-dev
+/deploy/helm/nvcf-unbound/ @NVIDIA/nvcf-compute-plane-dev
+/deploy/stacks/nvcf-compute-plane/ @NVIDIA/nvcf-compute-plane-dev

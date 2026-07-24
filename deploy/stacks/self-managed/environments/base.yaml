@@ -9,8 +9,16 @@ global:
   # =============================================================================
   # Helm Chart Sources Configuration
   # =============================================================================
-  # Configure the OCI registry where NVCF Helm charts are stored.
-  # This must point to a registry containing the NVCF chart packages.
+  # Option A — HTTP Helm repository (e.g. NGC public catalog):
+  #   sources:
+  #     url: "https://helm.ngc.nvidia.com/nvidia/nvcf"
+  #     username: "$oauthtoken"
+  #     password: "YOUR_NGC_API_KEY"
+  #
+  # Option B — OCI registry (e.g. ECR or a private NGC org after mirroring):
+  #   sources:
+  #     registry: "nvcr.io"           # or <account>.dkr.ecr.<region>.amazonaws.com
+  #     repository: "YOUR_ORG/YOUR_TEAM"
   # =============================================================================
   helm:
     sources:

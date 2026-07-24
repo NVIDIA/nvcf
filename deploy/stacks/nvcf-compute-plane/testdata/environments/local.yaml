@@ -1,0 +1,24 @@
+global:
+  helm:
+    sources:
+      registry: "nvcr.io"
+      repository: "0651155215864979/ncp-dev"
+
+  image:
+    registry: nvcr.io
+    repository: 0651155215864979/ncp-dev
+
+  imagePullSecrets:
+    - name: nvcr-pull-secret
+
+  nvcaOperator:
+    selfManaged:
+      icmsServiceURL: http://api.sis.svc.cluster.local:8080
+      revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+      natsURL: nats://nats.nats-system.svc.cluster.local:4222
+
+addons:
+  groveOperator:
+    enabled: true
+  dynamoOperator:
+    enabled: true

@@ -1458,11 +1458,11 @@ func isInitJobPodProgressing(pod *corev1.Pod, k8sTimeConfig *k8sutil.TimeConfig)
 	case corev1.PodPending, corev1.PodUnknown:
 		if k8sutil.IsPodScheduled(ps) {
 			if k8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.MaxImagePullErrorThreshold) {
-				if _, _, hasIssues := k8sutil.ImagePullIssuesReported(ps); hasIssues {
+				if _, hasIssues := k8sutil.ImagePullIssuesReported(ps); hasIssues {
 					return "image pull issues", false
 				}
 			}
-			stuck, _ := k8sutil.IsPodStuckInitializing(pod, k8sTimeConfig)
+			_, stuck := k8sutil.IsPodStuckInitializing(pod, k8sTimeConfig)
 			if stuck {
 				return "init stuck initializing", false
 			}
