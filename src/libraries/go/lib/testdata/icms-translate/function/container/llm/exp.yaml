@@ -276,6 +276,9 @@ spec:
       requests:
         cpu: 500m
         memory: 512Mi
+    securityContext:
+      runAsGroup: 1000
+      runAsUser: 1000
     volumeMounts:
     - mountPath: /var/run/llm
       name: llm
@@ -342,6 +345,9 @@ spec:
       requests:
         cpu: 125m
         memory: 64Mi
+    securityContext:
+      runAsGroup: 1000
+      runAsUser: 1000
     volumeMounts:
     - mountPath: /var/run/llm
       name: llm

@@ -431,3 +431,31 @@ func envSliceToMap(envs []corev1.EnvVar) map[string]string {
 	}
 	return m
 }
+
+// TestLLMSidecarsShareRunAsUser guards the fix for the worker-token permission
+// bug: the credential-manager writes the token 0600, so it and pylon must run
+// as the same non-root UID for pylon to read it (and to keep it from the
+// customer workload container).
+func TestLLMSidecarsShareRunAsUser(t *testing.T) {
+	allEnvSet := map[string]string{
+		"LLM_REQUEST_ROUTER_ADDRESS": "llm-router.example.com:443",
+		"INFERENCE_PORT":             "8080",
+	}
+
+	pylon, err := newLLMRouterClientContainer(&LaunchSpecification{}, allEnvSet, TranslateConfig{}, "inst-123", false)
+	require.NoError(t, err)
+	cred, err := newLLMCredentialManagerContainer(allEnvSet, TranslateConfig{})
+	require.NoError(t, err)
+
+	for name, sc := range map[string]*corev1.SecurityContext{"pylon": pylon.SecurityContext, "credential-manager": cred.SecurityContext} {
+		require.NotNilf(t, sc, "%s must set a security context", name)
+		require.NotNilf(t, sc.RunAsUser, "%s must set runAsUser", name)
+		assert.Equalf(t, llmSidecarRunAsUser, *sc.RunAsUser, "%s runAsUser", name)
+		require.NotNilf(t, sc.RunAsGroup, "%s must set runAsGroup", name)
+		assert.Equalf(t, llmSidecarRunAsUser, *sc.RunAsGroup, "%s runAsGroup", name)
+		assert.NotZerof(t, *sc.RunAsUser, "%s must be non-root", name)
+	}
+
+	assert.Equal(t, *pylon.SecurityContext.RunAsUser, *cred.SecurityContext.RunAsUser,
+		"both sidecars must share a UID so pylon can read the credential-manager's 0600 token")
+}

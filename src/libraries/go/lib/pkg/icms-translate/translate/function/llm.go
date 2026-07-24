@@ -40,7 +40,22 @@ const (
 
 	llmDirMountPath    = "/var/run/llm"
 	llmWorkerTokenPath = llmDirMountPath + "/worker-token"
+
+	// pylon's image user (nvs). Both LLM sidecars run as this UID so pylon can
+	// read the 0600 worker-token the credential-manager writes to the shared
+	// emptyDir; the customer container runs as its own user and cannot.
+	llmSidecarRunAsUser int64 = 1000
 )
+
+// newLLMSidecarSecurityContext runs both LLM sidecars as the same UID so they
+// can exchange the worker-token on the shared emptyDir.
+func newLLMSidecarSecurityContext() *corev1.SecurityContext {
+	uid := llmSidecarRunAsUser
+	return &corev1.SecurityContext{
+		RunAsUser:  &uid,
+		RunAsGroup: &uid,
+	}
+}
 
 func normalizeLLMRequestRouterAddressEnvAliases(envSet map[string]string) {
 	llmRequestRouterAddress := envSet[llmRequestRouterAddressEnv]
@@ -143,6 +158,7 @@ func newLLMRouterClientContainer(
 		Name:            LLMWorkerContainerName,
 		Image:           llmRouterClientImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
+		SecurityContext: newLLMSidecarSecurityContext(),
 		Args:            args,
 		Env:             common.SortEnvs(envs),
 		Resources: corev1.ResourceRequirements{
@@ -217,6 +233,7 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 		Name:            "llm-credential-manager",
 		Image:           llmCredentialManagerImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
+		SecurityContext: newLLMSidecarSecurityContext(),
 		Env:             common.SortEnvs(envs),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
