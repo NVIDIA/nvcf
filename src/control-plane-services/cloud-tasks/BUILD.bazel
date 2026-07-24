@@ -29,6 +29,7 @@ nvct_workspace_runfiles(
     name = "integration_local_env",
     srcs = [":integration_local_env_files"],
     strip_prefix = "src/control-plane-services/cloud-tasks/",
+    visibility = ["//src/control-plane-services/cloud-tasks:__subpackages__"],
 )
 
 nvcf_notice(

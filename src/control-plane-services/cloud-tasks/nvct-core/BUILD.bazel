@@ -204,6 +204,9 @@ nvct_library(
     name = "nvct_core_test_fixtures",
     srcs = NVCT_CORE_TEST_SRCS,
     deps = NVCT_CORE_TEST_DEPS,
+    # Preserve the classpath layout of the standalone cloud-tasks fixture jar
+    # after moving its sources under this monorepo directory.
+    resource_strip_prefix = "src/control-plane-services/cloud-tasks",
     resources = NVCT_CORE_TEST_RESOURCES,
 )
 
