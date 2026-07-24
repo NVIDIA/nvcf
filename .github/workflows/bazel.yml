@@ -698,6 +698,9 @@ jobs:
     env:
       CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
       CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
+      # Passed as an env var, never interpolated inline into a run: script, so
+      # its contents can never be parsed as shell (zizmor template-injection).
+      CACHE_CA: ${{ vars.BAZEL_REMOTE_CACHE_CA }}
     strategy:
       fail-fast: false
       matrix:
@@ -736,8 +739,8 @@ jobs:
       # poison the shared cache.
       - name: Prepare remote cache
         run: |
-          if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
-            printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
+          if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ] && [ -n "$CACHE_CA" ]; then
+            printf '%s\n' "$CACHE_CA" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
             upload=false
             if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then upload=true; fi
@@ -763,11 +766,23 @@ jobs:
               CACHE+=(--remote_upload_local_results=false)
             fi
           fi
-          if ! bazel build "${CACHE[@]}" ${{ matrix.subtree.scope }}; then
-            [ "${CACHE_READY:-0}" = "1" ] || exit 1
-            echo "::warning::remote cache build failed; retrying cacheless"
+          # Capture output so a remote-cache transport error is told apart from a
+          # genuine build failure: retry cacheless only on the former, otherwise
+          # every broken PR builds twice (CodeRabbit review on #399). The grep is
+          # broad on purpose -- a false positive only costs a second attempt (the
+          # old always-retry behavior), a false negative never hides a real break.
+          set +e
+          bazel build "${CACHE[@]}" ${{ matrix.subtree.scope }} 2>&1 | tee "$RUNNER_TEMP/bazel-build.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ] && [ "${CACHE_READY:-0}" = "1" ] && grep -qiE \
+              'remote (cache|spawn)|StatusRuntimeException|UNAVAILABLE|DEADLINE_EXCEEDED|Bad Gateway|502|lost inputs|BulkTransfer|Failed to (query remote|init TLS)' \
+              "$RUNNER_TEMP/bazel-build.log"; then
+            echo "::warning::remote cache error (exit $rc); retrying cacheless"
             bazel build --remote_cache= ${{ matrix.subtree.scope }}
+            rc=$?
           fi
+          exit "$rc"
       - name: bazel test (${{ matrix.subtree.id }})
         working-directory: ${{ matrix.subtree.workdir }}
         # Full suite, NO tag filter: unit AND requires-docker (Testcontainers)
@@ -789,12 +804,17 @@ jobs:
           fi
           set +e
           bazel test "${CACHE[@]}" ${{ matrix.subtree.scope }} \
-            --test_output=errors --flaky_test_attempts=2
-          rc=$?
+            --test_output=errors --flaky_test_attempts=2 2>&1 | tee "$RUNNER_TEMP/bazel-test.log"
+          rc=${PIPESTATUS[0]}
           set -e
           [ "$rc" -eq 4 ] && { echo "::warning::${{ matrix.subtree.id }}: no test targets in scope"; exit 0; }
-          if [ "$rc" -ne 0 ] && [ "${CACHE_READY:-0}" = "1" ]; then
-            echo "::warning::remote cache test failed; retrying cacheless"
+          # Retry cacheless only on a remote-cache transport error, never on a
+          # genuine test failure (exit 3) or build failure (1); see the build
+          # step above for the rationale.
+          if [ "$rc" -ne 0 ] && [ "${CACHE_READY:-0}" = "1" ] && grep -qiE \
+              'remote (cache|spawn)|StatusRuntimeException|UNAVAILABLE|DEADLINE_EXCEEDED|Bad Gateway|502|lost inputs|BulkTransfer|Failed to (query remote|init TLS)' \
+              "$RUNNER_TEMP/bazel-test.log"; then
+            echo "::warning::remote cache error (exit $rc); retrying cacheless"
             set +e; bazel test --remote_cache= ${{ matrix.subtree.scope }} --test_output=errors --flaky_test_attempts=2; rc=$?; set -e
             [ "$rc" -eq 4 ] && exit 0
           fi
