@@ -183,7 +183,7 @@ jobs:
           # changeset is never under-tested.
           #
           # A change to this workflow itself revalidates everything.
-          if printf '%s\n' "$changed" | grep -q '^\.github/workflows/bazel\.yml$'; then
+          if grep -q '^\.github/workflows/bazel\.yml$' <<<"$changed"; then
             run_all=true
           fi
 
@@ -193,7 +193,7 @@ jobs:
           if [ "$run_all" != "true" ]; then
             while IFS='|' read -r _id path _tests_skip component_kind _ci_lane; do
               component_kind="$(echo "$component_kind" | xargs)"
-              if [ "$component_kind" = "java-framework" ] && printf '%s\n' "$changed" | grep -q "^${path}/"; then
+              if [ "$component_kind" = "java-framework" ] && grep -q "^${path}/" <<<"$changed"; then
                 java_framework_changed=true
                 break
               fi
@@ -266,9 +266,9 @@ jobs:
               # treats them as full-build triggers, so gate root on them
               # explicitly; otherwise a root-global .bzl change selects zero rows
               # and passes without running Bazel.
-              if [ "$hit" != "true" ] && printf '%s\n' "$changed" | grep -qE '^[^/]+\.bzl$'; then hit=true; fi
+              if [ "$hit" != "true" ] && grep -qE '^[^/]+\.bzl$' <<<"$changed"; then hit=true; fi
             else
-              if printf '%s\n' "$changed" | grep -q "^${path}/"; then hit=true; fi
+              if grep -q "^${path}/" <<<"$changed"; then hit=true; fi
             fi
             # A framework change schedules every registered Java service.
             if [ "$hit" != "true" ] && [ "$java_framework_changed" = "true" ] && [ "$component_kind" = "java-service" ]; then
@@ -319,6 +319,12 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
+      # Cap concurrent rows. A full matrix otherwise starts ~20 jobs at once,
+      # and every runner pulls actions/checkout from codeload.github.com in the
+      # same instant, tripping GitHub's action-download rate limit (HTTP 429 in
+      # "Set up job"). Batching keeps the download burst under that limit;
+      # change-aware scheduling already keeps most PRs well below the cap.
+      max-parallel: 8
       matrix:
         subtree: ${{ fromJSON(needs.detect.outputs.matrix) }}
     steps:
