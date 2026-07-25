@@ -72,11 +72,17 @@ dep tracking for forward progress: the binary lives inside Bazel's
 output graph and flows through to `oci_image` + `oci_push` cleanly.
 
 Cache contract: Bazel rebuilds the genrule when any input
-(`otelcol/**/*.go`, `go.mod`, `go.sum`) changes. The genrule uses
-`local = True` + `tags = ["no-sandbox"]` so it can resolve `go` from
-`$PATH` and write to the standard Go module cache. The wrapper
+(`otelcol/**/*.go`, `go.mod`, `go.sum`) changes. The genrule is tagged
+`no-sandbox` + `no-remote-exec` so it can resolve `go` from `$PATH` and
+write to the standard Go module cache, while remaining eligible for the
+build cache. It is deliberately not `local = True`: that tag also stops
+the result being reused from the disk or remote cache, which made the
+collector recompile on every CI run. Because the action shells out to a
+host `go` that Bazel does not track, CI binds the toolchain into the
+action key with `--action_env=BYOO_GO_TOOLCHAIN`, so a Go bump in the CI
+image cannot serve binaries built by the previous compiler. The wrapper
 binary, in contrast, is a regular `go_binary` and benefits from full
-Bazel hermeticity + nvcfbarn remote-cache reuse.
+Bazel hermeticity + remote-cache reuse.
 
 A containerized Go application that provides a complete observability solution by orchestrating three functional components: it generates OpenTelemetry Collector configurations, extracts and manages secrets from ESS (Encrypted Secret Store), and runs a custom-built OpenTelemetry Collector binary.
 
