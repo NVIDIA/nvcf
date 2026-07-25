@@ -1,5 +1,6 @@
 load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
 load("//rules/java:spring.bzl", "spring_boot_app")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//rules/oci:defs.bzl", "java_oci_image")
 
 package(default_visibility = ["//visibility:public"])
@@ -87,4 +88,19 @@ nvct_library_test(
         "requires-docker",
     ],
     timeout = "long",
+)
+
+# Runtime-contract guard for the image: the jar path matches the entrypoint,
+# the base image's shelless_ulimit shim survives (oci_image replaces rather
+# than appends the base entrypoint), and java is invoked via the arch-stable
+# /usr/bin/java rather than a per-arch JAVA_HOME path. Each of these otherwise
+# fails only at container startup.
+#
+# sh_test is loaded explicitly: cloud-tasks builds in the root module on Bazel
+# 9, which no longer provides sh_test as a built-in global.
+sh_test(
+    name = "image_contract_test",
+    srcs = ["image_contract_test.sh"],
+    args = ["$(location :nvct-service-oss-image.tar)"],
+    data = [":nvct-service-oss-image.tar"],
 )

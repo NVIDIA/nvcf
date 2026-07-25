@@ -40,7 +40,7 @@ ULIMIT_SHIM = "/usr/bin/shelless_ulimit"
 # /usr/bin/java is present on both arches.
 JAVA_BIN = "/usr/bin/java"
 
-def _java_oci_image_impl(name, visibility, jar, base, jar_path, entrypoint, jvm_flags, registry, tags):
+def _java_oci_image_impl(name, visibility, jar, base, jar_path, java_bin, entrypoint, jvm_flags, registry, tags):
     layer_name = name + "_layer"
 
     # Place the jar at a fixed absolute path so the entrypoint below can name
@@ -64,7 +64,7 @@ def _java_oci_image_impl(name, visibility, jar, base, jar_path, entrypoint, jvm_
 
     entry = entrypoint
     if not entry:
-        entry = [ULIMIT_SHIM, JAVA_BIN] + list(jvm_flags) + ["-jar", jar_path]
+        entry = [ULIMIT_SHIM, java_bin] + list(jvm_flags) + ["-jar", jar_path]
 
     create_oci_image(
         name = name,
@@ -93,8 +93,19 @@ java_oci_image = macro(
             configurable = False,
         ),
         "base": attr.label(
-            doc = "Base OCI image. Must provide a JRE on PATH.",
+            doc = """Base OCI image. It must provide a Java launcher at the
+            absolute path given by java_bin (default /usr/bin/java) and the
+            shelless_ulimit shim, which the NVIDIA distroless bases do. A base
+            with Java only on PATH, or at a different absolute path, must set
+            java_bin accordingly.""",
             default = DEFAULT_JAVA_BASE,
+            configurable = False,
+        ),
+        "java_bin": attr.string(
+            doc = """Absolute path to the Java launcher in the base image.
+            Absolute rather than PATH-resolved, and deliberately not derived
+            from JAVA_HOME, which the distroless bases set per architecture.""",
+            default = JAVA_BIN,
             configurable = False,
         ),
         "jar_path": attr.string(
