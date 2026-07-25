@@ -18,21 +18,12 @@ on:
   workflow_dispatch:
     inputs:
       service_path:
-        description: Service subtree to build and push
+        description: >-
+          Service subtree to build and push, e.g.
+          src/invocation-plane-services/grpc-proxy. Any subtree with an
+          oci_image_index target works; the list is not maintained here.
         required: true
-        type: choice
-        options:
-          - src/invocation-plane-services/grpc-proxy
-          - src/invocation-plane-services/http-invocation
-          - src/invocation-plane-services/llm-api-gateway
-          - src/invocation-plane-services/ratelimiter
-          - src/invocation-plane-services/vanity-gateway
-          - src/control-plane-services/nats-auth-callout
-          - src/control-plane-services/function-autoscaler
-          - src/control-plane-services/helm-reval
-          - src/compute-plane-services/nvca
-          - src/compute-plane-services/ess-agent
-          - src/compute-plane-services/image-credential-helper
+        type: string
 
 permissions:
   contents: read
@@ -116,10 +107,38 @@ jobs:
           printf '{"auths":{"%s":{"auth":"%s"}}}\n' "${REGISTRY}" "${auth}" > "$HOME/.docker/config.json"
           chmod 600 "$HOME/.docker/config.json"
 
-      - name: Build and push multi-arch image(s)
-        working-directory: ${{ github.event.inputs.service_path }}
+      # Resolve where Bazel must run and how to scope the query. A subtree with
+      # its own MODULE.bazel is queried from inside itself; a service that
+      # lives in the repo-root module (the Java services) is queried from the
+      # root with a path-scoped pattern. Deriving this rather than hardcoding
+      # it means a new service needs no change to this workflow.
+      - name: Resolve Bazel module layout
+        id: layout
         env:
           SVC_PATH: ${{ github.event.inputs.service_path }}
+        run: |
+          set -euo pipefail
+          if [ ! -d "$SVC_PATH" ]; then
+            echo "ERROR: no such subtree: $SVC_PATH" >&2
+            echo "Subtrees owning a Bazel module:" >&2
+            find src -maxdepth 4 -name MODULE.bazel -printf '  %h\n' 2>/dev/null | sort >&2
+            exit 1
+          fi
+          if [ -f "$SVC_PATH/MODULE.bazel" ]; then
+            echo "workdir=$SVC_PATH" >> "$GITHUB_OUTPUT"
+            echo "scope=//..." >> "$GITHUB_OUTPUT"
+            echo "layout: standalone module rooted at $SVC_PATH"
+          else
+            echo "workdir=." >> "$GITHUB_OUTPUT"
+            echo "scope=//$SVC_PATH/..." >> "$GITHUB_OUTPUT"
+            echo "layout: root module, scoped to //$SVC_PATH/..."
+          fi
+
+      - name: Build and push multi-arch image(s)
+        working-directory: ${{ steps.layout.outputs.workdir }}
+        env:
+          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SCOPE: ${{ steps.layout.outputs.scope }}
           TAG: ${{ steps.meta.outputs.tag }}
           REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
         run: |
@@ -127,9 +146,10 @@ jobs:
           REGISTRY="${REGISTRY%/}"
           svc="$(basename "$SVC_PATH")"
           export BAZEL_DISK_CACHE="${HOME}/.bazel-disk-cache"
-          mapfile -t indexes < <(bazel query --remote_cache= 'kind("oci_image_index", //...)')
+          mapfile -t indexes < <(bazel query --remote_cache= "kind(\"oci_image_index\", ${SCOPE})")
           if [ "${#indexes[@]}" -eq 0 ]; then
             echo "ERROR: no oci_image_index targets under ${SVC_PATH}" >&2
+            echo "The subtree must declare an image target (go_oci_image, java_oci_image, ...)." >&2
             exit 1
           fi
           echo "discovered: ${indexes[*]}"
