@@ -60,7 +60,9 @@ func init() {
 		if err != nil {
 			panic(err)
 		}
-		primaryPVSel.Add(*req)
+		// labels.Selector.Add returns a new selector; it does not mutate the
+		// receiver. Reassign so the requirement is actually applied.
+		primaryPVSel = primaryPVSel.Add(*req)
 	}
 }
 
