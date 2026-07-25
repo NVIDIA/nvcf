@@ -74,10 +74,11 @@ go_test(
     local = True,
     # external: testcontainers spins up the localstack Docker container,
     # so the test's effective inputs (Docker daemon, localstack image
-    # tag) live outside Bazel's hermetic action hash. `local = True`
-    # forces local-only execution but does NOT bypass result caching;
-    # the `external` tag is what stops nvcfbarn from pinning a green
-    # forever. requires-docker is kept so callers can filter out
+    # tag) live outside Bazel's hermetic action hash. Note `local = True`
+    # is the union of no-sandbox, no-remote-exec AND no-cache, so it does
+    # bypass result caching; the `external` tag additionally stops a cached
+    # pass from pinning a green forever. requires-docker is kept so callers
+    # can filter out
     # docker-needing tests with --test_tag_filters=-requires-docker.
     tags = [
         "external",
