@@ -83,7 +83,7 @@ host `go` that Bazel does not track, CI binds the toolchain into the
 action key with `--action_env=BYOO_GO_TOOLCHAIN`, so a Go bump in the CI
 image cannot serve binaries built by the previous compiler. The wrapper
 binary, in contrast, is a regular `go_binary` and benefits from full
-Bazel hermeticity + remote-cache reuse.
+Bazel hermeticity + nvcfbarn remote-cache reuse.
 
 A containerized Go application that provides a complete observability solution by orchestrating three functional components: it generates OpenTelemetry Collector configurations, extracts and manages secrets from ESS (Encrypted Secret Store), and runs a custom-built OpenTelemetry Collector binary.
 
