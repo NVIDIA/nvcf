@@ -155,9 +155,21 @@ jobs:
           echo "discovered: ${indexes[*]}"
           for tgt in "${indexes[@]}"; do
             name="${tgt##*:}"; name="${name%_index}"
+            # Two naming conventions exist in the tree and they mean different
+            # things, distinguished by the separator:
+            #   image                 -> the service's sole image; repo is the service
+            #   <component>_image     -> a sub-component; repo is <service>-<component>
+            #                            (nvcf-unbound webhook, llm-api-gateway
+            #                            rate_limit_sync_worker, nvsnap agent/server)
+            #   <image-name>-image    -> the target already carries the full image
+            #                            name; use it as-is, do NOT prefix the
+            #                            service (byoo-otel-collector, cloud-tasks)
+            # Previously the hyphenated form fell through to the default and
+            # produced names like byoo-otel-collector-byoo-otel-collector-image.
             case "$name" in
               image)   repo="${svc}" ;;
               *_image) sub="$(printf '%s' "${name%_image}" | tr '_' '-')"; repo="${svc}-${sub}" ;;
+              *-image) repo="${name%-image}" ;;
               *)       sub="$(printf '%s' "$name" | tr '_' '-')"; repo="${svc}-${sub}" ;;
             esac
             dest="${REGISTRY}/${repo}"
