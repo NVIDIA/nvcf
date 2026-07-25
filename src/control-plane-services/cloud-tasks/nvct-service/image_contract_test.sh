@@ -5,7 +5,7 @@
 # Asserts the runtime contract of the nvct-service image, which is otherwise
 # only observable by running the container:
 #
-#   1. The jar is at /app.jar, the exact path the entrypoint names. If the
+#   1. The jar is at /usr/share/app.jar, the exact path the entrypoint names. If the
 #      layer path and the entrypoint ever disagree, the image builds fine and
 #      fails at startup with "Unable to access jarfile".
 #   2. The entrypoint keeps the base image's shelless_ulimit shim. oci_image
@@ -31,14 +31,14 @@ tar -xf "${image_tar}" -C "${outer_dir}"
 jar_found=false
 while IFS= read -r candidate; do
   tar -tf "${candidate}" >/dev/null 2>&1 || continue
-  if tar -tf "${candidate}" | grep -Eq '^(\./)?app\.jar$'; then
+  if tar -tf "${candidate}" | grep -Eq '^(\./)?usr/share/app\.jar$'; then
     jar_found=true
     break
   fi
 done < <(find "${outer_dir}" -type f)
 
 if [[ "${jar_found}" != "true" ]]; then
-  echo "no image layer contains /app.jar" >&2
+  echo "no image layer contains /usr/share/app.jar" >&2
   find "${outer_dir}" -type f -print >&2
   exit 1
 fi
@@ -51,15 +51,33 @@ entrypoint_ok=false
 while IFS= read -r meta; do
   grep -q '"Entrypoint"' "${meta}" 2>/dev/null || continue
   if tr -d ' \n' < "${meta}" \
-      | grep -q '"Entrypoint":\["/usr/bin/shelless_ulimit","/usr/bin/java","-jar","/app.jar"\]'; then
+      | grep -q '"Entrypoint":\["/usr/bin/shelless_ulimit","/usr/bin/java","-jar","/usr/share/app.jar"\]'; then
     entrypoint_ok=true
     break
   fi
 done < <(find "${outer_dir}" -type f)
 
 if [[ "${entrypoint_ok}" != "true" ]]; then
-  echo "image entrypoint is not [/usr/bin/shelless_ulimit /usr/bin/java -jar /app.jar]" >&2
+  echo "image entrypoint is not [/usr/bin/shelless_ulimit /usr/bin/java -jar /usr/share/app.jar]" >&2
   echo "entrypoints found in the image:" >&2
   find "${outer_dir}" -type f -exec grep -ho '"Entrypoint":[^]]*]' {} \; 2>/dev/null >&2 || true
   exit 1
 fi
+
+# 4. runtime parity with the pre-Bazel Dockerfile: ULIMIT_FLAG (which the
+# shelless_ulimit shim reads; without it the shim raises nothing),
+# JDK_JAVA_OPTIONS (container heap sizing), and the working directory.
+for expected in 'ULIMIT_FLAG=1' 'MaxRAMPercentage=40.0' '"WorkingDir":"/home/app"'; do
+  found=false
+  while IFS= read -r meta; do
+    grep -q '"Entrypoint"' "${meta}" 2>/dev/null || continue
+    if tr -d ' \n' < "${meta}" | grep -qF "${expected}"; then
+      found=true
+      break
+    fi
+  done < <(find "${outer_dir}" -type f)
+  if [[ "${found}" != "true" ]]; then
+    echo "image config is missing expected runtime setting: ${expected}" >&2
+    exit 1
+  fi
+done

@@ -15,7 +15,7 @@
 
 "OCI image rules for Java applications."
 
-load("@rules_pkg//pkg:mappings.bzl", "strip_prefix")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("//rules/oci/private:common.bzl", "create_oci_image")
 
@@ -40,25 +40,36 @@ ULIMIT_SHIM = "/usr/bin/shelless_ulimit"
 # /usr/bin/java is present on both arches.
 JAVA_BIN = "/usr/bin/java"
 
-def _java_oci_image_impl(name, visibility, jar, base, jar_path, java_bin, entrypoint, jvm_flags, registry, tags):
+def _java_oci_image_impl(name, visibility, jar, base, jar_path, java_bin, entrypoint, jvm_flags, env, workdir, registry, tags):
     layer_name = name + "_layer"
+    files_name = name + "_files"
 
-    # Place the jar at a fixed absolute path so the entrypoint below can name
-    # it. Without strip_prefix + package_dir, rules_pkg writes it at its full
-    # workspace short-path and `java -jar /app.jar` fails at runtime with
-    # "Unable to access jarfile" while `bazel build :image` still succeeds,
-    # because building only assembles the layer and never runs the container.
+    if not jar_path.startswith("/"):
+        fail("jar_path must be absolute, got: " + jar_path)
+    jar_dir, _, jar_name = jar_path.rpartition("/")
+
+    # Install the jar AT jar_path. pkg_tar alone preserves the source
+    # basename and only the entrypoint would name jar_path, so a jar not
+    # already called app.jar, or a jar_path pointing elsewhere, would produce
+    # an image whose entrypoint references a file that does not exist. pkg_files
+    # renames and relocates it so the layer and the entrypoint cannot disagree.
     #
-    # mode 0644 is correct here and is NOT the go_oci_image case: a jar is read
-    # by the JVM, never exec'd, so it needs no exec bit. The entrypoint
-    # executable is `java`, which comes from the base image.
+    # mode 0644 is correct and is NOT the go_oci_image case: a jar is read by
+    # the JVM, never exec'd, so it needs no exec bit. The executable in the
+    # entrypoint is java, which comes from the base image.
+    pkg_files(
+        name = files_name,
+        srcs = [jar],
+        prefix = jar_dir,
+        renames = {jar: jar_name},
+        attributes = pkg_attributes(mode = "0644"),
+        visibility = ["//visibility:private"],
+    )
+
     pkg_tar(
         name = layer_name,
         extension = "tar.gz",
-        srcs = [jar],
-        mode = "0644",
-        package_dir = "/",
-        strip_prefix = strip_prefix.from_pkg(""),
+        srcs = [files_name],
         visibility = ["//visibility:private"],
     )
 
@@ -71,6 +82,8 @@ def _java_oci_image_impl(name, visibility, jar, base, jar_path, java_bin, entryp
         tars = [layer_name],
         base = base,
         entrypoint = entry,
+        env = env,
+        workdir = workdir,
         visibility = visibility,
         registry = registry,
         tags = tags,
@@ -109,8 +122,20 @@ java_oci_image = macro(
             configurable = False,
         ),
         "jar_path": attr.string(
-            doc = "Absolute in-image path of the jar.",
+            doc = """Absolute in-image path the jar is installed at. The layer
+            and the entrypoint are both derived from this, so they cannot
+            disagree.""",
             default = "/app.jar",
+            configurable = False,
+        ),
+        "env": attr.string_dict(
+            doc = """Environment variables set in the image. Required for
+            runtime behavior the base image expects, for example ULIMIT_FLAG=1,
+            without which the shelless_ulimit shim runs but raises no limit.""",
+            configurable = False,
+        ),
+        "workdir": attr.string(
+            doc = "Container working directory. Unset leaves the base's value.",
             configurable = False,
         ),
         "jvm_flags": attr.string_list(
