@@ -71,8 +71,9 @@ OpenTelemetry Bazel community. The genrule trades Bazel's per-package
 dep tracking for forward progress: the binary lives inside Bazel's
 output graph and flows through to `oci_image` + `oci_push` cleanly.
 
-Cache contract: Bazel rebuilds the genrule when any input
-(`otelcol/**/*.go`, `go.mod`, `go.sum`) changes. The genrule is tagged
+Cache contract: Bazel rebuilds the genrule when any declared input
+(`otelcol/**/*.go`, `otelcol/go.mod`, `otelcol/go.sum`) changes; the
+glob is `**/*.go` so a new subpackage is picked up automatically. The genrule is tagged
 `no-sandbox` + `no-remote-exec` so it can resolve `go` from `$PATH` and
 write to the standard Go module cache, while remaining eligible for the
 build cache. It is deliberately not `local = True`: that tag also stops

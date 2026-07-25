@@ -125,11 +125,14 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \\
 
 genrule(
     name = "otelcol-contrib-bin",
+    # **/*.go rather than listing each package: the previous glob covered
+    # root-level files plus logchunkprocessor only, so a new subpackage would
+    # have been silently excluded from the action key and its edits would not
+    # have invalidated the build. The resolved file set is unchanged today.
     srcs = glob([
-        "*.go",
+        "**/*.go",
         "go.mod",
         "go.sum",
-        "logchunkprocessor/**/*.go",
     ]),
     outs = ["otelcol-contrib"],
     # GO_BIN can be overridden via env when the host installs go at a
