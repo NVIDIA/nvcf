@@ -24,7 +24,7 @@ else
   host="${NVCF_BAZEL_REMOTE_HOST}"
   port="${NVCF_BAZEL_REMOTE_PORT:-443}"
   tls="${NVCF_BAZEL_REMOTE_TLS:-1}"
-  if [ "${tls}" = "1" ] && [ -z "${BAZEL_REMOTE_CA_PEM:-}" ]; then
+  if [ "${tls}" = "1" ] && [ ! -r "${BAZEL_REMOTE_CA_PEM:-}" ]; then
     # TLS requires a CA pem. grpcurl can probe with `-insecure`, but
     # Bazel's own gRPC client cannot: with `grpcs://` and no
     # `--tls_certificate` it tries the system trust store, which does
@@ -32,8 +32,10 @@ else
     # with "General OpenSslEngine problem". Skip the cache cleanly
     # instead of greenlighting an unusable URL. Hit on
     # dns-cache/nvcf-unbound!41; set BAZEL_REMOTE_CA_PEM (file-type CI
-    # variable) to enable.
-    echo "[bazel-remote] grpcs://${host}:${port} requested but BAZEL_REMOTE_CA_PEM is unset; remote cache disabled. Set the file-type CI variable to enable."
+    # variable) to enable. The test is -r, not -z: a variable set to a
+    # path that does not exist would otherwise reach the `cp` below and
+    # fail the job instead of cleanly declining the cache.
+    echo "[bazel-remote] grpcs://${host}:${port} requested but BAZEL_REMOTE_CA_PEM is unset or unreadable (${BAZEL_REMOTE_CA_PEM:-unset}); remote cache disabled. Set the file-type CI variable to enable."
   elif [ "${tls}" = "1" ] && [ ! -r "${BAZEL_REMOTE_CA_PEM}" ]; then
     # Env var is set but the file is missing or unreadable. Treat it
     # the same as unset and degrade to local-only rather than failing

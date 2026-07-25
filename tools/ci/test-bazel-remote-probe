@@ -23,21 +23,56 @@ echo '{"cacheCapabilities":{"supportedCompressors":["IDENTITY","ZSTD"]}}'
 STUB
 chmod +x "${stub_dir}/grpcurl"
 
+# A readable (contents irrelevant) CA pem for the TLS success path.
+ca_pem="${stub_dir}/ca.pem"
+printf -- '-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n' > "${ca_pem}"
+
 fail=0
 
 check() { # name, expectation (enabled|disabled), probe, env assignments...
   local name="$1" want="$2" probe="$3"; shift 3
-  local out
+  local out status svc
+  svc="$(basename "$(dirname "$(dirname "${probe}")")")"
+
+  # Capture stdout and the exit status separately. Discarding stderr and
+  # forcing success would let a probe that CRASHES look identical to one that
+  # deliberately disables the cache, so every disabled-case assertion would
+  # pass on a broken script.
+  set +e
   out="$(
     env -i PATH="${stub_dir}:/usr/bin:/bin" HOME="${stub_dir}" \
         CI_PROJECT_DIR="${stub_dir}" "$@" \
-        bash -c 'BAZEL_REMOTE_FLAGS=""; . "$0"; printf "%s" "${BAZEL_REMOTE_FLAGS}"' "${probe}" 2>/dev/null
-  )" || true
+        bash -c 'set -e; BAZEL_REMOTE_FLAGS=""; . "$0"; printf "%s" "${BAZEL_REMOTE_FLAGS}"' \
+        "${probe}" 2>"${stub_dir}/stderr.txt"
+  )"
+  status=$?
+  set -e
+
+  if [[ "${status}" -ne 0 ]]; then
+    printf '  FAIL %-26s %-11s probe exited %s (expected a clean %s decision)\n' \
+      "${svc}" "${name}" "${status}" "${want}" >&2
+    sed 's/^/         /' "${stub_dir}/stderr.txt" >&2 || true
+    fail=1
+    return
+  fi
+
   local got="disabled"
   [[ "${out}" == *--remote_cache=* ]] && got="enabled"
   if [[ "${got}" != "${want}" ]]; then
-    printf '  FAIL %-34s %-9s want=%s got=%s\n' "$(basename "$(dirname "$(dirname "${probe}")")")" "${name}" "${want}" "${got}" >&2
+    printf '  FAIL %-26s %-11s want=%s got=%s\n' "${svc}" "${name}" "${want}" "${got}" >&2
     fail=1
+    return
+  fi
+
+  # For the TLS-enabled case, the cache URL must be grpcs:// and the probe must
+  # emit --tls_certificate. Without this the case would pass on a probe that
+  # silently downgraded to plaintext.
+  if [[ "${name}" == "tls-with-ca" ]]; then
+    if [[ "${out}" != *--tls_certificate=* || "${out}" != *grpcs://* ]]; then
+      printf '  FAIL %-26s %-11s expected grpcs:// and --tls_certificate, got: %s\n' \
+        "${svc}" "${name}" "${out}" >&2
+      fail=1
+    fi
   fi
 }
 
@@ -72,13 +107,29 @@ for probe in "${probes[@]}"; do
     NVCF_BAZEL_REMOTE_PORT=8980 NVCF_BAZEL_REMOTE_TLS=0
 
   # TLS requested but no CA pem: must decline rather than emit an unusable URL.
+  # Bazel's gRPC client cannot verify a private cache cert from the system
+  # trust store, so a grpcs:// URL without --tls_certificate fails mid-build.
   check "tls-no-ca" disabled "${probe}" \
     NVCF_BAZEL_REMOTE=1 NVCF_BAZEL_REMOTE_HOST=cache.example.com \
     NVCF_BAZEL_REMOTE_PORT=443 NVCF_BAZEL_REMOTE_TLS=1
+
+  # TLS requested WITH a readable CA pem: the success path that actually emits
+  # the certificate flag. Without this case nothing covers the grpcs:// branch.
+  check "tls-with-ca" enabled "${probe}" \
+    NVCF_BAZEL_REMOTE=1 NVCF_BAZEL_REMOTE_HOST=cache.example.com \
+    NVCF_BAZEL_REMOTE_PORT=443 NVCF_BAZEL_REMOTE_TLS=1 \
+    BAZEL_REMOTE_CA_PEM="${ca_pem}"
+
+  # TLS requested with an UNREADABLE CA path: must decline, not emit a flag
+  # pointing at a file that does not exist.
+  check "tls-bad-ca" disabled "${probe}" \
+    NVCF_BAZEL_REMOTE=1 NVCF_BAZEL_REMOTE_HOST=cache.example.com \
+    NVCF_BAZEL_REMOTE_PORT=443 NVCF_BAZEL_REMOTE_TLS=1 \
+    BAZEL_REMOTE_CA_PEM="${stub_dir}/definitely-missing.pem"
 done
 
 if [[ "${fail}" -ne 0 ]]; then
   echo "bazel-remote-probe behavioral tests failed" >&2
   exit 1
 fi
-echo "bazel-remote-probe: ${#probes[@]} probes x 4 cases OK"
+echo "bazel-remote-probe: ${#probes[@]} probes x 6 cases OK"
