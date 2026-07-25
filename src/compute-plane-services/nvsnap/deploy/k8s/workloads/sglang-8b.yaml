@@ -72,7 +72,7 @@ spec:
 
   # Copy intercept lib from agent
     - name: get-intercept-lib
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.26
+      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.30
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "-c"]
       args:
@@ -84,7 +84,7 @@ spec:
 
   containers:
     - name: sglang
-      image: lmsysorg/sglang:v0.4.5.post3-cu125
+      image: lmsysorg/sglang:v0.5.15.post1-cu129
       imagePullPolicy: IfNotPresent
       command: ["/bin/bash", "-lc"]
       args:
@@ -111,7 +111,8 @@ spec:
             --host 0.0.0.0 \
             --port 30000 \
             --tp-size 1 \
-            --mem-fraction-static 0.6
+            --mem-fraction-static 0.6 \
+            --disable-prefill-cuda-graph
       env:
         - name: LD_LIBRARY_PATH
           value: "/nvsnap-lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64"

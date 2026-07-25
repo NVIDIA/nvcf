@@ -72,7 +72,7 @@ spec:
 
   # Copy CRIU bundle, intercept library, and debug tools from agent image
     - name: get-criu
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.26
+      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.30
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "-c"]
       args:
@@ -90,7 +90,7 @@ spec:
   containers:
     - name: restore
       # MUST match source pod SGLang version (stock image - patches injected at startup)
-      image: lmsysorg/sglang:v0.4.5.post3-cu125
+      image: lmsysorg/sglang:v0.5.15.post1-cu129
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "-lc"]
       args:
