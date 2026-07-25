@@ -31,7 +31,9 @@ tar -xf "${image_tar}" -C "${outer_dir}"
 jar_found=false
 while IFS= read -r candidate; do
   tar -tf "${candidate}" >/dev/null 2>&1 || continue
-  if tar -tf "${candidate}" | grep -Eq '^(\./)?usr/share/app\.jar$'; then
+  # grep -q would close the pipe on first match, SIGPIPE tar, and under
+  # pipefail reject a valid image. Consume the whole stream.
+  if tar -tf "${candidate}" | grep -E '^(\./)?usr/share/app\.jar$' >/dev/null; then
     jar_found=true
     break
   fi
@@ -43,6 +45,20 @@ if [[ "${jar_found}" != "true" ]]; then
   exit 1
 fi
 
+# Presence in a layer is necessary but not sufficient: a later layer could
+# delete the file via an OCI whiteout marker, leaving the merged filesystem
+# without it. Assert no layer whites out the jar or its directory.
+while IFS= read -r candidate; do
+  tar -tf "${candidate}" >/dev/null 2>&1 || continue
+  if tar -tf "${candidate}" \
+      | grep -E '^(\./)?usr/share/\.wh\.app\.jar$|^(\./)?usr/\.wh\.share$|^(\./)?\.wh\.usr$|\.wh\.\.wh\.opq$' \
+      >/dev/null; then
+    echo "a layer whites out /usr/share/app.jar or a parent directory" >&2
+    tar -tf "${candidate}" | grep '\.wh\.' >&2 || true
+    exit 1
+  fi
+done < <(find "${outer_dir}" -type f)
+
 # 2 + 3. the entrypoint keeps the shim and uses the absolute java path. Scan
 # every regular file rather than parsing manifest.json, so the test needs no
 # JSON tool beyond coreutils. Note the config is a content-addressed blob under
@@ -51,7 +67,7 @@ entrypoint_ok=false
 while IFS= read -r meta; do
   grep -q '"Entrypoint"' "${meta}" 2>/dev/null || continue
   if tr -d ' \n' < "${meta}" \
-      | grep -q '"Entrypoint":\["/usr/bin/shelless_ulimit","/usr/bin/java","-jar","/usr/share/app.jar"\]'; then
+      | grep '"Entrypoint":\["/usr/bin/shelless_ulimit","/usr/bin/java","-jar","/usr/share/app.jar"\]' >/dev/null; then
     entrypoint_ok=true
     break
   fi
@@ -71,7 +87,7 @@ for expected in 'ULIMIT_FLAG=1' 'MaxRAMPercentage=40.0' '"WorkingDir":"/home/app
   found=false
   while IFS= read -r meta; do
     grep -q '"Entrypoint"' "${meta}" 2>/dev/null || continue
-    if tr -d ' \n' < "${meta}" | grep -qF "${expected}"; then
+    if tr -d ' \n' < "${meta}" | grep -F "${expected}" >/dev/null; then
       found=true
       break
     fi
