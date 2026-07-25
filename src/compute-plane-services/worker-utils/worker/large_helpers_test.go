@@ -20,11 +20,16 @@ limitations under the License.
 package worker
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,4 +65,66 @@ func TestRecordUploadStats(t *testing.T) {
 	recordUploadStats(time.Now().Add(-1*time.Second), meteringEvent, 250)
 	// Stats accumulate onto the metering event's inference size.
 	assert.Equal(t, int64(350), meteringEvent.InferenceSize)
+}
+
+// fakePartUploader fails the part whose number equals failPart and succeeds for
+// every other part, returning a per-part ETag.
+type fakePartUploader struct {
+	failPart int32
+	err      error
+}
+
+func (f *fakePartUploader) UploadPart(_ context.Context, params *s3.UploadPartInput, _ ...func(*s3.Options)) (*s3.UploadPartOutput, error) {
+	if f.err != nil && params.PartNumber != nil && *params.PartNumber == f.failPart {
+		return nil, f.err
+	}
+	return &s3.UploadPartOutput{ETag: aws.String(fmt.Sprintf("etag-%d", aws.ToInt32(params.PartNumber)))}, nil
+}
+
+func TestUploadPart(t *testing.T) {
+	t.Run("success returns the completed part", func(t *testing.T) {
+		pn := int32(3)
+		part, err := uploadPart(context.Background(), &fakePartUploader{}, &s3.UploadPartInput{PartNumber: &pn})
+		require.NoError(t, err)
+		assert.Equal(t, "etag-3", aws.ToString(part.ETag))
+		assert.Equal(t, int32(3), aws.ToInt32(part.PartNumber))
+	})
+
+	t.Run("failure returns the error without a nil dereference", func(t *testing.T) {
+		wantErr := errors.New("upload failed")
+		pn := int32(1)
+		part, err := uploadPart(context.Background(), &fakePartUploader{failPart: 1, err: wantErr}, &s3.UploadPartInput{PartNumber: &pn})
+		assert.ErrorIs(t, err, wantErr)
+		assert.Zero(t, part)
+	})
+
+	// Run under -race. One part fails while the rest succeed concurrently; each
+	// call must report only its own outcome. The previous shared function-scope
+	// err raced here and could make a successful part inherit the failure (or
+	// dereference a nil result).
+	t.Run("concurrent parts do not clobber each other", func(t *testing.T) {
+		const parts = 16
+		const failPart = int32(7)
+		up := &fakePartUploader{failPart: failPart, err: errors.New("part failed")}
+
+		results := make([]error, parts)
+		var wg sync.WaitGroup
+		for i := int32(0); i < parts; i++ {
+			wg.Add(1)
+			go func(pn int32) {
+				defer wg.Done()
+				_, err := uploadPart(context.Background(), up, &s3.UploadPartInput{PartNumber: &pn})
+				results[pn] = err
+			}(i)
+		}
+		wg.Wait()
+
+		for i := int32(0); i < parts; i++ {
+			if i == failPart {
+				assert.Error(t, results[i], "the failing part must report its own error")
+			} else {
+				assert.NoError(t, results[i], "a successful part must not inherit another part's error")
+			}
+		}
+	})
 }

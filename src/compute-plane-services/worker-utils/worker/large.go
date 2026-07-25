@@ -231,6 +231,33 @@ func recordUploadStats(uploadStart time.Time, meteringEvent *metering.EventDetai
 	metrics.LargeResponseTimeCounter.Add(uploadTimeSeconds)
 }
 
+// s3PartUploader is the subset of the S3 client used to upload a single part.
+// It lets tests drive uploadPart without a real S3 endpoint.
+type s3PartUploader interface {
+	UploadPart(ctx context.Context, params *s3.UploadPartInput, optFns ...func(*s3.Options)) (*s3.UploadPartOutput, error)
+}
+
+// uploadPart uploads one multipart part with retries and returns the completed
+// part. The error and result are local to this call, so concurrent part uploads
+// cannot clobber each other. A previous version shared a single function-scope
+// err across all upload goroutines, which raced and could dereference a nil
+// result when one part failed while another succeeded.
+func uploadPart(ctx context.Context, client s3PartUploader, partInput *s3.UploadPartInput) (types.CompletedPart, error) {
+	var uploadResult *s3.UploadPartOutput
+	if _, _, err := lo.AttemptWithDelay(3, 100*time.Millisecond, func(index int, duration time.Duration) error {
+		var err error
+		uploadResult, err = client.UploadPart(ctx, partInput)
+		return err
+	}); err != nil {
+		return types.CompletedPart{}, err
+	}
+
+	return types.CompletedPart{
+		ETag:       uploadResult.ETag,
+		PartNumber: partInput.PartNumber,
+	}, nil
+}
+
 func (w *NVCFWorker) multipartUpload(ctx context.Context, work *pb.WorkerInvokeFunctionRequest, body io.Reader, meteringEvent *metering.EventDetails) error {
 	// need regional client because the request id info is only in the originating region
 	nvcfClient, err := w.nvcfClient.GetRegionalNvcfClient(work.DirectResponseUrl)
@@ -293,21 +320,13 @@ func (w *NVCFWorker) multipartUpload(ctx context.Context, work *pb.WorkerInvokeF
 					UploadId:   resp.UploadId,
 				}
 
-				var uploadResult *s3.UploadPartOutput
-				_, _, err = lo.AttemptWithDelay(3, 100*time.Millisecond, func(index int, duration time.Duration) error {
-					var err error
-					uploadResult, err = client.UploadPart(ctx, partInput)
-					return err
-				})
+				part, err := uploadPart(ctx, client, partInput)
 				if err != nil {
 					return err
 				}
 
 				completedPartsLock.Lock()
-				completedParts = append(completedParts, types.CompletedPart{
-					ETag:       uploadResult.ETag,
-					PartNumber: &partNumber,
-				})
+				completedParts = append(completedParts, part)
 				completedPartsLock.Unlock()
 				return nil
 			})
