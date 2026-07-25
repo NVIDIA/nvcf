@@ -146,7 +146,21 @@ jobs:
           REGISTRY="${REGISTRY%/}"
           svc="$(basename "$SVC_PATH")"
           export BAZEL_DISK_CACHE="${HOME}/.bazel-disk-cache"
-          mapfile -t indexes < <(bazel query --remote_cache= "kind(\"oci_image_index\", ${SCOPE})")
+          # Run the query directly rather than inside process substitution.
+          # With `mapfile < <(bazel query ...)` only stdout reaches mapfile, so a
+          # failing query (BUILD error, unloadable package) yields an empty array
+          # and would be misreported below as "no image targets" instead of
+          # surfacing the real error.
+          if ! query_out="$(bazel query --remote_cache= "kind(\"oci_image_index\", ${SCOPE})")"; then
+            echo "ERROR: bazel query failed for scope ${SCOPE}" >&2
+            exit 1
+          fi
+          # Build the array by hand: a here-string of empty output would produce
+          # a single empty element rather than an empty array.
+          indexes=()
+          while IFS= read -r line; do
+            [ -n "$line" ] && indexes+=("$line")
+          done <<< "$query_out"
           if [ "${#indexes[@]}" -eq 0 ]; then
             echo "ERROR: no oci_image_index targets under ${SVC_PATH}" >&2
             echo "The subtree must declare an image target (go_oci_image, java_oci_image, ...)." >&2
