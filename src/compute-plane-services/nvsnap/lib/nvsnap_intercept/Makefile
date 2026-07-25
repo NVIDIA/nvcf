@@ -12,7 +12,7 @@ CFLAGS = -Wall -Wextra -fPIC -O2 -g -D_GNU_SOURCE -Iinclude
 CXXFLAGS = -Wall -Wextra -fPIC -O2 -g -std=c++17 -D_GNU_SOURCE -Iinclude
 
 # Linker flags — use g++ for C++ object linking
-LDFLAGS = -shared -ldl -lpthread -rdynamic -Wl,--version-script=libnvsnap.map
+LDFLAGS = -shared -ldl -lpthread -rdynamic -static-libstdc++ -static-libgcc -Wl,--version-script=libnvsnap.map
 
 # ── NvSnap source files (C) ──────────────────────────────────────────────
 NVSNAP_SRCS = src/init.c \
@@ -62,6 +62,34 @@ all: $(LIB)
 $(LIB): $(OBJS)
 	$(CXX) $(CFLAGS) $(LDFLAGS) -o $@ $^
 	@echo "Built $(LIB) (OS-level intercepts + GPU sub-module merged)"
+	@$(MAKE) --no-print-directory verify-deps
+
+# This library is force-loaded into EVERY process in the target mount namespace
+# via /etc/ld.so.preload -- including CRIU, which runs against the bundled glibc
+# rather than the container's. Any dependency beyond libc therefore gets resolved
+# from the *container*, and pairing a newer container libstdc++/libm with the
+# bundle's older libc fails with "GLIBC_2.xx not found" before CRIU can start.
+# The C++ runtime is statically linked (-static-libstdc++ -static-libgcc) to keep
+# the DT_NEEDED set at libc alone; libc itself is safe because glibc is backward
+# compatible, so a library built here runs against any newer container glibc.
+# Guard it so a new dependency cannot reintroduce the failure silently.
+ALLOWED_NEEDED = libc.so.6 libdl.so.2 libpthread.so.0 ld-linux-x86-64.so.2
+
+.PHONY: verify-deps
+verify-deps: $(LIB)
+	@bad=""; \
+	for n in $$(readelf -d $(LIB) 2>/dev/null | awk '/NEEDED/{gsub(/[][]/,"",$$5); print $$5}'); do \
+	    case " $(ALLOWED_NEEDED) " in *" $$n "*) ;; *) bad="$$bad $$n";; esac; \
+	done; \
+	if [ -n "$$bad" ]; then \
+	    echo "ERROR: $(LIB) has disallowed dependencies:$$bad"; \
+	    echo "       It is preloaded into CRIU, which uses the bundled glibc;"; \
+	    echo "       anything outside [$(ALLOWED_NEEDED)] resolves from the target"; \
+	    echo "       container and breaks on any newer-glibc image."; \
+	    echo "       Static-link it (see -static-libstdc++) or drop the dependency."; \
+	    exit 1; \
+	fi; \
+	echo "verify-deps: OK (only $(ALLOWED_NEEDED) permitted)"
 
 # C compilation
 src/%.o: src/%.c
