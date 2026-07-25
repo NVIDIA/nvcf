@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Regenerates the measurements quoted in docs/dev/bazel-consolidation.md.
+#
+# The plan quotes live counts, and those move: an in-flight change to pin the
+# worker Bazel versions invalidated part of the first draft within hours of it
+# being written. Run this instead of trusting the prose, and update the doc plus
+# its measurement stamp when the numbers move.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${repo_root}"
+
+nonvendor() { grep -v '/vendor/'; }
+
+printf 'measured at: %s\n' "$(git rev-parse --short HEAD)"
+printf 'date:        %s\n\n' "$(git log -1 --format=%cs)"
+
+printf 'service modules (src, excluding vendor) : %s\n' \
+  "$(find src -name MODULE.bazel | nonvendor | wc -l)"
+printf 'MODULE.bazel total (incl. root/helpers) : %s\n' \
+  "$(find . -name MODULE.bazel -not -path './.git/*' | wc -l)"
+printf 'MODULE.bazel.lock files                 : %s\n' \
+  "$(find . -name MODULE.bazel.lock -not -path './.git/*' | wc -l)"
+printf 'MODULE.bazel.lock total size            : %s MB\n' \
+  "$(find . -name MODULE.bazel.lock -not -path './.git/*' -exec cat {} + \
+     | wc -c | awk '{printf "%.1f", $1/1048576}')"
+
+printf '\nsubtree .bazelrc                        : %s (%s distinct)\n' \
+  "$(find src -name .bazelrc | wc -l)" \
+  "$(find src -name .bazelrc -exec md5sum {} + | awk '{print $1}' | sort -u | wc -l)"
+printf 'subtree .bazelversion values            : %s\n' \
+  "$(find src -name .bazelversion | nonvendor | xargs cat 2>/dev/null \
+     | grep -E '^[0-9]' | sort | uniq -c | tr '\n' ' ')"
+printf 'workspace_status.sh copies              : %s (%s variants)\n' \
+  "$(find . -name workspace_status.sh -not -path './.git/*' | wc -l)" \
+  "$(find . -name workspace_status.sh -not -path './.git/*' -exec md5sum {} + \
+     | awk '{print $1}' | sort -u | wc -l)"
+printf 'rules/oci copied files                  : %s files, %s lines\n' \
+  "$(find . -path '*/rules/oci/*' -type f -not -path './.git/*' | wc -l)" \
+  "$(find . -path '*/rules/oci/*' -type f -not -path './.git/*' -exec cat {} + | wc -l)"
+
+printf '\nroot-relative //:__subpackages__         : %s\n' \
+  "$(grep -rn '//:__subpackages__' --include=BUILD.bazel src | nonvendor | wc -l)"
+printf '//visibility:public (outside vendor)    : %s\n' \
+  "$(grep -rn '//visibility:public' --include=BUILD.bazel src | nonvendor | wc -l)"
+printf 'package_group definitions               : %s\n' \
+  "$(grep -rn 'package_group(' --include=BUILD.bazel src | nonvendor | wc -l)"
+printf 'nvca vendored BUILD.bazel               : %s\n' \
+  "$(find src/compute-plane-services/nvca/vendor -name BUILD.bazel 2>/dev/null | wc -l)"
+
+printf '\ngo_sdk.download versions                : %s\n' \
+  "$(grep -rh 'go_sdk.download' --include=MODULE.bazel . 2>/dev/null \
+     | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')"
+printf 'nvcr.io oci.pull declarations           : %s (for %s distinct digests)\n' \
+  "$(grep -rh 'image = "nvcr.io' --include=MODULE.bazel . 2>/dev/null | wc -l)" \
+  "$(python3 -c "
+import re,os
+d=set()
+for r,_,f in os.walk('.'):
+    if '/.git' in r or '/vendor/' in r or 'MODULE.bazel' not in f: continue
+    s=open(os.path.join(r,'MODULE.bazel')).read()
+    for m in re.finditer(r'oci\.pull\((.*?)\n\)', s, re.S):
+        b=m.group(1)
+        if 'nvcr.io' in b:
+            g=re.search(r'digest\s*=\s*\"(sha256:[0-9a-f]+)\"', b)
+            if g: d.add(g.group(1))
+print(len(d))
+")"
