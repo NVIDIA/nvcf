@@ -20,19 +20,23 @@ exports_files(
     visibility = ["//src/libraries/go/lib:__pkg__"],
 )
 
-# Root module identity + third-party lock + NOTICE index, consumed by the
-# Java subtrees' NOTICE generation/verification tooling now that their Maven
-# closure is owned by the single root module.
+package_group(
+    name = "java_notice_consumers",
+    packages = [
+        "//src/control-plane-services/...",
+        "//src/libraries/java/...",
+    ],
+)
+
+# Root module identity, third-party lock, and NOTICE index consumed by Java
+# NOTICE generation and verification under the stable Java component paths.
 exports_files(
     [
         "MODULE.bazel",
         "NOTICE",
         "maven_install.json",
     ],
-    visibility = [
-        "//src/control-plane-services/cloud-tasks:__subpackages__",
-        "//src/libraries/java/nv-boot-parent:__subpackages__",
-    ],
+    visibility = [":java_notice_consumers"],
 )
 
 # Gazelle manages only the native Go subtrees listed in go.work.bazel.

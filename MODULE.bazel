@@ -264,6 +264,8 @@ maven.install(
         "com.github.ben-manes.caffeine:guava",
         "com.github.java-json-tools:json-patch:1.13",
         "commons-codec:commons-codec",
+        # nv-boot-parent overrides the Spring Boot BOM's lower version.
+        "commons-logging:commons-logging:1.4.0",
         "io.cloudevents:cloudevents-core:4.1.1",
         "io.cloudevents:cloudevents-json-jackson:4.1.1",
         "io.micrometer:micrometer-tracing-bridge-otel",
@@ -272,6 +274,7 @@ maven.install(
         "io.opentelemetry:opentelemetry-sdk-testing",
         "jakarta.servlet:jakarta.servlet-api",
         "org.apache.cassandra:java-driver-metrics-micrometer",
+        "org.apache.commons:commons-collections4:4.5.0",
         "org.apache.commons:commons-lang3:3.20.0",
         "org.bouncycastle:bcprov-jdk18on:1.84",
         "org.jacoco:org.jacoco.agent:jar:runtime:0.8.14",
@@ -284,6 +287,8 @@ maven.install(
         "org.springdoc:springdoc-openapi-starter-webmvc-api:3.0.3",
         "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry",
         "org.springframework.boot:spring-boot-restclient",
+        # Spring Boot's Maven repackage goal injects this into executable jars.
+        "org.springframework.boot:spring-boot-jarmode-tools",
         "org.springframework.boot:spring-boot-starter",
         "org.springframework.boot:spring-boot-starter-actuator",
         "org.springframework.boot:spring-boot-starter-actuator-test",
@@ -361,6 +366,10 @@ maven.install(
         "org.springframework.cloud:spring-cloud-dependencies:2025.1.2",
         "org.testcontainers:testcontainers-bom:2.0.5",
     ],
+    # Spring Framework 7 embeds the AOP Alliance API in spring-aop. Maven's
+    # executable jar therefore omits the legacy standalone jar; excluding it
+    # here avoids duplicate org.aopalliance classes in Bazel applications.
+    excluded_artifacts = ["aopalliance:aopalliance"],
     fail_on_missing_checksum = True,
     fetch_sources = True,
     known_contributing_modules = [
