@@ -86,6 +86,16 @@ func TestNewTaskGetContext(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("rejects timeout that overflows duration", func(t *testing.T) {
+		timeoutSeconds := int64(maxTaskGetTimeoutSeconds + 1)
+		if int64(int(timeoutSeconds)) != timeoutSeconds {
+			t.Skip("int cannot represent an overflowing time.Duration in seconds")
+		}
+
+		_, _, err := newTaskGetContext(int(timeoutSeconds))
+		require.Error(t, err)
+	})
+
 	t.Run("uses caller timeout", func(t *testing.T) {
 		start := time.Now()
 		ctx, cancel, err := newTaskGetContext(1)

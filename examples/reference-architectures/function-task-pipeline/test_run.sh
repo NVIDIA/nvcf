@@ -242,6 +242,20 @@ fi
 grep -q -- "task cancel task-test" "$fake_log"
 
 reset_fake
+cancel_failure_log="${test_dir}/cancel-failure.log"
+if FAKE_TERMINAL_STATUS=UNKNOWN FAKE_TASK_CANCEL_FAIL=true \
+    run_workflow >/dev/null 2>"$cancel_failure_log"; then
+    printf 'Expected a task cancellation failure to fail cleanup\n' >&2
+    exit 1
+fi
+grep -q -- "task cancel task-test" "$fake_log"
+grep -q -- "ERROR: Failed to cancel task task-test" "$cancel_failure_log"
+grep -q -- "ERROR: Cleanup incomplete" "$cancel_failure_log"
+grep -q -- "task delete task-test" "$fake_log"
+grep -q -- "function deploy remove" "$fake_log"
+grep -q -- "function delete function-test version-test" "$fake_log"
+
+reset_fake
 if FAKE_TASK_DELETE_FAILURES=3 run_workflow >/dev/null 2>&1; then
     printf 'Expected incomplete cleanup to fail a successful workflow\n' >&2
     exit 1

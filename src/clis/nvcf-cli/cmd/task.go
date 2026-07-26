@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -438,8 +439,10 @@ func SetCurrentTask(taskID, taskName string) {
 	sm.SetTask(taskID, taskName)
 }
 
+const maxTaskGetTimeoutSeconds = math.MaxInt64 / int64(time.Second)
+
 func newTaskGetContext(timeoutSeconds int) (context.Context, context.CancelFunc, error) {
-	if timeoutSeconds < 0 {
+	if timeoutSeconds < 0 || int64(timeoutSeconds) > maxTaskGetTimeoutSeconds {
 		return nil, nil, fmt.Errorf("timeout must be a non-negative integer")
 	}
 	if timeoutSeconds == 0 {
