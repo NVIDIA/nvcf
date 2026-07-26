@@ -72,6 +72,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: tools/bazel-consolidation-inventory/go.mod
+          # setup-go looks for go.sum at the repository root by default, and
+          # there is no module there. Point it at this module's lockfile so the
+          # cache is used instead of warning that no dependency file was found.
+          cache-dependency-path: tools/bazel-consolidation-inventory/go.sum
 
       - name: Vet and unit test
         working-directory: tools/bazel-consolidation-inventory
