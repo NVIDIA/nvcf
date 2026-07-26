@@ -296,10 +296,10 @@ fi
 assert_line "${OUT_TMP}" "measurements are produced, not a dirty-tree error" \
     "service modules (src, excluding vendor) : 2"
 assert_absent "${OUT_TMP}" "the stamp does not claim a dirty tree" "WORKING TREE, not"
-# The scratch file must not survive.
+# No scratch file may be created in the repository at all.
 leftovers="$(find "${FIXTURE}" -maxdepth 1 -name 'tmp.*' | wc -l)"
 if [ "${leftovers}" -eq 0 ]; then
-    pass "scratch file is removed from the repository"
+    pass "no scratch file is left in the repository"
 else
     fail "scratch file left behind in the repository"
 fi
@@ -329,35 +329,25 @@ done
 rm -rf "${FAKEBIN}"
 
 echo
-echo "== injected grep failure must not produce a report =="
-# grep exiting 1 means "no match" and is fine. Anything above that is a broken
-# selector, and a bare `|| true` turned it into an empty result, i.e. a count of
-# zero in an otherwise complete, stamped, plausible report.
-GREPBIN="${TEMPDIR_OUT}/grepbin"
-mkdir -p "${GREPBIN}"
-cat >"${GREPBIN}/grep" <<EOF
-#!/bin/bash
-for a in "\$@"; do
-  if [ "\$a" = '^src/.*/MODULE\.bazel\$' ]; then
-    cat >/dev/null
-    echo "injected grep failure" >&2
-    exit 73
-  fi
+echo "== a hostile grep on PATH cannot affect the result =="
+# The tool used to shell out to grep, where a selector failing with status 2
+# or above was silently treated as "no matches" and reported as zero. It no
+# longer invokes external text tools, so tools that always fail must change
+# nothing about the result.
+HOSTILE="${TEMPDIR_OUT}/hostile"
+mkdir -p "${HOSTILE}"
+for tool in grep sed awk; do
+    printf '#!/bin/sh\nexit 73\n' >"${HOSTILE}/${tool}"
+    chmod +x "${HOSTILE}/${tool}"
 done
-exec $(command -v grep) "\$@"
-EOF
-chmod +x "${GREPBIN}/grep"
-if OUT_GREP="$(cd "${FIXTURE}" && PATH="${GREPBIN}:${PATH}" "${INVENTORY}" "${FIXTURE}" 2>&1)"; then
-    fail "expected failure when a selector grep fails, got:"
-    sed 's/^/    /' <<<"${OUT_GREP}" >&2
+OUT_HOSTILE="$(cd "${FIXTURE}" && PATH="${HOSTILE}:${PATH}" "${INVENTORY}" "${FIXTURE}" 2>&1)"
+if [ "${OUT_HOSTILE}" = "${OUT}" ]; then
+    pass "output is unchanged with failing grep, sed and awk on PATH"
 else
-    pass "selector grep failure is an error, not a zero count"
+    fail "external text tools still influence the result"
 fi
-assert_absent "${OUT_GREP}" "no measurements printed when a selector fails" \
-    "service modules (src, excluding vendor)"
-rm -rf "${GREPBIN}"
+rm -rf "${HOSTILE}"
 
-echo
 echo "== fixture: the post-consolidation shape reports successfully =="
 # Zero subtree .bazelversion files is the goal state, not an error. A raw grep
 # returns 1 on no match, which under pipefail aborted the run with no output and
@@ -418,16 +408,31 @@ fi
 assert_absent "${OUT_BAD}" "malformed input is not reported as absence" \
     "subtree .bazelversion values            : none"
 
-# A multiline go_sdk.download is a declaration this parser does not understand.
-# It must fail rather than report no Go SDK pins at all.
+# A multiline declaration is understood by the parser, so it must be reported
+# rather than rejected. The shell implementation failed on this, which was a
+# capability gap rather than correct strictness.
 printf '8.6.0\n' >"${BAD_REPO}/src/svc/.bazelversion"
 printf 'go_sdk.download(\n    version = "1.25.0",\n)\n' >"${BAD_REPO}/src/svc/MODULE.bazel"
 git -C "${BAD_REPO}" add -A
 git -C "${BAD_REPO}" commit -qm "multiline go_sdk"
 
+if OUT_ML="$(cd "${BAD_REPO}" && "${INVENTORY}" "${BAD_REPO}" 2>&1)"; then
+    pass "a multiline go_sdk.download is parsed, not rejected"
+else
+    fail "multiline go_sdk.download rejected"
+fi
+assert_line "${OUT_ML}" "the multiline version is reported" \
+    "go_sdk.download (first-party)           : 1.25.0"
+
+# Genuinely unparseable: the version is not a literal, so no version can be
+# extracted even though a declaration is present.
+printf 'GO_VERSION = "x"\ngo_sdk.download(version = GO_VERSION)\n' \
+    >"${BAD_REPO}/src/svc/MODULE.bazel"
+git -C "${BAD_REPO}" add -A
+git -C "${BAD_REPO}" commit -qm "non-literal go_sdk version"
+
 if OUT_GO="$(cd "${BAD_REPO}" && "${INVENTORY}" "${BAD_REPO}" 2>&1)"; then
-    fail "unparseable go_sdk.download reported as success:"
-    sed 's/^/    /' <<<"${OUT_GO}" >&2
+    fail "unparseable go_sdk.download reported as success"
 else
     pass "unparseable go_sdk.download fails instead of reporting none"
 fi

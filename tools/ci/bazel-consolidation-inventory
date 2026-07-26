@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -9,265 +9,311 @@
 # being written. Run this instead of trusting the prose, and update the doc plus
 # its measurement stamp when the numbers move.
 #
-# Measurements come from git-tracked files so they correspond to the stamped
-# commit rather than to whatever happens to be in the working tree. Vendored
-# third-party trees are excluded from first-party counts; where a vendored total
-# is itself interesting it is reported on its own line.
+# Why Python rather than shell. An earlier version of this tool was a bash
+# script, and review found the same class of defect in it repeatedly: a failed
+# `git` call, a broken `grep` selector, an unreadable file, or a legitimate
+# no-match would each be converted into a plausible zero or a silent abort,
+# because shell reports failure through exit statuses that are easy to discard
+# and hard to distinguish from "found nothing". A tool whose purpose is to make
+# quoted numbers reproducible must never answer confidently when it could not
+# compute the answer. Here a failure raises, and no report is printed; there is
+# no path that emits a partial or default-valued report.
 #
-# Vendor filtering is done with an explicit anchored grep rather than a git
-# ':(exclude)' pathspec. Combining an exclude pathspec with a wildcard positive
-# pathspec silently returns unfiltered results, which produced counts that were
-# wrong by a factor of four before this was caught.
-#
-# A dirty working tree is rejected by default. Paths come from git, but contents
-# are read from the working tree, so an uncommitted edit to a tracked file would
-# change the measurements while the output still stamped HEAD. Pass
-# --allow-dirty to override; the stamp then says so explicitly.
+# Two distinctions the tool is built around, because collapsing either one
+# produced a real defect:
+#   - Absent is not the same as unparseable. Zero sources reports "none"; a
+#     source that exists but yields nothing is an error.
+#   - A clean tree is not the same as an unknown tree. Measurements come from
+#     working-tree contents of git-tracked files, so the tree must be clean for
+#     the output to correspond to the stamped commit.
 #
 # Usage: bazel-consolidation-inventory [--allow-dirty] [repo-root]
-set -euo pipefail
 
-allow_dirty=0
-repo_root=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --allow-dirty) allow_dirty=1 ;;
-    -h|--help) sed -n '5,25p' "${BASH_SOURCE[0]}"; exit 0 ;;
-    -*) echo "unknown option: $1" >&2; exit 2 ;;
-    *) repo_root="$1" ;;
-  esac
-  shift
-done
-: "${repo_root:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-cd "${repo_root}"
+import argparse
+import re
+import subprocess
+import sys
+from collections import Counter
+from pathlib import Path
 
-VENDOR_RE='(^|/)vendor/'
+VENDOR_RE = re.compile(r"(^|/)vendor/")
+SERVICE_MODULE_RE = re.compile(r"^src/.*/MODULE\.bazel$")
+MODULE_RE = re.compile(r"(^|/)MODULE\.bazel$")
+LOCK_RE = re.compile(r"(^|/)MODULE\.bazel\.lock$")
+BAZELRC_RE = re.compile(r"^src/.*/\.bazelrc$")
+BAZELVERSION_RE = re.compile(r"^src/.*/\.bazelversion$")
+WORKSPACE_STATUS_RE = re.compile(r"(^|/)workspace_status\.sh$")
+RULES_OCI_RE = re.compile(r"(^|/)rules/oci/")
+BUILD_RE = re.compile(r"(^|/)BUILD\.bazel$")
+NVCA_VENDOR_BUILD_RE = re.compile(
+    r"^src/compute-plane-services/nvca/vendor/.*/BUILD\.bazel$"
+)
 
-# The tracked-file list is enumerated once, with its exit status checked, rather
-# than re-invoking git inside each helper's pipeline. A git failure inside a
-# pipeline yields an empty list, which every downstream count would report as a
-# plausible zero instead of an error.
-head_sha="$(git rev-parse --short HEAD)"
-head_date="$(git log -1 --format=%cs)"
+GO_SDK_BLOCK_RE = re.compile(r"go_sdk\.download\((.*?)\)", re.S)
+GO_SDK_CALL_RE = re.compile(r"go_sdk\.download\(")
+SEMVER_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+OCI_PULL_RE = re.compile(r"oci\.pull\((.*?)\n\)", re.S)
+IMAGE_RE = re.compile(r"image\s*=\s*\"([^\"]+)\"")
+DIGEST_RE = re.compile(r"digest\s*=\s*\"(sha256:[0-9a-f]+)\"")
+VERSION_LINE_RE = re.compile(r"^[0-9]")
 
-dirty=""
-if ! worktree_state="$(git status --porcelain)"; then
-  echo "error: git status failed; cannot tell whether the tree is clean" >&2
-  exit 1
-fi
-if [ -n "${worktree_state}" ]; then
-  if [ "${allow_dirty}" -eq 0 ]; then
-    echo "error: working tree is dirty, so measurements would not match commit ${head_sha}." >&2
-    echo "       Commit or stash your changes, or pass --allow-dirty to measure anyway." >&2
-    exit 1
-  fi
-  dirty="  (WORKING TREE, not ${head_sha}: --allow-dirty was passed)"
-fi
 
-# The temporary file is created only after the cleanliness check. Creating it
-# first can dirty the very tree being checked: mktemp honours TMPDIR, and a
-# TMPDIR inside the repository makes a clean checkout report as dirty.
-ALL_TRACKED="$(mktemp)"
-trap 'rm -f "${ALL_TRACKED}"' EXIT
-if ! git ls-files -z >"${ALL_TRACKED}"; then
-  echo "error: git ls-files failed; cannot enumerate tracked files" >&2
-  exit 1
-fi
+class InventoryError(Exception):
+    """A measurement could not be taken. No report is printed."""
 
-# grep_sel <args...> : run grep, tolerating "no match" (status 1) but
-# propagating any real failure. A bare `|| true` here masks status 2 and above,
-# which turns a broken selector into an empty result and therefore a count of
-# zero: a stamped, plausible, wrong report.
-grep_sel() {
-  local status=0
-  grep "$@" || status=$?
-  [ "${status}" -le 1 ] || return "${status}"
-}
 
-# first_party <regex> : NUL-delimited tracked paths matching regex, no vendor.
-first_party() { grep_sel -zEv "${VENDOR_RE}" <"${ALL_TRACKED}" | grep_sel -zE "$1"; }
-# any <regex> : NUL-delimited tracked paths matching regex, vendor included.
-any() { grep_sel -zE "$1" <"${ALL_TRACKED}"; }
+def git(root, *args):
+    """Run git, raising on failure rather than yielding an empty result.
 
-n_of() { grep_sel -zc .; }
+    A failed `git ls-files` returning empty output is indistinguishable from a
+    repository with no tracked files, and every count downstream would then
+    report a plausible zero.
+    """
+    result = subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        raise InventoryError(
+            f"git {' '.join(args)} failed with status {result.returncode}: "
+            f"{result.stderr.strip() or 'no stderr'}"
+        )
+    return result.stdout
 
-# count_occurrences <pattern>: reads NUL-delimited paths on stdin and prints the
-# number of matching lines.
-#
-# grep exits 1 when it finds nothing, which is a legitimate zero. Any other
-# failure, in particular an unreadable or missing tracked file, must propagate.
-# Appending `|| true` to the whole pipeline instead would turn a read failure
-# into a silent zero, which is exactly the false-green this tool exists to
-# prevent.
-count_occurrences() {
-  local contents status=0
-  if ! contents="$(cat_of)"; then
-    echo "error: could not read tracked files while counting '$1'" >&2
-    return 1
-  fi
-  printf '%s\n' "${contents}" | grep -cF -- "$1" || status=$?
-  [ "${status}" -le 1 ] || return "${status}"
-}
-cat_of() { xargs -0 -r cat; }
-distinct_of() { xargs -0 -r md5sum | awk '{ print $1 }' | sort -u | wc -l; }
 
-# Every measurement is computed into a variable before anything is printed, so a
-# failing command aborts under `set -e`. Command substitutions evaluated inside
-# printf arguments would have their exit status discarded, yielding partial
-# output with a success status.
+class Tree:
+    """The git-tracked files of one repository, and their contents."""
 
-# Measurements read tracked files from the working tree. Verify up front that
-# every file the tool will read is present and readable, so a deleted or
-# unreadable tracked file fails loudly here instead of silently lowering a count
-# further down. This covers every metric, not just the ones using grep.
-unreadable=""
-READ_RE='(^|/)(MODULE\.bazel|MODULE\.bazel\.lock|BUILD\.bazel|\.bazelrc|\.bazelversion|workspace_status\.sh)$|(^|/)rules/oci/'
-READ_LIST="$(mktemp)"
-trap 'rm -f "${ALL_TRACKED}" "${READ_LIST}"' EXIT
-if ! grep_sel -zE "${READ_RE}" <"${ALL_TRACKED}" >"${READ_LIST}"; then
-  echo "error: failed to select the files to verify; cannot trust any count" >&2
-  exit 1
-fi
-while IFS= read -r -d '' path; do
-  [ -r "${path}" ] || unreadable="${unreadable}  ${path}"$'\n'
-done <"${READ_LIST}"
-if [ -n "${unreadable}" ]; then
-  echo "error: tracked files are missing or unreadable, so counts would be wrong:" >&2
-  printf '%s' "${unreadable}" >&2
-  exit 1
-fi
+    def __init__(self, root, allow_dirty=False):
+        self.root = Path(root).resolve()
+        self.head = git(self.root, "rev-parse", "--short", "HEAD").strip()
+        self.date = git(self.root, "log", "-1", "--format=%cs").strip()
 
-service_modules="$(first_party '^src/.*/MODULE\.bazel$' | n_of)"
-modules_total="$(any '(^|/)MODULE\.bazel$' | n_of)"
-lock_files="$(any '(^|/)MODULE\.bazel\.lock$' | n_of)"
-lock_mb="$(any '(^|/)MODULE\.bazel\.lock$' | cat_of | wc -c \
-  | awk '{ printf "%.1f", $1 / 1048576 }')"
+        self.dirty = bool(git(self.root, "status", "--porcelain").strip())
+        if self.dirty and not allow_dirty:
+            raise InventoryError(
+                f"working tree is dirty, so measurements would not match commit "
+                f"{self.head}.\n"
+                "       Commit or stash your changes, or pass --allow-dirty to "
+                "measure anyway."
+            )
 
-bazelrc_count="$(first_party '^src/.*/\.bazelrc$' | n_of)"
-bazelrc_distinct="$(first_party '^src/.*/\.bazelrc$' | distinct_of)"
-# "none" and "could not parse" are different answers and must not collapse into
-# the same output. Count the sources first: report none only when there are no
-# sources, and otherwise require every source to have been parsed. A .bazelversion
-# that exists but yields no version is a malformed input, not an absent one.
-bv_files="$(first_party '^src/.*/\.bazelversion$' | n_of)"
-if [ "${bv_files}" -eq 0 ]; then
-  bazelversions="none (all subtrees use the root version)"
-else
-  bv_lines="$(first_party '^src/.*/\.bazelversion$' | cat_of | grep_sel -cE '^[0-9]')"
-  if [ "${bv_lines}" -ne "${bv_files}" ]; then
-    echo "error: ${bv_files} .bazelversion file(s) yielded ${bv_lines} parseable version(s)." >&2
-    echo "       Refusing to report; one or more files are empty or malformed." >&2
-    exit 1
-  fi
-  bazelversions="$(first_party '^src/.*/\.bazelversion$' | cat_of \
-    | grep_sel -E '^[0-9]' | sort -V | uniq -c | awk '{ printf "%s on %s  ", $1, $2 }')"
-fi
+        self.paths = [p for p in git(self.root, "ls-files", "-z").split("\0") if p]
+        self._contents = {}
 
-ws_count="$(any '(^|/)workspace_status\.sh$' | n_of)"
-ws_distinct="$(any '(^|/)workspace_status\.sh$' | distinct_of)"
+    def select(self, pattern, include_vendor=False):
+        """Tracked paths matching pattern, sorted for deterministic output."""
+        return sorted(
+            p
+            for p in self.paths
+            if pattern.search(p) and (include_vendor or not VENDOR_RE.search(p))
+        )
 
-oci_files="$(first_party '(^|/)rules/oci/' | n_of)"
-oci_lines="$(first_party '(^|/)rules/oci/' | cat_of | wc -l)"
+    def read(self, path):
+        """Read a tracked file, raising if it cannot be read.
 
-# Repository-wide, not just src/. The root BUILD.bazel carries visibility rules
-# and is where the first package_group appears, so scoping this to src/ would
-# report zero package_groups even after one exists.
-BUILD_RE='(^|/)BUILD\.bazel$'
-subpackages="$(first_party "${BUILD_RE}" | count_occurrences '//:__subpackages__')"
-public_vis="$(first_party "${BUILD_RE}" | count_occurrences '//visibility:public')"
-package_groups="$(first_party "${BUILD_RE}" | count_occurrences 'package_group(')"
-nvca_vendored="$(any '^src/compute-plane-services/nvca/vendor/.*/BUILD\.bazel$' | n_of)"
+        A tracked file that is missing or unreadable would otherwise make a
+        count silently low, which is worse than no answer at all.
+        """
+        if path not in self._contents:
+            try:
+                self._contents[path] = (self.root / path).read_text(
+                    encoding="utf-8", errors="replace"
+                )
+            except OSError as exc:
+                raise InventoryError(f"cannot read tracked file {path}: {exc}") from exc
+        return self._contents[path]
 
-# Reported separately: a vendored module pinning an old Go SDK is not evidence
-# that first-party code spans that range.
-# Same distinction for Go SDK pins: absent is not the same as unparsed. Each
-# go_sdk.download must yield exactly one version, so a mismatch means the
-# declaration is multiline or otherwise not understood by this parser.
-go_versions() { # go_versions <selector-fn> <label>
-  local sel="$1" label="$2" decls parsed out
-  decls="$("${sel}" '(^|/)MODULE\.bazel$' | cat_of | grep_sel -c 'go_sdk.download')"
-  if [ "${decls}" -eq 0 ]; then
-    printf 'none'
+    def occurrences(self, paths, needle):
+        """Count lines containing needle across paths."""
+        return sum(
+            1
+            for path in paths
+            for line in self.read(path).splitlines()
+            if needle in line
+        )
+
+    def distinct(self, paths):
+        return len({self.read(p) for p in paths})
+
+
+def version_key(value):
+    return tuple(int(part) for part in re.findall(r"[0-9]+", value))
+
+
+def bazel_versions(tree):
+    """Distribution of subtree Bazel versions.
+
+    Zero subtree files is the intended post-consolidation state and reports
+    "none". A file that exists but yields no version is malformed and is an
+    error, not an absence: reporting it as "none" would announce the plan's
+    success condition on the strength of a parse failure.
+    """
+    paths = tree.select(BAZELVERSION_RE)
+    if not paths:
+        return "none (all subtrees use the root version)"
+
+    versions = []
+    for path in paths:
+        matched = [
+            line.strip()
+            for line in tree.read(path).splitlines()
+            if VERSION_LINE_RE.match(line.strip())
+        ]
+        if len(matched) != 1:
+            raise InventoryError(
+                f"{path} yielded {len(matched)} version line(s), expected exactly "
+                "1; the file is empty or malformed"
+            )
+        versions.append(matched[0])
+
+    counts = Counter(versions)
+    ordered = sorted(counts.items(), key=lambda kv: version_key(kv[0]))
+    return "  ".join(f"{count} on {version}" for version, count in ordered) + "  "
+
+
+def go_sdk_versions(tree, include_vendor, label):
+    """Go SDK versions, distinguishing absence from an unparsed declaration."""
+    paths = tree.select(MODULE_RE, include_vendor=include_vendor)
+    declarations = sum(len(GO_SDK_CALL_RE.findall(tree.read(p))) for p in paths)
+    if declarations == 0:
+        return "none"
+
+    versions = []
+    for path in paths:
+        for block in GO_SDK_BLOCK_RE.findall(tree.read(path)):
+            found = SEMVER_RE.findall(block)
+            if len(found) != 1:
+                raise InventoryError(
+                    f"{path} contains a {label} go_sdk.download yielding "
+                    f"{len(found)} version(s), expected exactly 1; the "
+                    "declaration form is not understood by this parser"
+                )
+            versions.append(found[0])
+
+    if len(versions) != declarations:
+        raise InventoryError(
+            f"{declarations} {label} go_sdk.download declaration(s) yielded "
+            f"{len(versions)} version(s); the declaration form is not understood"
+        )
+    return " ".join(sorted(set(versions), key=version_key)) + " "
+
+
+def oci_pulls(tree):
+    """oci.pull declarations, distinct images, digests, and tag-only pulls."""
+    declarations = 0
+    from_nvcr = 0
+    images = set()
+    digests = set()
+    tag_only = []
+    for path in tree.select(MODULE_RE):
+        for body in OCI_PULL_RE.findall(tree.read(path)):
+            image = IMAGE_RE.search(body)
+            if not image:
+                continue
+            declarations += 1
+            images.add(image.group(1))
+            if image.group(1).startswith("nvcr.io/"):
+                from_nvcr += 1
+            digest = DIGEST_RE.search(body)
+            if digest:
+                digests.add(digest.group(1))
+            else:
+                tag_only.append(image.group(1))
+    return {
+        "declarations": declarations,
+        "from_nvcr": from_nvcr,
+        "images": len(images),
+        "digests": len(digests),
+        "tag_only": sorted(tag_only),
+    }
+
+
+def build_report(tree):
+    """Compute every measurement, then format. Nothing is printed on failure."""
+    service_modules = tree.select(SERVICE_MODULE_RE)
+    all_modules = tree.select(MODULE_RE, include_vendor=True)
+    locks = tree.select(LOCK_RE, include_vendor=True)
+    bazelrcs = tree.select(BAZELRC_RE)
+    workspace_status = tree.select(WORKSPACE_STATUS_RE, include_vendor=True)
+    oci_files = tree.select(RULES_OCI_RE)
+    build_files = tree.select(BUILD_RE)
+    nvca_vendored = tree.select(NVCA_VENDOR_BUILD_RE, include_vendor=True)
+
+    lock_mb = sum(len(tree.read(p).encode("utf-8")) for p in locks) / 1048576
+    oci_lines = sum(len(tree.read(p).splitlines()) for p in oci_files)
+    pulls = oci_pulls(tree)
+
+    stamp = tree.head
+    if tree.dirty:
+        stamp += f"  (WORKING TREE, not {tree.head}: --allow-dirty was passed)"
+
+    return "\n".join(
+        [
+            f"measured at: {stamp}",
+            f"date:        {tree.date}",
+            "",
+            f"service modules (src, excluding vendor) : {len(service_modules)}",
+            f"MODULE.bazel total (incl. root/helpers) : {len(all_modules)}",
+            f"MODULE.bazel.lock files                 : {len(locks)}",
+            f"MODULE.bazel.lock total size            : {lock_mb:.1f} MB",
+            "",
+            f"subtree .bazelrc                        : {len(bazelrcs)} "
+            f"({tree.distinct(bazelrcs)} distinct)",
+            f"subtree .bazelversion values            : {bazel_versions(tree)}",
+            f"workspace_status.sh copies              : {len(workspace_status)} "
+            f"({tree.distinct(workspace_status)} variants)",
+            f"rules/oci copied files                  : {len(oci_files)} files, "
+            f"{oci_lines} lines",
+            "",
+            "root-relative //:__subpackages__         : "
+            f"{tree.occurrences(build_files, '//:__subpackages__')}",
+            "//visibility:public (outside vendor)    : "
+            f"{tree.occurrences(build_files, '//visibility:public')}",
+            "package_group definitions               : "
+            f"{tree.occurrences(build_files, 'package_group(')}",
+            f"nvca vendored BUILD.bazel               : {len(nvca_vendored)}",
+            "",
+            "go_sdk.download (first-party)           : "
+            f"{go_sdk_versions(tree, False, 'first-party')}",
+            "go_sdk.download (incl. vendored)        : "
+            f"{go_sdk_versions(tree, True, 'vendored-inclusive')}",
+            f"oci.pull declarations                   : {pulls['declarations']} "
+            f"({pulls['from_nvcr']} from nvcr.io)",
+            f"oci.pull distinct images / digests      : {pulls['images']} images, "
+            f"{pulls['digests']} digests",
+            f"oci.pull without a digest (tag-only)    : {len(pulls['tag_only'])} "
+            f"({','.join(pulls['tag_only']) or '-'})",
+        ]
+    )
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Regenerate the measurements quoted in "
+        "docs/dev/bazel-consolidation.md."
+    )
+    parser.add_argument(
+        "repo_root",
+        nargs="?",
+        default=None,
+        help="repository to measure (default: the repository containing this tool)",
+    )
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="measure a dirty tree; the stamp then says so explicitly",
+    )
+    args = parser.parse_args(argv)
+
+    root = args.repo_root or Path(__file__).resolve().parents[2]
+    try:
+        report = build_report(Tree(root, allow_dirty=args.allow_dirty))
+    except InventoryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(report)
     return 0
-  fi
-  out="$("${sel}" '(^|/)MODULE\.bazel$' | cat_of \
-    | grep_sel 'go_sdk.download' | grep_sel -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -V)"
-  parsed="$(printf '%s\n' "${out}" | grep_sel -c '.')"
-  if [ "${parsed}" -ne "${decls}" ]; then
-    echo "error: ${decls} ${label} go_sdk.download declaration(s) yielded ${parsed} version(s)." >&2
-    echo "       Refusing to report; the declaration form is not understood." >&2
-    return 1
-  fi
-  printf '%s' "$(printf '%s\n' "${out}" | sort -uV | tr '\n' ' ')"
-}
-go_first_party="$(go_versions first_party first-party)"
-go_vendored_only="$(go_versions any vendored-inclusive)"
 
-oci_report="$(first_party '(^|/)MODULE\.bazel$' | python3 -c '
-import re, sys
 
-decls, nvcr, tagged = 0, 0, []
-digests, images = set(), set()
-for path in filter(None, sys.stdin.read().split("\0")):
-    with open(path) as handle:
-        source = handle.read()
-    for match in re.finditer(r"oci\.pull\((.*?)\n\)", source, re.S):
-        body = match.group(1)
-        image = re.search(r"image\s*=\s*\"([^\"]+)\"", body)
-        if not image:
-            continue
-        decls += 1
-        images.add(image.group(1))
-        if image.group(1).startswith("nvcr.io/"):
-            nvcr += 1
-        digest = re.search(r"digest\s*=\s*\"(sha256:[0-9a-f]+)\"", body)
-        if digest:
-            digests.add(digest.group(1))
-        else:
-            tagged.append(image.group(1))
-print("|".join([str(decls), str(nvcr), str(len(images)),
-                str(len(digests)), str(len(tagged)), ",".join(sorted(tagged)) or "-"]))
-')"
-IFS='|' read -r oci_decls oci_nvcr oci_images oci_digests oci_tagged_n oci_tagged_list \
-  <<<"${oci_report}"
-
-# Guard against a measurement having silently produced nothing. Counts are
-# numeric and version lists are non-empty on any real repository, so an empty
-# value here means a selector failed rather than that the answer is zero.
-for name in service_modules modules_total lock_files bazelrc_count ws_count \
-            oci_files subpackages public_vis package_groups oci_decls; do
-  if ! [[ "${!name}" =~ ^[0-9]+$ ]]; then
-    echo "error: measurement '${name}' is not a number ('${!name}'); refusing to report" >&2
-    exit 1
-  fi
-done
-
-printf 'measured at: %s%s\n' "${head_sha}" "${dirty}"
-printf 'date:        %s\n\n' "${head_date}"
-
-printf 'service modules (src, excluding vendor) : %s\n' "${service_modules}"
-printf 'MODULE.bazel total (incl. root/helpers) : %s\n' "${modules_total}"
-printf 'MODULE.bazel.lock files                 : %s\n' "${lock_files}"
-printf 'MODULE.bazel.lock total size            : %s MB\n' "${lock_mb}"
-
-printf '\nsubtree .bazelrc                        : %s (%s distinct)\n' \
-  "${bazelrc_count}" "${bazelrc_distinct}"
-printf 'subtree .bazelversion values            : %s\n' "${bazelversions}"
-printf 'workspace_status.sh copies              : %s (%s variants)\n' \
-  "${ws_count}" "${ws_distinct}"
-printf 'rules/oci copied files                  : %s files, %s lines\n' \
-  "${oci_files}" "${oci_lines}"
-
-printf '\nroot-relative //:__subpackages__         : %s\n' "${subpackages}"
-printf '//visibility:public (outside vendor)    : %s\n' "${public_vis}"
-printf 'package_group definitions               : %s\n' "${package_groups}"
-printf 'nvca vendored BUILD.bazel               : %s\n' "${nvca_vendored}"
-
-printf '\ngo_sdk.download (first-party)           : %s\n' "${go_first_party}"
-printf 'go_sdk.download (incl. vendored)        : %s\n' "${go_vendored_only}"
-printf 'oci.pull declarations                   : %s (%s from nvcr.io)\n' \
-  "${oci_decls}" "${oci_nvcr}"
-printf 'oci.pull distinct images / digests      : %s images, %s digests\n' \
-  "${oci_images}" "${oci_digests}"
-printf 'oci.pull without a digest (tag-only)    : %s (%s)\n' \
-  "${oci_tagged_n}" "${oci_tagged_list}"
+if __name__ == "__main__":
+    sys.exit(main())
