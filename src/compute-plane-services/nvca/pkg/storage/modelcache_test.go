@@ -592,10 +592,28 @@ func TestResolveCacheMountOptions(t *testing.T) {
 			want:       []string{"ro", "norecovery", "nouuid", "noatime"},
 		},
 		{
+			name:       "nvmesh drops configured rw that would negate ro",
+			driver:     NVMeshStorageClassProvisioner,
+			configured: []string{"rw", "noatime"},
+			want:       []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:       "nvmesh drops every option that negates a requirement",
+			driver:     NVMeshStorageClassProvisioner,
+			configured: []string{"rw", "recovery", "uuid"},
+			want:       []string{"ro", "norecovery", "nouuid"},
+		},
+		{
 			name:       "other driver uses configured options unchanged",
 			driver:     "smb.csi.k8s.io",
 			configured: []string{"vers=3.0", "dir_mode=0777"},
 			want:       []string{"vers=3.0", "dir_mode=0777"},
+		},
+		{
+			name:       "other driver keeps rw since no requirement applies",
+			driver:     "smb.csi.k8s.io",
+			configured: []string{"rw"},
+			want:       []string{"rw"},
 		},
 		{
 			name:       "other driver with no configuration gets nothing",
@@ -619,7 +637,7 @@ func TestResolveCacheMountOptions(t *testing.T) {
 			}
 
 			r := &Reconciler{csiVolumeMountOptions: tt.configured}
-			if got := r.resolveCacheMountOptions(pv); !slices.Equal(got, tt.want) {
+			if got := r.resolveCacheMountOptions(context.Background(), pv); !slices.Equal(got, tt.want) {
 				t.Errorf("resolveCacheMountOptions() = %v, want %v", got, tt.want)
 			}
 		})
@@ -658,6 +676,22 @@ func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 			configured: []string{"noatime"},
 			want:       []string{"ro", "norecovery", "nouuid", "noatime"},
 			wantPatch:  true,
+		},
+		{
+			name:       "optional option removed from configuration is removed from the pv",
+			driver:     NVMeshStorageClassProvisioner,
+			existing:   []string{"ro", "norecovery", "nouuid", "noatime"},
+			configured: nil,
+			want:       []string{"ro", "norecovery", "nouuid"},
+			wantPatch:  true,
+		},
+		{
+			name:       "configured rw does not make an existing read-only pv writable",
+			driver:     NVMeshStorageClassProvisioner,
+			existing:   []string{"ro", "norecovery", "nouuid"},
+			configured: []string{"rw"},
+			want:       []string{"ro", "norecovery", "nouuid"},
+			wantPatch:  false,
 		},
 		{
 			name:       "matching pv is left alone",

@@ -591,15 +591,37 @@ var accessModesRO = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
 // or not mount options are configured.
 var nvmeshRequiredMountOptions = []string{"ro", "norecovery", "nouuid"}
 
+// nvmeshConflictingMountOptions maps a configured option to the required option
+// it would negate. Kubernetes does not validate mount options before they reach
+// the mount call, so a configured value such as rw would otherwise be handed to
+// the driver alongside ro and leave the outcome to the mount implementation.
+var nvmeshConflictingMountOptions = map[string]string{
+	"rw":       "ro",
+	"recovery": "norecovery",
+	"uuid":     "nouuid",
+}
+
 // resolveCacheMountOptions returns the mount options for a read-only model cache
-// PV. NVMesh volumes always receive nvmeshRequiredMountOptions, with any
-// configured options appended. Volumes on other CSI drivers use the configured
-// options unchanged.
-func (r *Reconciler) resolveCacheMountOptions(pv *corev1.PersistentVolume) []string {
+// PV. NVMesh volumes always receive nvmeshRequiredMountOptions, with configured
+// options appended except where they would negate a required one. Volumes on
+// other CSI drivers use the configured options unchanged.
+func (r *Reconciler) resolveCacheMountOptions(ctx context.Context, pv *corev1.PersistentVolume) []string {
 	if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != NVMeshStorageClassProvisioner {
 		return r.csiVolumeMountOptions
 	}
-	return mergeMountOptions(nvmeshRequiredMountOptions, r.csiVolumeMountOptions)
+
+	log := logf.FromContext(ctx)
+	configured := make([]string, 0, len(r.csiVolumeMountOptions))
+	for _, opt := range r.csiVolumeMountOptions {
+		if required, conflicts := nvmeshConflictingMountOptions[opt]; conflicts {
+			log.Info("Ignoring configured cache mount option that conflicts with an NVMesh requirement",
+				"pv", pv.Name, "ignored", opt, "required", required)
+			continue
+		}
+		configured = append(configured, opt)
+	}
+
+	return mergeMountOptions(nvmeshRequiredMountOptions, configured)
 }
 
 // mergeMountOptions concatenates the given option lists, preserving order and
@@ -628,14 +650,19 @@ func (r *Reconciler) reconcileSecondaryPVMountOptions(ctx context.Context,
 ) error {
 	log := logf.FromContext(ctx)
 
-	want := r.resolveCacheMountOptions(secondaryPV)
+	want := r.resolveCacheMountOptions(ctx, secondaryPV)
 	if slices.Equal(secondaryPV.Spec.MountOptions, want) {
 		return nil
 	}
 
 	secondaryPVOld := secondaryPV.DeepCopy()
 	secondaryPV.Spec.MountOptions = want
-	if err := r.Client.Patch(ctx, secondaryPV, client.MergeFrom(secondaryPVOld)); err != nil {
+	if err := nvcaotel.InvokeWithSpan(ctx, modelCacheTracer, "nvca.modelcache.reconcile_mount_options",
+		func(ctx context.Context) error {
+			return r.Client.Patch(ctx, secondaryPV, client.MergeFrom(secondaryPVOld))
+		},
+		oteltrace.WithAttributes(otelattr.String("nvcf.modelcache.pv", secondaryPV.Name)),
+	); err != nil {
 		return fmt.Errorf("patch secondary PV mount options: %w", err)
 	}
 	log.Info("Reconciled secondary PV mount options", "pv", secondaryPV.Name,
@@ -765,7 +792,7 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		}
 		maps.Copy(secondaryPV.Labels, getClusterWideResourceLabels(stCopy))
 		secondaryPV.Spec.AccessModes = accessModesRO
-		secondaryPV.Spec.MountOptions = r.resolveCacheMountOptions(secondaryPV)
+		secondaryPV.Spec.MountOptions = r.resolveCacheMountOptions(ctx, secondaryPV)
 		secondaryPV.Spec.ClaimRef = &corev1.ObjectReference{
 			APIVersion: "v1",
 			Kind:       "PersistentVolumeClaim",
