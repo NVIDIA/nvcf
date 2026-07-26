@@ -10,6 +10,7 @@ OBSERVABILITY_REQUIRED_DEPS = [
     "@nv_third_party_deps//:io_micrometer_micrometer_tracing",
     "@nv_third_party_deps//:io_micrometer_micrometer_tracing_bridge_otel",
     "@nv_third_party_deps//:io_opentelemetry_opentelemetry_api",
+    "@nv_third_party_deps//:io_opentelemetry_opentelemetry_exporter_otlp",
     "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_common",
     "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_trace",
     "@nv_third_party_deps//:io_opentelemetry_semconv_opentelemetry_semconv",

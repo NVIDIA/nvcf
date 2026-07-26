@@ -131,6 +131,15 @@ jobs:
           # jq validates every field before the row reaches matrix generation.
           while IFS= read -r manifest; do
             path="${manifest%/bazel-java-ci.json}"
+            for forbidden in \
+              MODULE.bazel MODULE.bazel.lock maven_install.json \
+              .bazelrc .bazelversion .bazel_downloader_config \
+              WORKSPACE WORKSPACE.bazel bazel-enablement bazel-migration; do
+              if [ -e "${path}/${forbidden}" ]; then
+                echo "::error file=${path}/${forbidden}::Java components use root Bazel state; remove imported standalone file"
+                exit 1
+              fi
+            done
             id="$(jq -er '.id | select(test("^[a-z0-9][a-z0-9-]*$"))' "$manifest")"
             tests_skip="$(jq -er '.tests_skip | if type == "boolean" then tostring else error("tests_skip must be boolean") end' "$manifest")"
             component_kind="$(jq -er '.component_kind | select(. == "java-framework" or . == "java-service")' "$manifest")"

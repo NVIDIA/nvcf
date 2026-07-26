@@ -1,0 +1,131 @@
+{
+  "artifacts": {
+    "io.micrometer:micrometer-registry-prometheus:1.16.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-registry-prometheus",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
+    "io.prometheus:prometheus-metrics-config:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Config",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-core:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Core",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-exposition-formats:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Exposition Formats",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-exposition-textformats:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Exposition Text Formats",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-model:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Model",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-tracer-common:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Tracer Common",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "org.apache.commons:commons-collections4:4.5.0": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Collections",
+      "url": "https://commons.apache.org/proper/commons-collections/"
+    },
+    "org.apache.tomcat.embed:tomcat-embed-core:11.0.22": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "tomcat-embed-core",
+      "url": "https://tomcat.apache.org/"
+    },
+    "org.apache.tomcat.embed:tomcat-embed-websocket:11.0.22": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "tomcat-embed-websocket",
+      "url": "https://tomcat.apache.org/"
+    },
+    "org.aspectj:aspectjweaver:1.9.25.1": {
+      "licenses": [
+        "Eclipse Public License - v 2.0"
+      ],
+      "name": "AspectJ Weaver",
+      "url": "https://www.eclipse.org/aspectj/"
+    },
+    "org.springframework.boot:spring-boot-jarmode-tools:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-jarmode-tools",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-restclient:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-restclient",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-aspectj:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-aspectj",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-tomcat-runtime:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-tomcat-runtime",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-tomcat:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-tomcat",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-webmvc:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-webmvc",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-tomcat:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-tomcat",
+      "url": "https://spring.io/projects/spring-boot"
+    }
+  },
+  "generated_by": "tools/bazel/java/generate_notice.py --update-metadata"
+}
