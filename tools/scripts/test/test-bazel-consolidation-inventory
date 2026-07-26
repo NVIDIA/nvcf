@@ -248,6 +248,21 @@ assert_line "${OUT_ALLOW}" "--allow-dirty picks up the uncommitted occurrence" \
 git -C "${FIXTURE}" checkout -q -- .
 
 echo
+echo "== fixture: a missing tracked file must not silently lower a count =="
+# The regression this guards: the three visibility counts appended `|| true` to
+# the whole pipeline, so a failure to read the files became a silent zero rather
+# than an error. --allow-dirty must not rescue that.
+rm "${FIXTURE}/src/svc-a/BUILD.bazel"
+if OUT_GONE="$(cd "${FIXTURE}" && "${INVENTORY}" --allow-dirty "${FIXTURE}" 2>&1)"; then
+    fail "expected failure when a tracked BUILD.bazel is missing, got:"
+    sed 's/^/    /' <<<"${OUT_GONE}" >&2
+else
+    pass "missing tracked BUILD.bazel is an error, not a lower count"
+fi
+assert_line "${OUT_GONE}" "the missing file is named" "src/svc-a/BUILD.bazel"
+git -C "${FIXTURE}" checkout -q -- .
+
+echo
 echo "== failure propagation =="
 # The tool must not report success when a measurement cannot be taken. Running
 # outside a git repository is the cheapest way to force that.

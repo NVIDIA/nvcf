@@ -13,12 +13,19 @@ pinned the worker Bazel versions.
 
 First-party code builds as 19 nested service modules plus the root. That layout
 is inherited from the pre-monorepo history, when each service was its own
-repository. The proposal is that the 18 publicly buildable service modules
-converge on one root Bazel module, with services as packages, while releases and
-ownership stay per component. `nvsnap` remains an explicit nested-module
-exception until its private build dependency is resolved, so the end state is
-one root module plus that documented exception, not literally zero nested
-modules.
+repository. The proposal is that all 19 first-party service modules converge on
+one root Bazel module, with services as packages, while releases and ownership
+stay per component.
+
+An earlier draft carried `nvsnap` as a standing exception on the grounds that its
+base image is not publicly pullable. That rationale is stale. `.github/workflows/bazel.yml`
+still records it, but the code disagrees: `nvsnap` pins public `gcr.io/distroless/static`,
+`docker.io/library/ubuntu`, and `docker.io/library/alpine` bases by digest, builds
+its images on `@distroless_static`, and documents a public-input-only source build.
+Private NGC is its publish destination, not its base. Phase 1 therefore has to
+resolve `nvsnap` rather than assume it: migrate it with the rest, or record a real
+reason under the exception contract. Its absence from the public CI matrix is a
+row decision, not an architectural one.
 
 Scope boundary, and the most common misreading of this proposal: one Bazel
 module does not mean one Go module, one Cargo workspace, or one lockfile per
@@ -111,7 +118,7 @@ Consolidation does not add `rdeps`. It retires the static module-root list, but
 it does not eliminate job or lane selection. Affected targets still have to be
 partitioned by component metadata, target tags, and execution requirements:
 Docker-host and Testcontainers lanes, Java component lanes, Cargo parity tests,
-BYOO generation, release and artifact staging, and any retained `nvsnap` lane.
+BYOO generation, and release and artifact staging.
 Root-scoped Java already demonstrates this, routing on the `component_kind` and
 `ci_lane` fields of its component descriptors rather than on a module root.
 
@@ -131,8 +138,10 @@ conservative fallback is a feature.
    not in scope. Each decision needs an owner review and service tests.
 2. A dependency bump becomes repository wide. Breakage surfaces immediately
    instead of never, which is the goal, but it changes how changes are staged.
-3. The analysis graph per invocation grows. Mitigate with the remote cache and
-   query-driven target selection rather than wildcard builds.
+3. The analysis graph per invocation grows. Query-driven target selection is the
+   mitigation; remote caching is not. Caching avoids re-executing actions, but
+   the analysis phase still loads and analyzes whatever the invocation asks for,
+   so the fix is asking for less rather than caching more.
 4. This is incremental work measured in months and must not be attempted as one
    change.
 
@@ -186,10 +195,27 @@ Every nested module retained past Phase 8 records:
 - Residual correctness risk, stated plainly.
 - A dated revisit or removal trigger.
 
-An entry missing any of these is not an exception; it is unfinished work. The
-current expected entries are `nvsnap`, a deliberate helper module, and a vendored
-module. NVCA, ESS, or BYOO join only if their subphase concludes so, and the
-summary count is updated when that happens.
+An entry missing any of these is not an exception; it is unfinished work.
+
+The 22 tracked `MODULE.bazel` files are three different things, and conflating
+them obscures the end state:
+
+| Category | Count | End state |
+|---|---|---|
+| First-party service modules | 19 | Converge on the root |
+| Root module | 1 | The destination |
+| Migration scaffolding (`rules/oci-destinations`) | 1 | Removable once its five consumers migrate |
+| Vendored third-party (`cel.dev/expr`) | 1 | Never in scope; excluded from the guard |
+
+Only the first category can hold an architectural exception. `rules/oci-destinations`
+is scaffolding that five nested modules currently depend on, so it is retired by
+Phase 8 rather than excepted. A vendored third-party module is a guard exclusion,
+not a decision anyone has to justify.
+
+So: migrated services satisfy the root-label criteria; approved service exceptions
+satisfy the exception contract above; vendored third-party modules are excluded
+from the guard entirely. NVCA, ESS, or BYOO join the second group only if their
+subphase concludes so, and the summary is updated when that happens.
 
 ## Phases
 
@@ -198,10 +224,15 @@ only `bazel build //...` and `bazel test //...` at the repository root. Lanes
 that route by component metadata or execution requirements, such as the
 Docker-host and Java component lanes, count toward that invariant.
 
-1. Correct the inventory, remove stale Bazel documentation, and define the
-   intentional nested-module exceptions. Not every nested module is in scope:
-   `nvsnap`, a deliberate helper module, and a vendored module all stay nested,
-   so the Phase 2 guard needs an allowlist rather than a blanket ban.
+1. Correct the inventory, remove stale Bazel documentation, and settle the
+   exception question. Two of the 22 tracked modules are not first-party services
+   and are handled by category rather than by exception: `rules/oci-destinations`
+   is migration scaffolding retired once its five consumers migrate, and the
+   vendored `cel.dev/expr` module is excluded from the guard outright. `nvsnap`
+   is the only open question, and its recorded rationale contradicts its code, so
+   this phase decides it on current evidence. The Phase 2 guard still needs an
+   allowlist rather than a blanket ban, but the allowlist should be short and
+   every entry should carry the exception contract.
 2. Establish visibility policy, root-run Gazelle enforcement, the nested-module
    guard, and the extended hybrid affected-target CI.
 3. Converge Bazel and shared toolchain versions. This is real work: sampling two
@@ -223,8 +254,10 @@ Docker-host and Java component lanes, count toward that invariant.
      whose labels will not survive a root move. Decide between rebasing the
      vendored labels and dropping the vendored tree in favor of module
      resolution before any code moves.
-   - 6b. ESS. Nested Go workspace; needs the workspace collapsed or an explicit
-     exception recorded.
+   - 6b. ESS. Retains its Go workspace while the root Bazel graph ingests its
+     modules, consistent with the scope boundary above: one Bazel module does not
+     mean one Go workspace. The work is teaching the root graph to build those
+     modules, not collapsing the workspace.
    - 6c. BYOO. The collector already builds through a declared Bazel genrule.
      The problem is that the action uses host Go with `local` and `no-sandbox`,
      so it is neither hermetic nor remotely cacheable. Make the action hermetic,
@@ -264,8 +297,8 @@ Docker-host and Java component lanes, count toward that invariant.
 - Merging the Rust crate hubs as part of this work.
 - A single large migration.
 - Removing per-service release granularity.
-- Moving `nvsnap` into scope. Its base image is not publicly pullable and it is
-  excluded from the public build for that reason.
+- Keeping `nvsnap` permanently out of scope on the current stated rationale.
+  That rationale no longer matches the code and Phase 1 must re-decide it.
 
 ## Open questions
 

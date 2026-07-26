@@ -49,6 +49,24 @@ first_party() { git ls-files -z | grep -zEv "${VENDOR_RE}" | { grep -zE "$1" || 
 any() { git ls-files -z | { grep -zE "$1" || true; }; }
 
 n_of() { grep -zc . || true; }
+
+# count_occurrences <pattern>: reads NUL-delimited paths on stdin and prints the
+# number of matching lines.
+#
+# grep exits 1 when it finds nothing, which is a legitimate zero. Any other
+# failure, in particular an unreadable or missing tracked file, must propagate.
+# Appending `|| true` to the whole pipeline instead would turn a read failure
+# into a silent zero, which is exactly the false-green this tool exists to
+# prevent.
+count_occurrences() {
+  local contents status=0
+  if ! contents="$(cat_of)"; then
+    echo "error: could not read tracked files while counting '$1'" >&2
+    return 1
+  fi
+  printf '%s\n' "${contents}" | grep -cF -- "$1" || status=$?
+  [ "${status}" -le 1 ] || return "${status}"
+}
 cat_of() { xargs -0 -r cat; }
 distinct_of() { xargs -0 -r md5sum | awk '{ print $1 }' | sort -u | wc -l; }
 
@@ -66,6 +84,21 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
   fi
   dirty="  (WORKING TREE, not ${head_sha}: --allow-dirty was passed)"
+fi
+
+# Measurements read tracked files from the working tree. Verify up front that
+# every file the tool will read is present and readable, so a deleted or
+# unreadable tracked file fails loudly here instead of silently lowering a count
+# further down. This covers every metric, not just the ones using grep.
+unreadable=""
+while IFS= read -r -d '' path; do
+  [ -r "${path}" ] || unreadable="${unreadable}  ${path}"$'\n'
+done < <(git ls-files -z -- '*MODULE.bazel' '*MODULE.bazel.lock' '*BUILD.bazel' \
+  '*.bazelrc' '*.bazelversion' '*workspace_status.sh' 'rules/oci/*' '*/rules/oci/*')
+if [ -n "${unreadable}" ]; then
+  echo "error: tracked files are missing or unreadable, so counts would be wrong:" >&2
+  printf '%s' "${unreadable}" >&2
+  exit 1
 fi
 
 service_modules="$(first_party '^src/.*/MODULE\.bazel$' | n_of)"
@@ -89,12 +122,9 @@ oci_lines="$(first_party '(^|/)rules/oci/' | cat_of | wc -l)"
 # and is where the first package_group appears, so scoping this to src/ would
 # report zero package_groups even after one exists.
 BUILD_RE='(^|/)BUILD\.bazel$'
-subpackages="$(first_party "${BUILD_RE}" | cat_of \
-  | grep -c '//:__subpackages__' || true)"
-public_vis="$(first_party "${BUILD_RE}" | cat_of \
-  | grep -c '//visibility:public' || true)"
-package_groups="$(first_party "${BUILD_RE}" | cat_of \
-  | grep -c 'package_group(' || true)"
+subpackages="$(first_party "${BUILD_RE}" | count_occurrences '//:__subpackages__')"
+public_vis="$(first_party "${BUILD_RE}" | count_occurrences '//visibility:public')"
+package_groups="$(first_party "${BUILD_RE}" | count_occurrences 'package_group(')"
 nvca_vendored="$(any '^src/compute-plane-services/nvca/vendor/.*/BUILD\.bazel$' | n_of)"
 
 # Reported separately: a vendored module pinning an old Go SDK is not evidence
