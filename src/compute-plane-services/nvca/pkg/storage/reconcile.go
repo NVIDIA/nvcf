@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"sync/atomic"
 	"time"
 
 	cmnotel "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel"
@@ -67,6 +68,15 @@ const (
 	ConditionTypeCleanupSuccessful            = "CleanupSuccessful"
 	ConditionReasonSomeObjectsPendingDeletion = "SomeObjectsPendingDeletion"
 	ConditionReasonAllObjectsDeleted          = "AllObjectsDeleted"
+
+	// DefaultModelCacheStorageClassName is the storage class whose provisioner
+	// decides which mount option defaults model cache volumes need.
+	DefaultModelCacheStorageClassName = "nvcf-sc"
+
+	// DefaultCacheMountOptionsConfigMapName maps a CSI provisioner to the mount
+	// options its model cache volumes require, as comma separated values. It
+	// lives in ModelCacheInitNamespace and ships seeded with the NVMesh entry.
+	DefaultCacheMountOptionsConfigMapName = "nvca-cache-mount-options"
 )
 
 var (
@@ -101,6 +111,28 @@ func WithCSIVolumeMountOptions(mntOptions []string) ReconcilerOption {
 	return func(r *Reconciler) {
 		if len(mntOptions) > 0 {
 			r.csiVolumeMountOptions = mntOptions
+		}
+	}
+}
+
+// WithModelCacheStorageClass overrides the storage class whose provisioner
+// decides which mount option defaults model cache volumes get. Defaults to
+// DefaultModelCacheStorageClassName when unset.
+func WithModelCacheStorageClass(name string) ReconcilerOption {
+	return func(r *Reconciler) {
+		if name != "" {
+			r.modelCacheStorageClass = name
+		}
+	}
+}
+
+// WithCacheMountOptionsConfigMap overrides the ConfigMap holding the per
+// provisioner mount option defaults. Defaults to
+// DefaultCacheMountOptionsConfigMapName when unset.
+func WithCacheMountOptionsConfigMap(name string) ReconcilerOption {
+	return func(r *Reconciler) {
+		if name != "" {
+			r.cacheMountOptionsConfigMap = name
 		}
 	}
 }
@@ -181,6 +213,14 @@ type Reconciler struct {
 	// eventRecorder                record.EventRecorder
 	k8sTimeConfig         *k8sutil.TimeConfig
 	csiVolumeMountOptions []string
+
+	// modelCacheStorageClass is the storage class whose provisioner selects the
+	// mount option defaults, and cacheMountOptionsConfigMap holds those defaults
+	// per provisioner. modelCacheDefaults caches the resolved answer, looked up
+	// once on first use.
+	modelCacheStorageClass     string
+	cacheMountOptionsConfigMap string
+	modelCacheDefaults         atomic.Pointer[provisionerMountOptionDefaults]
 
 	tracer            oteltrace.Tracer
 	nowFunc           func() time.Time

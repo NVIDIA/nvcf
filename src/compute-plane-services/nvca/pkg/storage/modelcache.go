@@ -583,45 +583,117 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 
 var accessModesRO = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
 
-// nvmeshRequiredMountOptions are mandatory for read-only model cache volumes on
-// NVMesh, which provisions XFS. The secondary PV attaches the same filesystem as
-// the primary, so the kernel rejects the mount as a duplicate filesystem UUID
-// without nouuid, and rejects a dirty log on a read-only mount without norecovery.
-// These are a property of the driver, not a tunable, so they are applied whether
-// or not mount options are configured.
-var nvmeshRequiredMountOptions = []string{"ro", "norecovery", "nouuid"}
+// provisionerMountOptionDefaults is the resolved answer for the model cache
+// storage class: the mount options its provisioner requires, and whether the
+// provisioner had an entry at all.
+type provisionerMountOptionDefaults struct {
+	options []string
+	found   bool
+}
 
-// nvmeshConflictingMountOptions maps a configured option to the required option
-// it would negate. Kubernetes does not validate mount options before they reach
-// the mount call, so a configured value such as rw would otherwise be handed to
-// the driver alongside ro and leave the outcome to the mount implementation.
-var nvmeshConflictingMountOptions = map[string]string{
-	"rw":       "ro",
-	"recovery": "norecovery",
-	"uuid":     "nouuid",
+// provisionerDefaultMountOptions returns the mount options required by the
+// provisioner of the model cache storage class, taken from the mount option
+// ConfigMap. It reports false when the provisioner has no entry, in which case
+// the configured mount options are used as-is.
+//
+// The decision cannot be taken from the reconcile path: doModelCacheNVMesh also
+// serves requests with an empty backend, whose storage class need not be
+// provisioned by NVMesh at all. It is instead resolved from the storage class
+// named by DefaultModelCacheStorageClassName, or the override.
+//
+// Both objects are cluster-owned and effectively static, so the answer is
+// resolved once and cached. A failed lookup is deliberately not cached, so a
+// storage class or ConfigMap created after the agent starts is picked up on a
+// later reconcile rather than being written off forever.
+func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]string, bool) {
+	if cached := r.modelCacheDefaults.Load(); cached != nil {
+		return cached.options, cached.found
+	}
+
+	log := logf.FromContext(ctx)
+
+	scName := r.modelCacheStorageClass
+	if scName == "" {
+		scName = DefaultModelCacheStorageClassName
+	}
+	sc := &storagev1.StorageClass{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: scName}, sc); err != nil {
+		log.V(1).Info("Could not resolve the model cache storage class, using configured mount options",
+			"storageclass", scName, "reason", err.Error())
+		return nil, false
+	}
+
+	cmName := r.cacheMountOptionsConfigMap
+	if cmName == "" {
+		cmName = DefaultCacheMountOptionsConfigMapName
+	}
+	cm := &corev1.ConfigMap{}
+	if err := r.Client.Get(ctx,
+		client.ObjectKey{Name: cmName, Namespace: ModelCacheInitNamespace}, cm); err != nil {
+		log.V(1).Info("Could not read the cache mount option defaults, using configured mount options",
+			"configmap", cmName, "namespace", ModelCacheInitNamespace, "reason", err.Error())
+		return nil, false
+	}
+
+	resolved := &provisionerMountOptionDefaults{}
+	if raw, ok := cm.Data[sc.Provisioner]; ok {
+		resolved.found = true
+		for _, opt := range strings.Split(raw, ",") {
+			if opt = strings.TrimSpace(opt); opt != "" {
+				resolved.options = append(resolved.options, opt)
+			}
+		}
+	}
+	r.modelCacheDefaults.Store(resolved)
+
+	log.Info("Resolved cache mount option defaults for the model cache provisioner",
+		"storageclass", scName, "provisioner", sc.Provisioner,
+		"configmap", cmName, "found", resolved.found, "defaults", resolved.options)
+
+	return resolved.options, resolved.found
+}
+
+// negatesMountOption reports whether configured would cancel out required, so a
+// configured rw is not handed to the driver alongside a required ro. Kubernetes
+// does not validate mount options before they reach the mount call, which would
+// otherwise leave the outcome to the mount implementation.
+func negatesMountOption(required, configured string) bool {
+	switch {
+	case required == "ro" && configured == "rw":
+		return true
+	case required == "rw" && configured == "ro":
+		return true
+	case strings.HasPrefix(required, "no") && required[2:] == configured:
+		return true
+	case strings.HasPrefix(configured, "no") && configured[2:] == required:
+		return true
+	}
+
+	return false
 }
 
 // resolveCacheMountOptions returns the mount options for a read-only model cache
-// PV. NVMesh volumes always receive nvmeshRequiredMountOptions, with configured
-// options appended except where they would negate a required one. Volumes on
-// other CSI drivers use the configured options unchanged.
+// PV. When the storage class provisioner has defaults, the volume always
+// receives them, with configured options appended except where they would negate
+// a default. Otherwise the configured options are used unchanged.
 func (r *Reconciler) resolveCacheMountOptions(ctx context.Context, pv *corev1.PersistentVolume) []string {
-	if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != NVMeshStorageClassProvisioner {
+	defaults, found := r.provisionerDefaultMountOptions(ctx)
+	if !found {
 		return r.csiVolumeMountOptions
 	}
 
 	log := logf.FromContext(ctx)
 	configured := make([]string, 0, len(r.csiVolumeMountOptions))
 	for _, opt := range r.csiVolumeMountOptions {
-		if required, conflicts := nvmeshConflictingMountOptions[opt]; conflicts {
-			log.Info("Ignoring configured cache mount option that conflicts with an NVMesh requirement",
-				"pv", pv.Name, "ignored", opt, "required", required)
+		if i := slices.IndexFunc(defaults, func(d string) bool { return negatesMountOption(d, opt) }); i >= 0 {
+			log.Info("Ignoring configured cache mount option that conflicts with a provisioner default",
+				"pv", pv.Name, "ignored", opt, "required", defaults[i])
 			continue
 		}
 		configured = append(configured, opt)
 	}
 
-	return mergeMountOptions(nvmeshRequiredMountOptions, configured)
+	return mergeMountOptions(defaults, configured)
 }
 
 // mergeMountOptions concatenates the given option lists, preserving order and

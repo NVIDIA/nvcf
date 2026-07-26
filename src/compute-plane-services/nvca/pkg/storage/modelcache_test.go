@@ -565,78 +565,118 @@ func TestGetPrimaryPV(t *testing.T) {
 	}
 }
 
+// newMountOptionDefaultsObjects builds the storage class and ConfigMap that the
+// reconciler consults to decide which mount option defaults apply.
+func newMountOptionDefaultsObjects(provisioner string, cmData map[string]string) []client.Object {
+	objs := []client.Object{}
+	if provisioner != "" {
+		objs = append(objs, &storagev1.StorageClass{
+			ObjectMeta:  metav1.ObjectMeta{Name: DefaultModelCacheStorageClassName},
+			Provisioner: provisioner,
+		})
+	}
+	if cmData != nil {
+		objs = append(objs, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      DefaultCacheMountOptionsConfigMapName,
+				Namespace: ModelCacheInitNamespace,
+			},
+			Data: cmData,
+		})
+	}
+	return objs
+}
+
+var nvmeshMountOptionDefaults = map[string]string{
+	NVMeshStorageClassProvisioner: "ro,norecovery,nouuid",
+}
+
 func TestResolveCacheMountOptions(t *testing.T) {
 	tests := []struct {
-		name       string
-		driver     string
-		noCSI      bool
-		configured []string
-		want       []string
+		name        string
+		provisioner string
+		cmData      map[string]string
+		configured  []string
+		want        []string
 	}{
 		{
-			name:       "nvmesh gets required options when nothing configured",
-			driver:     NVMeshStorageClassProvisioner,
-			configured: nil,
-			want:       []string{"ro", "norecovery", "nouuid"},
+			name:        "nvmesh provisioner gets its defaults when nothing configured",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
 		},
 		{
-			name:       "nvmesh keeps required options when configuration omits them",
-			driver:     NVMeshStorageClassProvisioner,
+			name:        "defaults are kept when configuration omits them",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:        "options already configured are not duplicated",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"nouuid", "noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:        "configured rw that would negate a required ro is dropped",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"rw", "noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:        "every option negating a default is dropped",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"rw", "recovery", "uuid"},
+			want:        []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			// doModelCacheNVMesh also serves requests with an empty backend, whose
+			// storage class need not be NVMesh at all.
+			name:        "provisioner absent from the configmap uses configured options",
+			provisioner: "ebs.csi.aws.com",
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+		},
+		{
+			name:        "a new provisioner is picked up from the configmap without a code change",
+			provisioner: "some-other.csi.driver",
+			cmData: map[string]string{
+				"some-other.csi.driver": "ro, nouuid ",
+			},
 			configured: []string{"noatime"},
-			want:       []string{"ro", "norecovery", "nouuid", "noatime"},
+			want:       []string{"ro", "nouuid", "noatime"},
 		},
 		{
-			name:       "nvmesh does not duplicate options already configured",
-			driver:     NVMeshStorageClassProvisioner,
-			configured: []string{"nouuid", "noatime"},
-			want:       []string{"ro", "norecovery", "nouuid", "noatime"},
+			name:        "missing configmap falls back to configured options",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nil,
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
 		},
 		{
-			name:       "nvmesh drops configured rw that would negate ro",
-			driver:     NVMeshStorageClassProvisioner,
-			configured: []string{"rw", "noatime"},
-			want:       []string{"ro", "norecovery", "nouuid", "noatime"},
-		},
-		{
-			name:       "nvmesh drops every option that negates a requirement",
-			driver:     NVMeshStorageClassProvisioner,
-			configured: []string{"rw", "recovery", "uuid"},
-			want:       []string{"ro", "norecovery", "nouuid"},
-		},
-		{
-			name:       "other driver uses configured options unchanged",
-			driver:     "smb.csi.k8s.io",
-			configured: []string{"vers=3.0", "dir_mode=0777"},
-			want:       []string{"vers=3.0", "dir_mode=0777"},
-		},
-		{
-			name:       "other driver keeps rw since no requirement applies",
-			driver:     "smb.csi.k8s.io",
-			configured: []string{"rw"},
-			want:       []string{"rw"},
-		},
-		{
-			name:       "other driver with no configuration gets nothing",
-			driver:     "smb.csi.k8s.io",
-			configured: nil,
-			want:       nil,
-		},
-		{
-			name:       "pv without csi source falls back to configuration",
-			noCSI:      true,
-			configured: []string{"noatime"},
-			want:       []string{"noatime"},
+			name:        "missing storage class falls back to configured options",
+			provisioner: "",
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().
+				WithScheme(mgrScheme).
+				WithObjects(newMountOptionDefaultsObjects(tt.provisioner, tt.cmData)...).
+				Build()
+			r := &Reconciler{Client: c, csiVolumeMountOptions: tt.configured}
 			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
-			if !tt.noCSI {
-				pv.Spec.CSI = &corev1.CSIPersistentVolumeSource{Driver: tt.driver}
-			}
 
-			r := &Reconciler{csiVolumeMountOptions: tt.configured}
 			if got := r.resolveCacheMountOptions(context.Background(), pv); !slices.Equal(got, tt.want) {
 				t.Errorf("resolveCacheMountOptions() = %v, want %v", got, tt.want)
 			}
@@ -646,60 +686,67 @@ func TestResolveCacheMountOptions(t *testing.T) {
 
 func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 	tests := []struct {
-		name       string
-		driver     string
-		existing   []string
-		configured []string
-		want       []string
-		wantPatch  bool
+		name        string
+		provisioner string
+		cmData      map[string]string
+		existing    []string
+		configured  []string
+		want        []string
+		wantPatch   bool
 	}{
 		{
-			name:       "nvmesh pv missing required options is repaired",
-			driver:     NVMeshStorageClassProvisioner,
-			existing:   nil,
-			configured: nil,
-			want:       []string{"ro", "norecovery", "nouuid"},
-			wantPatch:  true,
+			name:        "pv missing required options is repaired",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    nil,
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   true,
 		},
 		{
-			name:       "nvmesh pv is not stripped when configuration is empty",
-			driver:     NVMeshStorageClassProvisioner,
-			existing:   []string{"ro", "norecovery", "nouuid"},
-			configured: nil,
-			want:       []string{"ro", "norecovery", "nouuid"},
-			wantPatch:  false,
+			name:        "pv is not stripped when configuration is empty",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid"},
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   false,
 		},
 		{
-			name:       "nvmesh pv picks up newly configured options",
-			driver:     NVMeshStorageClassProvisioner,
-			existing:   []string{"ro", "norecovery", "nouuid"},
-			configured: []string{"noatime"},
-			want:       []string{"ro", "norecovery", "nouuid", "noatime"},
-			wantPatch:  true,
+			name:        "pv picks up newly configured options",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid"},
+			configured:  []string{"noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+			wantPatch:   true,
 		},
 		{
-			name:       "optional option removed from configuration is removed from the pv",
-			driver:     NVMeshStorageClassProvisioner,
-			existing:   []string{"ro", "norecovery", "nouuid", "noatime"},
-			configured: nil,
-			want:       []string{"ro", "norecovery", "nouuid"},
-			wantPatch:  true,
+			name:        "optional option removed from configuration is removed from the pv",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid", "noatime"},
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   true,
 		},
 		{
-			name:       "configured rw does not make an existing read-only pv writable",
-			driver:     NVMeshStorageClassProvisioner,
-			existing:   []string{"ro", "norecovery", "nouuid"},
-			configured: []string{"rw"},
-			want:       []string{"ro", "norecovery", "nouuid"},
-			wantPatch:  false,
+			name:        "configured rw does not make an existing read-only pv writable",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid"},
+			configured:  []string{"rw"},
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   false,
 		},
 		{
-			name:       "matching pv is left alone",
-			driver:     "smb.csi.k8s.io",
-			existing:   []string{"vers=3.0"},
-			configured: []string{"vers=3.0"},
-			want:       []string{"vers=3.0"},
-			wantPatch:  false,
+			name:        "matching pv is left alone",
+			provisioner: "ebs.csi.aws.com",
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"noatime"},
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+			wantPatch:   false,
 		},
 	}
 
@@ -711,13 +758,14 @@ func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 					MountOptions: tt.existing,
 					PersistentVolumeSource: corev1.PersistentVolumeSource{
 						CSI: &corev1.CSIPersistentVolumeSource{
-							Driver:       tt.driver,
+							Driver:       tt.provisioner,
 							VolumeHandle: "handle",
 						},
 					},
 				},
 			}
-			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(pv).Build()
+			objs := append(newMountOptionDefaultsObjects(tt.provisioner, tt.cmData), pv)
+			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objs...).Build()
 			r := &Reconciler{Client: c, csiVolumeMountOptions: tt.configured}
 
 			stored := &corev1.PersistentVolume{}
