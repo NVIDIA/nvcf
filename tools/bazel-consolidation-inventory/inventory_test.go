@@ -21,8 +21,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"go.starlark.net/syntax"
 )
 
 // fakeTree lets the measurement functions be tested without a git repository.
@@ -133,7 +131,7 @@ func TestGoSDKVersions(t *testing.T) {
 			// comment.
 			name:    "non literal version with semver in comment",
 			source:  "go_sdk.download(\n    version = GO_VERSION,  # used 1.25.0 before\n)\n",
-			wantErr: "not a string literal",
+			wantErr: "cannot be resolved to a string",
 		},
 		{
 			name:    "missing version attribute",
@@ -236,7 +234,7 @@ func TestOCIPulls(t *testing.T) {
 			// an unparseable declaration into an absent one.
 			name:    "non literal image",
 			source:  "oci.pull(\n    image = BASE_IMAGE,\n)\n",
-			wantErr: "not a string literal",
+			wantErr: "cannot be resolved to a string",
 		},
 		{
 			name:    "missing image attribute",
@@ -473,7 +471,7 @@ func TestOCIPullsValidation(t *testing.T) {
 		{
 			name:    "digest built by concatenation is not a literal",
 			source:  "oci.pull(\n    image = \"nvcr.io/x\",\n    digest = \"sha256:\" + D,\n)\n",
-			wantErr: "not a string literal",
+			wantErr: "cannot be resolved to a string",
 		},
 		{
 			name: "space before parenthesis is counted",
@@ -508,13 +506,13 @@ func TestOCIPullsValidation(t *testing.T) {
 
 // --- parser-level behavior (AST) -------------------------------------------
 
-func parse(t *testing.T, src string) *syntax.File {
+func parse(t *testing.T, src string) *Module {
 	t.Helper()
-	f, err := ParseModule("MODULE.bazel", src)
+	m, err := NewModule("MODULE.bazel", src)
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}
-	return f
+	return m
 }
 
 func TestFindCallsHandlesSyntaxVariants(t *testing.T) {
@@ -529,7 +527,7 @@ func TestFindCallsHandlesSyntaxVariants(t *testing.T) {
 		"trailing comma":     "oci.pull(\n    image = \"x\",\n    tag = \"v1\",\n)\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			calls := FindCalls(parse(t, src), "oci", "pull")
+			calls := parse(t, src).FindCalls("oci", "pull")
 			if len(calls) != 1 {
 				t.Fatalf("got %d calls, want 1", len(calls))
 			}
@@ -545,11 +543,8 @@ func TestFindCallsResolvesExtensionAliases(t *testing.T) {
 	// aliased files report zero declarations.
 	src := "images = use_extension(\"@rules_oci//oci:extensions.bzl\", \"oci\")\n" +
 		"images.pull(\n    image = \"nvcr.io/x\",\n    tag = \"v1\",\n)\n"
-	f := parse(t, src)
-	if got := ExtensionAliases(f)["images"]; got != "oci" {
-		t.Fatalf("alias images resolved to %q, want oci", got)
-	}
-	if calls := FindCalls(f, "oci", "pull"); len(calls) != 1 {
+	m := parse(t, src)
+	if calls := m.FindCalls("oci", "pull"); len(calls) != 1 {
 		t.Errorf("got %d calls through the alias, want 1", len(calls))
 	}
 }
@@ -557,7 +552,7 @@ func TestFindCallsResolvesExtensionAliases(t *testing.T) {
 func TestFindCallsIgnoresUnrelatedReceivers(t *testing.T) {
 	src := "other = use_extension(\"@x//:y.bzl\", \"something_else\")\n" +
 		"other.pull(image = \"x\", tag = \"v1\")\n"
-	if calls := FindCalls(parse(t, src), "oci", "pull"); len(calls) != 0 {
+	if calls := parse(t, src).FindCalls("oci", "pull"); len(calls) != 0 {
 		t.Errorf("got %d calls, want 0 for an unrelated extension", len(calls))
 	}
 }
@@ -565,13 +560,13 @@ func TestFindCallsIgnoresUnrelatedReceivers(t *testing.T) {
 func TestFindCallsIgnoresCommentsAndStrings(t *testing.T) {
 	src := "# oci.pull(fake)\nSOME = \"oci.pull(also fake)\"\n" +
 		"oci.pull(\n    image = \"x\",\n    tag = \"v1\",\n)\n"
-	if calls := FindCalls(parse(t, src), "oci", "pull"); len(calls) != 1 {
+	if calls := parse(t, src).FindCalls("oci", "pull"); len(calls) != 1 {
 		t.Fatalf("got %d calls, want 1", len(calls))
 	}
 }
 
 func TestParseModuleRejectsInvalidSyntax(t *testing.T) {
-	if _, err := ParseModule("MODULE.bazel", "oci.pull(\n    image = \"x\",\n"); err == nil {
+	if _, err := NewModule("MODULE.bazel", "oci.pull(\n    image = \"x\",\n"); err == nil {
 		t.Fatal("expected a parse error for an unterminated call")
 	}
 }
@@ -584,7 +579,7 @@ func TestStringLiteralsAreDecoded(t *testing.T) {
 		"    image = \"nvcr.io/a\\u002Db\",\n" +
 		"    tag = '''v1''',\n" +
 		")\n"
-	calls := FindCalls(parse(t, src), "oci", "pull")
+	calls := parse(t, src).FindCalls("oci", "pull")
 	if len(calls) != 1 {
 		t.Fatalf("got %d calls, want 1", len(calls))
 	}
@@ -598,7 +593,7 @@ func TestStringLiteralsAreDecoded(t *testing.T) {
 
 func TestAttrDistinguishesAbsentFromNonLiteral(t *testing.T) {
 	src := "oci.pull(\n    image = \"x\" + SUFFIX,\n    tag = \"v1\",\n)\n"
-	calls := FindCalls(parse(t, src), "oci", "pull")
+	calls := parse(t, src).FindCalls("oci", "pull")
 	if len(calls) != 1 {
 		t.Fatalf("got %d calls, want 1", len(calls))
 	}
@@ -618,5 +613,86 @@ func TestBazelVersionsRejectsInvalidReleaseSuffixes(t *testing.T) {
 		})); err == nil {
 			t.Errorf("version %q accepted, want rejected", v)
 		}
+	}
+}
+
+// --- forms that were previously omitted rather than counted ----------------
+
+func TestResolvesModuleLevelConstants(t *testing.T) {
+	// `IMG = "..."` used as an attribute value is a real form. It previously
+	// failed as unresolvable, which was at least loud, but it is resolvable.
+	src := "IMG = \"nvcr.io/x\"\nTAG = \"v1\"\n" +
+		"oci.pull(\n    image = IMG,\n    tag = TAG,\n)\n"
+	p, err := OCIPulls(newTree(map[string]string{"src/a/MODULE.bazel": src}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.Declarations != 1 || len(p.TagOnly) != 1 || p.TagOnly[0] != "nvcr.io/x" {
+		t.Errorf("got %+v, want the constant resolved to nvcr.io/x", p)
+	}
+}
+
+func TestResolvesChainedUseExtensionReceiver(t *testing.T) {
+	// `use_extension(...).pull(...)` has no named receiver at all. It was not
+	// matched, so the declaration vanished from the count.
+	src := "use_extension(\"@rules_oci//oci:extensions.bzl\", \"oci\").pull(\n" +
+		"    image = \"nvcr.io/x\",\n    tag = \"v1\",\n)\n"
+	p, err := OCIPulls(newTree(map[string]string{"src/a/MODULE.bazel": src}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.Declarations != 1 {
+		t.Errorf("got %d declarations, want 1 through a chained receiver", p.Declarations)
+	}
+}
+
+func TestResolvesReassignedReceiver(t *testing.T) {
+	src := "oci_ext = use_extension(\"@a//:b.bzl\", \"oci\")\nalias = oci_ext\n" +
+		"alias.pull(image = \"nvcr.io/x\", tag = \"v1\")\n"
+	p, err := OCIPulls(newTree(map[string]string{"src/a/MODULE.bazel": src}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.Declarations != 1 {
+		t.Errorf("got %d declarations, want 1 through a reassigned receiver", p.Declarations)
+	}
+}
+
+func TestIncludedModuleIsAnError(t *testing.T) {
+	// Declarations in an included file are not read, so any total would be an
+	// undercount. That must fail rather than report a partial number.
+	src := "include(\"//:other.MODULE.bazel\")\n" +
+		"oci.pull(image = \"nvcr.io/x\", tag = \"v1\")\n"
+	if _, err := OCIPulls(newTree(map[string]string{"src/a/MODULE.bazel": src})); err == nil {
+		t.Fatal("expected include() to be an error")
+	} else if !strings.Contains(err.Error(), "includes") {
+		t.Errorf("error %q should name the include", err)
+	}
+	if _, err := GoSDKVersions(
+		newTree(map[string]string{"src/a/MODULE.bazel": src}), false, "first-party"); err == nil {
+		t.Fatal("expected include() to be an error for go_sdk too")
+	}
+}
+
+func TestUnresolvableValueIsAnError(t *testing.T) {
+	// A value this tool cannot determine statically must fail, not be skipped.
+	for name, src := range map[string]string{
+		"function call": "oci.pull(image = compute(), tag = \"v1\")\n",
+		"concatenation": "oci.pull(image = \"a\" + B, tag = \"v1\")\n",
+		"unbound name":  "oci.pull(image = UNBOUND, tag = \"v1\")\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := OCIPulls(newTree(map[string]string{"src/a/MODULE.bazel": src})); err == nil {
+				t.Error("expected an error for an unresolvable image")
+			}
+		})
+	}
+}
+
+func TestConstantResolutionTerminatesOnCycle(t *testing.T) {
+	// A cyclic binding must not loop. It is unresolvable, so it is an error.
+	src := "A = B\nB = A\noci.pull(image = A, tag = \"v1\")\n"
+	if _, err := OCIPulls(newTree(map[string]string{"src/a/MODULE.bazel": src})); err == nil {
+		t.Error("expected a cyclic binding to be unresolvable")
 	}
 }

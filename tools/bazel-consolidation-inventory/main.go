@@ -267,11 +267,17 @@ func GoSDKVersions(t *Tree, includeVendor bool, label string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		file, err := ParseModule(path, text)
+		mod, err := NewModule(path, text)
 		if err != nil {
 			return "", err
 		}
-		calls := FindCalls(file, "go_sdk", "download")
+		if included := mod.Includes(); len(included) > 0 {
+			return "", fmt.Errorf(
+				"%s includes %v; declarations in an included file would not be "+
+					"counted, so this tool cannot report a total for it",
+				path, included)
+		}
+		calls := mod.FindCalls("go_sdk", "download")
 		total += len(calls)
 		for _, call := range calls {
 			value, literal, found := call.Attr("version")
@@ -282,8 +288,8 @@ func GoSDKVersions(t *Tree, includeVendor bool, label string) (string, error) {
 			}
 			if !literal {
 				return "", fmt.Errorf(
-					"%s:%d: %s go_sdk.download version is not a string literal; "+
-						"the declaration form is not understood by this parser",
+					"%s:%d: %s go_sdk.download version cannot be resolved to a "+
+						"string; the declaration form is not understood by this parser",
 					path, call.Line, label)
 			}
 			if !semverRe.MatchString(value) {
@@ -323,11 +329,17 @@ func OCIPulls(t *Tree) (Pulls, error) {
 		if err != nil {
 			return Pulls{}, err
 		}
-		file, err := ParseModule(path, text)
+		mod, err := NewModule(path, text)
 		if err != nil {
 			return Pulls{}, err
 		}
-		for _, call := range FindCalls(file, "oci", "pull") {
+		if included := mod.Includes(); len(included) > 0 {
+			return Pulls{}, fmt.Errorf(
+				"%s includes %v; declarations in an included file would not be "+
+					"counted, so this tool cannot report a total for it",
+				path, included)
+		}
+		for _, call := range mod.FindCalls("oci", "pull") {
 			image, literal, found := call.Attr("image")
 			if !found {
 				return Pulls{}, fmt.Errorf(
@@ -335,7 +347,7 @@ func OCIPulls(t *Tree) (Pulls, error) {
 			}
 			if !literal {
 				return Pulls{}, fmt.Errorf(
-					"%s:%d: oci.pull image is not a string literal; the "+
+					"%s:%d: oci.pull image cannot be resolved to a string; the "+
 						"declaration form is not understood by this parser",
 					path, call.Line)
 			}
@@ -359,8 +371,8 @@ func OCIPulls(t *Tree) (Pulls, error) {
 				}
 				if !tagLiteral {
 					return Pulls{}, fmt.Errorf(
-						"%s:%d: oci.pull for %q has no digest and its tag is not a "+
-							"string literal; the declaration cannot be classified",
+						"%s:%d: oci.pull for %q has no digest and its tag cannot be "+
+							"resolved to a string; the declaration cannot be classified",
 						path, call.Line, image)
 				}
 				if strings.TrimSpace(tag) == "" {
@@ -371,7 +383,7 @@ func OCIPulls(t *Tree) (Pulls, error) {
 				p.TagOnly = append(p.TagOnly, image)
 			case !digestLiteral:
 				return Pulls{}, fmt.Errorf(
-					"%s:%d: oci.pull digest is not a string literal", path, call.Line)
+					"%s:%d: oci.pull digest cannot be resolved to a string", path, call.Line)
 			case !digestRe.MatchString(digest):
 				return Pulls{}, fmt.Errorf(
 					"%s:%d: oci.pull digest %q is not a sha256 digest "+
