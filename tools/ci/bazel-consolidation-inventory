@@ -8,64 +8,132 @@
 # worker Bazel versions invalidated part of the first draft within hours of it
 # being written. Run this instead of trusting the prose, and update the doc plus
 # its measurement stamp when the numbers move.
+#
+# Measurements come from git-tracked files so they correspond to the stamped
+# commit rather than to whatever happens to be in the working tree. Vendored
+# third-party trees are excluded from first-party counts; where a vendored total
+# is itself interesting it is reported on its own line.
+#
+# Vendor filtering is done with an explicit anchored grep rather than a git
+# ':(exclude)' pathspec. Combining an exclude pathspec with a wildcard positive
+# pathspec silently returns unfiltered results, which produced counts that were
+# wrong by a factor of four before this was caught.
+#
+# Usage: bazel-consolidation-inventory [repo-root]
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+repo_root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "${repo_root}"
 
-nonvendor() { grep -v '/vendor/'; }
+VENDOR_RE='(^|/)vendor/'
 
-printf 'measured at: %s\n' "$(git rev-parse --short HEAD)"
-printf 'date:        %s\n\n' "$(git log -1 --format=%cs)"
+# first_party <regex> : NUL-delimited tracked paths matching regex, no vendor.
+first_party() { git ls-files -z | grep -zEv "${VENDOR_RE}" | { grep -zE "$1" || true; }; }
+# any <regex> : NUL-delimited tracked paths matching regex, vendor included.
+any() { git ls-files -z | { grep -zE "$1" || true; }; }
 
-printf 'service modules (src, excluding vendor) : %s\n' \
-  "$(find src -name MODULE.bazel | nonvendor | wc -l)"
-printf 'MODULE.bazel total (incl. root/helpers) : %s\n' \
-  "$(find . -name MODULE.bazel -not -path './.git/*' | wc -l)"
-printf 'MODULE.bazel.lock files                 : %s\n' \
-  "$(find . -name MODULE.bazel.lock -not -path './.git/*' | wc -l)"
-printf 'MODULE.bazel.lock total size            : %s MB\n' \
-  "$(find . -name MODULE.bazel.lock -not -path './.git/*' -exec cat {} + \
-     | wc -c | awk '{printf "%.1f", $1/1048576}')"
+n_of() { grep -zc . || true; }
+cat_of() { xargs -0 -r cat; }
+distinct_of() { xargs -0 -r md5sum | awk '{ print $1 }' | sort -u | wc -l; }
+
+# Every measurement is computed into a variable before anything is printed, so a
+# failing command aborts under `set -e`. Command substitutions evaluated inside
+# printf arguments would have their exit status discarded, yielding partial
+# output with a success status.
+head_sha="$(git rev-parse --short HEAD)"
+head_date="$(git log -1 --format=%cs)"
+dirty=""
+if [ -n "$(git status --porcelain)" ]; then
+  dirty="  WARNING: working tree is dirty; counts reflect tracked files, not the working tree"
+fi
+
+service_modules="$(first_party '^src/.*/MODULE\.bazel$' | n_of)"
+modules_total="$(any '(^|/)MODULE\.bazel$' | n_of)"
+lock_files="$(any '(^|/)MODULE\.bazel\.lock$' | n_of)"
+lock_mb="$(any '(^|/)MODULE\.bazel\.lock$' | cat_of | wc -c \
+  | awk '{ printf "%.1f", $1 / 1048576 }')"
+
+bazelrc_count="$(first_party '^src/.*/\.bazelrc$' | n_of)"
+bazelrc_distinct="$(first_party '^src/.*/\.bazelrc$' | distinct_of)"
+bazelversions="$(first_party '^src/.*/\.bazelversion$' | cat_of \
+  | grep -E '^[0-9]' | sort -V | uniq -c | awk '{ printf "%s on %s  ", $1, $2 }')"
+
+ws_count="$(any '(^|/)workspace_status\.sh$' | n_of)"
+ws_distinct="$(any '(^|/)workspace_status\.sh$' | distinct_of)"
+
+oci_files="$(first_party '(^|/)rules/oci/' | n_of)"
+oci_lines="$(first_party '(^|/)rules/oci/' | cat_of | wc -l)"
+
+SRC_BUILD_RE='^src/(.*/)?BUILD\.bazel$'
+subpackages="$(first_party "${SRC_BUILD_RE}" | cat_of \
+  | grep -c '//:__subpackages__' || true)"
+public_vis="$(first_party "${SRC_BUILD_RE}" | cat_of \
+  | grep -c '//visibility:public' || true)"
+package_groups="$(first_party "${SRC_BUILD_RE}" | cat_of \
+  | grep -c 'package_group(' || true)"
+nvca_vendored="$(any '^src/compute-plane-services/nvca/vendor/.*/BUILD\.bazel$' | n_of)"
+
+# Reported separately: a vendored module pinning an old Go SDK is not evidence
+# that first-party code spans that range.
+go_first_party="$(first_party '(^|/)MODULE\.bazel$' | cat_of \
+  | grep 'go_sdk.download' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')"
+go_vendored_only="$(any '(^|/)MODULE\.bazel$' | cat_of \
+  | grep 'go_sdk.download' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')"
+
+oci_report="$(first_party '(^|/)MODULE\.bazel$' | python3 -c '
+import re, sys
+
+decls, nvcr, tagged = 0, 0, []
+digests, images = set(), set()
+for path in filter(None, sys.stdin.read().split("\0")):
+    with open(path) as handle:
+        source = handle.read()
+    for match in re.finditer(r"oci\.pull\((.*?)\n\)", source, re.S):
+        body = match.group(1)
+        image = re.search(r"image\s*=\s*\"([^\"]+)\"", body)
+        if not image:
+            continue
+        decls += 1
+        images.add(image.group(1))
+        if image.group(1).startswith("nvcr.io/"):
+            nvcr += 1
+        digest = re.search(r"digest\s*=\s*\"(sha256:[0-9a-f]+)\"", body)
+        if digest:
+            digests.add(digest.group(1))
+        else:
+            tagged.append(image.group(1))
+print("|".join([str(decls), str(nvcr), str(len(images)),
+                str(len(digests)), str(len(tagged)), ",".join(sorted(tagged)) or "-"]))
+')"
+IFS='|' read -r oci_decls oci_nvcr oci_images oci_digests oci_tagged_n oci_tagged_list \
+  <<<"${oci_report}"
+
+printf 'measured at: %s%s\n' "${head_sha}" "${dirty}"
+printf 'date:        %s\n\n' "${head_date}"
+
+printf 'service modules (src, excluding vendor) : %s\n' "${service_modules}"
+printf 'MODULE.bazel total (incl. root/helpers) : %s\n' "${modules_total}"
+printf 'MODULE.bazel.lock files                 : %s\n' "${lock_files}"
+printf 'MODULE.bazel.lock total size            : %s MB\n' "${lock_mb}"
 
 printf '\nsubtree .bazelrc                        : %s (%s distinct)\n' \
-  "$(find src -name .bazelrc | wc -l)" \
-  "$(find src -name .bazelrc -exec md5sum {} + | awk '{print $1}' | sort -u | wc -l)"
-printf 'subtree .bazelversion values            : %s\n' \
-  "$(find src -name .bazelversion | nonvendor | xargs cat 2>/dev/null \
-     | grep -E '^[0-9]' | sort | uniq -c | tr '\n' ' ')"
+  "${bazelrc_count}" "${bazelrc_distinct}"
+printf 'subtree .bazelversion values            : %s\n' "${bazelversions}"
 printf 'workspace_status.sh copies              : %s (%s variants)\n' \
-  "$(find . -name workspace_status.sh -not -path './.git/*' | wc -l)" \
-  "$(find . -name workspace_status.sh -not -path './.git/*' -exec md5sum {} + \
-     | awk '{print $1}' | sort -u | wc -l)"
+  "${ws_count}" "${ws_distinct}"
 printf 'rules/oci copied files                  : %s files, %s lines\n' \
-  "$(find . -path '*/rules/oci/*' -type f -not -path './.git/*' | wc -l)" \
-  "$(find . -path '*/rules/oci/*' -type f -not -path './.git/*' -exec cat {} + | wc -l)"
+  "${oci_files}" "${oci_lines}"
 
-printf '\nroot-relative //:__subpackages__         : %s\n' \
-  "$(grep -rn '//:__subpackages__' --include=BUILD.bazel src | nonvendor | wc -l)"
-printf '//visibility:public (outside vendor)    : %s\n' \
-  "$(grep -rn '//visibility:public' --include=BUILD.bazel src | nonvendor | wc -l)"
-printf 'package_group definitions               : %s\n' \
-  "$(grep -rn 'package_group(' --include=BUILD.bazel src | nonvendor | wc -l)"
-printf 'nvca vendored BUILD.bazel               : %s\n' \
-  "$(find src/compute-plane-services/nvca/vendor -name BUILD.bazel 2>/dev/null | wc -l)"
+printf '\nroot-relative //:__subpackages__         : %s\n' "${subpackages}"
+printf '//visibility:public (outside vendor)    : %s\n' "${public_vis}"
+printf 'package_group definitions               : %s\n' "${package_groups}"
+printf 'nvca vendored BUILD.bazel               : %s\n' "${nvca_vendored}"
 
-printf '\ngo_sdk.download versions                : %s\n' \
-  "$(grep -rh 'go_sdk.download' --include=MODULE.bazel . 2>/dev/null \
-     | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')"
-printf 'nvcr.io oci.pull declarations           : %s (for %s distinct digests)\n' \
-  "$(grep -rh 'image = "nvcr.io' --include=MODULE.bazel . 2>/dev/null | wc -l)" \
-  "$(python3 -c "
-import re,os
-d=set()
-for r,_,f in os.walk('.'):
-    if '/.git' in r or '/vendor/' in r or 'MODULE.bazel' not in f: continue
-    s=open(os.path.join(r,'MODULE.bazel')).read()
-    for m in re.finditer(r'oci\.pull\((.*?)\n\)', s, re.S):
-        b=m.group(1)
-        if 'nvcr.io' in b:
-            g=re.search(r'digest\s*=\s*\"(sha256:[0-9a-f]+)\"', b)
-            if g: d.add(g.group(1))
-print(len(d))
-")"
+printf '\ngo_sdk.download (first-party)           : %s\n' "${go_first_party}"
+printf 'go_sdk.download (incl. vendored)        : %s\n' "${go_vendored_only}"
+printf 'oci.pull declarations                   : %s (%s from nvcr.io)\n' \
+  "${oci_decls}" "${oci_nvcr}"
+printf 'oci.pull distinct images / digests      : %s images, %s digests\n' \
+  "${oci_images}" "${oci_digests}"
+printf 'oci.pull without a digest (tag-only)    : %s (%s)\n' \
+  "${oci_tagged_n}" "${oci_tagged_list}"

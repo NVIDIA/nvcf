@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Fixture tests for tools/ci/bazel-consolidation-inventory.
+#
+# The cases here are the ones that actually went wrong while the tool was being
+# written: vendored trees leaking into first-party counts, root-level paths
+# being missed by an unanchored pattern, and untracked files being measured
+# under a commit stamp that does not contain them.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INVENTORY="${SCRIPT_DIR}/../../ci/bazel-consolidation-inventory"
+
+TEMP_DIRS=()
+FAILURES=0
+
+cleanup() {
+    local path
+    for path in "${TEMP_DIRS[@]:-}"; do
+        [ -n "${path}" ] && rm -rf "${path}"
+    done
+}
+trap cleanup EXIT
+
+make_tempdir() {
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    TEMP_DIRS+=("${tmpdir}")
+    echo "${tmpdir}"
+}
+
+fail() {
+    echo "FAIL: $*" >&2
+    FAILURES=$((FAILURES + 1))
+}
+
+pass() {
+    echo "ok: $*"
+}
+
+# assert_line <output> <description> <expected-substring>
+assert_line() {
+    local output="$1" description="$2" expected="$3"
+    if grep -qF -- "${expected}" <<<"${output}"; then
+        pass "${description}"
+    else
+        fail "${description}: expected to find '${expected}' in:"
+        sed 's/^/    /' <<<"${output}" >&2
+    fi
+}
+
+# assert_absent <output> <description> <unexpected-substring>
+assert_absent() {
+    local output="$1" description="$2" unexpected="$3"
+    if grep -qF -- "${unexpected}" <<<"${output}"; then
+        fail "${description}: did not expect '${unexpected}' in output"
+    else
+        pass "${description}"
+    fi
+}
+
+# Builds a fixture repository exercising every filter the tool applies.
+build_fixture() {
+    local root="$1"
+    mkdir -p "${root}"
+    git -C "${root}" init -q
+    git -C "${root}" config user.email fixture@example.com
+    git -C "${root}" config user.name Fixture
+
+    # Root module plus a root-level rules/oci copy. The root-level copy is the
+    # regression case: a '**/rules/oci/*' pattern silently misses it because
+    # there is no leading path component.
+    mkdir -p "${root}/rules/oci/private"
+    printf 'module(name = "root")\n' >"${root}/MODULE.bazel"
+    printf '{}\n' >"${root}/MODULE.bazel.lock"
+    printf 'root oci defs\n' >"${root}/rules/oci/defs.bzl"
+    printf 'root oci common\n' >"${root}/rules/oci/private/common.bzl"
+
+    # One first-party service: pinned Bazel version, its own rules/oci copy,
+    # one digest-pinned pull and one tag-only pull.
+    mkdir -p "${root}/src/svc-a/rules/oci"
+    printf 'module(name = "svc_a")\n' >"${root}/src/svc-a/MODULE.bazel"
+    cat >>"${root}/src/svc-a/MODULE.bazel" <<'EOF'
+go_sdk.download(version = "1.25.11")
+oci.pull(
+    name = "distroless_go",
+    image = "nvcr.io/nvidia/distroless/go",
+    digest = "sha256:aaaa",
+)
+oci.pull(
+    name = "temurin",
+    image = "public.ecr.aws/docker/library/eclipse-temurin",
+    tag = "21-jre",
+)
+EOF
+    printf '{}\n' >"${root}/src/svc-a/MODULE.bazel.lock"
+    printf '8.6.0\n' >"${root}/src/svc-a/.bazelversion"
+    printf 'build --config=x\n' >"${root}/src/svc-a/.bazelrc"
+    printf 'svc-a oci defs\n' >"${root}/src/svc-a/rules/oci/defs.bzl"
+    cat >"${root}/src/svc-a/BUILD.bazel" <<'EOF'
+package(default_visibility = ["//:__subpackages__"])
+go_library(name = "a", visibility = ["//visibility:public"])
+EOF
+
+    # A second service on a different Bazel version, sharing svc-a's .bazelrc
+    # content so the distinct-content count must differ from the file count.
+    mkdir -p "${root}/src/svc-b"
+    printf 'module(name = "svc_b")\n' >"${root}/src/svc-b/MODULE.bazel"
+    printf '9.1.1\n' >"${root}/src/svc-b/.bazelversion"
+    printf 'build --config=x\n' >"${root}/src/svc-b/.bazelrc"
+    printf 'go_library(name = "b")\n' >"${root}/src/svc-b/BUILD.bazel"
+
+    # Vendored third-party tree. Everything below must be excluded from
+    # first-party counts: an old Go SDK, a nested module, public visibility,
+    # __subpackages__, and its own rules/oci copy.
+    mkdir -p "${root}/src/svc-a/vendor/example.com/dep/rules/oci"
+    cat >"${root}/src/svc-a/vendor/example.com/dep/MODULE.bazel" <<'EOF'
+module(name = "vendored_dep")
+go_sdk.download(version = "1.23.0")
+oci.pull(
+    name = "vendored_base",
+    image = "docker.io/library/vendored",
+    tag = "latest",
+)
+EOF
+    cat >"${root}/src/svc-a/vendor/example.com/dep/BUILD.bazel" <<'EOF'
+package(default_visibility = ["//:__subpackages__"])
+go_library(name = "dep", visibility = ["//visibility:public"])
+EOF
+    printf 'vendored oci\n' \
+        >"${root}/src/svc-a/vendor/example.com/dep/rules/oci/defs.bzl"
+
+    git -C "${root}" add -A
+    git -C "${root}" commit -qm "fixture"
+}
+
+echo "== fixture: vendor filtering and path anchoring =="
+FIXTURE="$(make_tempdir)/repo"
+build_fixture "${FIXTURE}"
+OUT="$(cd "${FIXTURE}" && "${INVENTORY}" "${FIXTURE}")"
+
+# Two first-party service modules; the vendored one must not be counted.
+assert_line "${OUT}" "counts only first-party service modules" \
+    "service modules (src, excluding vendor) : 2"
+# Root + svc-a + svc-b + vendored dep.
+assert_line "${OUT}" "counts every module including vendored" \
+    "MODULE.bazel total (incl. root/helpers) : 4"
+
+# svc-a and svc-b only.
+assert_line "${OUT}" "excludes vendored .bazelrc" \
+    "subtree .bazelrc                        : 2 (1 distinct)"
+assert_line "${OUT}" "reports both Bazel versions" \
+    "1 on 8.6.0  1 on 9.1.1"
+
+# Root copy (2 files) + svc-a copy (1 file). The vendored copy is excluded.
+# This fails if the root-level path is not matched by the pattern.
+assert_line "${OUT}" "includes root-level rules/oci and excludes vendored" \
+    "rules/oci copied files                  : 3 files"
+
+# One occurrence each in svc-a; the vendored BUILD.bazel must not contribute.
+assert_line "${OUT}" "excludes vendored __subpackages__" \
+    "root-relative //:__subpackages__         : 1"
+assert_line "${OUT}" "excludes vendored public visibility" \
+    "//visibility:public (outside vendor)    : 1"
+assert_line "${OUT}" "reports zero package_group" \
+    "package_group definitions               : 0"
+
+echo
+echo "== fixture: Go SDK provenance is separated =="
+assert_line "${OUT}" "first-party Go SDK excludes the vendored 1.23.0" \
+    "go_sdk.download (first-party)           : 1.25.11"
+assert_line "${OUT}" "vendored-inclusive Go SDK shows 1.23.0" \
+    "go_sdk.download (incl. vendored)        : 1.23.0 1.25.11"
+
+echo
+echo "== fixture: OCI pull parsing =="
+# Two first-party pulls; the vendored pull is excluded.
+assert_line "${OUT}" "counts first-party oci.pull declarations" \
+    "oci.pull declarations                   : 2 (1 from nvcr.io)"
+assert_line "${OUT}" "separates distinct images from digests" \
+    "oci.pull distinct images / digests      : 2 images, 1 digests"
+assert_line "${OUT}" "identifies the tag-only pull by name" \
+    "oci.pull without a digest (tag-only)    : 1 (public.ecr.aws/docker/library/eclipse-temurin)"
+assert_absent "${OUT}" "vendored pull is not reported as tag-only" \
+    "docker.io/library/vendored"
+
+echo
+echo "== fixture: untracked files are not measured =="
+mkdir -p "${FIXTURE}/src/svc-c"
+printf 'module(name = "untracked")\n' >"${FIXTURE}/src/svc-c/MODULE.bazel"
+OUT_DIRTY="$(cd "${FIXTURE}" && "${INVENTORY}" "${FIXTURE}")"
+assert_line "${OUT_DIRTY}" "untracked module is excluded from the count" \
+    "service modules (src, excluding vendor) : 2"
+assert_line "${OUT_DIRTY}" "dirty tree is reported alongside the stamp" \
+    "WARNING: working tree is dirty"
+
+echo
+echo "== failure propagation =="
+# The tool must not report success when a measurement cannot be taken. Running
+# outside a git repository is the cheapest way to force that.
+NOT_A_REPO="$(make_tempdir)/plain"
+mkdir -p "${NOT_A_REPO}"
+if (cd "${NOT_A_REPO}" && "${INVENTORY}" "${NOT_A_REPO}") >/dev/null 2>&1; then
+    fail "expected a non-zero exit status outside a git repository"
+else
+    pass "non-zero exit status outside a git repository"
+fi
+
+echo
+if [ "${FAILURES}" -ne 0 ]; then
+    echo "${FAILURES} test(s) failed" >&2
+    exit 1
+fi
+echo "all tests passed"

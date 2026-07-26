@@ -13,9 +13,12 @@ pinned the worker Bazel versions.
 
 First-party code builds as 19 nested service modules plus the root. That layout
 is inherited from the pre-monorepo history, when each service was its own
-repository. The proposal is to converge first-party code on one root Bazel
-module, with services as packages, while releases and ownership stay per
-component.
+repository. The proposal is that the 18 publicly buildable service modules
+converge on one root Bazel module, with services as packages, while releases and
+ownership stay per component. `nvsnap` remains an explicit nested-module
+exception until its private build dependency is resolved, so the end state is
+one root module plus that documented exception, not literally zero nested
+modules.
 
 Scope boundary, and the most common misreading of this proposal: one Bazel
 module does not mean one Go module, one Cargo workspace, or one lockfile per
@@ -40,17 +43,18 @@ The duplication is the secondary argument:
 | Subtree `.bazelrc` | 19, of which 17 distinct |
 | `workspace_status.sh` copies | 20, 7 variants |
 | Copied `rules/oci` files | 120 files, 6944 lines |
-| Registry pulls for base images | 18 declarations, 3 distinct digests |
+| `oci.pull` declarations | 23 (18 from nvcr.io), 8 images, 7 digests |
 
 The isolation that separate modules provide is largely unused: `rules_oci`,
 `rules_pkg`, and `aspect_bazel_lib` are on identical versions in all 19.
 
 Two important qualifications. The `rules/oci` and stamping copies contain real
 behavioral differences, so they need a shared API with per-component
-configuration, not mechanical deletion. And the 18 base-image pulls collapse to
-one repository definition and one digest pin, but not necessarily to one fetch
-or one compilation: that depends on how many Bazel invocations CI runs and
-whether they share repository and action caches with compatible action keys.
+configuration, not mechanical deletion. And the 23 base-image pulls resolve to
+8 distinct images; each collapses to one repository definition and one digest
+pin, but not necessarily to one fetch or one compilation. That depends on how
+many Bazel invocations CI runs and whether they share repository and action
+caches with compatible action keys.
 
 ## Java is the proof, not the exception
 
@@ -76,8 +80,10 @@ mechanical. Removing a workspace root changes what its labels mean.
   root it expands to the entire repository. There are 156 such declarations
   outside vendored code.
 - There are 639 `//visibility:public` occurrences outside vendored code and
-  zero `package_group` definitions, so today there is no expressed API surface
-  to preserve.
+  zero `package_group` definitions. The expressed API surface is therefore very
+  broad and uniform rather than absent: almost everything is public, and nothing
+  declares a narrow boundary. Consolidation must inventory that surface before
+  restricting it, because today's breadth is load-bearing for consumers.
 
 Before any boundary is removed, define: default-private service packages,
 explicit exported APIs, allowed cross-layer dependency groups, a query or aspect
@@ -101,8 +107,13 @@ There are two layers:
    from a list in the workflow plus path-prefix matching, because 19 modules
    cannot be one query.
 
-Consolidation does not add `rdeps`. It removes the need for layer 2, because a
-single module makes "which subtrees" a non-question.
+Consolidation does not add `rdeps`. It retires the static module-root list, but
+it does not eliminate job or lane selection. Affected targets still have to be
+partitioned by component metadata, target tags, and execution requirements:
+Docker-host and Testcontainers lanes, Java component lanes, Cargo parity tests,
+BYOO generation, release and artifact staging, and any retained `nvsnap` lane.
+Root-scoped Java already demonstrates this, routing on the `component_kind` and
+`ci_lane` fields of its component descriptors rather than on a module root.
 
 The hybrid must be extended during every phase, not deferred to the end. `rdeps`
 alone cannot safely handle added, deleted, renamed, generated, configuration,
@@ -114,9 +125,10 @@ conservative fallback is a feature.
 1. Merging language dependency graphs is the real work. Do not assume conflicts
    resolve by taking the newer version: Kubernetes dependency families span
    several versions with conflicting `replace` directives. Toolchains also
-   differ, with Go SDK versions from 1.23.0 through 1.25.11 and protobuf and
-   Rust toolchains spanning major versions. Each decision needs an owner review
-   and service tests.
+   differ, with first-party Go SDK versions from 1.25.0 through 1.25.11 and
+   protobuf and Rust toolchains spanning major versions. The older 1.23.0 pin
+   reported by a naive scan comes only from a vendored third-party module and is
+   not in scope. Each decision needs an owner review and service tests.
 2. A dependency bump becomes repository wide. Breakage surfaces immediately
    instead of never, which is the goal, but it changes how changes are staged.
 3. The analysis graph per invocation grows. Mitigate with the remote cache and
@@ -138,15 +150,34 @@ Those labels are a public interface until it cuts over. Do not rename them or
 restrict their visibility before then. Nothing else here is blocked by it,
 because those targets already build in the root module.
 
+## Per-component exit criteria
+
+A component is done when all of the following hold. These are the migration's
+definition of done; a phase is not complete until every component it touched
+satisfies them.
+
+- In-repository Go dependencies resolve to root-local `//src/...` labels, not to
+  published `@com_github_nvidia_nvcf...` copies. This is the correctness goal, so
+  it is the criterion that cannot be waived.
+- The component's public labels are inventoried before visibility is restricted,
+  and every external consumer of a removed label has been identified.
+- Build, tests, OCI image equivalence, version stamping, and staged release
+  behavior all pass.
+- Tag prefixes, artifact names, and registry destinations are unchanged. A
+  consolidation that silently renames a published artifact has failed, however
+  green the build is.
+
 ## Phases
 
-Each phase lands independently and must leave `bazel build //...` and
-`bazel test //...` green at the repository root.
+Each phase lands independently and must leave every declared CI lane green, not
+only `bazel build //...` and `bazel test //...` at the repository root. Lanes
+that route by component metadata or execution requirements, such as the
+Docker-host and Java component lanes, count toward that invariant.
 
 1. Correct the inventory, remove stale Bazel documentation, and define the
    intentional nested-module exceptions. Not every nested module is in scope:
-   there is a deliberate helper module and a vendored module, so the Phase 2
-   guard needs an allowlist rather than a blanket ban.
+   `nvsnap`, a deliberate helper module, and a vendored module all stay nested,
+   so the Phase 2 guard needs an allowlist rather than a blanket ban.
 2. Establish visibility policy, root-run Gazelle enforcement, the nested-module
    guard, and the extended hybrid affected-target CI.
 3. Converge Bazel and shared toolchain versions. This is real work: sampling two
@@ -161,18 +192,29 @@ Each phase lands independently and must leave `bazel build //...` and
    invocation while releases stay per service.
 5. Migrate the four worker services. They are the most uniform and prove the Go
    dependency merge and the release path end to end.
-6. Migrate the remaining ordinary Go services. NVCA, ESS, and BYOO are handled
-   separately: NVCA has 1261 vendored BUILD files and direct `//vendor/...`
-   dependencies whose labels will not survive a root move, and ESS and BYOO have
-   nested Go workspaces and non-hermetic generation.
+6. Migrate the remaining ordinary Go services. The three special cases are
+   scheduled explicitly rather than deferred, because Phase 8 cannot complete
+   while any of them is unresolved:
+   - 6a. NVCA. 1261 vendored BUILD files and direct `//vendor/...` dependencies
+     whose labels will not survive a root move. Decide between rebasing the
+     vendored labels and dropping the vendored tree in favor of module
+     resolution before any code moves.
+   - 6b. ESS. Nested Go workspace; needs the workspace collapsed or an explicit
+     exception recorded.
+   - 6c. BYOO. Non-hermetic generation; the generator must become a declared
+     Bazel action, or BYOO joins the allowlisted exceptions.
+   Each subphase carries its own owner and exit criteria. If one is judged not
+   worth doing, it moves to the exception allowlist rather than staying open.
 7. Move the Rust trees into the root Bazel module while initially retaining
    their Cargo workspaces, lockfiles, and separate crate hub names. One Bazel
    module can host several crate hubs. Merging them into one Cargo graph is a
-   later optimization needing its own justification. Retain
+   later optimization needing its own justification. Add and retain
    `cargo test --workspace --all-targets` until Bazel declares every Rust
-   integration test that Cargo currently discovers.
-8. Retire nested configuration and the static CI job list once graph coverage is
-   complete.
+   integration test that Cargo currently discovers. GitHub CI has no Cargo lane
+   today, so this is new work rather than something already in place.
+8. Retire nested configuration and the static module-root list once graph
+   coverage is complete, leaving the allowlisted exceptions in place. Lane
+   routing by component metadata and execution requirements stays.
 
 ## Adjacent cleanup, independent of consolidation
 
