@@ -193,7 +193,7 @@ func TestOCIPulls(t *testing.T) {
 		{
 			name: "indented closing parenthesis",
 			source: "oci.pull(\n    image = \"nvcr.io/x\",\n" +
-				"    digest = \"sha256:aa\",\n    )\n",
+				"    digest = \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n    )\n",
 			check: func(t *testing.T, p Pulls) {
 				if p.Declarations != 1 || p.FromNVCR != 1 || p.Digests != 1 {
 					t.Errorf("got %+v, want 1 declaration from nvcr.io with 1 digest", p)
@@ -203,7 +203,7 @@ func TestOCIPulls(t *testing.T) {
 		{
 			name: "single quoted attributes",
 			source: "oci.pull(\n    image = 'nvcr.io/x',\n" +
-				"    digest = 'sha256:aa',\n)\n",
+				"    digest = 'sha256:1111111111111111111111111111111111111111111111111111111111111111',\n)\n",
 			check: func(t *testing.T, p Pulls) {
 				if p.Declarations != 1 || p.Digests != 1 {
 					t.Errorf("got %+v, want 1 declaration with 1 digest", p)
@@ -222,7 +222,7 @@ func TestOCIPulls(t *testing.T) {
 		},
 		{
 			name:   "parenthesis inside a string does not end the call",
-			source: "oci.pull(\n    image = \"nvcr.io/x\",  # note )\n    digest = \"sha256:aa\",\n)\n",
+			source: "oci.pull(\n    image = \"nvcr.io/x\",  # note )\n    digest = \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n)\n",
 			check: func(t *testing.T, p Pulls) {
 				if p.Declarations != 1 {
 					t.Errorf("got %+v, want 1 declaration", p)
@@ -437,5 +437,140 @@ func TestConsolidatedRepositoryReportsSuccessfully(t *testing.T) {
 		if !strings.Contains(report, want) {
 			t.Errorf("report missing %q:\n%s", want, report)
 		}
+	}
+}
+
+// --- cases from the seventh review pass ------------------------------------
+
+func TestFindCallsAcceptsSpaceBeforeParenthesis(t *testing.T) {
+	// Starlark permits `oci.pull (`. Requiring the literal "oci.pull(" made
+	// such declarations disappear from the inventory rather than fail, which is
+	// the silent-undercount failure mode this tool exists to avoid.
+	for _, src := range []string{
+		"oci.pull (\n    image = \"x\",\n    tag = \"v1\",\n)\n",
+		"oci.pull\t(\n    image = \"x\",\n    tag = \"v1\",\n)\n",
+		"oci.pull\n(\n    image = \"x\",\n    tag = \"v1\",\n)\n",
+	} {
+		calls, err := FindCalls(src, "oci.pull")
+		if err != nil {
+			t.Errorf("source %q: unexpected error: %v", src, err)
+			continue
+		}
+		if len(calls) != 1 {
+			t.Errorf("source %q: got %d calls, want 1", src, len(calls))
+		}
+	}
+}
+
+func TestStringAttrRejectsExpressions(t *testing.T) {
+	// A literal followed or preceded by an operator is an expression. Reporting
+	// its first operand as the value would be wrong, not merely imprecise.
+	for name, body := range map[string]string{
+		"concatenation": "version = \"1.25.0\" + GO_SUFFIX,",
+		"prefixed":      "version = GO_PREFIX + \"1.25.0\",",
+		"format":        "version = \"1.25.%s\" % PATCH,",
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, literal, found := StringAttr(body, "version")
+			if !found {
+				t.Fatal("attribute should be found")
+			}
+			if literal {
+				t.Errorf("expression reported as literal %q", value)
+			}
+		})
+	}
+}
+
+func TestStringAttrAcceptsPlainLiteral(t *testing.T) {
+	for _, body := range []string{
+		"version = \"1.25.0\",",
+		"version = \"1.25.0\"",
+		"version = '1.25.0',\n",
+		"version = \"1.25.0\" ,\n    name = \"go\",",
+	} {
+		value, literal, found := StringAttr(body, "version")
+		if !found || !literal || value != "1.25.0" {
+			t.Errorf("body %q: got (%q, literal=%v, found=%v)", body, value, literal, found)
+		}
+	}
+}
+
+func TestBazelVersionsAcceptsReleaseCandidates(t *testing.T) {
+	// Bazel ships release candidates such as 9.0.0rc1 and pre-release builds.
+	// Rejecting them would fail on a legitimate pin.
+	for _, v := range []string{"9.0.0rc1", "8.6.0", "8.6.0-pre.20240101.3", "7.4.1"} {
+		if _, err := BazelVersions(newTree(map[string]string{
+			"src/a/.bazelversion": v + "\n",
+		})); err != nil {
+			t.Errorf("version %q rejected: %v", v, err)
+		}
+	}
+}
+
+func TestOCIPullsValidation(t *testing.T) {
+	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	cases := []struct {
+		name    string
+		source  string
+		check   func(*testing.T, Pulls)
+		wantErr string
+	}{
+		{
+			// A truncated digest cannot resolve an image. Accepting it let a
+			// declaration count as pinned when it is not.
+			name:    "truncated digest",
+			source:  "oci.pull(\n    image = \"nvcr.io/x\",\n    digest = \"sha256:aa\",\n)\n",
+			wantErr: "is not a sha256 digest",
+		},
+		{
+			// Absent digest does not by itself mean tag-only.
+			name:    "neither digest nor tag",
+			source:  "oci.pull(\n    image = \"nvcr.io/x\",\n)\n",
+			wantErr: "neither a digest nor a tag",
+		},
+		{
+			name:    "no digest and non literal tag",
+			source:  "oci.pull(\n    image = \"nvcr.io/x\",\n    tag = TAG,\n)\n",
+			wantErr: "cannot be classified",
+		},
+		{
+			name:    "no digest and empty tag",
+			source:  "oci.pull(\n    image = \"nvcr.io/x\",\n    tag = \"\",\n)\n",
+			wantErr: "empty tag",
+		},
+		{
+			name:    "digest built by concatenation is not a literal",
+			source:  "oci.pull(\n    image = \"nvcr.io/x\",\n    digest = \"sha256:\" + D,\n)\n",
+			wantErr: "not a string literal",
+		},
+		{
+			name: "space before parenthesis is counted",
+			source: "oci.pull (\n    image = \"nvcr.io/x\",\n" +
+				"    digest = \"" + digest + "\",\n)\n",
+			check: func(t *testing.T, p Pulls) {
+				if p.Declarations != 1 || p.Digests != 1 {
+					t.Errorf("got %+v, want 1 declaration with 1 digest", p)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := OCIPulls(newTree(map[string]string{"src/a/MODULE.bazel": tc.source}))
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected an error containing %q, got %+v", tc.wantErr, got)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error %q does not contain %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			tc.check(t, got)
+		})
 	}
 }

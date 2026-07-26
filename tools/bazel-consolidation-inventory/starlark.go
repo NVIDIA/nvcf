@@ -45,23 +45,38 @@ type Call struct {
 // parentheses, is still bounded correctly.
 func FindCalls(src, name string) ([]Call, error) {
 	var calls []Call
-	needle := name + "("
 	for i := 0; i < len(src); {
-		idx := strings.Index(src[i:], needle)
+		idx := strings.Index(src[i:], name)
 		if idx < 0 {
 			break
 		}
 		start := i + idx
+		next := start + len(name)
 		// Require a call rather than a longer identifier ending in name.
 		if start > 0 && isIdentByte(src[start-1]) {
-			i = start + len(needle)
+			i = next
+			continue
+		}
+		// Starlark permits whitespace between the callee and the opening
+		// parenthesis, so `oci.pull (` is the same call as `oci.pull(`.
+		paren := next
+		for paren < len(src) && (src[paren] == ' ' || src[paren] == '\t' ||
+			src[paren] == '\n' || src[paren] == '\r') {
+			paren++
+		}
+		if paren >= len(src) || src[paren] != '(' {
+			i = next
+			continue
+		}
+		if isIdentByte(src[next]) {
+			i = next
 			continue
 		}
 		if inCommentOrString(src[:start]) {
-			i = start + len(needle)
+			i = next
 			continue
 		}
-		open := start + len(needle)
+		open := paren + 1
 		end, err := matchParen(src, open)
 		if err != nil {
 			return nil, fmt.Errorf("%s at line %d: %w", name, lineOf(src, start), err)
@@ -215,6 +230,17 @@ func StringAttr(body, key string) (value string, literal bool, found bool) {
 		}
 		end, err := skipString(body, j)
 		if err != nil {
+			return "", false, true
+		}
+		// The string must be the whole value. `version = "1.25.0" + SUFFIX`
+		// starts with a literal but is an expression, and reporting its first
+		// operand as the value would be wrong rather than merely imprecise.
+		k := end + 1
+		for k < len(body) && (body[k] == ' ' || body[k] == '\t' ||
+			body[k] == '\n' || body[k] == '\r') {
+			k++
+		}
+		if k < len(body) && body[k] != ',' && body[k] != ')' {
 			return "", false, true
 		}
 		return body[j+1 : end], true, true

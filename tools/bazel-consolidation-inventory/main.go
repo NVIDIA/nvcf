@@ -64,9 +64,9 @@ var (
 	// A Bazel version is a release identifier, not merely a token starting with
 	// a digit. Accepting "9-not-a-version" previously let a malformed pin be
 	// reported as though it were a real version.
-	versionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$`)
+	versionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+([-.]?[0-9A-Za-z][0-9A-Za-z.-]*)?$`)
 	semverRe  = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
-	digestRe  = regexp.MustCompile(`^sha256:[0-9a-f]+$`)
+	digestRe  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	digitsRe  = regexp.MustCompile(`[0-9]+`)
 )
 
@@ -346,13 +346,35 @@ func OCIPulls(t *Tree) (Pulls, error) {
 			digest, digestLiteral, digestFound := StringAttr(call.Body, "digest")
 			switch {
 			case !digestFound:
+				// Classify as tag-only only if a literal tag actually exists.
+				// A declaration with neither a digest nor a readable tag is one
+				// this tool cannot classify, and silently counting it as
+				// tag-only would overstate a number the plan acts on.
+				tag, tagLiteral, tagFound := StringAttr(call.Body, "tag")
+				if !tagFound {
+					return Pulls{}, fmt.Errorf(
+						"%s:%d: oci.pull for %q has neither a digest nor a tag",
+						path, call.Line, image)
+				}
+				if !tagLiteral {
+					return Pulls{}, fmt.Errorf(
+						"%s:%d: oci.pull for %q has no digest and its tag is not a "+
+							"string literal; the declaration cannot be classified",
+						path, call.Line, image)
+				}
+				if strings.TrimSpace(tag) == "" {
+					return Pulls{}, fmt.Errorf(
+						"%s:%d: oci.pull for %q has no digest and an empty tag",
+						path, call.Line, image)
+				}
 				p.TagOnly = append(p.TagOnly, image)
 			case !digestLiteral:
 				return Pulls{}, fmt.Errorf(
 					"%s:%d: oci.pull digest is not a string literal", path, call.Line)
 			case !digestRe.MatchString(digest):
 				return Pulls{}, fmt.Errorf(
-					"%s:%d: oci.pull digest %q is not a sha256 digest",
+					"%s:%d: oci.pull digest %q is not a sha256 digest "+
+						"(expected sha256: followed by 64 hex characters)",
 					path, call.Line, digest)
 			default:
 				digests[digest] = true

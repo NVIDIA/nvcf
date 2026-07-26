@@ -102,7 +102,7 @@ go_sdk.download(version = "1.25.11")
 oci.pull(
     name = "distroless_go",
     image = "nvcr.io/nvidia/distroless/go",
-    digest = "sha256:aaaa",
+    digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111",
 )
 oci.pull(
     name = "temurin",
