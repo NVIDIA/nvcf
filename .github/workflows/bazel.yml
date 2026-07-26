@@ -106,7 +106,7 @@ jobs:
           #   id|path|tests_skip|component_kind|ci_lane
           # Static non-Java rows use only the first three fields.
           ROWS='root|.|false
-          grpc-proxy|src/invocation-plane-services/grpc-proxy|false
+          grpc-proxy|src/invocation-plane-services/grpc-proxy|false|service|docker-host
           nats-auth-callout|src/control-plane-services/nats-auth-callout|false
           ratelimiter|src/invocation-plane-services/ratelimiter|false
           http-invocation|src/invocation-plane-services/http-invocation|false
@@ -230,11 +230,8 @@ jobs:
           # tests. They run directly on the GitHub host where a Docker daemon is
           # available, executing their FULL suite with no tag filter. Such a row
           # is not also placed in the build-container matrix.
-          # NOTE: grpc-proxy also owns a requires-docker test but is a nested Rust
-          # module whose test has never run in CI; wiring+validating it is tracked
-          # separately (NVIDIA/nvcf#396) to keep this change scoped to the Java
-          # subtrees. It stays in the build-container matrix for now (build
-          # coverage).
+          # grpc-proxy owns a requires-docker test (proxy/geo:geo_test) and runs in
+          # this docker-host lane (NVIDIA/nvcf#396).
           include="[]"
           include_docker="[]"
           while IFS='|' read -r id path tests_skip component_kind ci_lane; do
