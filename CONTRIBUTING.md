@@ -43,11 +43,8 @@ For all development, push your changes to a branch in your own fork of nvcf and 
 
 ### Current GitHub workflow
 
-This repository is being actively improved to support a more GitHub-native contribution flow. During this transition, commits are still pushed from our GitLab-based internal workflow, and GitHub pull requests cannot be merged directly.
-
-We do accept external contributions through GitHub pull requests. When a contribution is ready to land, the NVCF team will carry it through the current internal workflow and preserve attribution by co-authoring the resulting commit with the original contributor and the bot that pushes the commit.
-
-Thank you for working with us during this transition while we make the project easier to contribute to directly on GitHub.
+NVCF accepts external contributions through GitHub pull requests. Accepted
+contributions can be merged directly in this repository.
 
 ### Step 1: Set Up Your Environment
 
