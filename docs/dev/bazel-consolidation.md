@@ -127,10 +127,11 @@ There are two layers:
    consolidation makes possible rather than work it does automatically.
    That is a deliberate hybrid and it should be kept.
 
-   This is also an argument for consolidation rather than against it: today only
-   the root row can narrow, because only the root row has a graph spanning the
-   changed files. Extending narrowing to service code requires the services to be
-   in that graph.
+   This is also an argument for consolidation rather than against it. Narrowing
+   needs a graph that spans the changed files, and today only the root module
+   provides one for the nested services. Root-scoped Java components already sit
+   in that graph, which is why extending narrowing to them is a workflow change
+   rather than a restructuring; the nested services have to move first.
 2. Job selection across the matrix is static: which subtree lanes to spawn comes
    from a list in the workflow plus path-prefix matching, because 19 modules
    cannot be one query.

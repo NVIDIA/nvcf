@@ -61,7 +61,24 @@ jobs:
       - name: Run release helper tests
         run: python3 tools/ci/test-github-release.py
 
-      - name: Run Bazel consolidation inventory tests
+  bazel-consolidation-inventory:
+    name: bazel consolidation inventory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/bazel-consolidation-inventory/go.mod
+
+      - name: Vet and unit test
+        working-directory: tools/bazel-consolidation-inventory
         run: |
-          python3 tools/ci/test-bazel-consolidation-inventory.py
-          tools/scripts/test/test-bazel-consolidation-inventory
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "run gofmt -w ."; exit 1; }
+          go vet ./...
+          go test ./...
+
+      - name: End-to-end fixtures
+        run: tools/scripts/test/test-bazel-consolidation-inventory
