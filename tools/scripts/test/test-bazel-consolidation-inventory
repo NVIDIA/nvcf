@@ -282,6 +282,29 @@ git -C "${FIXTURE}" reset -q --hard HEAD~1
 rm -rf "${FIXTURE}/src/svc-d"
 
 echo
+echo "== fixture: TMPDIR inside the repository does not dirty a clean tree =="
+# mktemp honours TMPDIR. Creating the tool's scratch file before checking
+# cleanliness makes the tool dirty the very tree it is about to inspect, so a
+# clean checkout is rejected. TMPDIR is the repository root here, which exists
+# and is not ignored, exactly as a user running with TMPDIR=. would hit.
+if OUT_TMP="$(cd "${FIXTURE}" && TMPDIR="${FIXTURE}" "${INVENTORY}" "${FIXTURE}" 2>&1)"; then
+    pass "clean tree with TMPDIR inside the repository is accepted"
+else
+    fail "clean tree rejected when TMPDIR is inside the repository:"
+    sed 's/^/    /' <<<"${OUT_TMP}" >&2
+fi
+assert_line "${OUT_TMP}" "measurements are produced, not a dirty-tree error" \
+    "service modules (src, excluding vendor) : 2"
+assert_absent "${OUT_TMP}" "the stamp does not claim a dirty tree" "WORKING TREE, not"
+# The scratch file must not survive.
+leftovers="$(find "${FIXTURE}" -maxdepth 1 -name 'tmp.*' | wc -l)"
+if [ "${leftovers}" -eq 0 ]; then
+    pass "scratch file is removed from the repository"
+else
+    fail "scratch file left behind in the repository"
+fi
+
+echo
 echo "== injected git failures must not produce a report =="
 # git status failing looked exactly like a clean tree, and git ls-files failing
 # inside a pipeline produced an empty file list that every count read as zero.

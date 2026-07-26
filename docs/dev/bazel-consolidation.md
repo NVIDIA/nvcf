@@ -26,11 +26,12 @@ documents a public-input-only source build. Private NGC is the publish destinati
 of those targets, not their base.
 
 The qualification matters: this is a statement about the Bazel targets, not about
-every build path in the directory. The legacy `docker/agent/Dockerfile.app.criuv2`
-still defaults to a private `nvsnap-agent-base` image, and the init image defaults
-to a private builder. Those Dockerfile paths are not what consolidation moves, but
-they are the likely origin of the original claim and they have to be retired or
-excluded explicitly rather than quietly. Phase 1 therefore has to
+every build path in the directory. The legacy `docker/agent/Dockerfile.app`
+defaults to a private `nvsnap-agent-base` image and to private uvloop, libuv, and
+libzmq builder images. The criuv2 variant is not the offender; it documents public
+inputs. Those Dockerfile paths are not what consolidation moves, but they are the
+likely origin of the original claim and have to be retired or excluded explicitly
+rather than quietly. Phase 1 therefore has to
 resolve `nvsnap` rather than assume it: migrate it with the rest, or record a real
 reason under the exception contract. Its absence from the public CI matrix is a
 row decision, not an architectural one.
@@ -117,8 +118,10 @@ There are two layers:
 1. Target selection already uses `rdeps`, but only for the root row on a pull
    request. `.github/workflows/bazel.yml` maps changed files to labels, queries
    reverse dependencies, and falls back to a full build for non-modify changes,
-   global files, and file types it does not model. Every per-service row, and
-   every non-pull-request trigger, still builds its whole workspace by design.
+   global files, and file types it does not model. Every other row, and every
+   non-pull-request trigger, builds its full declared scope by design. For a
+   nested module that is its whole workspace; for a root-scoped Java row it is
+   that component's subtree of the root graph.
    That is a deliberate hybrid and it should be kept.
 
    This is also an argument for consolidation rather than against it: today only
@@ -148,7 +151,8 @@ conservative fallback is a feature.
    resolve by taking the newer version: Kubernetes dependency families span
    several versions with conflicting `replace` directives. Toolchains also
    differ, with first-party Go SDK versions from 1.25.0 through 1.25.11 and
-   protobuf and Rust toolchain versions spanning major releases. The older 1.23.0 pin
+   protobuf spanning major versions and Rust toolchains spanning releases from
+   1.91.1 to 1.97.0. The older 1.23.0 pin
    reported by a naive scan comes only from a vendored third-party module and is
    not in scope. Each decision needs an owner review and service tests.
 2. A dependency bump becomes repository-wide. Breakage surfaces immediately
@@ -176,9 +180,10 @@ because those targets already build in the root module.
 
 ## Per-component exit criteria
 
-A component is done when all of the following hold. These are the migration's
-definition of done; a phase is not complete until every component it touched
-satisfies them.
+A migrated component is done when all of the following hold. These are the
+migration criteria, not the only way to close a phase: a phase is complete when
+every component it touched satisfies either these criteria or the exception
+contract. The two closure paths are set out below.
 
 - In-repository Go dependencies resolve to root-local `//src/...` labels, not to
   published `@com_github_nvidia_nvcf...` copies. This is the correctness goal, so
@@ -220,7 +225,7 @@ while still claiming to be done.
 ## Exception contract
 
 An exception is a decision, not a deferral, and it has to be written down as one.
-Every nested module retained past the final phase records:
+Every retained first-party service module records:
 
 - Owner, and the rationale for staying nested.
 - The retained module and its CI entry point.
@@ -284,9 +289,11 @@ Docker-host and Java component lanes, count toward that invariant.
    is migration scaffolding retired once its five consumers migrate, and the
    vendored `cel.dev/expr` module is excluded from the guard outright. `nvsnap`
    is the only open question, and its recorded rationale contradicts its code, so
-   this phase decides it on current evidence. The Phase 2 guard still needs an
-   allowlist rather than a blanket ban, but the allowlist should be short and
-   every entry should carry the exception contract.
+   this phase decides it on current evidence. The Phase 2 guard is not a single
+   allowlist: it separates vendored-path exclusions, a migration ledger of
+   modules not yet migrated, and permanent service exceptions. Only the third
+   category carries the exception contract. Requiring one for every entry would
+   make the guard unusable during the migration itself.
 2. Establish visibility policy, root-run Gazelle enforcement, the nested-module
    guard, and the extended hybrid affected-target CI.
 3. Converge Bazel and shared toolchain versions. This is real work: sampling two
@@ -317,13 +324,13 @@ Docker-host and Java component lanes, count toward that invariant.
      so it is neither hermetic nor remotely cacheable. Make the action hermetic,
      retain its dedicated local lane, or record an exception.
    Each subphase carries its own owner and exit criteria. If one is judged not
-   worth doing, it moves to the exception allowlist under the contract below
+   worth doing, it moves to the exception list under the contract above
    rather than staying open. Moving a component there changes the end state:
    the summary's count of converging modules drops, and that component keeps its
    own lockfile and module-root CI lane.
 7. Establish source-of-truth ownership before moving the Rust trees. Any subtree
-   that is still upstream-authoritative in `imports.yaml` can have a later import
-   restore its nested module and its old labels, silently undoing the migration.
+   still synchronized from an upstream repository can have a later import restore
+   its nested module and its old labels, silently undoing the migration.
    `stargate` is in this position today. Each affected subtree needs either a
    native ownership cutover, or compatible Bazel changes landed upstream and then
    synchronized, before its labels are rebased. This is a prerequisite, not a

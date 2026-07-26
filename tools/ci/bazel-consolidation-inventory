@@ -47,6 +47,26 @@ VENDOR_RE='(^|/)vendor/'
 # than re-invoking git inside each helper's pipeline. A git failure inside a
 # pipeline yields an empty list, which every downstream count would report as a
 # plausible zero instead of an error.
+head_sha="$(git rev-parse --short HEAD)"
+head_date="$(git log -1 --format=%cs)"
+
+dirty=""
+if ! worktree_state="$(git status --porcelain)"; then
+  echo "error: git status failed; cannot tell whether the tree is clean" >&2
+  exit 1
+fi
+if [ -n "${worktree_state}" ]; then
+  if [ "${allow_dirty}" -eq 0 ]; then
+    echo "error: working tree is dirty, so measurements would not match commit ${head_sha}." >&2
+    echo "       Commit or stash your changes, or pass --allow-dirty to measure anyway." >&2
+    exit 1
+  fi
+  dirty="  (WORKING TREE, not ${head_sha}: --allow-dirty was passed)"
+fi
+
+# The temporary file is created only after the cleanliness check. Creating it
+# first can dirty the very tree being checked: mktemp honours TMPDIR, and a
+# TMPDIR inside the repository makes a clean checkout report as dirty.
 ALL_TRACKED="$(mktemp)"
 trap 'rm -f "${ALL_TRACKED}"' EXIT
 if ! git ls-files -z >"${ALL_TRACKED}"; then
@@ -85,21 +105,6 @@ distinct_of() { xargs -0 -r md5sum | awk '{ print $1 }' | sort -u | wc -l; }
 # failing command aborts under `set -e`. Command substitutions evaluated inside
 # printf arguments would have their exit status discarded, yielding partial
 # output with a success status.
-head_sha="$(git rev-parse --short HEAD)"
-head_date="$(git log -1 --format=%cs)"
-dirty=""
-if ! worktree_state="$(git status --porcelain)"; then
-  echo "error: git status failed; cannot tell whether the tree is clean" >&2
-  exit 1
-fi
-if [ -n "${worktree_state}" ]; then
-  if [ "${allow_dirty}" -eq 0 ]; then
-    echo "error: working tree is dirty, so measurements would not match commit ${head_sha}." >&2
-    echo "       Commit or stash your changes, or pass --allow-dirty to measure anyway." >&2
-    exit 1
-  fi
-  dirty="  (WORKING TREE, not ${head_sha}: --allow-dirty was passed)"
-fi
 
 # Measurements read tracked files from the working tree. Verify up front that
 # every file the tool will read is present and readable, so a deleted or
