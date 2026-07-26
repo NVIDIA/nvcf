@@ -30,6 +30,7 @@ import (
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
 	"nvcf-cli/internal/state"
+	"nvcf-cli/internal/validate"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -1501,6 +1502,18 @@ func validateCreateConfig(config *CreateConfig) error {
 	}
 	if config.InferencePort == 0 {
 		return fmt.Errorf("inference port is required (use --inference-port or specify in JSON file)")
+	}
+	if config.HealthTimeout != "" && !validate.IsISO8601Duration(config.HealthTimeout) {
+		return fmt.Errorf("--health-timeout: %q is not a valid ISO 8601 duration (e.g. PT30S, PT2M)", config.HealthTimeout)
+	}
+	if config.APIBodyFormat != "" {
+		upper := strings.ToUpper(config.APIBodyFormat)
+		switch upper {
+		case "CUSTOM", "PREDICT_V2":
+			config.APIBodyFormat = upper
+		default:
+			return fmt.Errorf("--api-body-format: %q is not valid; allowed values: CUSTOM, PREDICT_V2", config.APIBodyFormat)
+		}
 	}
 	return nil
 }

@@ -145,6 +145,84 @@ func TestParseArtifactsListInvalid(t *testing.T) {
 	require.Error(t, err)
 }
 
+// --- validateTaskCreateConfig ----------------------------------------------
+
+func minValidTaskCfg() *TaskCreateConfig {
+	return &TaskCreateConfig{
+		Name:             "t",
+		GpuSpecification: &TaskGpuSpecificationInput{GPU: "H100", InstanceType: "NCP.GPU.H100_8x"},
+	}
+}
+
+func TestValidateTaskCreateConfig(t *testing.T) {
+	t.Run("missing name is rejected", func(t *testing.T) {
+		cfg := &TaskCreateConfig{GpuSpecification: &TaskGpuSpecificationInput{GPU: "H100", InstanceType: "NCP.GPU.H100_8x"}}
+		require.ErrorContains(t, validateTaskCreateConfig(cfg), "task name is required")
+	})
+
+	t.Run("missing gpuSpecification is rejected", func(t *testing.T) {
+		cfg := &TaskCreateConfig{Name: "t"}
+		require.ErrorContains(t, validateTaskCreateConfig(cfg), "gpuSpecification is required")
+	})
+
+	t.Run("valid ISO 8601 durations pass", func(t *testing.T) {
+		for _, dur := range []string{"PT4H", "PT72H", "P1DT30M", "PT1H30M", "PT0S"} {
+			cfg := minValidTaskCfg()
+			cfg.MaxRuntimeDuration = dur
+			assert.NoErrorf(t, validateTaskCreateConfig(cfg), "expected %q to be valid", dur)
+		}
+	})
+
+	t.Run("invalid duration rejected with flag name", func(t *testing.T) {
+		cfg := minValidTaskCfg()
+		cfg.MaxRuntimeDuration = "4hours"
+		err := validateTaskCreateConfig(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--max-runtime")
+		assert.Contains(t, err.Error(), "4hours")
+	})
+
+	t.Run("invalid max-queued duration rejected", func(t *testing.T) {
+		cfg := minValidTaskCfg()
+		cfg.MaxQueuedDuration = "notaduration"
+		err := validateTaskCreateConfig(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--max-queued")
+	})
+
+	t.Run("invalid termination-grace duration rejected", func(t *testing.T) {
+		cfg := minValidTaskCfg()
+		cfg.TerminationGracePeriodDuration = "xx"
+		err := validateTaskCreateConfig(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--termination-grace")
+	})
+
+	t.Run("valid result-strategy values pass", func(t *testing.T) {
+		for _, s := range []string{"UPLOAD", "NONE", "upload", "none", "Upload"} {
+			cfg := minValidTaskCfg()
+			cfg.ResultHandlingStrategy = s
+			assert.NoErrorf(t, validateTaskCreateConfig(cfg), "expected %q to be valid", s)
+		}
+	})
+
+	t.Run("invalid result-strategy rejected with flag name", func(t *testing.T) {
+		cfg := minValidTaskCfg()
+		cfg.ResultHandlingStrategy = "BOGUS"
+		err := validateTaskCreateConfig(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--result-strategy")
+		assert.Contains(t, err.Error(), "BOGUS")
+	})
+
+	t.Run("case-insensitive result-strategy is normalized to uppercase", func(t *testing.T) {
+		cfg := minValidTaskCfg()
+		cfg.ResultHandlingStrategy = "upload"
+		require.NoError(t, validateTaskCreateConfig(cfg))
+		assert.Equal(t, "UPLOAD", cfg.ResultHandlingStrategy)
+	})
+}
+
 // --- resolveTaskID ---------------------------------------------------------
 
 func TestResolveTaskIDFromArgs(t *testing.T) {
