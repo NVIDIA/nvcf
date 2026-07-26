@@ -18,7 +18,9 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,6 +73,40 @@ func TestTaskCreateCommandFlagSurface(t *testing.T) {
 			assert.NotNilf(t, taskCreateCmd.Flags().Lookup(name), "task create should expose --%s", name)
 		})
 	}
+}
+
+func TestTaskGetCommandFlagSurface(t *testing.T) {
+	assert.NotNil(t, taskGetCmd.Flags().Lookup("include-secrets"))
+	assert.NotNil(t, taskGetCmd.Flags().Lookup("timeout"))
+}
+
+func TestNewTaskGetContext(t *testing.T) {
+	t.Run("rejects negative timeout", func(t *testing.T) {
+		_, _, err := newTaskGetContext(-1)
+		require.Error(t, err)
+	})
+
+	t.Run("uses caller timeout", func(t *testing.T) {
+		start := time.Now()
+		ctx, cancel, err := newTaskGetContext(1)
+		require.NoError(t, err)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		assert.WithinDuration(t, start.Add(time.Second), deadline, 100*time.Millisecond)
+	})
+
+	t.Run("keeps default timeout", func(t *testing.T) {
+		ctx, cancel, err := newTaskGetContext(0)
+		require.NoError(t, err)
+		defer cancel()
+
+		_, ok := ctx.Deadline()
+		assert.False(t, ok)
+		assert.NoError(t, ctx.Err())
+		assert.NotEqual(t, context.Canceled, ctx.Err())
+	})
 }
 
 // --- Helpers ----------------------------------------------------------------

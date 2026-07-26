@@ -64,7 +64,7 @@ Push each built container to an OCI registry that your self-hosted NVCF cluster 
 docker tag my_image <your-registry>/<namespace>/my_image:<tag>
 docker push <your-registry>/<namespace>/my_image:<tag>
 
-nvcf-cli registry add \
+nvcf-cli registry-credential add \
   --hostname <your-registry> \
   --username <user> \
   --password <pass> \

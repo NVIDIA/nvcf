@@ -730,6 +730,9 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 # Create function (requires admin token)
 ./nvcf-cli create --file examples/create-function.json
 
+# Return the create response as structured JSON
+./nvcf-cli --json function create --input-file examples/create-function.json
+
 # Create function with secrets using command-line flags
 ./nvcf-cli function create \
   --name my-function \
@@ -1313,6 +1316,12 @@ nvcf-cli task create \
 `get`/`events`/`results`/`cancel`/`delete`/`update-secrets` commands can omit
 the positional task ID and reuse the saved context.
 
+Bound an individual task status request when it is part of a larger workflow:
+
+```bash
+nvcf-cli task get --timeout 30
+```
+
 ### Required vs Optional Fields
 
 `name`, `gpuSpecification.gpu`, and `gpuSpecification.instanceType` are
@@ -1373,4 +1382,3 @@ nvcf-cli task delete    # DELETE - permanent
 ```
 
 `task delete` clears the saved task from state when it matches.
-

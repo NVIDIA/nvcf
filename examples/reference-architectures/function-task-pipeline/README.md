@@ -47,7 +47,9 @@ permission to create or inspect tasks.
 
 - A self-hosted NVCF stack with function and task routes.
 - `nvcf-cli` configured for the stack. The config must include
-  `base_nvct_url` and `nvct_host`.
+  `base_nvct_url` and `nvct_host`. Use a dedicated config filename with a
+  unique basename for this workflow because CLI commands update the current
+  Function and Task context associated with that filename.
 - An admin token and both API keys in the CLI state:
 
   ```bash
@@ -93,19 +95,22 @@ export FUNCTION_IMAGE=<registry>/<namespace>/fastapi-echo-sample:<tag>
 export TASK_IMAGE=<registry>/<namespace>/task-simple-sample:<tag>
 ```
 
-Run the coordinator:
+From the repository root, run the coordinator:
 
 ```bash
-./run.sh
+examples/reference-architectures/function-task-pipeline/run.sh
 ```
 
 The script prints one JSON summary after both stages complete. It removes the
-task, function deployment, and function definition on exit.
+task, function deployment, and function definition on exit. Function and
+version IDs are read from the structured create response and passed explicitly
+to later commands.
 
 Set `KEEP_RESOURCES=true` to inspect the resources after the run:
 
 ```bash
-KEEP_RESOURCES=true ./run.sh
+KEEP_RESOURCES=true \
+  examples/reference-architectures/function-task-pipeline/run.sh
 ```
 
 ## Configuration
@@ -125,18 +130,24 @@ KEEP_RESOURCES=true ./run.sh
 | `FUNCTION_DEPLOY_TIMEOUT_SECONDS` | `900` | Maximum function deployment wait time. |
 | `POLL_INTERVAL_SECONDS` | `10` | Delay between task status requests. |
 | `TASK_TIMEOUT_SECONDS` | `900` | Maximum task wait time. |
+| `CLEANUP_DELETE_ATTEMPTS` | `6` | Maximum attempts for each cleanup deletion. |
+| `CLEANUP_RETRY_INTERVAL_SECONDS` | `5` | Delay between cleanup deletion attempts. |
 | `KEEP_RESOURCES` | `false` | Preserve resources when set to `true`. |
 
 ## Failure behavior
 
 - A task terminal status other than `COMPLETED` fails the workflow.
-- A task timeout fails the workflow and attempts task cancellation.
-- Cleanup is best effort and does not replace the original exit status.
+- A task timeout caps each status request to the remaining workflow time, fails
+  the workflow, and attempts task cancellation.
+- Cleanup failures preserve an existing failure status. If the workflow itself
+  succeeded, incomplete cleanup changes the exit status to nonzero and prints
+  the resource IDs that require inspection.
 - `KEEP_RESOURCES=true` disables automatic cleanup for debugging.
 
 The shell process is the coordinator, so it is not durable across client
-failure. A production workflow should store the task ID in durable state, use
-an idempotency key for submission, and resume polling after a restart.
+failure. A production coordinator should persist the mapping from its workflow
+ID to the task ID immediately after submission. On restart, it should resume
+polling an existing mapping instead of submitting a duplicate task.
 
 ## Validate without a cluster
 
@@ -144,5 +155,5 @@ The test replaces `nvcf-cli` with a deterministic fake. It checks command
 ordering, terminal-state handling, JSON output, and cleanup:
 
 ```bash
-./test_run.sh
+examples/reference-architectures/function-task-pipeline/test_run.sh
 ```

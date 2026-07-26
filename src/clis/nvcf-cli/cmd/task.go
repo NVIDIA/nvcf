@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
@@ -307,6 +308,7 @@ var taskBulkFlags struct {
 
 var taskGetFlags struct {
 	includeSecrets bool
+	timeoutSeconds int
 }
 
 var taskPaginationFlags struct {
@@ -385,6 +387,7 @@ func init() {
 
 	// task get flags
 	taskGetCmd.Flags().BoolVar(&taskGetFlags.includeSecrets, "include-secrets", false, "Include secret values in the response (subject to authorization)")
+	taskGetCmd.Flags().IntVar(&taskGetFlags.timeoutSeconds, "timeout", 0, "Maximum request duration in seconds (default client timeout)")
 
 	// task events flags
 	taskEventsCmd.Flags().IntVar(&taskPaginationFlags.limit, "limit", 0, "Maximum number of events to return")
@@ -433,6 +436,22 @@ func HasCurrentTask() bool {
 func SetCurrentTask(taskID, taskName string) {
 	sm := GetStateManagerForCurrentCommand()
 	sm.SetTask(taskID, taskName)
+}
+
+func newTaskGetContext(timeoutSeconds int) (context.Context, context.CancelFunc, error) {
+	if timeoutSeconds < 0 {
+		return nil, nil, fmt.Errorf("timeout must be a non-negative integer")
+	}
+	if timeoutSeconds == 0 {
+		ctx, cancel := context.WithCancel(context.Background())
+		return ctx, cancel, nil
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		time.Duration(timeoutSeconds)*time.Second,
+	)
+	return ctx, cancel, nil
 }
 
 // parseSecretsList converts CLI/JSON `name=value` style entries (or a slice of
@@ -734,6 +753,9 @@ func runTaskCreate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create task: %w", err)
 	}
+	if resp.Task.ID == "" {
+		return fmt.Errorf("task create response did not include a task ID")
+	}
 
 	SetCurrentTask(resp.Task.ID, resp.Task.Name)
 	if err := SaveStateForCurrentCommand(); err != nil {
@@ -876,7 +898,13 @@ func runTaskGet(cmd *cobra.Command, args []string) error {
 	}
 	defer c.Close()
 
-	resp, err := c.GetTask(context.Background(), taskID, taskGetFlags.includeSecrets)
+	ctx, cancel, err := newTaskGetContext(taskGetFlags.timeoutSeconds)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	resp, err := c.GetTask(ctx, taskID, taskGetFlags.includeSecrets)
 	if err != nil {
 		return fmt.Errorf("failed to get task: %w", err)
 	}
@@ -1143,4 +1171,3 @@ func runTaskUpdateSecrets(cmd *cobra.Command, args []string) error {
 	logging.Success("Updated %d secret(s) for task %s.", len(secrets), taskID)
 	return nil
 }
-
