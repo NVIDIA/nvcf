@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -582,6 +583,67 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 
 var accessModesRO = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
 
+// nvmeshRequiredMountOptions are mandatory for read-only model cache volumes on
+// NVMesh, which provisions XFS. The secondary PV attaches the same filesystem as
+// the primary, so the kernel rejects the mount as a duplicate filesystem UUID
+// without nouuid, and rejects a dirty log on a read-only mount without norecovery.
+// These are a property of the driver, not a tunable, so they are applied whether
+// or not mount options are configured.
+var nvmeshRequiredMountOptions = []string{"ro", "norecovery", "nouuid"}
+
+// resolveCacheMountOptions returns the mount options for a read-only model cache
+// PV. NVMesh volumes always receive nvmeshRequiredMountOptions, with any
+// configured options appended. Volumes on other CSI drivers use the configured
+// options unchanged.
+func (r *Reconciler) resolveCacheMountOptions(pv *corev1.PersistentVolume) []string {
+	if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != NVMeshStorageClassProvisioner {
+		return r.csiVolumeMountOptions
+	}
+	return mergeMountOptions(nvmeshRequiredMountOptions, r.csiVolumeMountOptions)
+}
+
+// mergeMountOptions concatenates the given option lists, preserving order and
+// dropping duplicates so the result is stable enough to compare against a PV.
+func mergeMountOptions(lists ...[]string) []string {
+	merged := []string{}
+	seen := sets.New[string]()
+	for _, list := range lists {
+		for _, opt := range list {
+			if seen.Has(opt) {
+				continue
+			}
+			seen.Insert(opt)
+			merged = append(merged, opt)
+		}
+	}
+	return merged
+}
+
+// reconcileSecondaryPVMountOptions patches a secondary PV whose mount options no
+// longer match what the current configuration requires. CSI drivers read mount
+// options when the volume is mounted, so a patch applies to the next mount and
+// leaves volumes that are already mounted untouched.
+func (r *Reconciler) reconcileSecondaryPVMountOptions(ctx context.Context,
+	secondaryPV *corev1.PersistentVolume,
+) error {
+	log := logf.FromContext(ctx)
+
+	want := r.resolveCacheMountOptions(secondaryPV)
+	if slices.Equal(secondaryPV.Spec.MountOptions, want) {
+		return nil
+	}
+
+	secondaryPVOld := secondaryPV.DeepCopy()
+	secondaryPV.Spec.MountOptions = want
+	if err := r.Client.Patch(ctx, secondaryPV, client.MergeFrom(secondaryPVOld)); err != nil {
+		return fmt.Errorf("patch secondary PV mount options: %w", err)
+	}
+	log.Info("Reconciled secondary PV mount options", "pv", secondaryPV.Name,
+		"from", secondaryPVOld.Spec.MountOptions, "to", want)
+
+	return nil
+}
+
 func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 	st nvcav1new.StorageRequest, stCopy *nvcav1new.StorageRequest,
 	icmsReq *nvcav2beta1.ICMSRequest,
@@ -703,7 +765,7 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		}
 		maps.Copy(secondaryPV.Labels, getClusterWideResourceLabels(stCopy))
 		secondaryPV.Spec.AccessModes = accessModesRO
-		secondaryPV.Spec.MountOptions = r.csiVolumeMountOptions
+		secondaryPV.Spec.MountOptions = r.resolveCacheMountOptions(secondaryPV)
 		secondaryPV.Spec.ClaimRef = &corev1.ObjectReference{
 			APIVersion: "v1",
 			Kind:       "PersistentVolumeClaim",
@@ -726,6 +788,17 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		log.Info("Secondary PV created", "pv", secondaryPV.Name)
 	} else {
 		log.V(1).Info("Secondary PV already exists, checking status", "pv", secondaryPV.Name)
+		// Mount options are mutable via NGC/NVCFBackend, so an existing PV can be
+		// left behind when the configuration changes.
+		if err := r.reconcileSecondaryPVMountOptions(ctx, secondaryPV); err != nil {
+			if k8sutil.IsTransientK8sError(err) {
+				log.V(1).Info("Transient error reconciling secondary PV mount options, will retry",
+					"pv", secondaryPV.Name)
+				return reconcile.Result{Requeue: true}, nil
+			}
+			log.Error(err, "Failed to reconcile secondary PV mount options", "pv", secondaryPV.Name)
+			return reconcile.Result{}, err
+		}
 	}
 	// Next the RO PVC.
 	roPVC := &corev1.PersistentVolumeClaim{}

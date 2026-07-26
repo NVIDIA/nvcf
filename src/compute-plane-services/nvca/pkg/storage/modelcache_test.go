@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -559,6 +560,154 @@ func TestGetPrimaryPV(t *testing.T) {
 			_, err := r.getPrimaryPV(context.Background(), st)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("getPrimaryPV() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestResolveCacheMountOptions(t *testing.T) {
+	tests := []struct {
+		name       string
+		driver     string
+		noCSI      bool
+		configured []string
+		want       []string
+	}{
+		{
+			name:       "nvmesh gets required options when nothing configured",
+			driver:     NVMeshStorageClassProvisioner,
+			configured: nil,
+			want:       []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name:       "nvmesh keeps required options when configuration omits them",
+			driver:     NVMeshStorageClassProvisioner,
+			configured: []string{"noatime"},
+			want:       []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:       "nvmesh does not duplicate options already configured",
+			driver:     NVMeshStorageClassProvisioner,
+			configured: []string{"nouuid", "noatime"},
+			want:       []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:       "other driver uses configured options unchanged",
+			driver:     "smb.csi.k8s.io",
+			configured: []string{"vers=3.0", "dir_mode=0777"},
+			want:       []string{"vers=3.0", "dir_mode=0777"},
+		},
+		{
+			name:       "other driver with no configuration gets nothing",
+			driver:     "smb.csi.k8s.io",
+			configured: nil,
+			want:       nil,
+		},
+		{
+			name:       "pv without csi source falls back to configuration",
+			noCSI:      true,
+			configured: []string{"noatime"},
+			want:       []string{"noatime"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
+			if !tt.noCSI {
+				pv.Spec.CSI = &corev1.CSIPersistentVolumeSource{Driver: tt.driver}
+			}
+
+			r := &Reconciler{csiVolumeMountOptions: tt.configured}
+			if got := r.resolveCacheMountOptions(pv); !slices.Equal(got, tt.want) {
+				t.Errorf("resolveCacheMountOptions() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReconcileSecondaryPVMountOptions(t *testing.T) {
+	tests := []struct {
+		name       string
+		driver     string
+		existing   []string
+		configured []string
+		want       []string
+		wantPatch  bool
+	}{
+		{
+			name:       "nvmesh pv missing required options is repaired",
+			driver:     NVMeshStorageClassProvisioner,
+			existing:   nil,
+			configured: nil,
+			want:       []string{"ro", "norecovery", "nouuid"},
+			wantPatch:  true,
+		},
+		{
+			name:       "nvmesh pv is not stripped when configuration is empty",
+			driver:     NVMeshStorageClassProvisioner,
+			existing:   []string{"ro", "norecovery", "nouuid"},
+			configured: nil,
+			want:       []string{"ro", "norecovery", "nouuid"},
+			wantPatch:  false,
+		},
+		{
+			name:       "nvmesh pv picks up newly configured options",
+			driver:     NVMeshStorageClassProvisioner,
+			existing:   []string{"ro", "norecovery", "nouuid"},
+			configured: []string{"noatime"},
+			want:       []string{"ro", "norecovery", "nouuid", "noatime"},
+			wantPatch:  true,
+		},
+		{
+			name:       "matching pv is left alone",
+			driver:     "smb.csi.k8s.io",
+			existing:   []string{"vers=3.0"},
+			configured: []string{"vers=3.0"},
+			want:       []string{"vers=3.0"},
+			wantPatch:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pv := &corev1.PersistentVolume{
+				ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"},
+				Spec: corev1.PersistentVolumeSpec{
+					MountOptions: tt.existing,
+					PersistentVolumeSource: corev1.PersistentVolumeSource{
+						CSI: &corev1.CSIPersistentVolumeSource{
+							Driver:       tt.driver,
+							VolumeHandle: "handle",
+						},
+					},
+				},
+			}
+			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(pv).Build()
+			r := &Reconciler{Client: c, csiVolumeMountOptions: tt.configured}
+
+			stored := &corev1.PersistentVolume{}
+			if err := c.Get(context.Background(), client.ObjectKey{Name: "secondary-pv-test"}, stored); err != nil {
+				t.Fatalf("get pv before reconcile: %v", err)
+			}
+			rvBefore := stored.ResourceVersion
+
+			if err := r.reconcileSecondaryPVMountOptions(context.Background(), pv); err != nil {
+				t.Fatalf("reconcileSecondaryPVMountOptions() error = %v", err)
+			}
+
+			got := &corev1.PersistentVolume{}
+			if err := c.Get(context.Background(), client.ObjectKey{Name: "secondary-pv-test"}, got); err != nil {
+				t.Fatalf("get pv: %v", err)
+			}
+			if !slices.Equal(got.Spec.MountOptions, tt.want) {
+				t.Errorf("persisted mount options = %v, want %v", got.Spec.MountOptions, tt.want)
+			}
+			// An unchanged PV must not be written, otherwise every reconcile
+			// would issue a patch and churn the API server.
+			if patched := got.ResourceVersion != rvBefore; patched != tt.wantPatch {
+				t.Errorf("patched = %v, want %v (resourceVersion %s -> %s)",
+					patched, tt.wantPatch, rvBefore, got.ResourceVersion)
 			}
 		})
 	}
