@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.starlark.net/syntax"
 )
 
 // fakeTree lets the measurement functions be tested without a git repository.
@@ -279,23 +281,6 @@ func TestOCIPullsExcludesVendor(t *testing.T) {
 	}
 }
 
-func TestFindCallsIgnoresCommentsAndStrings(t *testing.T) {
-	src := "# oci.pull(fake)\nSOME = \"oci.pull(also fake)\"\noci.pull(\n    image = \"x\",\n)\n"
-	calls, err := FindCalls(src, "oci.pull")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(calls) != 1 {
-		t.Fatalf("got %d calls, want 1", len(calls))
-	}
-}
-
-func TestFindCallsRejectsUnterminated(t *testing.T) {
-	if _, err := FindCalls("oci.pull(\n    image = \"x\",\n", "oci.pull"); err == nil {
-		t.Fatal("expected an error for an unterminated call")
-	}
-}
-
 // --- repository-level behavior -------------------------------------------
 
 func gitInit(t *testing.T, root string) {
@@ -442,60 +427,6 @@ func TestConsolidatedRepositoryReportsSuccessfully(t *testing.T) {
 
 // --- cases from the seventh review pass ------------------------------------
 
-func TestFindCallsAcceptsSpaceBeforeParenthesis(t *testing.T) {
-	// Starlark permits `oci.pull (`. Requiring the literal "oci.pull(" made
-	// such declarations disappear from the inventory rather than fail, which is
-	// the silent-undercount failure mode this tool exists to avoid.
-	for _, src := range []string{
-		"oci.pull (\n    image = \"x\",\n    tag = \"v1\",\n)\n",
-		"oci.pull\t(\n    image = \"x\",\n    tag = \"v1\",\n)\n",
-		"oci.pull\n(\n    image = \"x\",\n    tag = \"v1\",\n)\n",
-	} {
-		calls, err := FindCalls(src, "oci.pull")
-		if err != nil {
-			t.Errorf("source %q: unexpected error: %v", src, err)
-			continue
-		}
-		if len(calls) != 1 {
-			t.Errorf("source %q: got %d calls, want 1", src, len(calls))
-		}
-	}
-}
-
-func TestStringAttrRejectsExpressions(t *testing.T) {
-	// A literal followed or preceded by an operator is an expression. Reporting
-	// its first operand as the value would be wrong, not merely imprecise.
-	for name, body := range map[string]string{
-		"concatenation": "version = \"1.25.0\" + GO_SUFFIX,",
-		"prefixed":      "version = GO_PREFIX + \"1.25.0\",",
-		"format":        "version = \"1.25.%s\" % PATCH,",
-	} {
-		t.Run(name, func(t *testing.T) {
-			value, literal, found := StringAttr(body, "version")
-			if !found {
-				t.Fatal("attribute should be found")
-			}
-			if literal {
-				t.Errorf("expression reported as literal %q", value)
-			}
-		})
-	}
-}
-
-func TestStringAttrAcceptsPlainLiteral(t *testing.T) {
-	for _, body := range []string{
-		"version = \"1.25.0\",",
-		"version = \"1.25.0\"",
-		"version = '1.25.0',\n",
-		"version = \"1.25.0\" ,\n    name = \"go\",",
-	} {
-		value, literal, found := StringAttr(body, "version")
-		if !found || !literal || value != "1.25.0" {
-			t.Errorf("body %q: got (%q, literal=%v, found=%v)", body, value, literal, found)
-		}
-	}
-}
-
 func TestBazelVersionsAcceptsReleaseCandidates(t *testing.T) {
 	// Bazel ships release candidates such as 9.0.0rc1 and pre-release builds.
 	// Rejecting them would fail on a legitimate pin.
@@ -572,5 +503,120 @@ func TestOCIPullsValidation(t *testing.T) {
 			}
 			tc.check(t, got)
 		})
+	}
+}
+
+// --- parser-level behavior (AST) -------------------------------------------
+
+func parse(t *testing.T, src string) *syntax.File {
+	t.Helper()
+	f, err := ParseModule("MODULE.bazel", src)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	return f
+}
+
+func TestFindCallsHandlesSyntaxVariants(t *testing.T) {
+	// Each of these was a separate scanner defect at some point. With a real
+	// parser they are all the same case.
+	for name, src := range map[string]string{
+		"plain":              "oci.pull(image = \"x\", tag = \"v1\")\n",
+		"space before paren": "oci.pull (\n    image = \"x\",\n    tag = \"v1\",\n)\n",
+		"indented close":     "oci.pull(\n    image = \"x\",\n    tag = \"v1\",\n    )\n",
+		"single quotes":      "oci.pull(\n    image = 'x',\n    tag = 'v1',\n)\n",
+		"comment inside":     "oci.pull(\n    # note )\n    image = \"x\",\n    tag = \"v1\",\n)\n",
+		"trailing comma":     "oci.pull(\n    image = \"x\",\n    tag = \"v1\",\n)\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := FindCalls(parse(t, src), "oci", "pull")
+			if len(calls) != 1 {
+				t.Fatalf("got %d calls, want 1", len(calls))
+			}
+			if v, literal, found := calls[0].Attr("image"); !found || !literal || v != "x" {
+				t.Errorf("image: got (%q, %v, %v)", v, literal, found)
+			}
+		})
+	}
+}
+
+func TestFindCallsResolvesExtensionAliases(t *testing.T) {
+	// The receiver name is arbitrary. Assuming the conventional "oci" made
+	// aliased files report zero declarations.
+	src := "images = use_extension(\"@rules_oci//oci:extensions.bzl\", \"oci\")\n" +
+		"images.pull(\n    image = \"nvcr.io/x\",\n    tag = \"v1\",\n)\n"
+	f := parse(t, src)
+	if got := ExtensionAliases(f)["images"]; got != "oci" {
+		t.Fatalf("alias images resolved to %q, want oci", got)
+	}
+	if calls := FindCalls(f, "oci", "pull"); len(calls) != 1 {
+		t.Errorf("got %d calls through the alias, want 1", len(calls))
+	}
+}
+
+func TestFindCallsIgnoresUnrelatedReceivers(t *testing.T) {
+	src := "other = use_extension(\"@x//:y.bzl\", \"something_else\")\n" +
+		"other.pull(image = \"x\", tag = \"v1\")\n"
+	if calls := FindCalls(parse(t, src), "oci", "pull"); len(calls) != 0 {
+		t.Errorf("got %d calls, want 0 for an unrelated extension", len(calls))
+	}
+}
+
+func TestFindCallsIgnoresCommentsAndStrings(t *testing.T) {
+	src := "# oci.pull(fake)\nSOME = \"oci.pull(also fake)\"\n" +
+		"oci.pull(\n    image = \"x\",\n    tag = \"v1\",\n)\n"
+	if calls := FindCalls(parse(t, src), "oci", "pull"); len(calls) != 1 {
+		t.Fatalf("got %d calls, want 1", len(calls))
+	}
+}
+
+func TestParseModuleRejectsInvalidSyntax(t *testing.T) {
+	if _, err := ParseModule("MODULE.bazel", "oci.pull(\n    image = \"x\",\n"); err == nil {
+		t.Fatal("expected a parse error for an unterminated call")
+	}
+}
+
+func TestStringLiteralsAreDecoded(t *testing.T) {
+	// The parser decodes escapes and triple-quoted strings. A scanner returning
+	// raw source text produced wrong image and registry values while reporting
+	// success.
+	src := "oci.pull(\n" +
+		"    image = \"nvcr.io/a\\u002Db\",\n" +
+		"    tag = '''v1''',\n" +
+		")\n"
+	calls := FindCalls(parse(t, src), "oci", "pull")
+	if len(calls) != 1 {
+		t.Fatalf("got %d calls, want 1", len(calls))
+	}
+	if v, _, _ := calls[0].Attr("image"); v != "nvcr.io/a-b" {
+		t.Errorf("image decoded to %q, want nvcr.io/a-b", v)
+	}
+	if v, _, _ := calls[0].Attr("tag"); v != "v1" {
+		t.Errorf("triple-quoted tag decoded to %q, want v1", v)
+	}
+}
+
+func TestAttrDistinguishesAbsentFromNonLiteral(t *testing.T) {
+	src := "oci.pull(\n    image = \"x\" + SUFFIX,\n    tag = \"v1\",\n)\n"
+	calls := FindCalls(parse(t, src), "oci", "pull")
+	if len(calls) != 1 {
+		t.Fatalf("got %d calls, want 1", len(calls))
+	}
+	if _, literal, found := calls[0].Attr("image"); !found || literal {
+		t.Errorf("concatenated image: literal=%v found=%v, want found and not literal", literal, found)
+	}
+	if _, _, found := calls[0].Attr("digest"); found {
+		t.Error("absent digest reported as found")
+	}
+}
+
+func TestBazelVersionsRejectsInvalidReleaseSuffixes(t *testing.T) {
+	// The permissive pattern accepted 9.0.0foo and 9.0.0foo.
+	for _, v := range []string{"9.0.0foo", "9.0.0foo.", "9.0.0-", "9.0.0.", "9.0.0rc"} {
+		if _, err := BazelVersions(newTree(map[string]string{
+			"src/a/.bazelversion": v + "\n",
+		})); err == nil {
+			t.Errorf("version %q accepted, want rejected", v)
+		}
 	}
 }

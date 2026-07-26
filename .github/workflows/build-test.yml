@@ -82,3 +82,9 @@ jobs:
 
       - name: End-to-end fixtures
         run: tools/scripts/test/test-bazel-consolidation-inventory
+
+      # Running the tool against this repository is the check that matters:
+      # unit tests and fixtures use synthetic inputs, so only this catches a
+      # real MODULE.bazel form the parser cannot interpret.
+      - name: Run the inventory against this repository
+        run: tools/ci/bazel-consolidation-inventory

@@ -3,7 +3,7 @@
 Status: proposed. Not started.
 Owner: TBD.
 
-Measurements below were taken on main `1c29b4b7` (2026-07-25). They move.
+Measurements below were taken on main `1f8ea711` (2026-07-26). They move.
 Regenerate them with `tools/ci/bazel-consolidation-inventory` rather than
 trusting this prose, and update the stamp above when they change. The first
 draft of this document was invalidated within hours by an in-flight change that
@@ -95,11 +95,16 @@ mechanical. Removing a workspace root changes what its labels mean.
 - `//:__subpackages__` currently scopes to one service. Under the repository
   root it expands to the entire repository. There are 156 such declarations
   outside vendored code.
-- There are 644 `//visibility:public` occurrences outside vendored code and
-  zero `package_group` definitions. The expressed API surface is therefore very
-  broad and uniform rather than absent: almost everything is public, and nothing
+- There are 647 `//visibility:public` occurrences outside vendored code and
+  one `package_group` definition. The expressed API surface is therefore very
+  broad and nearly uniform: almost everything is public, and exactly one place
   declares a narrow boundary. Consolidation must inventory that surface before
   restricting it, because today's breadth is load-bearing for consumers.
+
+  That single `package_group` arrived with the notary import, which replaced two
+  root-relative `__subpackages__` visibility entries with a named group. It is
+  the pattern this phase generalizes, and it is worth noting that it appeared
+  without this plan: the need is being felt independently.
 
 Before any boundary is removed, define: default-private service packages,
 explicit exported APIs, allowed cross-layer dependency groups, a query or aspect

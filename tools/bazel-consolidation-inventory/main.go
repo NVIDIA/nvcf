@@ -64,7 +64,7 @@ var (
 	// A Bazel version is a release identifier, not merely a token starting with
 	// a digit. Accepting "9-not-a-version" previously let a malformed pin be
 	// reported as though it were a real version.
-	versionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+([-.]?[0-9A-Za-z][0-9A-Za-z.-]*)?$`)
+	versionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|-pre\.[0-9]+(\.[0-9]+)*)?$`)
 	semverRe  = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	digestRe  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	digitsRe  = regexp.MustCompile(`[0-9]+`)
@@ -267,13 +267,14 @@ func GoSDKVersions(t *Tree, includeVendor bool, label string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		calls, err := FindCalls(text, "go_sdk.download")
+		file, err := ParseModule(path, text)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", path, err)
+			return "", err
 		}
+		calls := FindCalls(file, "go_sdk", "download")
 		total += len(calls)
 		for _, call := range calls {
-			value, literal, found := StringAttr(call.Body, "version")
+			value, literal, found := call.Attr("version")
 			if !found {
 				return "", fmt.Errorf(
 					"%s:%d: %s go_sdk.download has no version attribute",
@@ -322,12 +323,12 @@ func OCIPulls(t *Tree) (Pulls, error) {
 		if err != nil {
 			return Pulls{}, err
 		}
-		calls, err := FindCalls(text, "oci.pull")
+		file, err := ParseModule(path, text)
 		if err != nil {
-			return Pulls{}, fmt.Errorf("%s: %w", path, err)
+			return Pulls{}, err
 		}
-		for _, call := range calls {
-			image, literal, found := StringAttr(call.Body, "image")
+		for _, call := range FindCalls(file, "oci", "pull") {
+			image, literal, found := call.Attr("image")
 			if !found {
 				return Pulls{}, fmt.Errorf(
 					"%s:%d: oci.pull has no image attribute", path, call.Line)
@@ -343,14 +344,14 @@ func OCIPulls(t *Tree) (Pulls, error) {
 			if strings.HasPrefix(image, "nvcr.io/") {
 				p.FromNVCR++
 			}
-			digest, digestLiteral, digestFound := StringAttr(call.Body, "digest")
+			digest, digestLiteral, digestFound := call.Attr("digest")
 			switch {
 			case !digestFound:
 				// Classify as tag-only only if a literal tag actually exists.
 				// A declaration with neither a digest nor a readable tag is one
 				// this tool cannot classify, and silently counting it as
 				// tag-only would overstate a number the plan acts on.
-				tag, tagLiteral, tagFound := StringAttr(call.Body, "tag")
+				tag, tagLiteral, tagFound := call.Attr("tag")
 				if !tagFound {
 					return Pulls{}, fmt.Errorf(
 						"%s:%d: oci.pull for %q has neither a digest nor a tag",

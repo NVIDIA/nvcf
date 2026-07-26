@@ -17,233 +17,174 @@ package main
 
 import (
 	"fmt"
-	"strings"
+	"sort"
+
+	"go.starlark.net/syntax"
 )
 
-// Minimal Starlark call scanning, sufficient for the MODULE.bazel declarations
-// this tool measures.
+// Starlark analysis of MODULE.bazel files, using a real parser.
 //
-// A regular expression is not sufficient here, and trying to use one produced
-// real defects: a pattern anchored on a closing parenthesis at column zero
-// missed calls with an indented ")", a pattern matching only double quotes
-// missed single-quoted attributes, and scanning a call body for any version-like
-// token picked up numbers from trailing comments. Balanced-parenthesis scanning
-// that understands strings and comments avoids all three by construction.
+// Earlier versions scanned text: first with regular expressions, then with a
+// hand-written balanced-parenthesis scanner. Review found a new syntax case
+// each round that the scanner mishandled, always in the same direction, by
+// treating an input it could not interpret as one that was not there: an
+// indented closing parenthesis, single-quoted attributes, whitespace before the
+// parenthesis, a concatenation reported as its first operand. Each fix was
+// correct and the next case appeared elsewhere, because a scanner approximates
+// a grammar and the gap between them is unbounded.
+//
+// This uses go.starlark.net/syntax, the parser for the language these files are
+// actually written in. Escapes and triple-quoted strings are decoded by the
+// parser rather than by us, and extension aliases are resolved from the file's
+// own assignments instead of assuming a conventional receiver name.
 
-// Call is one occurrence of name(...) in a source file.
+// Call is one resolved extension method call, such as oci.pull.
 type Call struct {
-	// Body is the text between the outer parentheses.
-	Body string
-	// Line is the 1-indexed line where the call starts, for error messages.
-	Line int
+	// Attrs holds keyword arguments whose values are string literals, already
+	// decoded by the parser.
+	Attrs map[string]string
+	// NonLiteral holds keyword arguments that are present but are not string
+	// literals, for example `image = BASE_IMAGE` or a concatenation. These are
+	// recorded rather than dropped, so callers can fail on them instead of
+	// mistaking them for absent attributes.
+	NonLiteral map[string]bool
+	// Line is the 1-indexed line of the call, for error messages.
+	Line int32
 }
 
-// FindCalls returns every top-level occurrence of name( ... ) in src.
+// Attr returns a string-literal attribute.
 //
-// Parentheses inside string literals and comments do not affect nesting, so a
-// call whose closing parenthesis is indented, or whose attributes contain
-// parentheses, is still bounded correctly.
-func FindCalls(src, name string) ([]Call, error) {
-	var calls []Call
-	for i := 0; i < len(src); {
-		idx := strings.Index(src[i:], name)
-		if idx < 0 {
-			break
-		}
-		start := i + idx
-		next := start + len(name)
-		// Require a call rather than a longer identifier ending in name.
-		if start > 0 && isIdentByte(src[start-1]) {
-			i = next
-			continue
-		}
-		// Starlark permits whitespace between the callee and the opening
-		// parenthesis, so `oci.pull (` is the same call as `oci.pull(`.
-		paren := next
-		for paren < len(src) && (src[paren] == ' ' || src[paren] == '\t' ||
-			src[paren] == '\n' || src[paren] == '\r') {
-			paren++
-		}
-		if paren >= len(src) || src[paren] != '(' {
-			i = next
-			continue
-		}
-		if isIdentByte(src[next]) {
-			i = next
-			continue
-		}
-		if inCommentOrString(src[:start]) {
-			i = next
-			continue
-		}
-		open := paren + 1
-		end, err := matchParen(src, open)
-		if err != nil {
-			return nil, fmt.Errorf("%s at line %d: %w", name, lineOf(src, start), err)
-		}
-		calls = append(calls, Call{Body: src[open:end], Line: lineOf(src, start)})
-		i = end + 1
+// literal is false when the attribute is present but is not a string literal;
+// found is false when it is absent. Callers must distinguish the two, because
+// treating an uninterpretable value as an absent one is exactly the defect this
+// file exists to prevent.
+func (c Call) Attr(key string) (value string, literal bool, found bool) {
+	if v, ok := c.Attrs[key]; ok {
+		return v, true, true
 	}
-	return calls, nil
-}
-
-func isIdentByte(b byte) bool {
-	return b == '_' || b == '.' ||
-		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
-}
-
-func lineOf(src string, pos int) int {
-	return strings.Count(src[:pos], "\n") + 1
-}
-
-// matchParen returns the index of the parenthesis closing the one just before
-// open, ignoring parentheses inside strings and comments.
-func matchParen(src string, open int) (int, error) {
-	depth := 1
-	for i := open; i < len(src); i++ {
-		switch src[i] {
-		case '#':
-			// Comment runs to end of line.
-			nl := strings.IndexByte(src[i:], '\n')
-			if nl < 0 {
-				return 0, fmt.Errorf("unterminated call: comment reaches end of file")
-			}
-			i += nl
-		case '"', '\'':
-			end, err := skipString(src, i)
-			if err != nil {
-				return 0, err
-			}
-			i = end
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return i, nil
-			}
-		}
-	}
-	return 0, fmt.Errorf("unterminated call: no matching closing parenthesis")
-}
-
-// skipString returns the index of the closing quote of the literal starting at
-// start. Triple-quoted strings are handled because Starlark allows them.
-func skipString(src string, start int) (int, error) {
-	quote := src[start]
-	triple := strings.HasPrefix(src[start:], strings.Repeat(string(quote), 3))
-	if triple {
-		closing := strings.Repeat(string(quote), 3)
-		idx := strings.Index(src[start+3:], closing)
-		if idx < 0 {
-			return 0, fmt.Errorf("unterminated triple-quoted string")
-		}
-		return start + 3 + idx + 2, nil
-	}
-	for i := start + 1; i < len(src); i++ {
-		switch src[i] {
-		case '\\':
-			i++
-		case quote:
-			return i, nil
-		case '\n':
-			return 0, fmt.Errorf("unterminated string literal")
-		}
-	}
-	return 0, fmt.Errorf("unterminated string literal")
-}
-
-// inCommentOrString reports whether the end of prefix falls inside a comment or
-// string literal, which would mean a following call token is not real code.
-func inCommentOrString(prefix string) bool {
-	for i := 0; i < len(prefix); i++ {
-		switch prefix[i] {
-		case '#':
-			nl := strings.IndexByte(prefix[i:], '\n')
-			if nl < 0 {
-				return true
-			}
-			i += nl
-		case '"', '\'':
-			end, err := skipString(prefix, i)
-			if err != nil {
-				return true
-			}
-			i = end
-		}
-	}
-	return false
-}
-
-// StringAttr returns the value of a `key = "value"` attribute in a call body.
-//
-// found is false when the attribute is absent. literal is false when the
-// attribute is present but bound to something other than a string literal, for
-// example `image = BASE_IMAGE`. Callers must treat a non-literal attribute as
-// an input they cannot interpret rather than as an absent one; conflating the
-// two is what previously let unparseable declarations be reported as zero.
-func StringAttr(body, key string) (value string, literal bool, found bool) {
-	for i := 0; i < len(body); i++ {
-		switch body[i] {
-		case '#':
-			nl := strings.IndexByte(body[i:], '\n')
-			if nl < 0 {
-				return "", false, false
-			}
-			i += nl
-			continue
-		case '"', '\'':
-			end, err := skipString(body, i)
-			if err != nil {
-				return "", false, false
-			}
-			i = end
-			continue
-		}
-		if !strings.HasPrefix(body[i:], key) {
-			continue
-		}
-		// The key must be a whole word.
-		if i > 0 && isIdentByte(body[i-1]) {
-			continue
-		}
-		j := i + len(key)
-		if j < len(body) && isIdentByte(body[j]) {
-			continue
-		}
-		for j < len(body) && (body[j] == ' ' || body[j] == '\t') {
-			j++
-		}
-		if j >= len(body) || body[j] != '=' {
-			continue
-		}
-		j++
-		for j < len(body) && (body[j] == ' ' || body[j] == '\t' || body[j] == '\n') {
-			j++
-		}
-		if j >= len(body) {
-			return "", false, true
-		}
-		if body[j] != '"' && body[j] != '\'' {
-			// Present, but not a string literal.
-			return "", false, true
-		}
-		end, err := skipString(body, j)
-		if err != nil {
-			return "", false, true
-		}
-		// The string must be the whole value. `version = "1.25.0" + SUFFIX`
-		// starts with a literal but is an expression, and reporting its first
-		// operand as the value would be wrong rather than merely imprecise.
-		k := end + 1
-		for k < len(body) && (body[k] == ' ' || body[k] == '\t' ||
-			body[k] == '\n' || body[k] == '\r') {
-			k++
-		}
-		if k < len(body) && body[k] != ',' && body[k] != ')' {
-			return "", false, true
-		}
-		return body[j+1 : end], true, true
+	if c.NonLiteral[key] {
+		return "", false, true
 	}
 	return "", false, false
+}
+
+// ParseModule parses a MODULE.bazel file into an AST.
+func ParseModule(path, src string) (*syntax.File, error) {
+	f, err := syntax.Parse(path, src, 0)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse %s: %w", path, err)
+	}
+	return f, nil
+}
+
+// ExtensionAliases maps local variable names to the extension they are bound to
+// by use_extension.
+//
+// MODULE.bazel conventionally writes `oci = use_extension(..., "oci")`, but the
+// local name is arbitrary: `images = use_extension(..., "oci")` makes
+// `images.pull(...)` the same call. Hard-coding the conventional receiver meant
+// such files reported zero declarations.
+//
+// The extension is identified by the second positional argument to
+// use_extension, which names the extension within the module file.
+func ExtensionAliases(f *syntax.File) map[string]string {
+	aliases := map[string]string{}
+	for _, stmt := range f.Stmts {
+		assign, ok := stmt.(*syntax.AssignStmt)
+		if !ok || assign.Op != syntax.EQ {
+			continue
+		}
+		lhs, ok := assign.LHS.(*syntax.Ident)
+		if !ok {
+			continue
+		}
+		call, ok := assign.RHS.(*syntax.CallExpr)
+		if !ok {
+			continue
+		}
+		fn, ok := call.Fn.(*syntax.Ident)
+		if !ok || fn.Name != "use_extension" {
+			continue
+		}
+		var positional []string
+		for _, arg := range call.Args {
+			if binary, isKeyword := arg.(*syntax.BinaryExpr); isKeyword && binary.Op == syntax.EQ {
+				continue
+			}
+			lit, ok := arg.(*syntax.Literal)
+			if !ok {
+				continue
+			}
+			if s, ok := lit.Value.(string); ok {
+				positional = append(positional, s)
+			}
+		}
+		if len(positional) >= 2 {
+			aliases[lhs.Name] = positional[1]
+		}
+	}
+	return aliases
+}
+
+// FindCalls returns every call to <extension>.<method> in the file, resolving
+// local aliases established by use_extension.
+//
+// extension is the name as it appears in use_extension, for example "oci" or
+// "go_sdk". A call written directly against that name is also matched, so files
+// that do not alias still work.
+func FindCalls(f *syntax.File, extension, method string) []Call {
+	receivers := map[string]bool{extension: true}
+	for local, ext := range ExtensionAliases(f) {
+		if ext == extension {
+			receivers[local] = true
+		}
+	}
+
+	var calls []Call
+	syntax.Walk(f, func(n syntax.Node) bool {
+		call, ok := n.(*syntax.CallExpr)
+		if !ok {
+			return true
+		}
+		dot, ok := call.Fn.(*syntax.DotExpr)
+		if !ok || dot.Name.Name != method {
+			return true
+		}
+		recv, ok := dot.X.(*syntax.Ident)
+		if !ok || !receivers[recv.Name] {
+			return true
+		}
+		calls = append(calls, newCall(call))
+		return true
+	})
+	sort.Slice(calls, func(i, j int) bool { return calls[i].Line < calls[j].Line })
+	return calls
+}
+
+func newCall(expr *syntax.CallExpr) Call {
+	c := Call{
+		Attrs:      map[string]string{},
+		NonLiteral: map[string]bool{},
+		Line:       expr.Lparen.Line,
+	}
+	for _, arg := range expr.Args {
+		binary, ok := arg.(*syntax.BinaryExpr)
+		if !ok || binary.Op != syntax.EQ {
+			continue
+		}
+		key, ok := binary.X.(*syntax.Ident)
+		if !ok {
+			continue
+		}
+		// The parser has already decoded escapes and triple-quoted strings, so
+		// this is the actual string value rather than its source text.
+		if lit, ok := binary.Y.(*syntax.Literal); ok {
+			if s, ok := lit.Value.(string); ok {
+				c.Attrs[key.Name] = s
+				continue
+			}
+		}
+		c.NonLiteral[key.Name] = true
+	}
+	return c
 }
