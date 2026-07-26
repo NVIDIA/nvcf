@@ -145,8 +145,13 @@ lock_mb="$(any '(^|/)MODULE\.bazel\.lock$' | cat_of | wc -c \
 
 bazelrc_count="$(first_party '^src/.*/\.bazelrc$' | n_of)"
 bazelrc_distinct="$(first_party '^src/.*/\.bazelrc$' | distinct_of)"
+# Zero subtree .bazelversion files is the intended post-consolidation state, not
+# an error. A raw grep returns status 1 on no match, which under pipefail aborted
+# the whole run silently, meaning the tool could never report its own success
+# condition.
 bazelversions="$(first_party '^src/.*/\.bazelversion$' | cat_of \
-  | grep -E '^[0-9]' | sort -V | uniq -c | awk '{ printf "%s on %s  ", $1, $2 }')"
+  | grep_sel -E '^[0-9]' | sort -V | uniq -c | awk '{ printf "%s on %s  ", $1, $2 }')"
+[ -n "${bazelversions}" ] || bazelversions="none (all subtrees use the root version)"
 
 ws_count="$(any '(^|/)workspace_status\.sh$' | n_of)"
 ws_distinct="$(any '(^|/)workspace_status\.sh$' | distinct_of)"
@@ -166,9 +171,13 @@ nvca_vendored="$(any '^src/compute-plane-services/nvca/vendor/.*/BUILD\.bazel$' 
 # Reported separately: a vendored module pinning an old Go SDK is not evidence
 # that first-party code spans that range.
 go_first_party="$(first_party '(^|/)MODULE\.bazel$' | cat_of \
-  | grep 'go_sdk.download' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')"
+  | grep_sel 'go_sdk.download' | grep_sel -oE '[0-9]+\.[0-9]+\.[0-9]+' \
+  | sort -uV | tr '\n' ' ')"
+[ -n "${go_first_party}" ] || go_first_party="none"
 go_vendored_only="$(any '(^|/)MODULE\.bazel$' | cat_of \
-  | grep 'go_sdk.download' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')"
+  | grep_sel 'go_sdk.download' | grep_sel -oE '[0-9]+\.[0-9]+\.[0-9]+' \
+  | sort -uV | tr '\n' ' ')"
+[ -n "${go_vendored_only}" ] || go_vendored_only="none"
 
 oci_report="$(first_party '(^|/)MODULE\.bazel$' | python3 -c '
 import re, sys

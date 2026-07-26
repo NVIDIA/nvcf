@@ -358,6 +358,37 @@ assert_absent "${OUT_GREP}" "no measurements printed when a selector fails" \
 rm -rf "${GREPBIN}"
 
 echo
+echo "== fixture: the post-consolidation shape reports successfully =="
+# Zero subtree .bazelversion files is the goal state, not an error. A raw grep
+# returns 1 on no match, which under pipefail aborted the run with no output and
+# no message, so the tool could never report the very outcome it exists to track.
+make_tempdir
+DONE_REPO="${TEMPDIR_OUT}/consolidated"
+mkdir -p "${DONE_REPO}/src/svc" "${DONE_REPO}/rules/oci"
+git -C "${DONE_REPO}" init -q
+git -C "${DONE_REPO}" config user.email fixture@example.com
+git -C "${DONE_REPO}" config user.name Fixture
+printf 'module(name = "root")\n' >"${DONE_REPO}/MODULE.bazel"
+printf '{}\n' >"${DONE_REPO}/MODULE.bazel.lock"
+printf 'go_library(name = "x")\n' >"${DONE_REPO}/src/svc/BUILD.bazel"
+printf 'root oci defs\n' >"${DONE_REPO}/rules/oci/defs.bzl"
+git -C "${DONE_REPO}" add -A
+git -C "${DONE_REPO}" commit -qm "consolidated"
+
+if OUT_DONE="$(cd "${DONE_REPO}" && "${INVENTORY}" "${DONE_REPO}" 2>&1)"; then
+    pass "a fully consolidated repository reports successfully"
+else
+    fail "consolidated repository failed to report:"
+    sed 's/^/    /' <<<"${OUT_DONE}" >&2
+fi
+assert_line "${OUT_DONE}" "zero nested service modules is reported, not an error" \
+    "service modules (src, excluding vendor) : 0"
+assert_line "${OUT_DONE}" "empty version distribution is normalized" \
+    "subtree .bazelversion values            : none"
+assert_line "${OUT_DONE}" "absent Go SDK pins are normalized" \
+    "go_sdk.download (first-party)           : none"
+
+echo
 echo "== failure propagation =="
 # The tool must not report success when a measurement cannot be taken. Running
 # outside a git repository is the cheapest way to force that.

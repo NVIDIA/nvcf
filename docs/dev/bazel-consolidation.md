@@ -120,8 +120,10 @@ There are two layers:
    reverse dependencies, and falls back to a full build for non-modify changes,
    global files, and file types it does not model. Every other row, and every
    non-pull-request trigger, builds its full declared scope by design. For a
-   nested module that is its whole workspace; for a root-scoped Java row it is
-   that component's subtree of the root graph.
+   nested module that is its whole workspace; a root-scoped Java row already
+   shares the root graph and builds that component's subtree of it. Sharing the
+   graph is therefore not by itself what enables narrowing: only the root row
+   performs narrowing today.
    That is a deliberate hybrid and it should be kept.
 
    This is also an argument for consolidation rather than against it: today only
@@ -251,8 +253,10 @@ than an architectural decision. The guard therefore distinguishes three things:
 2. A migration and retirement ledger. Every nested module that still exists but
    is scheduled to go away, with its target phase and whether it goes by
    migration or by removal. `rules/oci-destinations` is a retirement entry, not a
-   migration one: nothing moves into the root graph, the module disappears once
-   its five consumers no longer need it. The ledger must shrink monotonically; a
+   migration one: what disappears is its standalone module boundary, not its
+   contents. Its package becomes root-owned unless the macro is rehomed into the
+   shared OCI API from the OCI and stamping phase, which is the preferable
+   outcome and should be decided there rather than by default. The ledger must shrink monotonically; a
    phase that adds an entry, or leaves one without a target phase, fails. This is
    the mechanism that makes incremental migration expressible without pretending
    every unmigrated module is a considered exception.
@@ -296,8 +300,8 @@ Docker-host and Java component lanes, count toward that invariant.
    vendored `cel.dev/expr` module is excluded from the guard outright. `nvsnap`
    is the only open question, and its recorded rationale contradicts its code, so
    this phase decides it on current evidence. The Phase 2 guard is not a single
-   allowlist: it separates vendored-path exclusions, a migration ledger of
-   modules not yet migrated, and permanent service exceptions. Only the third
+   allowlist: it separates vendored-path exclusions, a migration and retirement
+   ledger of modules not yet resolved, and permanent service exceptions. Only the third
    category carries the exception contract. Requiring one for every entry would
    make the guard unusable during the migration itself.
 2. Establish visibility policy, root-run Gazelle enforcement, the nested-module
