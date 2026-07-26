@@ -4,10 +4,26 @@ Status: proposed. Not started.
 Owner: TBD.
 
 Measurements below were taken on main `1f8ea711` (2026-07-26). They move.
-Regenerate them with `tools/ci/bazel-consolidation-inventory` rather than
-trusting this prose, and update the stamp above when they change. The first
-draft of this document was invalidated within hours by an in-flight change that
-pinned the worker Bazel versions.
+Re-derive them before relying on them, and update the stamp above when they
+change. The first draft of this document was invalidated within hours by an
+in-flight change that pinned the worker Bazel versions, and again during review
+when the notary import landed, so treat any number here as a snapshot.
+
+The counts come from the tracked file list. Note which ones exclude vendored
+trees and which do not: the module total below is deliberately inclusive, because
+the point of that row is the total number of Bazel modules in the repository.
+
+```sh
+# 22: every tracked module, vendored ones included
+git ls-files | grep -E '(^|/)MODULE\.bazel$' | wc -l
+
+# 19: first-party service modules only
+git ls-files | grep -v /vendor/ | grep -E '^src/.*/MODULE\.bazel$' | wc -l
+
+# 647 public, 1 package_group: first-party BUILD files only
+git ls-files | grep -v /vendor/ | grep -E '(^|/)BUILD\.bazel$' \
+  | xargs grep -c '//visibility:public' | awk -F: '{n+=$2} END {print n}'
+```
 
 ## Summary
 
@@ -229,8 +245,9 @@ not waived for first-party NVCF code that a component vendors. NVCA has dozens o
 files referring to vendored copies of NVCF Go libraries, and that is precisely
 the false-green condition this proposal exists to remove. The exact figure is
 deliberately not quoted here: plausible definitions of the metric disagree, and
-the inventory tool does not generate it, so a number would be unverifiable in a
-document whose whole point is that quoted numbers must be reproducible. A component
+it depends on choices a reader cannot see, so a number here would be
+unverifiable in a document whose point is that quoted numbers must be
+reproducible. A component
 may be excepted from moving; it may not be excepted from the correctness goal
 while still claiming to be done.
 
