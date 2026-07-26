@@ -216,9 +216,12 @@ correctness risk on the record. The final phase completes when every component h
 exactly one of these two paths.
 
 The root-local-label criterion is scoped to components that have migrated. It is
-not waived for first-party NVCF code that a component vendors. NVCA currently has
-80 BUILD files referring to vendored copies of NVCF Go libraries, and that is
-precisely the false-green condition this proposal exists to remove. A component
+not waived for first-party NVCF code that a component vendors. NVCA has dozens of BUILD
+files referring to vendored copies of NVCF Go libraries, and that is precisely
+the false-green condition this proposal exists to remove. The exact figure is
+deliberately not quoted here: plausible definitions of the metric disagree, and
+the inventory tool does not generate it, so a number would be unverifiable in a
+document whose whole point is that quoted numbers must be reproducible. A component
 may be excepted from moving; it may not be excepted from the correctness goal
 while still claiming to be done.
 
@@ -245,8 +248,11 @@ than an architectural decision. The guard therefore distinguishes three things:
 
 1. Vendored-path exclusions. Exact paths, not patterns. A vendored third-party
    module is outside the guard's remit entirely and needs no justification.
-2. A migration ledger. Every nested module that still exists but is planned for
-   migration, with its target phase. The ledger must shrink monotonically; a
+2. A migration and retirement ledger. Every nested module that still exists but
+   is scheduled to go away, with its target phase and whether it goes by
+   migration or by removal. `rules/oci-destinations` is a retirement entry, not a
+   migration one: nothing moves into the root graph, the module disappears once
+   its five consumers no longer need it. The ledger must shrink monotonically; a
    phase that adds an entry, or leaves one without a target phase, fails. This is
    the mechanism that makes incremental migration expressible without pretending
    every unmigrated module is a considered exception.

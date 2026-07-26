@@ -329,6 +329,35 @@ done
 rm -rf "${FAKEBIN}"
 
 echo
+echo "== injected grep failure must not produce a report =="
+# grep exiting 1 means "no match" and is fine. Anything above that is a broken
+# selector, and a bare `|| true` turned it into an empty result, i.e. a count of
+# zero in an otherwise complete, stamped, plausible report.
+GREPBIN="${TEMPDIR_OUT}/grepbin"
+mkdir -p "${GREPBIN}"
+cat >"${GREPBIN}/grep" <<EOF
+#!/bin/bash
+for a in "\$@"; do
+  if [ "\$a" = '^src/.*/MODULE\.bazel\$' ]; then
+    cat >/dev/null
+    echo "injected grep failure" >&2
+    exit 73
+  fi
+done
+exec $(command -v grep) "\$@"
+EOF
+chmod +x "${GREPBIN}/grep"
+if OUT_GREP="$(cd "${FIXTURE}" && PATH="${GREPBIN}:${PATH}" "${INVENTORY}" "${FIXTURE}" 2>&1)"; then
+    fail "expected failure when a selector grep fails, got:"
+    sed 's/^/    /' <<<"${OUT_GREP}" >&2
+else
+    pass "selector grep failure is an error, not a zero count"
+fi
+assert_absent "${OUT_GREP}" "no measurements printed when a selector fails" \
+    "service modules (src, excluding vendor)"
+rm -rf "${GREPBIN}"
+
+echo
 echo "== failure propagation =="
 # The tool must not report success when a measurement cannot be taken. Running
 # outside a git repository is the cheapest way to force that.

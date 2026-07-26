@@ -74,12 +74,22 @@ if ! git ls-files -z >"${ALL_TRACKED}"; then
   exit 1
 fi
 
-# first_party <regex> : NUL-delimited tracked paths matching regex, no vendor.
-first_party() { grep -zEv "${VENDOR_RE}" <"${ALL_TRACKED}" | { grep -zE "$1" || true; }; }
-# any <regex> : NUL-delimited tracked paths matching regex, vendor included.
-any() { { grep -zE "$1" <"${ALL_TRACKED}" || true; }; }
+# grep_sel <args...> : run grep, tolerating "no match" (status 1) but
+# propagating any real failure. A bare `|| true` here masks status 2 and above,
+# which turns a broken selector into an empty result and therefore a count of
+# zero: a stamped, plausible, wrong report.
+grep_sel() {
+  local status=0
+  grep "$@" || status=$?
+  [ "${status}" -le 1 ] || return "${status}"
+}
 
-n_of() { grep -zc . || true; }
+# first_party <regex> : NUL-delimited tracked paths matching regex, no vendor.
+first_party() { grep_sel -zEv "${VENDOR_RE}" <"${ALL_TRACKED}" | grep_sel -zE "$1"; }
+# any <regex> : NUL-delimited tracked paths matching regex, vendor included.
+any() { grep_sel -zE "$1" <"${ALL_TRACKED}"; }
+
+n_of() { grep_sel -zc .; }
 
 # count_occurrences <pattern>: reads NUL-delimited paths on stdin and prints the
 # number of matching lines.
@@ -112,9 +122,15 @@ distinct_of() { xargs -0 -r md5sum | awk '{ print $1 }' | sort -u | wc -l; }
 # further down. This covers every metric, not just the ones using grep.
 unreadable=""
 READ_RE='(^|/)(MODULE\.bazel|MODULE\.bazel\.lock|BUILD\.bazel|\.bazelrc|\.bazelversion|workspace_status\.sh)$|(^|/)rules/oci/'
+READ_LIST="$(mktemp)"
+trap 'rm -f "${ALL_TRACKED}" "${READ_LIST}"' EXIT
+if ! grep_sel -zE "${READ_RE}" <"${ALL_TRACKED}" >"${READ_LIST}"; then
+  echo "error: failed to select the files to verify; cannot trust any count" >&2
+  exit 1
+fi
 while IFS= read -r -d '' path; do
   [ -r "${path}" ] || unreadable="${unreadable}  ${path}"$'\n'
-done < <(grep -zE "${READ_RE}" <"${ALL_TRACKED}" || true)
+done <"${READ_LIST}"
 if [ -n "${unreadable}" ]; then
   echo "error: tracked files are missing or unreadable, so counts would be wrong:" >&2
   printf '%s' "${unreadable}" >&2
@@ -181,6 +197,17 @@ print("|".join([str(decls), str(nvcr), str(len(images)),
 ')"
 IFS='|' read -r oci_decls oci_nvcr oci_images oci_digests oci_tagged_n oci_tagged_list \
   <<<"${oci_report}"
+
+# Guard against a measurement having silently produced nothing. Counts are
+# numeric and version lists are non-empty on any real repository, so an empty
+# value here means a selector failed rather than that the answer is zero.
+for name in service_modules modules_total lock_files bazelrc_count ws_count \
+            oci_files subpackages public_vis package_groups oci_decls; do
+  if ! [[ "${!name}" =~ ^[0-9]+$ ]]; then
+    echo "error: measurement '${name}' is not a number ('${!name}'); refusing to report" >&2
+    exit 1
+  fi
+done
 
 printf 'measured at: %s%s\n' "${head_sha}" "${dirty}"
 printf 'date:        %s\n\n' "${head_date}"
