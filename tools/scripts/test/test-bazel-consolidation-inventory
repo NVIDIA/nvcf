@@ -370,6 +370,8 @@ git -C "${DONE_REPO}" config user.email fixture@example.com
 git -C "${DONE_REPO}" config user.name Fixture
 printf 'module(name = "root")\n' >"${DONE_REPO}/MODULE.bazel"
 printf '{}\n' >"${DONE_REPO}/MODULE.bazel.lock"
+# The root pins a version; the point is that no SUBTREE does.
+printf '8.6.0\n' >"${DONE_REPO}/.bazelversion"
 printf 'go_library(name = "x")\n' >"${DONE_REPO}/src/svc/BUILD.bazel"
 printf 'root oci defs\n' >"${DONE_REPO}/rules/oci/defs.bzl"
 git -C "${DONE_REPO}" add -A
@@ -386,6 +388,50 @@ assert_line "${OUT_DONE}" "zero nested service modules is reported, not an error
 assert_line "${OUT_DONE}" "empty version distribution is normalized" \
     "subtree .bazelversion values            : none"
 assert_line "${OUT_DONE}" "absent Go SDK pins are normalized" \
+    "go_sdk.download (first-party)           : none"
+
+echo
+echo "== fixture: absent and unparseable are different answers =="
+# Normalizing an empty parse to "none" hides a real defect: files that exist but
+# cannot be read as versions would be reported as absence. Sources are counted
+# separately, so present-but-unparseable must fail.
+make_tempdir
+BAD_REPO="${TEMPDIR_OUT}/malformed"
+mkdir -p "${BAD_REPO}/src/svc" "${BAD_REPO}/rules/oci"
+git -C "${BAD_REPO}" init -q
+git -C "${BAD_REPO}" config user.email fixture@example.com
+git -C "${BAD_REPO}" config user.name Fixture
+printf 'module(name = "root")\n' >"${BAD_REPO}/MODULE.bazel"
+printf '{}\n' >"${BAD_REPO}/MODULE.bazel.lock"
+printf 'go_library(name = "x")\n' >"${BAD_REPO}/src/svc/BUILD.bazel"
+printf 'root oci defs\n' >"${BAD_REPO}/rules/oci/defs.bzl"
+printf 'not-a-version\n' >"${BAD_REPO}/src/svc/.bazelversion"
+git -C "${BAD_REPO}" add -A
+git -C "${BAD_REPO}" commit -qm "malformed bazelversion"
+
+if OUT_BAD="$(cd "${BAD_REPO}" && "${INVENTORY}" "${BAD_REPO}" 2>&1)"; then
+    fail "malformed .bazelversion reported as success:"
+    sed 's/^/    /' <<<"${OUT_BAD}" >&2
+else
+    pass "malformed .bazelversion fails instead of reporting none"
+fi
+assert_absent "${OUT_BAD}" "malformed input is not reported as absence" \
+    "subtree .bazelversion values            : none"
+
+# A multiline go_sdk.download is a declaration this parser does not understand.
+# It must fail rather than report no Go SDK pins at all.
+printf '8.6.0\n' >"${BAD_REPO}/src/svc/.bazelversion"
+printf 'go_sdk.download(\n    version = "1.25.0",\n)\n' >"${BAD_REPO}/src/svc/MODULE.bazel"
+git -C "${BAD_REPO}" add -A
+git -C "${BAD_REPO}" commit -qm "multiline go_sdk"
+
+if OUT_GO="$(cd "${BAD_REPO}" && "${INVENTORY}" "${BAD_REPO}" 2>&1)"; then
+    fail "unparseable go_sdk.download reported as success:"
+    sed 's/^/    /' <<<"${OUT_GO}" >&2
+else
+    pass "unparseable go_sdk.download fails instead of reporting none"
+fi
+assert_absent "${OUT_GO}" "unparsed declaration is not reported as absence" \
     "go_sdk.download (first-party)           : none"
 
 echo

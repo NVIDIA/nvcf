@@ -123,7 +123,8 @@ There are two layers:
    nested module that is its whole workspace; a root-scoped Java row already
    shares the root graph and builds that component's subtree of it. Sharing the
    graph is therefore not by itself what enables narrowing: only the root row
-   performs narrowing today.
+   performs narrowing today, and extending it to the other rows is work that
+   consolidation makes possible rather than work it does automatically.
    That is a deliberate hybrid and it should be kept.
 
    This is also an argument for consolidation rather than against it: today only

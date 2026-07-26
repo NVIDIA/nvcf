@@ -145,13 +145,23 @@ lock_mb="$(any '(^|/)MODULE\.bazel\.lock$' | cat_of | wc -c \
 
 bazelrc_count="$(first_party '^src/.*/\.bazelrc$' | n_of)"
 bazelrc_distinct="$(first_party '^src/.*/\.bazelrc$' | distinct_of)"
-# Zero subtree .bazelversion files is the intended post-consolidation state, not
-# an error. A raw grep returns status 1 on no match, which under pipefail aborted
-# the whole run silently, meaning the tool could never report its own success
-# condition.
-bazelversions="$(first_party '^src/.*/\.bazelversion$' | cat_of \
-  | grep_sel -E '^[0-9]' | sort -V | uniq -c | awk '{ printf "%s on %s  ", $1, $2 }')"
-[ -n "${bazelversions}" ] || bazelversions="none (all subtrees use the root version)"
+# "none" and "could not parse" are different answers and must not collapse into
+# the same output. Count the sources first: report none only when there are no
+# sources, and otherwise require every source to have been parsed. A .bazelversion
+# that exists but yields no version is a malformed input, not an absent one.
+bv_files="$(first_party '^src/.*/\.bazelversion$' | n_of)"
+if [ "${bv_files}" -eq 0 ]; then
+  bazelversions="none (all subtrees use the root version)"
+else
+  bv_lines="$(first_party '^src/.*/\.bazelversion$' | cat_of | grep_sel -cE '^[0-9]')"
+  if [ "${bv_lines}" -ne "${bv_files}" ]; then
+    echo "error: ${bv_files} .bazelversion file(s) yielded ${bv_lines} parseable version(s)." >&2
+    echo "       Refusing to report; one or more files are empty or malformed." >&2
+    exit 1
+  fi
+  bazelversions="$(first_party '^src/.*/\.bazelversion$' | cat_of \
+    | grep_sel -E '^[0-9]' | sort -V | uniq -c | awk '{ printf "%s on %s  ", $1, $2 }')"
+fi
 
 ws_count="$(any '(^|/)workspace_status\.sh$' | n_of)"
 ws_distinct="$(any '(^|/)workspace_status\.sh$' | distinct_of)"
@@ -170,14 +180,28 @@ nvca_vendored="$(any '^src/compute-plane-services/nvca/vendor/.*/BUILD\.bazel$' 
 
 # Reported separately: a vendored module pinning an old Go SDK is not evidence
 # that first-party code spans that range.
-go_first_party="$(first_party '(^|/)MODULE\.bazel$' | cat_of \
-  | grep_sel 'go_sdk.download' | grep_sel -oE '[0-9]+\.[0-9]+\.[0-9]+' \
-  | sort -uV | tr '\n' ' ')"
-[ -n "${go_first_party}" ] || go_first_party="none"
-go_vendored_only="$(any '(^|/)MODULE\.bazel$' | cat_of \
-  | grep_sel 'go_sdk.download' | grep_sel -oE '[0-9]+\.[0-9]+\.[0-9]+' \
-  | sort -uV | tr '\n' ' ')"
-[ -n "${go_vendored_only}" ] || go_vendored_only="none"
+# Same distinction for Go SDK pins: absent is not the same as unparsed. Each
+# go_sdk.download must yield exactly one version, so a mismatch means the
+# declaration is multiline or otherwise not understood by this parser.
+go_versions() { # go_versions <selector-fn> <label>
+  local sel="$1" label="$2" decls parsed out
+  decls="$("${sel}" '(^|/)MODULE\.bazel$' | cat_of | grep_sel -c 'go_sdk.download')"
+  if [ "${decls}" -eq 0 ]; then
+    printf 'none'
+    return 0
+  fi
+  out="$("${sel}" '(^|/)MODULE\.bazel$' | cat_of \
+    | grep_sel 'go_sdk.download' | grep_sel -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -V)"
+  parsed="$(printf '%s\n' "${out}" | grep_sel -c '.')"
+  if [ "${parsed}" -ne "${decls}" ]; then
+    echo "error: ${decls} ${label} go_sdk.download declaration(s) yielded ${parsed} version(s)." >&2
+    echo "       Refusing to report; the declaration form is not understood." >&2
+    return 1
+  fi
+  printf '%s' "$(printf '%s\n' "${out}" | sort -uV | tr '\n' ' ')"
+}
+go_first_party="$(go_versions first_party first-party)"
+go_vendored_only="$(go_versions any vendored-inclusive)"
 
 oci_report="$(first_party '(^|/)MODULE\.bazel$' | python3 -c '
 import re, sys
