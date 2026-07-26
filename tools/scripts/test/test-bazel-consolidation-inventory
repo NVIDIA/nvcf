@@ -37,11 +37,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Sets TEMPDIR_OUT rather than echoing. Calling this through command
+# substitution would run it in a subshell, so the TEMP_DIRS append would be
+# discarded and the cleanup trap would have nothing to remove.
+TEMPDIR_OUT=""
 make_tempdir() {
-    local tmpdir
-    tmpdir="$(mktemp -d)"
-    TEMP_DIRS+=("${tmpdir}")
-    echo "${tmpdir}"
+    TEMPDIR_OUT="$(mktemp -d)"
+    TEMP_DIRS+=("${TEMPDIR_OUT}")
 }
 
 fail() {
@@ -150,7 +152,8 @@ EOF
 }
 
 echo "== fixture: vendor filtering and path anchoring =="
-FIXTURE="$(make_tempdir)/repo"
+make_tempdir
+FIXTURE="${TEMPDIR_OUT}/repo"
 build_fixture "${FIXTURE}"
 OUT="$(cd "${FIXTURE}" && "${INVENTORY}" "${FIXTURE}")"
 
@@ -201,19 +204,55 @@ assert_absent "${OUT}" "vendored pull is not reported as tag-only" \
 
 echo
 echo "== fixture: untracked files are not measured =="
+# Paths come from git, so an untracked module must never be counted. The tool
+# refuses to run on a dirty tree at all, so this case has to opt in explicitly.
 mkdir -p "${FIXTURE}/src/svc-c"
 printf 'module(name = "untracked")\n' >"${FIXTURE}/src/svc-c/MODULE.bazel"
-OUT_DIRTY="$(cd "${FIXTURE}" && "${INVENTORY}" "${FIXTURE}")"
+
+if (cd "${FIXTURE}" && "${INVENTORY}" "${FIXTURE}") >/dev/null 2>&1; then
+    fail "expected a non-zero exit status with an untracked file present"
+else
+    pass "untracked file alone makes the tree dirty and is rejected"
+fi
+
+OUT_DIRTY="$(cd "${FIXTURE}" && "${INVENTORY}" --allow-dirty "${FIXTURE}")"
 assert_line "${OUT_DIRTY}" "untracked module is excluded from the count" \
     "service modules (src, excluding vendor) : 2"
-assert_line "${OUT_DIRTY}" "dirty tree is reported alongside the stamp" \
-    "WARNING: working tree is dirty"
+assert_line "${OUT_DIRTY}" "stamp says working tree rather than the commit" \
+    "(WORKING TREE, not"
+rm -rf "${FIXTURE}/src/svc-c"
+
+echo
+echo "== fixture: a modified tracked file is rejected =="
+# The untracked case above is not sufficient. Contents are read from the working
+# tree, so an edit to a TRACKED file changes measurements while the stamp still
+# names HEAD. That must fail rather than silently misreport.
+git -C "${FIXTURE}" checkout -q -- . 2>/dev/null || true
+rm -rf "${FIXTURE}/src/svc-c"
+printf '\ngo_library(name = "extra", visibility = ["//visibility:public"])\n' \
+    >>"${FIXTURE}/src/svc-b/BUILD.bazel"
+if OUT_MOD="$(cd "${FIXTURE}" && "${INVENTORY}" "${FIXTURE}" 2>&1)"; then
+    fail "expected a non-zero exit status when a tracked file is modified"
+else
+    pass "modified tracked file is rejected"
+fi
+assert_line "${OUT_MOD}" "rejection names the offending commit" "working tree is dirty"
+
+OUT_ALLOW="$(cd "${FIXTURE}" && "${INVENTORY}" --allow-dirty "${FIXTURE}")"
+assert_line "${OUT_ALLOW}" "--allow-dirty stamps the working tree, not HEAD" \
+    "(WORKING TREE, not"
+# The injected line must actually be counted, proving the override reads the
+# working tree rather than silently reusing a cached HEAD measurement.
+assert_line "${OUT_ALLOW}" "--allow-dirty picks up the uncommitted occurrence" \
+    "//visibility:public (outside vendor)    : 2"
+git -C "${FIXTURE}" checkout -q -- .
 
 echo
 echo "== failure propagation =="
 # The tool must not report success when a measurement cannot be taken. Running
 # outside a git repository is the cheapest way to force that.
-NOT_A_REPO="$(make_tempdir)/plain"
+make_tempdir
+NOT_A_REPO="${TEMPDIR_OUT}/plain"
 mkdir -p "${NOT_A_REPO}"
 if (cd "${NOT_A_REPO}" && "${INVENTORY}" "${NOT_A_REPO}") >/dev/null 2>&1; then
     fail "expected a non-zero exit status outside a git repository"

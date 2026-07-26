@@ -19,10 +19,26 @@
 # pathspec silently returns unfiltered results, which produced counts that were
 # wrong by a factor of four before this was caught.
 #
-# Usage: bazel-consolidation-inventory [repo-root]
+# A dirty working tree is rejected by default. Paths come from git, but contents
+# are read from the working tree, so an uncommitted edit to a tracked file would
+# change the measurements while the output still stamped HEAD. Pass
+# --allow-dirty to override; the stamp then says so explicitly.
+#
+# Usage: bazel-consolidation-inventory [--allow-dirty] [repo-root]
 set -euo pipefail
 
-repo_root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+allow_dirty=0
+repo_root=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --allow-dirty) allow_dirty=1 ;;
+    -h|--help) sed -n '5,25p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
+    *) repo_root="$1" ;;
+  esac
+  shift
+done
+: "${repo_root:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "${repo_root}"
 
 VENDOR_RE='(^|/)vendor/'
@@ -44,7 +60,12 @@ head_sha="$(git rev-parse --short HEAD)"
 head_date="$(git log -1 --format=%cs)"
 dirty=""
 if [ -n "$(git status --porcelain)" ]; then
-  dirty="  WARNING: working tree is dirty; counts reflect tracked files, not the working tree"
+  if [ "${allow_dirty}" -eq 0 ]; then
+    echo "error: working tree is dirty, so measurements would not match commit ${head_sha}." >&2
+    echo "       Commit or stash your changes, or pass --allow-dirty to measure anyway." >&2
+    exit 1
+  fi
+  dirty="  (WORKING TREE, not ${head_sha}: --allow-dirty was passed)"
 fi
 
 service_modules="$(first_party '^src/.*/MODULE\.bazel$' | n_of)"
@@ -64,12 +85,15 @@ ws_distinct="$(any '(^|/)workspace_status\.sh$' | distinct_of)"
 oci_files="$(first_party '(^|/)rules/oci/' | n_of)"
 oci_lines="$(first_party '(^|/)rules/oci/' | cat_of | wc -l)"
 
-SRC_BUILD_RE='^src/(.*/)?BUILD\.bazel$'
-subpackages="$(first_party "${SRC_BUILD_RE}" | cat_of \
+# Repository-wide, not just src/. The root BUILD.bazel carries visibility rules
+# and is where the first package_group appears, so scoping this to src/ would
+# report zero package_groups even after one exists.
+BUILD_RE='(^|/)BUILD\.bazel$'
+subpackages="$(first_party "${BUILD_RE}" | cat_of \
   | grep -c '//:__subpackages__' || true)"
-public_vis="$(first_party "${SRC_BUILD_RE}" | cat_of \
+public_vis="$(first_party "${BUILD_RE}" | cat_of \
   | grep -c '//visibility:public' || true)"
-package_groups="$(first_party "${SRC_BUILD_RE}" | cat_of \
+package_groups="$(first_party "${BUILD_RE}" | cat_of \
   | grep -c 'package_group(' || true)"
 nvca_vendored="$(any '^src/compute-plane-services/nvca/vendor/.*/BUILD\.bazel$' | n_of)"
 

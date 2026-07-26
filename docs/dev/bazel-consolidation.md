@@ -79,7 +79,7 @@ mechanical. Removing a workspace root changes what its labels mean.
 - `//:__subpackages__` currently scopes to one service. Under the repository
   root it expands to the entire repository. There are 156 such declarations
   outside vendored code.
-- There are 639 `//visibility:public` occurrences outside vendored code and
+- There are 644 `//visibility:public` occurrences outside vendored code and
   zero `package_group` definitions. The expressed API surface is therefore very
   broad and uniform rather than absent: almost everything is public, and nothing
   declares a narrow boundary. Consolidation must inventory that surface before
@@ -167,6 +167,30 @@ satisfies them.
   consolidation that silently renames a published artifact has failed, however
   green the build is.
 
+The root-local-label criterion is scoped to components that have migrated. It is
+not waived for first-party NVCF code that a component vendors. NVCA currently has
+80 BUILD files referring to vendored copies of NVCF Go libraries, and that is
+precisely the false-green condition this proposal exists to remove. A component
+may be excepted from moving; it may not be excepted from the correctness goal
+while still claiming to be done.
+
+## Exception contract
+
+An exception is a decision, not a deferral, and it has to be written down as one.
+Every nested module retained past Phase 8 records:
+
+- Owner, and the rationale for staying nested.
+- The retained module and its CI entry point.
+- How the component sources first-party dependencies, and whether it can still
+  test against a stale published or vendored copy of an in-repository library.
+- Residual correctness risk, stated plainly.
+- A dated revisit or removal trigger.
+
+An entry missing any of these is not an exception; it is unfinished work. The
+current expected entries are `nvsnap`, a deliberate helper module, and a vendored
+module. NVCA, ESS, or BYOO join only if their subphase concludes so, and the
+summary count is updated when that happens.
+
 ## Phases
 
 Each phase lands independently and must leave every declared CI lane green, not
@@ -201,10 +225,15 @@ Docker-host and Java component lanes, count toward that invariant.
      resolution before any code moves.
    - 6b. ESS. Nested Go workspace; needs the workspace collapsed or an explicit
      exception recorded.
-   - 6c. BYOO. Non-hermetic generation; the generator must become a declared
-     Bazel action, or BYOO joins the allowlisted exceptions.
+   - 6c. BYOO. The collector already builds through a declared Bazel genrule.
+     The problem is that the action uses host Go with `local` and `no-sandbox`,
+     so it is neither hermetic nor remotely cacheable. Make the action hermetic,
+     retain its dedicated local lane, or record an exception.
    Each subphase carries its own owner and exit criteria. If one is judged not
-   worth doing, it moves to the exception allowlist rather than staying open.
+   worth doing, it moves to the exception allowlist under the contract below
+   rather than staying open. Moving a component there changes the end state:
+   the summary's count of converging modules drops, and that component keeps its
+   own lockfile and module-root CI lane.
 7. Move the Rust trees into the root Bazel module while initially retaining
    their Cargo workspaces, lockfiles, and separate crate hub names. One Bazel
    module can host several crate hubs. Merging them into one Cargo graph is a
