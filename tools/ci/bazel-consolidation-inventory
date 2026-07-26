@@ -43,10 +43,21 @@ cd "${repo_root}"
 
 VENDOR_RE='(^|/)vendor/'
 
+# The tracked-file list is enumerated once, with its exit status checked, rather
+# than re-invoking git inside each helper's pipeline. A git failure inside a
+# pipeline yields an empty list, which every downstream count would report as a
+# plausible zero instead of an error.
+ALL_TRACKED="$(mktemp)"
+trap 'rm -f "${ALL_TRACKED}"' EXIT
+if ! git ls-files -z >"${ALL_TRACKED}"; then
+  echo "error: git ls-files failed; cannot enumerate tracked files" >&2
+  exit 1
+fi
+
 # first_party <regex> : NUL-delimited tracked paths matching regex, no vendor.
-first_party() { git ls-files -z | grep -zEv "${VENDOR_RE}" | { grep -zE "$1" || true; }; }
+first_party() { grep -zEv "${VENDOR_RE}" <"${ALL_TRACKED}" | { grep -zE "$1" || true; }; }
 # any <regex> : NUL-delimited tracked paths matching regex, vendor included.
-any() { git ls-files -z | { grep -zE "$1" || true; }; }
+any() { { grep -zE "$1" <"${ALL_TRACKED}" || true; }; }
 
 n_of() { grep -zc . || true; }
 
@@ -77,7 +88,11 @@ distinct_of() { xargs -0 -r md5sum | awk '{ print $1 }' | sort -u | wc -l; }
 head_sha="$(git rev-parse --short HEAD)"
 head_date="$(git log -1 --format=%cs)"
 dirty=""
-if [ -n "$(git status --porcelain)" ]; then
+if ! worktree_state="$(git status --porcelain)"; then
+  echo "error: git status failed; cannot tell whether the tree is clean" >&2
+  exit 1
+fi
+if [ -n "${worktree_state}" ]; then
   if [ "${allow_dirty}" -eq 0 ]; then
     echo "error: working tree is dirty, so measurements would not match commit ${head_sha}." >&2
     echo "       Commit or stash your changes, or pass --allow-dirty to measure anyway." >&2
@@ -91,10 +106,10 @@ fi
 # unreadable tracked file fails loudly here instead of silently lowering a count
 # further down. This covers every metric, not just the ones using grep.
 unreadable=""
+READ_RE='(^|/)(MODULE\.bazel|MODULE\.bazel\.lock|BUILD\.bazel|\.bazelrc|\.bazelversion|workspace_status\.sh)$|(^|/)rules/oci/'
 while IFS= read -r -d '' path; do
   [ -r "${path}" ] || unreadable="${unreadable}  ${path}"$'\n'
-done < <(git ls-files -z -- '*MODULE.bazel' '*MODULE.bazel.lock' '*BUILD.bazel' \
-  '*.bazelrc' '*.bazelversion' '*workspace_status.sh' 'rules/oci/*' '*/rules/oci/*')
+done < <(grep -zE "${READ_RE}" <"${ALL_TRACKED}" || true)
 if [ -n "${unreadable}" ]; then
   echo "error: tracked files are missing or unreadable, so counts would be wrong:" >&2
   printf '%s' "${unreadable}" >&2

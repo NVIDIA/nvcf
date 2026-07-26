@@ -263,6 +263,49 @@ assert_line "${OUT_GONE}" "the missing file is named" "src/svc-a/BUILD.bazel"
 git -C "${FIXTURE}" checkout -q -- .
 
 echo
+echo "== fixture: count_occurrences failure is not masked =="
+# The missing-file case above is caught by the preflight. This one gets past it:
+# a tracked symlink pointing at a directory is readable, so -r succeeds, but cat
+# fails with "Is a directory". That exercises count_occurrences itself, which is
+# where the `|| true` masking lived.
+mkdir -p "${FIXTURE}/src/svc-d"
+ln -s .. "${FIXTURE}/src/svc-d/BUILD.bazel"
+git -C "${FIXTURE}" add -A
+git -C "${FIXTURE}" commit -qm "symlinked BUILD.bazel"
+if OUT_SYM="$(cd "${FIXTURE}" && "${INVENTORY}" "${FIXTURE}" 2>&1)"; then
+    fail "expected failure when a tracked BUILD.bazel cannot be read, got:"
+    sed 's/^/    /' <<<"${OUT_SYM}" >&2
+else
+    pass "unreadable tracked BUILD.bazel fails instead of counting zero"
+fi
+git -C "${FIXTURE}" reset -q --hard HEAD~1
+rm -rf "${FIXTURE}/src/svc-d"
+
+echo
+echo "== injected git failures must not produce a report =="
+# git status failing looked exactly like a clean tree, and git ls-files failing
+# inside a pipeline produced an empty file list that every count read as zero.
+FAKEBIN="${TEMPDIR_OUT}/fakebin"
+mkdir -p "${FAKEBIN}"
+for broken in status ls-files; do
+    cat >"${FAKEBIN}/git" <<EOF
+#!/bin/bash
+[ "\$1" = "${broken}" ] && exit 7
+exec $(command -v git) "\$@"
+EOF
+    chmod +x "${FAKEBIN}/git"
+    if OUT_GIT="$(cd "${FIXTURE}" && PATH="${FAKEBIN}:${PATH}" "${INVENTORY}" "${FIXTURE}" 2>&1)"; then
+        fail "expected failure when 'git ${broken}' fails, got:"
+        sed 's/^/    /' <<<"${OUT_GIT}" >&2
+    else
+        pass "'git ${broken}' failure is an error, not a report"
+    fi
+    assert_absent "${OUT_GIT}" "no measurements printed when 'git ${broken}' fails" \
+        "service modules (src, excluding vendor)"
+done
+rm -rf "${FAKEBIN}"
+
+echo
 echo "== failure propagation =="
 # The tool must not report success when a measurement cannot be taken. Running
 # outside a git repository is the cheapest way to force that.

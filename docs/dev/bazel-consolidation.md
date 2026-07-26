@@ -19,10 +19,18 @@ stay per component.
 
 An earlier draft carried `nvsnap` as a standing exception on the grounds that its
 base image is not publicly pullable. That rationale is stale. `.github/workflows/bazel.yml`
-still records it, but the code disagrees: `nvsnap` pins public `gcr.io/distroless/static`,
-`docker.io/library/ubuntu`, and `docker.io/library/alpine` bases by digest, builds
-its images on `@distroless_static`, and documents a public-input-only source build.
-Private NGC is its publish destination, not its base. Phase 1 therefore has to
+still records it, but its current Bazel targets disagree: `nvsnap` pins public
+`gcr.io/distroless/static`, `docker.io/library/ubuntu`, and `docker.io/library/alpine`
+bases by digest, builds both `go_oci_image` targets on `@distroless_static`, and
+documents a public-input-only source build. Private NGC is the publish destination
+of those targets, not their base.
+
+The qualification matters: this is a statement about the Bazel targets, not about
+every build path in the directory. The legacy `docker/agent/Dockerfile.app.criuv2`
+still defaults to a private `nvsnap-agent-base` image, and the init image defaults
+to a private builder. Those Dockerfile paths are not what consolidation moves, but
+they are the likely origin of the original claim and they have to be retired or
+excluded explicitly rather than quietly. Phase 1 therefore has to
 resolve `nvsnap` rather than assume it: migrate it with the rest, or record a real
 reason under the exception contract. Its absence from the public CI matrix is a
 row decision, not an architectural one.
@@ -106,10 +114,17 @@ changes what work is left.
 
 There are two layers:
 
-1. Target selection inside a job already uses `rdeps`. `.github/workflows/bazel.yml`
-   maps changed files to labels, queries reverse dependencies, and falls back to
-   a full build for non-modify changes, global files, and file types it does not
-   model. That is a deliberate hybrid and it should be kept.
+1. Target selection already uses `rdeps`, but only for the root row on a pull
+   request. `.github/workflows/bazel.yml` maps changed files to labels, queries
+   reverse dependencies, and falls back to a full build for non-modify changes,
+   global files, and file types it does not model. Every per-service row, and
+   every non-pull-request trigger, still builds its whole workspace by design.
+   That is a deliberate hybrid and it should be kept.
+
+   This is also an argument for consolidation rather than against it: today only
+   the root row can narrow, because only the root row has a graph spanning the
+   changed files. Extending narrowing to service code requires the services to be
+   in that graph.
 2. Job selection across the matrix is static: which subtree lanes to spawn comes
    from a list in the workflow plus path-prefix matching, because 19 modules
    cannot be one query.
@@ -133,10 +148,10 @@ conservative fallback is a feature.
    resolve by taking the newer version: Kubernetes dependency families span
    several versions with conflicting `replace` directives. Toolchains also
    differ, with first-party Go SDK versions from 1.25.0 through 1.25.11 and
-   protobuf and Rust toolchains spanning major versions. The older 1.23.0 pin
+   protobuf and Rust toolchain versions spanning major releases. The older 1.23.0 pin
    reported by a naive scan comes only from a vendored third-party module and is
    not in scope. Each decision needs an owner review and service tests.
-2. A dependency bump becomes repository wide. Breakage surfaces immediately
+2. A dependency bump becomes repository-wide. Breakage surfaces immediately
    instead of never, which is the goal, but it changes how changes are staged.
 3. The analysis graph per invocation grows. Query-driven target selection is the
    mitigation; remote caching is not. Caching avoids re-executing actions, but
@@ -150,7 +165,7 @@ conservative fallback is a feature.
 An external project builds against this repository by Bazel label during the
 parallel migration period:
 
-```
+```text
 @nvcf//src/control-plane-services/cloud-tasks/nvct-core:nvct_core
 @nvcf//src/control-plane-services/cloud-tasks/nvct-core:nvct_core_test_fixtures
 ```
@@ -176,6 +191,25 @@ satisfies them.
   consolidation that silently renames a published artifact has failed, however
   green the build is.
 
+### Two closure paths
+
+A component closes its subphase one of two ways, and the two must not be
+conflated. Saying every touched component satisfies the migration criteria, while
+also permitting a component to finish by staying nested, is a contradiction.
+
+| | Migrated component | Retained service exception |
+|---|---|---|
+| Satisfies | The criteria above | The exception contract below |
+| Bazel module | Root | Its own, retained |
+| CI | Root graph, routed by lane | Its own module-root lane |
+| Counted in | The migrated total | Explicitly outside it |
+| Records | Nothing extra | Residual correctness risk, in writing |
+
+A retained exception is a legitimate outcome. It is not a quiet one: it lowers the
+migrated count, keeps a lockfile and a module-root lane alive, and leaves a stated
+correctness risk on the record. The final phase completes when every component has taken
+exactly one of these two paths.
+
 The root-local-label criterion is scoped to components that have migrated. It is
 not waived for first-party NVCF code that a component vendors. NVCA currently has
 80 BUILD files referring to vendored copies of NVCF Go libraries, and that is
@@ -186,7 +220,7 @@ while still claiming to be done.
 ## Exception contract
 
 An exception is a decision, not a deferral, and it has to be written down as one.
-Every nested module retained past Phase 8 records:
+Every nested module retained past the final phase records:
 
 - Owner, and the rationale for staying nested.
 - The retained module and its CI entry point.
@@ -196,6 +230,26 @@ Every nested module retained past Phase 8 records:
 - A dated revisit or removal trigger.
 
 An entry missing any of these is not an exception; it is unfinished work.
+
+### The guard needs three mechanisms, not one allowlist
+
+Requiring every allowlist entry to carry a permanent exception contract from
+Phase 2 onward is incompatible with incremental migration: during the migration
+most nested modules are simply not migrated yet, which is a schedule fact rather
+than an architectural decision. The guard therefore distinguishes three things:
+
+1. Vendored-path exclusions. Exact paths, not patterns. A vendored third-party
+   module is outside the guard's remit entirely and needs no justification.
+2. A migration ledger. Every nested module that still exists but is planned for
+   migration, with its target phase. The ledger must shrink monotonically; a
+   phase that adds an entry, or leaves one without a target phase, fails. This is
+   the mechanism that makes incremental migration expressible without pretending
+   every unmigrated module is a considered exception.
+3. Permanent service exceptions. Only these carry the exception contract above,
+   and only these survive the final phase.
+
+Conflating 2 and 3 is what makes an allowlist rot: it cannot distinguish "not yet"
+from "never", so nothing ever forces the first to resolve.
 
 The 22 tracked `MODULE.bazel` files are three different things, and conflating
 them obscures the end state:
@@ -209,7 +263,7 @@ them obscures the end state:
 
 Only the first category can hold an architectural exception. `rules/oci-destinations`
 is scaffolding that five nested modules currently depend on, so it is retired by
-Phase 8 rather than excepted. A vendored third-party module is a guard exclusion,
+the final phase rather than excepted. A vendored third-party module is a guard exclusion,
 not a decision anyone has to justify.
 
 So: migrated services satisfy the root-label criteria; approved service exceptions
@@ -225,7 +279,7 @@ that route by component metadata or execution requirements, such as the
 Docker-host and Java component lanes, count toward that invariant.
 
 1. Correct the inventory, remove stale Bazel documentation, and settle the
-   exception question. Two of the 22 tracked modules are not first-party services
+   exception question. Three of the 22 tracked modules are not first-party services
    and are handled by category rather than by exception: `rules/oci-destinations`
    is migration scaffolding retired once its five consumers migrate, and the
    vendored `cel.dev/expr` module is excluded from the guard outright. `nvsnap`
@@ -248,7 +302,7 @@ Docker-host and Java component lanes, count toward that invariant.
 5. Migrate the four worker services. They are the most uniform and prove the Go
    dependency merge and the release path end to end.
 6. Migrate the remaining ordinary Go services. The three special cases are
-   scheduled explicitly rather than deferred, because Phase 8 cannot complete
+   scheduled explicitly rather than deferred, because the final phase cannot complete
    while any of them is unresolved:
    - 6a. NVCA. 1261 vendored BUILD files and direct `//vendor/...` dependencies
      whose labels will not survive a root move. Decide between rebasing the
@@ -267,14 +321,21 @@ Docker-host and Java component lanes, count toward that invariant.
    rather than staying open. Moving a component there changes the end state:
    the summary's count of converging modules drops, and that component keeps its
    own lockfile and module-root CI lane.
-7. Move the Rust trees into the root Bazel module while initially retaining
+7. Establish source-of-truth ownership before moving the Rust trees. Any subtree
+   that is still upstream-authoritative in `imports.yaml` can have a later import
+   restore its nested module and its old labels, silently undoing the migration.
+   `stargate` is in this position today. Each affected subtree needs either a
+   native ownership cutover, or compatible Bazel changes landed upstream and then
+   synchronized, before its labels are rebased. This is a prerequisite, not a
+   cleanup step.
+8. Move the Rust trees into the root Bazel module while initially retaining
    their Cargo workspaces, lockfiles, and separate crate hub names. One Bazel
    module can host several crate hubs. Merging them into one Cargo graph is a
    later optimization needing its own justification. Add and retain
    `cargo test --workspace --all-targets` until Bazel declares every Rust
    integration test that Cargo currently discovers. GitHub CI has no Cargo lane
    today, so this is new work rather than something already in place.
-8. Retire nested configuration and the static module-root list once graph
+9. Retire nested configuration and the static module-root list once graph
    coverage is complete, leaving the allowlisted exceptions in place. Lane
    routing by component metadata and execution requirements stays.
 
