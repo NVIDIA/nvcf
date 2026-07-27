@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"runtime/debug"
+
+	"go.uber.org/zap"
 )
 
 // Info holds the resolved build metadata returned by the GET /info endpoint.
@@ -44,7 +46,10 @@ func Handler() http.Handler {
 // pointing directly at this package.
 func HandlerFor(service, ver, commit string) http.Handler {
 	info := resolve(service, ver, commit)
-	body, _ := json.Marshal(info)
+	body, err := json.Marshal(info)
+	if err != nil {
+		zap.L().Error("failed to marshal build info", zap.Error(err))
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
@@ -52,7 +57,9 @@ func HandlerFor(service, ver, commit string) http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(body)
+		if _, err := w.Write(body); err != nil {
+			zap.L().Error("failed to write build info response", zap.Error(err))
+		}
 	})
 }
 
