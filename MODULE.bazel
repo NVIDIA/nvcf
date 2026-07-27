@@ -309,6 +309,13 @@ maven.install(
         "org.apache.commons:commons-collections4:4.5.0",
         "org.apache.commons:commons-lang3:3.20.0",
         "org.apache.commons:commons-pool2",
+        # CVE override: Spring Boot 4.0.7 manages Tomcat 11.0.22. Bazel does
+        # not read Maven's tomcat.version property, so keep the shipped Tomcat
+        # family aligned here until Spring Boot manages the fixed version.
+        "org.apache.tomcat.embed:tomcat-embed-core:11.0.24",
+        "org.apache.tomcat.embed:tomcat-embed-el:11.0.24",
+        "org.apache.tomcat.embed:tomcat-embed-websocket:11.0.24",
+        "org.apache.tomcat:tomcat-annotations-api:11.0.24",
         "org.bouncycastle:bcprov-jdk18on:1.84",
         "org.jacoco:org.jacoco.agent:jar:runtime:0.8.14",
         "org.jacoco:org.jacoco.cli:0.8.14",

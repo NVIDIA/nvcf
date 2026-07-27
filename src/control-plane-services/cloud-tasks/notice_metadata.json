@@ -393,18 +393,25 @@
       "name": "Apache Commons Compress",
       "url": "https://commons.apache.org/proper/commons-compress/"
     },
-    "org.apache.tomcat.embed:tomcat-embed-core:11.0.22": {
+    "org.apache.tomcat.embed:tomcat-embed-core:11.0.24": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
       "name": "tomcat-embed-core",
       "url": "https://tomcat.apache.org/"
     },
-    "org.apache.tomcat.embed:tomcat-embed-websocket:11.0.22": {
+    "org.apache.tomcat.embed:tomcat-embed-websocket:11.0.24": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
       "name": "tomcat-embed-websocket",
+      "url": "https://tomcat.apache.org/"
+    },
+    "org.apache.tomcat:tomcat-annotations-api:11.0.24": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "tomcat-annotations-api",
       "url": "https://tomcat.apache.org/"
     },
     "org.aspectj:aspectjweaver:1.9.25.1": {
