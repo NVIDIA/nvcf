@@ -430,14 +430,27 @@ jobs:
           if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
             printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
-            # Upload results only from main pushes; every other trigger
-            # (PRs) is read-only so it can never poison the cache.
-            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            # Upload from merge-queue runs and main pushes; PRs stay
+            # read-only so they can never poison the cache.
+            #
+            # merge_group is the primary writer. Its tree is exactly what is
+            # about to become main, and each queue entry gets its own ref, so
+            # these runs are never cancelled by the next merge. Main-push runs
+            # all share the concurrency group bazel-refs/heads/main with
+            # cancel-in-progress, so a second merge landing minutes later kills
+            # the first one's warm-write: that is how the byoo collector, whose
+            # own PR existed to make it cacheable, ended up never warming the
+            # cache. Main pushes still upload, as a backstop for anything that
+            # reaches main without going through the queue.
+            if [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
+              upload=true
+            elif [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
               upload=true
             fi
             echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
             # Make the mode visible in the log so a missing warm-write is never
-            # a silent guess: read-only PRs show upload=false, main pushes true.
+            # a silent guess: read-only PRs show upload=false, merge-queue runs
+            # and main pushes true.
             if [ "$upload" = "true" ]; then
               echo "remote cache ready: read-write (warming; upload=true)"
             else
@@ -808,7 +821,10 @@ jobs:
             printf '%s\n' "$CACHE_CA" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
             upload=false
-            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then upload=true; fi
+            # See the bazel job's gate above for why merge_group is the
+            # primary writer rather than main pushes.
+            if [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then upload=true
+            elif [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then upload=true; fi
             echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
             echo "remote cache ready (upload=$upload)"
           else
