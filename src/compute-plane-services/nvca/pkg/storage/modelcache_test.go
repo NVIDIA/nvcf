@@ -753,6 +753,67 @@ func TestModelCacheStorageClassName(t *testing.T) {
 	}
 }
 
+func TestApplyModelCacheStorageClass(t *testing.T) {
+	ptr := func(s string) *string { return &s }
+
+	tests := []struct {
+		name       string
+		configured string
+		specSC     *string
+		want       string
+	}{
+		{
+			name:       "spec value is replaced by the default",
+			configured: "",
+			specSC:     ptr("some-other-sc"),
+			want:       DefaultModelCacheStorageClassName,
+		},
+		{
+			name:       "spec value is replaced by the configured override",
+			configured: "custom-sc",
+			specSC:     ptr("some-other-sc"),
+			want:       "custom-sc",
+		},
+		{
+			name:       "unset spec value is filled in",
+			configured: "custom-sc",
+			specSC:     nil,
+			want:       "custom-sc",
+		},
+		{
+			name:       "matching spec value is left as-is",
+			configured: "custom-sc",
+			specSC:     ptr("custom-sc"),
+			want:       "custom-sc",
+		},
+		{
+			name:       "empty string in the spec is still replaced",
+			configured: "custom-sc",
+			specSC:     ptr(""),
+			want:       "custom-sc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "rw-pvc-test"},
+				Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: tt.specSC},
+			}
+			r := &Reconciler{modelCacheStorageClass: tt.configured}
+
+			r.applyModelCacheStorageClass(context.Background(), pvc)
+
+			if pvc.Spec.StorageClassName == nil {
+				t.Fatalf("storage class was left nil, want %q", tt.want)
+			}
+			if got := *pvc.Spec.StorageClassName; got != tt.want {
+				t.Errorf("storage class = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRedactMountOptionValues(t *testing.T) {
 	tests := []struct {
 		name string
