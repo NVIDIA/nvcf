@@ -29,7 +29,7 @@ After installing NVCA on a cluster:
 
     - If your cloud provider does not support the NVIDIA GPU Operator, [Manual Instance Configuration](./configuration.md) is possible, but not recommended due to lack of maintainability.
     - To get the most out of clusters with multi-node NVLink ([MNNVL](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html#dra-docs-compute-domains)) GPUs like [GB200](https://www.nvidia.com/en-us/data-center/gb200-nvl72/), the [NVIDIA GPU DRA driver](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-intro-install.html) must be installed. See the [nvlink-optimized-clusters](./configuration.md) for details.
-    - For development or testing environments without physical GPUs, install the [fake-gpu-operator](../fake-gpu-operator.md) instead.
+    - For development or testing environments without physical GPUs, install the [fake-gpu-operator](../fake-gpu-operator) instead.
 
 - Registering the cluster requires `kubectl` and `helm` installed.
 

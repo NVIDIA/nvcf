@@ -268,9 +268,6 @@ addons:
       enabled: false               # OpenBao-issued QUIC TLS for the request router. Optional.
       allowedDomains: ""           # Required only when llm.pki.enabled: comma-separated DNS suffixes.
       dnsNames: []                 # Required only when llm.pki.enabled: SANs on the issued certificate.
-  vanityGateway:
-    enabled: false                 # Vanity and OpenAI-compatible invocation routes. Optional.
-    replicaCount: 2                # Vanity gateway replicas (applied only when enabled).
 
 stateMetrics:
   enabled: false                   # State-metrics exporter. Optional.
@@ -304,9 +301,6 @@ ingress:
         routeAnnotations: {}       # Optional annotations for the invocation route.
       llmInvocation:
         routeAnnotations: {}       # Optional annotations for the LLM invocation route.
-      vanityGateway:
-        hostnames: []              # Override vanity hostnames. Default is vanity.<domain>.
-        routeAnnotations: {}       # Optional annotations for the vanity route.
       grpc:
         routeAnnotations: {}       # Optional annotations for the gRPC route.
       nats:

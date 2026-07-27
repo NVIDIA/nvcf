@@ -122,7 +122,7 @@ helm repo update
 helm pull nvcf/helm-nvca-operator --version 1.12.7
 
 # Prerelease charts require --devel when searching
-helm search repo nvcf/helm-nvcf-vanity-gateway --versions --devel
+helm search repo nvcf/helm-nvcf-<chart-name> --versions --devel
 ```
 
 **Other Repository-based Helm Charts (Non-OCI)**

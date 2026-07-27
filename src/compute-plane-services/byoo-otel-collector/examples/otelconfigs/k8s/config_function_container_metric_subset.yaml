@@ -113,7 +113,7 @@ exporters:
     resource_to_telemetry_conversion:
       enabled: true
     send_timestamps: true
-  prometheusremotewrite/PROMETHEUS-workload-metrics-metrics:
+  prometheus_remote_write/PROMETHEUS-workload-metrics-metrics:
     endpoint: https://workload-metrics.example.invalid/api/v1/write
     tls:
       cert_file: /etc/byoo-otel-collector/secrets/workload-metrics-clientCert
@@ -270,7 +270,7 @@ service:
         - otlp
         - prometheus
       exporters:
-        - prometheusremotewrite/PROMETHEUS-workload-metrics-metrics
+        - prometheus_remote_write/PROMETHEUS-workload-metrics-metrics
       processors:
         - memory_limiter
         - filter/metrics

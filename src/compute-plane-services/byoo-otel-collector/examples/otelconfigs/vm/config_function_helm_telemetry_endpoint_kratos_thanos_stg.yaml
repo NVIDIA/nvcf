@@ -148,7 +148,7 @@ receivers:
             - targets:
                 - worker-0.mini-service.svc.cluster.local:8010
 exporters:
-  prometheusremotewrite/KRATOS_THANOS-kratos-thanos-sandbox-metrics:
+  prometheus_remote_write/KRATOS_THANOS-kratos-thanos-sandbox-metrics:
     endpoint: https://sandbox-receivers.thanos.example.com/api/v1/receive
     tls:
       ca_file: /etc/byoo-otel-collector/secrets/kratos-thanos-sandbox-caFile
@@ -292,7 +292,7 @@ service:
         - otlp
         - prometheus
       exporters:
-        - prometheusremotewrite/KRATOS_THANOS-kratos-thanos-sandbox-metrics
+        - prometheus_remote_write/KRATOS_THANOS-kratos-thanos-sandbox-metrics
       processors:
         - memory_limiter
         - filter/metrics

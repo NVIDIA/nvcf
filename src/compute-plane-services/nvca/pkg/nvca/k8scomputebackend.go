@@ -323,7 +323,7 @@ func (c K8sComputeBackend) translateFunctionLaunchSpecification(
 			if !ok {
 				continue
 			}
-			k8sutil.AddBYOOEnvVarsToPodSpec(&pod.Spec, envs)
+			k8sutil.AddBYOOOTelCollectorEnvVarsToPodSpec(&pod.Spec, envs)
 		}
 	}
 
@@ -1346,8 +1346,10 @@ func (c K8sComputeBackend) GetErroredPodLogs(ctx context.Context, pod *corev1.Po
 	log := core.GetLogger(ctx)
 
 	// Image pull issues should be directly reported to users for debugging.
-	if _, state, ok := k8sutil.ImagePullIssuesReported(pod.Status); ok {
-		prepend = fmt.Sprintf("%s (%s)", prepend, state.Message)
+	if imagePullIssues, ok := k8sutil.ImagePullIssuesReported(pod.Status); ok {
+		for _, imagePullIssue := range imagePullIssues {
+			prepend = fmt.Sprintf("%s (%s)\n", prepend, imagePullIssue.Message)
+		}
 	}
 
 	totalBytesWritten := int64(0)
@@ -1696,9 +1698,11 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 		string(is), st.LastReportedStatus, st.LastReportedTimestamp) {
 
 		// Only increment metric once.
-		if imgTag, _, ok := k8sutil.ImagePullIssuesReported(p.Status); ok {
-			reg := k8sutil.ParseImageRegistry(imgTag)
-			metrics.ImagePullIssueTotal.WithLabelValues(metrics.WithDefaultLabelValues(reg)...).Inc()
+		if imagePullIssues, ok := k8sutil.ImagePullIssuesReported(p.Status); ok {
+			for _, imagePullIssue := range imagePullIssues {
+				reg := k8sutil.ParseImageRegistry(imagePullIssue.Image)
+				metrics.ImagePullIssueTotal.WithLabelValues(metrics.WithDefaultLabelValues(reg)...).Inc()
+			}
 		}
 
 		// Record workload result metric on terminal state transitions.
@@ -1810,7 +1814,7 @@ func podPhaseToInstanceState(pod *corev1.Pod, k8sTimeConfig *k8sutil.TimeConfig)
 				return types.ICMSInstanceFailedCreateContainerError, msg
 			}
 			if k8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.MaxImagePullErrorThreshold) {
-				if _, _, ok := nvcak8sutil.ImagePullIssuesReported(ps); ok {
+				if _, ok := nvcak8sutil.ImagePullIssuesReported(ps); ok {
 					return types.ICMSInstanceFailedImagePullIssues, ""
 				}
 			}
@@ -1840,9 +1844,9 @@ func podPhaseToInstanceState(pod *corev1.Pod, k8sTimeConfig *k8sutil.TimeConfig)
 		if stuck {
 			return reason, ""
 		}
-		degraded, msg := nvcak8sutil.IsPodDegraded(pod, k8sTimeConfig)
+		degradedStatus, degraded := nvcak8sutil.IsPodDegraded(pod, k8sTimeConfig)
 		if degraded {
-			return types.ICMSInstanceDegradedWorker, msg
+			return types.ICMSInstanceDegradedWorker, degradedStatus.Reason
 		}
 		return types.ICMSInstanceStarted, ""
 	case corev1.PodSucceeded:
@@ -2083,7 +2087,7 @@ func podPhaseToAggregatedInstanceStatus(p *corev1.Pod, k8sTimeConfig *k8sutil.Ti
 			if stuck, _ := IsPodStuckInitializing(p, k8sTimeConfig); stuck {
 				return AggregatedInstanceStatusFailed
 			}
-			if degraded, _ := nvcak8sutil.IsPodDegraded(p, k8sTimeConfig); degraded {
+			if _, degraded := nvcak8sutil.IsPodDegraded(p, k8sTimeConfig); degraded {
 				return AggregatedInstanceStatusFailed
 			}
 			return AggregatedInstanceStatusPending
@@ -2102,7 +2106,7 @@ func podPhaseToAggregatedInstanceStatus(p *corev1.Pod, k8sTimeConfig *k8sutil.Ti
 	default:
 		if nvcak8sutil.IsPodScheduled(ps) {
 			overImagePullTimeout := k8sutil.IsTimeSincePodLaunchedLaterThan(p, k8sTimeConfig.MaxImagePullErrorThreshold)
-			if _, _, ok := nvcak8sutil.ImagePullIssuesReported(ps); overImagePullTimeout && ok {
+			if _, ok := nvcak8sutil.ImagePullIssuesReported(ps); overImagePullTimeout && ok {
 				return AggregatedInstanceStatusFailed
 			}
 			if stuck, _ := IsPodStuckInitializing(p, k8sTimeConfig); stuck {

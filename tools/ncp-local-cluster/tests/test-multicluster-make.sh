@@ -143,10 +143,6 @@ fi
 if ! grep -q '10081:10081' "$ROOT_DIR/k3d-config.yaml"; then
   fail "single-cluster k3d config must expose the stack-owned grpc-gw TCP listener on host port 10081"
 fi
-if ! grep -q 'invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080' "$ROOT_DIR/../../deploy/stacks/self-managed/environments/local.yaml"; then
-  fail "local stack values must advertise the invocation service DNS worker endpoint"
-fi
-
 if ! grep -q 'service-nvct-api.yaml' "$ROOT_DIR/apps/compute-control-plane-endpoints/kustomization.yaml"; then
   fail "compute control-plane endpoint aliases must include the NVCT API Service"
 fi

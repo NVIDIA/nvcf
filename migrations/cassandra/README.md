@@ -62,10 +62,11 @@ The container reads the following environment variables:
 | `CASSANDRA_USER` | Cassandra superuser used to apply DDL |
 | `CASSANDRA_PASSWORD` | Cassandra superuser password |
 | `SERVICE_ROLE_PASSWORD` | Substituted into the per-keyspace login role passwords (`02_init_roles.up.sql`) |
+| `REPLICA_COUNT` | Replication factor for service keyspaces (defaults to `3`) |
 
 For each keyspace under `keyspaces/`, the container:
 
-1. Pre-processes any `*.up.sql` and `*.cql` files via `envsubst` so that `${SERVICE_ROLE_PASSWORD}` is substituted (other environment variables are intentionally not substituted).
+1. Pre-processes any `*.sql` and `*.cql` files via `envsubst` so that `${SERVICE_ROLE_PASSWORD}` and `${REPLICA_COUNT}` are substituted (other environment variables are intentionally not substituted).
 2. Runs `migrate up` with the `cassandra://` driver, using the keyspace name as the migrations table name.
 
 A failure in any keyspace's migration set stops the run.
@@ -93,9 +94,9 @@ cqlsh -u "$CASSANDRA_USER" -p "$CASSANDRA_PASSWORD" "$CASSANDRA_HOSTS" \
 
 The migration may have applied some statements before the failure. Decide whether to roll the schema back to `<N-1>` or roll it forward to `<N>`:
 
-- **Re-apply migration `<N>` from `<N-1>`** (recommended when the migration is fully idempotent). Most bundled migrations use `CREATE TABLE IF NOT EXISTS`, `CREATE TYPE IF NOT EXISTS`, and similar idempotent forms; if the failing file is fully idempotent, fix the root cause of the failure (network, capacity, malformed CQL) and re-running migration `<N>` will be safe. Plan to `force <N-1>` in step 3.
-- **Roll back manually** to `<N-1>`. If the migration is not idempotent, drop any tables / types / columns the partial run created so the schema matches the post-`<N-1>` state, then `force <N-1>` in step 3.
-- **Roll forward manually** to `<N>`. Run the remaining CQL statements from `<N>` by hand so the schema matches the post-`<N>` state, then `force <N>` in step 3.
+- Re-apply migration `<N>` from `<N-1>` (recommended when the migration is fully idempotent). Most bundled migrations use `CREATE TABLE IF NOT EXISTS`, `CREATE TYPE IF NOT EXISTS`, and similar idempotent forms; if the failing file is fully idempotent, fix the root cause of the failure (network, capacity, malformed CQL) and re-running migration `<N>` will be safe. Plan to `force <N-1>` in step 3.
+- Roll back manually to `<N-1>`. If the migration is not idempotent, drop any tables / types / columns the partial run created so the schema matches the post-`<N-1>` state, then `force <N-1>` in step 3.
+- Roll forward manually to `<N>`. Run the remaining CQL statements from `<N>` by hand so the schema matches the post-`<N>` state, then `force <N>` in step 3.
 
 #### 3. Clear the dirty flag and re-run
 
@@ -149,7 +150,7 @@ NN_description.up.sql
 
 For a brand-new keyspace, the conventional sequence is:
 
-1. `01_init_keyspace.up.sql` - creates the keyspace with `NetworkTopologyStrategy` (uses `{{ $replicaCount }}` template variable, substituted upstream).
+1. `01_init_keyspace.up.sql` - creates the keyspace with `NetworkTopologyStrategy` and substitutes `${REPLICA_COUNT}` before migration.
 2. `02_init_roles.up.sql` - creates the application role and grants, with the login password supplied by `${SERVICE_ROLE_PASSWORD}`.
 3. `03_init_tables.up.sql` - the canonical schema (UDTs, tables, indexes) for the keyspace.
 

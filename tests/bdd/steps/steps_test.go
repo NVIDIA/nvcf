@@ -110,6 +110,42 @@ func TestIUpdateYAMLFileWritesKeys(t *testing.T) {
 	}
 }
 
+func TestISubstituteBlockReplacesAndRestoresFile(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	rel := "global.yaml.gotmpl"
+	abs := filepath.Join(sc.Suite.Config.RepoRoot, rel)
+	original := "before\nold one\nold two\nafter\n"
+	if err := os.WriteFile(abs, []byte(original), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	doc := &godog.DocString{Content: "old one\nold two\n---\nnew one\nnew two"}
+
+	if err := sc.iSubstituteBlock(rel, doc); err != nil {
+		t.Fatalf("substitute block: %v", err)
+	}
+	got, err := os.ReadFile(abs)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "before\nnew one\nnew two\nafter\n" {
+		t.Fatalf("body = %q", got)
+	}
+
+	if err := os.WriteFile(abs, []byte("mutated\n"), 0o644); err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err = os.ReadFile(abs)
+	if err != nil {
+		t.Fatalf("read restored: %v", err)
+	}
+	if string(got) != original {
+		t.Fatalf("restored body = %q", got)
+	}
+}
+
 func TestEnvironmentVariableIsSet(t *testing.T) {
 	sc, _ := newScenarioContext(t)
 	t.Setenv("BDD_TMP_TEST_FOO", "bar")

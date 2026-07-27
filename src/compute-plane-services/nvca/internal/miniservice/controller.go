@@ -136,6 +136,8 @@ type registrationInstanceTypeCache interface {
 }
 
 const (
+	controllerName = "miniservice-controller"
+
 	defaultCacheDir = "/var/run/nvca/reval-rendered-helmcharts"
 )
 
@@ -185,7 +187,7 @@ func BuildController(ctx context.Context,
 		tracer:            otel.NewTracer(),
 		Decoder:           newFlexibleDecoder(mgr.GetScheme(), extraGVKs...),
 		NFClient:          nflient,
-		eventRecorder:     mgr.GetEventRecorderFor("miniservice-controller"),
+		eventRecorder:     mgr.GetEventRecorderFor(controllerName),
 		chartCache:        chartcache.New(opts.cacheDir),
 		regITCache:        regITCache,
 		enabledAttrs:      enabledAttrs,

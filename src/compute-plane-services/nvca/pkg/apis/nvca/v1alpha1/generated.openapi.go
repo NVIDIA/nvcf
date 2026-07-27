@@ -208,12 +208,18 @@ func schema_pkg_apis_nvca_v1alpha1_MiniServiceSpec(ref common.ReferenceCallback)
 							Ref:     ref("github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common.HelmConfig"),
 						},
 					},
+					"workloadConfig": {
+						SchemaProps: spec.SchemaProps{
+							Description: "WorkloadConfig holds workload-specific configuration decoded from the user-provided workload config ConfigMap in the rendered Helm chart. It is populated by the controller during installation and read on subsequent reconciles.",
+							Ref:         ref("github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.WorkloadConfig"),
+						},
+					},
 				},
 				Required: []string{"namespace", "icmsRequestName", "helmChartConfig"},
 			},
 		},
 		Dependencies: []string{
-			"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common.HelmConfig"},
+			"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1.WorkloadConfig", "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common.HelmConfig"},
 	}
 }
 

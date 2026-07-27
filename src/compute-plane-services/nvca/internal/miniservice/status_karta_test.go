@@ -34,14 +34,6 @@ import (
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 )
 
-func newKartaScheme(t *testing.T) *runtime.Scheme {
-	t.Helper()
-	scheme := runtime.NewScheme()
-	require.NoError(t, kartav1alpha1.AddToScheme(scheme))
-	require.NoError(t, corev1.AddToScheme(scheme))
-	return scheme
-}
-
 func TestGetEmbeddedKartaDefinitions(t *testing.T) {
 	kartas, err := getEmbeddedKartaDefinitions()
 	require.NoError(t, err)
@@ -858,7 +850,7 @@ func TestNewKartaDefinedObjectStatusChecker_EmbeddedDynamoRunning(t *testing.T) 
 
 func TestLoadKartaDefinitions_WithLiveKartaFromFakeClient(t *testing.T) {
 	liveKartas := []*kartav1alpha1.Karta{
-		&kartav1alpha1.Karta{
+		{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "live-dynamo-v2",
 			},

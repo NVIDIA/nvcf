@@ -52,14 +52,14 @@ api_keys_service_url: https://api-keys.nvcf.nvidia.com
 # Config key: api_key
 # Environment variable: NVCF_API_KEY
 # Scope: invoke_function, list_functions, queue_details, list_functions_details
-# Note: Stored in ~/.nvcf-cli-state.json after running 'nvcf-cli api-key generate'
+# Note: Stored in ~/.nvcf-cli.state after running 'nvcf-cli api-key generate'
 # api_key: nvapi-xxxxx
 
 # NVCF Admin Token / JWT (for admin operations: create, deploy, delete, update)
 # Config key: token
 # Environment variable: NVCF_TOKEN
 # Scope: admin:* (all admin operations)
-# Note: Stored in ~/.nvcf-cli-state.json after running 'nvcf-cli init'
+# Note: Stored in ~/.nvcf-cli.state after running 'nvcf-cli init'
 # token: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
 
 # NVIDIA Cloud Account Client ID (your account/username)
@@ -213,7 +213,7 @@ api_keys_owner_id: svc@nvcf-api.local
 #    - No kubeconfig or kubectl needed!
 #    - Run: nvcf-cli init
 #    - Calls API Keys service directly: /v1/admin/keys
-#    - Tokens stored in: ~/.nvcf-cli-state.json
+#    - Tokens stored in: ~/.nvcf-cli.state
 #
 # 4. Token Usage:
 #    - NVCF_API_KEY: User operations (invoke, list, queue details)

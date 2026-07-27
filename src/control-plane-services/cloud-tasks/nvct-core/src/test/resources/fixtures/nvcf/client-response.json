@@ -1,0 +1,7 @@
+{
+  "client": {
+    "clientId": "%s",
+    "ncaId": "%s",
+    "name": "%s"
+  }
+}

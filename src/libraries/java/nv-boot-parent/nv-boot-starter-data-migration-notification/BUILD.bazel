@@ -1,4 +1,4 @@
-load("//src/libraries/java/nv-boot-parent/tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
 
 DATA_MIGRATION_NOTIFICATION_COMPILE_DEPS = [
     "@nv_third_party_deps//:io_cloudevents_cloudevents_api",

@@ -143,6 +143,30 @@ func SubstituteFile(path, placeholder, replacement string) error {
 	return os.WriteFile(path, []byte(rendered), info.Mode().Perm())
 }
 
+// SubstituteFileBlock parses an exact old/new block pair separated by one
+// YAML document-marker line and replaces the old block in path. It fails when
+// the spec is malformed or the old block is absent so documentation drift
+// cannot silently turn a requested edit into a no-op.
+func SubstituteFileBlock(path, spec string) error {
+	const separator = "\n---\n"
+	if strings.Count(spec, separator) != 1 {
+		return fmt.Errorf("substitution spec must contain exactly one --- separator line")
+	}
+	parts := strings.SplitN(spec, separator, 2)
+	oldBlock, newBlock := parts[0], parts[1]
+	if oldBlock == "" {
+		return fmt.Errorf("substitution old block must not be empty")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	if !strings.Contains(string(body), oldBlock) {
+		return fmt.Errorf("%s: substitution old block is not present", path)
+	}
+	return SubstituteFile(path, oldBlock, newBlock)
+}
+
 // readYAMLAny reads path and unmarshals into a generic any value.
 // An empty document parses to nil.
 func readYAMLAny(path string) (any, error) {

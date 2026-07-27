@@ -137,7 +137,7 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 		if !ok {
 			continue
 		}
-		k8sutil.AddBYOOEnvVarsToPodSpec(&pod.Spec, envs)
+		k8sutil.AddBYOOOTelCollectorEnvVarsToPodSpec(&pod.Spec, envs)
 	}
 
 	ownerRefsForReq := getOwnerRefForRequest(req)

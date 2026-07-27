@@ -854,6 +854,28 @@ isolated test clusters that run the LLM request router tunnel without TLS. For
 the full LLM addon setup, see
 [LLM Function Enablement](../llm-function-enablement.md).
 
+BYOO collector debug and log chunking example:
+
+```yaml
+agentConfig:
+  mergeConfig: |
+    agent:
+      byooLogChunking:
+        enabled: true
+        maxPayloadBytes: 262144
+      byooDebugMode:
+        enabled: true
+      byooOtelCollector:
+        exporterHelper:
+          timeout: 30s
+          sendingQueue:
+            batch:
+              flushTimeout: 200ms
+              sizer: bytes
+              minSize: 1000000
+              maxSize: 1000000
+```
+
 BYOO metric subset example:
 
 ```yaml

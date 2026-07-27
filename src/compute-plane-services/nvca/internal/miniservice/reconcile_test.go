@@ -179,6 +179,32 @@ func filterNVCFEnvVars(envs []corev1.EnvVar) []corev1.EnvVar {
 	return result
 }
 
+func envVarsByName(envs []corev1.EnvVar) map[string]string {
+	result := map[string]string{}
+	for _, env := range envs {
+		result[env.Name] = env.Value
+	}
+	return result
+}
+
+func assertBYOOOTelCollectorEnvVars(t *testing.T, envs []corev1.EnvVar) {
+	t.Helper()
+	envsByName := envVarsByName(envs)
+	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOLogChunkingEnabledEnv])
+	assert.Equal(t, "262144", envsByName[nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv])
+	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOLogChunkDryRunEnv])
+	encodedCollectorConfig, ok := envsByName[nvcaconfig.BYOOOTelCollectorConfigEnv]
+	require.True(t, ok)
+	decodedCollectorConfig, err := base64.StdEncoding.DecodeString(encodedCollectorConfig)
+	require.NoError(t, err)
+	var collectorConfig nvcaconfig.BYOOOTelCollectorConfig
+	require.NoError(t, json.Unmarshal(decodedCollectorConfig, &collectorConfig))
+	assert.Equal(t, "30s", collectorConfig.ExporterHelper.Timeout)
+	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOMetricSubsetEnabledEnv])
+	assert.Contains(t, envsByName[nvcaconfig.BYOOMetricSubsetFilterConfigEnv], "metric.name")
+	assert.Equal(t, "metric_subset_enabled,custom_label", envsByName[nvcaconfig.BYOOWorkloadMetricsDropLabelsEnv])
+}
+
 func TestReconcile_Function(t *testing.T) {
 	ctx := newTestContext()
 	testScheme := mgrScheme
@@ -254,11 +280,15 @@ func TestReconcile_Function(t *testing.T) {
 		Effect:   corev1.TaintEffectNoSchedule,
 	}
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
-	exporterBatchMaxSizeBytes := int64(1000000)
 	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
-		MaxBodyBytes:              262144,
-		DryRun:                    true,
-		ExporterBatchMaxSizeBytes: &exporterBatchMaxSizeBytes,
+		Enabled:         true,
+		MaxPayloadBytes: 262144,
+		DryRun:          true,
+	}
+	r.cfg.Agent.BYOOOTelCollector = nvcaconfig.BYOOOTelCollectorConfig{
+		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
+			Timeout: "30s",
+		},
 	}
 	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{
 		Enabled:      true,
@@ -667,13 +697,7 @@ rules:
 		}
 	}
 	require.NotNil(t, byooCollector, "utils pod should include BYOO collector sidecar")
-	byooCollectorEnv := map[string]string{}
-	for _, env := range byooCollector.Env {
-		byooCollectorEnv[env.Name] = env.Value
-	}
-	assert.Equal(t, "262144", byooCollectorEnv[nvcaconfig.BYOOLogChunkMaxBodyBytesEnv])
-	assert.Equal(t, "true", byooCollectorEnv[nvcaconfig.BYOOLogChunkDryRunEnv])
-	assert.Equal(t, "1000000", byooCollectorEnv[nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv])
+	assertBYOOOTelCollectorEnvVars(t, byooCollector.Env)
 	assert.Contains(t, utilsPod.Spec.Tolerations, configuredToleration)
 	assert.Equal(t, mergeMaps(translatedLabels, map[string]string{
 		common.BYOOMetricsEgressTargetLabelKey: common.BYOOMetricsEgressTargetLabelValue,
@@ -827,18 +851,10 @@ rules:
 	for _, env := range msMeta.EnvVars {
 		metaEnv[env.Name] = env.Value
 	}
-	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkingEnabledEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
 	assert.NotContains(t, metaEnv, nvcaconfig.BYOOMetricSubsetEnabledEnv)
-	otelCollectorEnv := map[string]string{}
-	for _, env := range msMeta.OTelCollectorEnvVars {
-		otelCollectorEnv[env.Name] = env.Value
-	}
-	assert.Equal(t, "262144", otelCollectorEnv[nvcaconfig.BYOOLogChunkMaxBodyBytesEnv])
-	assert.Equal(t, "true", otelCollectorEnv[nvcaconfig.BYOOLogChunkDryRunEnv])
-	assert.Equal(t, "1000000", otelCollectorEnv[nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv])
-	assert.Equal(t, "true", otelCollectorEnv[nvcaconfig.BYOOMetricSubsetEnabledEnv])
-	assert.Contains(t, otelCollectorEnv[nvcaconfig.BYOOMetricSubsetFilterConfigEnv], "metric.name")
-	assert.Equal(t, "metric_subset_enabled,custom_label", otelCollectorEnv[nvcaconfig.BYOOWorkloadMetricsDropLabelsEnv])
+	assertBYOOOTelCollectorEnvVars(t, msMeta.OTelCollectorEnvVars)
 	assert.Equal(t, nodefeatures.UniformInstanceTypeLabelKey, msMeta.NodeAffinityKey)
 	assert.Equal(t, []corev1.Toleration{configuredToleration}, msMeta.Tolerations)
 
@@ -2184,6 +2200,23 @@ func TestReconcile_Task(t *testing.T) {
 	}
 
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
+	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
+		Enabled:         true,
+		MaxPayloadBytes: 262144,
+		DryRun:          true,
+	}
+	r.cfg.Agent.BYOOOTelCollector = nvcaconfig.BYOOOTelCollectorConfig{
+		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
+			Timeout: "30s",
+		},
+	}
+	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{
+		Enabled:      true,
+		FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
+	}
+	r.cfg.Agent.BYOOWorkloadMetrics = nvcaconfig.BYOOWorkloadMetricsConfig{
+		DropLabels: []string{"metric_subset_enabled", "custom_label"},
+	}
 	err := k8sutil.SetConfigDefaultResources(&r.cfg)
 	require.NoError(t, err)
 
@@ -2529,6 +2562,15 @@ rules:
 			})
 		}
 	}
+	var byooCollector *corev1.Container
+	for i := range utilsPod.Spec.Containers {
+		if utilsPod.Spec.Containers[i].Name == common.ByooOTelCollectorPodNameBase {
+			byooCollector = &utilsPod.Spec.Containers[i]
+			break
+		}
+	}
+	require.NotNil(t, byooCollector, "utils pod should include BYOO collector sidecar")
+	assertBYOOOTelCollectorEnvVars(t, byooCollector.Env)
 	assert.Equal(t, mergeMaps(translatedLabels, map[string]string{
 		common.BYOOMetricsEgressTargetLabelKey: common.BYOOMetricsEgressTargetLabelValue,
 	}), utilsPod.Labels)
@@ -2642,6 +2684,12 @@ rules:
 	assert.Equal(t, serviceAccountName, msMeta.ServiceAccountName)
 	assert.NotEmpty(t, msMeta.EnvVars, "metadata should include workload env vars")
 	assert.NotNil(t, msMeta.TerminationGracePeriodSeconds)
+	metaEnv := envVarsByName(msMeta.EnvVars)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkingEnabledEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOMetricSubsetEnabledEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOOTelCollectorConfigEnv)
+	assertBYOOOTelCollectorEnvVars(t, msMeta.OTelCollectorEnvVars)
 
 	gotSecrets := &corev1.SecretList{}
 	err = r.Client.List(ctx, gotSecrets, client.InNamespace(ms.Spec.Namespace))
@@ -4340,7 +4388,7 @@ func TestDecodeObjects_Success(t *testing.T) {
 	data, err := json.Marshal(helmObjs)
 	require.NoError(t, err)
 
-	objs, resources, derr := decodeObjects(ctx, decoder, data)
+	objs, resources, _, derr := decodeObjects(ctx, decoder, data)
 	require.NoError(t, derr)
 	require.Len(t, objs, 2)
 	require.Len(t, resources, 2)
@@ -4366,6 +4414,57 @@ func TestDecodeObjects_Success(t *testing.T) {
 	})
 }
 
+func TestDecodeObjects_ExtractsWorkloadConfig(t *testing.T) {
+	ctx := newTestContext()
+	s := mgrScheme
+	decoder := serializer.NewCodecFactory(s).UniversalDeserializer()
+
+	helmObjs := []client.Object{
+		&corev1.ConfigMap{
+			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: featureflag.WorkloadConfigConfigMapName,
+			},
+			Data: map[string]string{
+				featureflag.WorkloadConfigDataKey: "featureFlags:\n" +
+					"  " + featureflag.StatusByWorkerReadiness + ": true\n" +
+					"  SOME_UNKNOWN_FLAG: true\n",
+			},
+		},
+		&appsv1.Deployment{
+			TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "dep-1",
+			},
+		},
+	}
+
+	data, err := json.Marshal(helmObjs)
+	require.NoError(t, err)
+
+	objs, resources, workloadConfig, derr := decodeObjects(ctx, decoder, data)
+	require.NoError(t, derr)
+
+	// The workload config ConfigMap must be stripped from the applied/status-checked objects
+	// and from the resource summary.
+	require.Len(t, objs, 1)
+	if dep, ok := objs[0].(*appsv1.Deployment); assert.True(t, ok) {
+		assert.Equal(t, "dep-1", dep.Name)
+	}
+	require.Len(t, resources, 1)
+	assert.Contains(t, resources, v1alpha1.ResourceStatus{
+		GVK:   "apps/v1, Kind=Deployment",
+		Names: []string{"dep-1"},
+		Count: 1,
+	})
+
+	// Recognized flags are decoded; unknown keys are dropped.
+	assert.Equal(t, &v1alpha1.WorkloadConfig{
+		FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+	}, workloadConfig)
+	assert.True(t, workloadConfig.IsFeatureFlagEnabled(featureflag.StatusByWorkerReadiness))
+}
+
 func TestDecodeObjects_JSONUnmarshalError(t *testing.T) {
 	ctx := newTestContext()
 	s := mgrScheme
@@ -4374,7 +4473,7 @@ func TestDecodeObjects_JSONUnmarshalError(t *testing.T) {
 	// Invalid JSON
 	data := []byte("not-json")
 
-	objs, resources, err := decodeObjects(ctx, decoder, data)
+	objs, resources, _, err := decodeObjects(ctx, decoder, data)
 	assert.Error(t, err)
 	assert.Nil(t, objs)
 	assert.Nil(t, resources)
@@ -4394,7 +4493,7 @@ func TestDecodeObjects_NonClientObject(t *testing.T) {
 	data, err := json.Marshal(objs)
 	require.NoError(t, err)
 
-	gotObjs, gotResources, derr := decodeObjects(ctx, decoder, data)
+	gotObjs, gotResources, _, derr := decodeObjects(ctx, decoder, data)
 	assert.EqualError(t, derr, "terminal error: bad object type")
 	assert.Nil(t, gotObjs)
 	assert.Nil(t, gotResources)

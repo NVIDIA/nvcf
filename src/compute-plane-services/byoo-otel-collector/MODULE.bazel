@@ -83,6 +83,7 @@ use_repo(
     "com_github_kelseyhightower_envconfig",
     "com_github_open_telemetry_opentelemetry_collector_contrib_exporter_azuremonitorexporter",
     "com_github_open_telemetry_opentelemetry_collector_contrib_exporter_datadogexporter",
+    "com_github_open_telemetry_opentelemetry_collector_contrib_exporter_prometheusexporter",
     "com_github_open_telemetry_opentelemetry_collector_contrib_exporter_prometheusremotewriteexporter",
     "com_github_open_telemetry_opentelemetry_collector_contrib_exporter_splunkhecexporter",
     "com_github_open_telemetry_opentelemetry_collector_contrib_extension_basicauthextension",

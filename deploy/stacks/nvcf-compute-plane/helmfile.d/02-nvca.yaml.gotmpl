@@ -14,6 +14,32 @@ environments:
 
 ---
 
+{{- /*
+  nvca-operator.featureGateValues normalizes a selfManaged feature gate list.
+  Every gate in the default set below is enabled unless it is already present or
+  explicitly disabled by including "-<gate>" in the input. This keeps the
+  defaults intact even when the operator sets a non-empty featureGateValues
+  list, which would otherwise replace the chart default entirely. Input (.) is
+  the raw list; output is the normalized list as YAML.
+*/}}
+{{- define "nvca-operator.featureGateValues" -}}
+{{- $featureGateValues := . | default list -}}
+{{- $defaultFeatureGates := list
+      "DynamicGPUDiscovery"
+      "InfraResourceOverhead"
+      "EnforceHelmFunctionResourceLimits"
+      "EnforceContainerFunctionResourceLimits"
+      "EnforceHelmTaskResourceLimits"
+      "EnforceContainerTaskResourceLimits"
+-}}
+{{- range $gate := $defaultFeatureGates -}}
+{{-   if not (or (has $gate $featureGateValues) (has (printf "-%s" $gate) $featureGateValues)) -}}
+{{-     $featureGateValues = append $featureGateValues $gate -}}
+{{-   end -}}
+{{- end -}}
+{{- toYaml $featureGateValues -}}
+{{- end -}}
+
 repositories:
   - name: nvcf
     url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
@@ -98,6 +124,8 @@ releases:
           {{- with dig "natsHostOverride" "" $selfManaged }}
           natsHostOverride: {{ . | quote }}
           {{- end }}
+          featureGateValues:
+          {{- include "nvca-operator.featureGateValues" (dig "featureGateValues" list $selfManaged) | nindent 10 }}
           imageCredHelper:
             imageRepository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-image-credential-helper
             {{- with dig "imageCredHelper" "imageTag" "" $selfManaged }}

@@ -33,7 +33,7 @@ for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system cert-m
 done
 
 for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system cert-manager; do
-  kubectl --context <control-plane-context> create secret docker-registry nvcr-pull-secret \
+  kubectl --context <control-plane-context> create secret docker-registry nvcr-creds \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
     --docker-password="$NGC_API_KEY" \
@@ -76,7 +76,7 @@ spec:
               nvcf.nvidia.com/imagepullsecret-injected-by: kyverno
           spec:
             imagePullSecrets:
-            - name: nvcr-pull-secret
+            - name: nvcr-creds
 ```
 
 ```bash
@@ -100,7 +100,7 @@ kubectl --context <compute-plane-context> create namespace nvca-operator \
   --dry-run=client -o yaml | \
   kubectl --context <compute-plane-context> apply -f -
 
-kubectl --context <compute-plane-context> create secret docker-registry nvcr-pull-secret \
+kubectl --context <compute-plane-context> create secret docker-registry nvcr-creds \
   --docker-server=nvcr.io \
   --docker-username='$oauthtoken' \
   --docker-password="$NGC_API_KEY" \
@@ -114,7 +114,7 @@ Reference it in the compute-plane environment file:
 ```yaml
 global:
   imagePullSecrets:
-    - name: nvcr-pull-secret
+    - name: nvcr-creds
 ```
 
 The chart and operator use that reference in `nvca-operator` and mirror the
@@ -128,7 +128,7 @@ selected install flow.
 # Check that a control-plane pod has the injected secret
 kubectl --context <control-plane-context> get pod -n <namespace> <pod-name> \
   -o jsonpath='{.spec.imagePullSecrets}'
-# Expected: [{"name":"nvcr-pull-secret"}]
+# Expected: [{"name":"nvcr-creds"}]
 
 # Check the Kyverno annotation
 kubectl --context <control-plane-context> get pod -n <namespace> <pod-name> \
@@ -141,7 +141,7 @@ kubectl --context <control-plane-context> get events -n <namespace> \
 # Should show "Successfully pulled" not "401 Unauthorized"
 
 # Check the chart/operator mirror on the compute cluster
-kubectl --context <compute-plane-context> get secret nvcr-pull-secret \
+kubectl --context <compute-plane-context> get secret nvcr-creds \
   -n nvca-system
 ```
 
@@ -177,8 +177,8 @@ kubectl --context <control-plane-context> get clusterpolicy nvcf-add-imagepullse
 
 ### Wrong secret name
 
-The policy references `nvcr-pull-secret`. Verify the secret exists with that exact name:
+The policy references `nvcr-creds`. Verify the secret exists with that exact name:
 
 ```bash
-kubectl --context <target-context> get secret nvcr-pull-secret -n <namespace>
+kubectl --context <target-context> get secret nvcr-creds -n <namespace>
 ```

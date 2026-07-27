@@ -9,8 +9,16 @@ global:
   # =============================================================================
   # Helm Chart Sources Configuration
   # =============================================================================
-  # Configure the OCI registry where NVCF Helm charts are stored.
-  # This must point to a registry containing the NVCF chart packages.
+  # Option A — HTTP Helm repository (e.g. NGC public catalog):
+  #   sources:
+  #     url: "https://helm.ngc.nvidia.com/nvidia/nvcf"
+  #     username: "$oauthtoken"
+  #     password: "YOUR_NGC_API_KEY"
+  #
+  # Option B — OCI registry (e.g. ECR or a private NGC org after mirroring):
+  #   sources:
+  #     registry: "nvcr.io"           # or <account>.dkr.ecr.<region>.amazonaws.com
+  #     repository: "YOUR_ORG/YOUR_TEAM"
   # =============================================================================
   helm:
     sources:
@@ -174,6 +182,9 @@ openbao:
         matchExpressions:
           - key: kubernetes.io/metadata.name
             operator: In
+            # nvcf-ui is appended by global.yaml.gotmpl only when the
+            # addons.nvcfUi addon is enabled, so the disabled-by-default path
+            # leaves the injector's namespace selector unchanged.
             values:
               - api-keys
               - ess
@@ -260,6 +271,11 @@ addons:
     tolerations: []
     affinity: {}
 
+  # NVCF UI addon for optional NVCF admin-panel UI.
+  # Disabled by default
+  nvcfUi:
+    enabled: false
+
 stateMetrics:
   enabled: false
   # Disable ServiceMonitor for environments without Prometheus Operator
@@ -297,6 +313,8 @@ ingress:
       vanityGateway:
         # Defaults to vanity.<global.domain>. Set a non-empty list to override.
         hostnames: []
+        routeAnnotations: {}
+      nvcfUi:
         routeAnnotations: {}
       grpc:
         routeAnnotations: {}

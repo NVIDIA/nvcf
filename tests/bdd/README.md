@@ -72,6 +72,15 @@ go test -run '^TestMultiClusterUp$' -timeout 60m -v
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
   go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
+# Focused single-cluster Helmfile feature for the documented public Docker Hub
+# NATS reloader and API bootstrap Alpine Kubernetes utility image. The feature
+# installs the dependency group, ESS API, NATS auth callout, and API rather
+# than unrelated services. The broad cleanup mode
+# removes any stale single- or multi-cluster ncp-local topology first.
+BDD_CLEANUP_MODE=topology-multi \
+  NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  go test -run '^TestSingleClusterHelmfileUpstreamImages$' -timeout 90m -v
+
 # Multi-cluster Helmfile feature: control-plane install on
 # k3d-ncp-local-cp followed by compute-plane register-cluster + install
 # on k3d-ncp-local-compute-1. Same secrets as the single-cluster
@@ -155,6 +164,29 @@ If a new step is genuinely needed:
   invocations resolve.
 - For the Helmfile feature: `NGC_API_KEY`, `SAMPLE_NGC_ORG`,
   `SAMPLE_NGC_TEAM` env vars set.
+- For the upstream-image feature: outbound cluster access to
+  `docker.io/natsio` and `docker.io/alpine`.
+
+The focused upstream-image feature also requires the gitignored
+`tools/ncp-local-cluster/secrets/docker-config.json` used by the kubelet
+credential-provider mount. Create it from a Docker config with valid NGC
+credentials before running:
+
+```sh
+mkdir -p tools/ncp-local-cluster/secrets
+cp "$HOME/.docker/config.json" \
+  tools/ncp-local-cluster/secrets/docker-config.json
+
+printf '%s' "$NGC_API_KEY" | \
+  HELM_REGISTRY_CONFIG="$PWD/tools/ncp-local-cluster/secrets/docker-config.json" \
+  helm registry login nvcr.io --username '$oauthtoken' --password-stdin
+```
+
+The feature supplies the same file to Helm through `HELM_REGISTRY_CONFIG` for
+the remaining private NGC charts. It is a durable local cluster prerequisite,
+not a suite-authored artifact: deleting it while k3d is running breaks the
+bind mount and can make Docker recreate the path as a directory. The NGC key
+must have pull access to `SAMPLE_NGC_ORG/SAMPLE_NGC_TEAM`.
 
 Live runs write every command's argv, stdout, and stderr to
 `tests/bdd/out/<run-id>/logs/` for post-mortem inspection.

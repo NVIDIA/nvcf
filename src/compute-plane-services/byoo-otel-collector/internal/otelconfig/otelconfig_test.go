@@ -82,9 +82,6 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCF_ZONE_NAME":     "zone-1",
 			},
 			expectErr: false,
-			expect: func(t *testing.T, cfg TemplateConfig) {
-				assert.Equal(t, defaultLogExporterBatchMaxSizeBytes, cfg.LogExporterBatchMaxSizeBytes)
-			},
 		},
 		{
 			name: "valid FunctionID",
@@ -101,19 +98,88 @@ func TestGetTemplateConfig(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name: "custom log exporter batch max size",
+			name: "BYOO log chunking enabled uses collector defaults",
 			env: map[string]string{
-				"NVCF_BACKEND_TYPE":                      "gfn",
-				"NVCF_INSTANCE_ID":                       "test-instance",
-				"NVCF_NAMESPACE":                         "test-ns",
-				"NVCF_WORKLOAD_TYPE":                     "function",
-				"NVCT_TASK_ID":                           "task-123",
-				"NVCF_ZONE_NAME":                         "zone-1",
-				"BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES": "2000000",
+				"NVCF_BACKEND_TYPE":         "gfn",
+				"NVCF_INSTANCE_ID":          "test-instance",
+				"NVCF_NAMESPACE":            "test-ns",
+				"NVCF_WORKLOAD_TYPE":        "function",
+				"NVCT_TASK_ID":              "task-123",
+				"NVCF_ZONE_NAME":            "zone-1",
+				"BYOO_LOG_CHUNKING_ENABLED": "true",
 			},
 			expectErr: false,
 			expect: func(t *testing.T, cfg TemplateConfig) {
-				assert.Equal(t, 2_000_000, cfg.LogExporterBatchMaxSizeBytes)
+				assert.True(t, cfg.LogChunking.Enabled)
+				assert.Equal(t, defaultLogChunkMaxPayloadBytes, cfg.LogChunking.MaxPayloadBytes)
+				assert.False(t, cfg.LogChunking.DryRun)
+			},
+		},
+		{
+			name: "BYOO log chunk max payload bytes overrides deprecated max body bytes",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":                "gfn",
+				"NVCF_INSTANCE_ID":                 "test-instance",
+				"NVCF_NAMESPACE":                   "test-ns",
+				"NVCF_WORKLOAD_TYPE":               "function",
+				"NVCT_TASK_ID":                     "task-123",
+				"NVCF_ZONE_NAME":                   "zone-1",
+				"BYOO_LOG_CHUNK_MAX_BODY_BYTES":    "131072",
+				"BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES": "262144",
+			},
+			expectErr: false,
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.True(t, cfg.LogChunking.Enabled)
+				assert.Equal(t, 262144, cfg.LogChunking.MaxPayloadBytes)
+			},
+		},
+		{
+			name: "BYOO deprecated log chunk max body bytes is accepted",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":             "gfn",
+				"NVCF_INSTANCE_ID":              "test-instance",
+				"NVCF_NAMESPACE":                "test-ns",
+				"NVCF_WORKLOAD_TYPE":            "function",
+				"NVCT_TASK_ID":                  "task-123",
+				"NVCF_ZONE_NAME":                "zone-1",
+				"BYOO_LOG_CHUNK_MAX_BODY_BYTES": "131072",
+			},
+			expectErr: false,
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.True(t, cfg.LogChunking.Enabled)
+				assert.Equal(t, 131072, cfg.LogChunking.MaxPayloadBytes)
+			},
+		},
+		{
+			name: "BYOO OTel collector config",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":              "gfn",
+				"NVCF_INSTANCE_ID":               "test-instance",
+				"NVCF_NAMESPACE":                 "test-ns",
+				"NVCF_WORKLOAD_TYPE":             "function",
+				"NVCT_TASK_ID":                   "task-123",
+				"NVCF_ZONE_NAME":                 "zone-1",
+				"BYOO_OTEL_COLLECTOR_CONFIG_B64": base64.StdEncoding.EncodeToString([]byte(`{"exporterHelper":{"timeout":"30s"}}`)),
+			},
+			expectErr: false,
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.Equal(t, "30s", cfg.OTelCollector.ExporterHelper.Timeout)
+			},
+		},
+		{
+			name: "BYOO debug mode",
+			env: map[string]string{
+				"NVCF_BACKEND_TYPE":  "gfn",
+				"NVCF_INSTANCE_ID":   "test-instance",
+				"NVCF_NAMESPACE":     "test-ns",
+				"NVCF_WORKLOAD_TYPE": "function",
+				"NVCT_TASK_ID":       "task-123",
+				"NVCF_ZONE_NAME":     "zone-1",
+				"BYOO_DEBUG_MODE":    "true",
+			},
+			expectErr: false,
+			expect: func(t *testing.T, cfg TemplateConfig) {
+				assert.True(t, cfg.DebugMode)
 			},
 		},
 		{
@@ -151,19 +217,6 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCT_TASK_ID":                     "task-123",
 				"NVCF_ZONE_NAME":                   "zone-1",
 				"BYOO_METRIC_SUBSET_FILTER_CONFIG": "processors: []",
-			},
-			expectErr: true,
-		},
-		{
-			name: "negative log exporter batch max size",
-			env: map[string]string{
-				"NVCF_BACKEND_TYPE":                      "gfn",
-				"NVCF_INSTANCE_ID":                       "test-instance",
-				"NVCF_NAMESPACE":                         "test-ns",
-				"NVCF_WORKLOAD_TYPE":                     "function",
-				"NVCT_TASK_ID":                           "task-123",
-				"NVCF_ZONE_NAME":                         "zone-1",
-				"BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES": "-1",
 			},
 			expectErr: true,
 		},
@@ -237,12 +290,15 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCT_TASK_ID",
 				"NVCF_ZONE_NAME",
 				"NVCF_CLUSTER_REGION",
+				"BYOO_LOG_CHUNKING_ENABLED",
+				"BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES",
 				"BYOO_LOG_CHUNK_MAX_BODY_BYTES",
 				"BYOO_LOG_CHUNK_DRY_RUN",
-				"BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES",
+				"BYOO_DEBUG_MODE",
 				"BYOO_METRIC_SUBSET_ENABLED",
 				"BYOO_METRIC_SUBSET_FILTER_CONFIG",
 				"BYOO_WORKLOAD_METRICS_DROP_LABELS",
+				"BYOO_OTEL_COLLECTOR_CONFIG_B64",
 			}
 			backup := map[string]*string{}
 			for _, k := range envKeys {

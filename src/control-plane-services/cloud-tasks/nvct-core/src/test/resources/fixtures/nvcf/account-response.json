@@ -1,0 +1,151 @@
+{
+  "account": {
+    "ncaId": "%s",
+    "clientIds": [
+      "%s"
+    ],
+    "name": "%s",
+    "registryCredentials": [
+      {
+        "registryHostname": "docker.io",
+        "secret": {
+          "name": "docker-container-registry-credential",
+          "value": "dXNlcm5hbWU6ZG9ja2VyLXBhdC1wYXNzd29yZA=="
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryHostname": "779846807323.dkr.ecr.us-west-2.amazonaws.com",
+        "secret": {
+          "name": "ecr-container-registry-credential",
+          "value": "YWNjZXNzLWtleS1pZC0xOnNlY3JldC1hY2Nlc3Mta2V5LTE="
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryHostname": "public.ecr.aws",
+        "secret": {
+          "name": "ecr-container-registry-credential",
+          "value": "YWNjZXNzLWtleS1pZC0xOnNlY3JldC1hY2Nlc3Mta2V5LTE="
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryHostname": "test-volcengine-registry-cn-beijing.cr.volces.com",
+        "secret": {
+          "name": "ve-registry-credential",
+          "value": "dm9sY2VuZ2luZS1hY2Nlc3Mta2V5LTE6dm9sY2VuZ2luZS1zZWNyZXQta2V5LTE="
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryHostname": "test1-bmfvajfxgfcrhba5.azurecr.io",
+        "secret": {
+          "name": "acr-registry-credential-1",
+          "value": "YWNyLWNsaWVudC1pZC0xOmFjci1jbGllbnQtc2VjcmV0LTE="
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryHostname": "demo.goharbor.io",
+        "secret": {
+          "name": "harbor-registry-credential",
+          "value": "aGFyYm9yLXJvYm90LWFjY291bnQ6aGFyYm9yLXJvYm90LXBhc3N3b3Jk"
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryHostname": "artifactorytest12345.jfrog.io",
+        "secret": {
+          "name": "artifactory-registry-credential",
+          "value": "YXJ0aWZhY3RvcnktdXNlcm5hbWU6YXJ0aWZhY3RvcnktcGFzc3dvcmQ="
+        },
+        "artifactTypes": [
+          "CONTAINER",
+          "HELM"
+        ]
+      },
+      {
+        "registryHostname": "stg.nvcr.io",
+        "secret": {
+          "name": "ngc-container-registry-credential",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtY29udGFpbmVyLXJlZ2lzdHJ5LWNyZWQ="
+        },
+        "artifactTypes": [
+          "CONTAINER"
+        ]
+      },
+      {
+        "registryHostname": "localhost-ngc",
+        "secret": {
+          "name": "ngc-container-registry-credential",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtY29udGFpbmVyLXJlZ2lzdHJ5LWNyZWQ="
+        },
+        "artifactTypes": [
+          "CONTAINER"
+        ]
+      },
+      {
+        "registryHostname": "api.stg.ngc.nvidia.com",
+        "secret": {
+          "name": "ngc-model-resource-registry-credential",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtbW9kZWwtcmVnaXN0cnktY3JlZA=="
+        },
+        "artifactTypes": [
+          "MODEL",
+          "RESOURCE"
+        ]
+      },
+      {
+        "registryHostname": "localhost-ngc",
+        "secret": {
+          "name": "ngc-model-resource-registry-credential",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtbW9kZWwtcmVnaXN0cnktY3JlZA=="
+        },
+        "artifactTypes": [
+          "MODEL",
+          "RESOURCE"
+        ]
+      },
+      {
+        "registryHostname": "helm.stg.ngc.nvidia.com",
+        "secret": {
+          "name": "ngc-helm-registry-credential",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtaGVsbS1yZWdpc3RyeS1jcmVk"
+        },
+        "artifactTypes": [
+          "HELM"
+        ]
+      },
+      {
+        "registryHostname": "localhost-ngc",
+        "secret": {
+          "name": "ngc-helm-registry-credential",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtaGVsbS1yZWdpc3RyeS1jcmVk"
+        },
+        "artifactTypes": [
+          "HELM"
+        ]
+      }
+    ],
+    "maxTasksAllowed": "%d"
+  }
+}
