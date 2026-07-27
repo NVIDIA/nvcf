@@ -9,21 +9,48 @@ change. The first draft of this document was invalidated within hours by an
 in-flight change that pinned the worker Bazel versions, and again during review
 when the notary import landed, so treat any number here as a snapshot.
 
-The counts come from the tracked file list. Note which ones exclude vendored
-trees and which do not: the module total below is deliberately inclusive, because
-the point of that row is the total number of Bazel modules in the repository.
+All commands below are run from the stamped commit, not from a branch. Note
+which ones exclude vendored trees and which do not: the module total is
+deliberately inclusive, because the point of that row is the total number of
+Bazel modules in the repository.
 
 ```sh
-# 22: every tracked module, vendored ones included
+# 22 modules total, vendored included; 19 first-party service modules
 git ls-files | grep -E '(^|/)MODULE\.bazel$' | wc -l
-
-# 19: first-party service modules only
 git ls-files | grep -v /vendor/ | grep -E '^src/.*/MODULE\.bazel$' | wc -l
 
-# 647 public, 1 package_group: first-party BUILD files only
-git ls-files | grep -v /vendor/ | grep -E '(^|/)BUILD\.bazel$' \
-  | xargs grep -c '//visibility:public' | awk -F: '{n+=$2} END {print n}'
+# 20 lockfiles; 19 subtree .bazelrc of which 17 distinct
+git ls-files | grep -E '(^|/)MODULE\.bazel\.lock$' | wc -l
+git ls-files | grep -v /vendor/ | grep -E '^src/.*/\.bazelrc$' | wc -l
+git ls-files | grep -v /vendor/ | grep -E '^src/.*/\.bazelrc$' \
+  | xargs md5sum | awk '{print $1}' | sort -u | wc -l
+
+# 15 on 8.6.0, 4 on 9.1.1
+git ls-files | grep -v /vendor/ | grep -E '^src/.*/\.bazelversion$' \
+  | xargs cat | sort | uniq -c
+
+# 20 workspace_status.sh in 7 variants; 120 copied rules/oci files
+git ls-files | grep -E '(^|/)workspace_status\.sh$' | wc -l
+git ls-files | grep -E '(^|/)workspace_status\.sh$' \
+  | xargs md5sum | awk '{print $1}' | sort -u | wc -l
+git ls-files | grep -v /vendor/ | grep -E '(^|/)rules/oci/' | wc -l
+
+# 647 public, 156 __subpackages__, 1 package_group: first-party BUILD files
+for pat in '//visibility:public' '//:__subpackages__' 'package_group('; do
+  git ls-files | grep -v /vendor/ | grep -E '(^|/)BUILD\.bazel$' \
+    | xargs grep -c -F "$pat" | awk -F: -v p="$pat" '{n+=$2} END {print p, n}'
+done
+
+# 1261 vendored BUILD files under nvca
+git ls-files | grep -E '^src/compute-plane-services/nvca/vendor/.*/BUILD\.bazel$' | wc -l
 ```
+
+Two figures are not reduced to a command here, because they need the contents of
+`MODULE.bazel` to be parsed rather than matched: the `oci.pull` breakdown and the
+Go SDK version range. Both were derived by reading the `oci.pull` and
+`go_sdk.download` declarations across the tracked `MODULE.bazel` files, and
+should be treated as reported rather than reproduced. Check them by hand before
+relying on either.
 
 ## Summary
 
@@ -77,8 +104,12 @@ The duplication is the secondary argument:
 | Copied `rules/oci` files | 120 files, 6944 lines |
 | `oci.pull` declarations | 23 (18 from nvcr.io), 8 images, 7 digests |
 
-The isolation that separate modules provide is largely unused: `rules_oci`,
-`rules_pkg`, and `aspect_bazel_lib` are on identical versions in all 19.
+`rules_oci`, `rules_pkg`, and `aspect_bazel_lib` are on identical versions in all
+19 modules, so for those three the isolation a separate module provides is not
+being used. That is a narrow observation and should not be read as a general one:
+the language dependency graphs do diverge, as the costs section below records for
+Kubernetes families, protobuf, and Rust toolchains. The claim is that nothing is
+gained by isolating these particular rule sets, not that isolation is unused.
 
 Two important qualifications. The `rules/oci` and stamping copies contain real
 behavioral differences, so they need a shared API with per-component
@@ -90,9 +121,20 @@ caches with compatible action keys.
 
 ## Java is the proof, not the exception
 
-`nv-boot-parent` and `cloud-tasks` already build in the root module while
-retaining Maven and POM workflows, a root Maven dependency hub and lock,
-Java-specific rules, component CI metadata, Testcontainers and Docker-host test
+`nv-boot-parent` and `cloud-tasks` already build in the root module. Being
+specific about what is shared and what is not, because this is the concrete model
+the rest of the plan generalizes:
+
+Shared, at the root: one `rules_jvm_external` hub and one pinned
+`//:maven_install.json` for the Bazel build, plus Java-specific rules and the
+root Bazel graph.
+
+Retained, per component: separate Maven reactors, each with its own multi-module
+`pom.xml` tree and BOM, and their own Maven-side validation, publication, and
+release cadence. `nv-boot-parent` publishes a BOM and starters that
+`cloud-tasks` consumes as ordinary Maven artifacts.
+
+Also retained per component: CI metadata, Testcontainers and Docker-host test
 lanes, externally consumed labels, and independent releases.
 
 The lesson is not to make Java, Go, and Rust identical. It is that one root
@@ -240,8 +282,36 @@ migrated count, keeps a lockfile and a module-root lane alive, and leaves a stat
 correctness risk on the record. The final phase completes when every component has taken
 exactly one of these two paths.
 
-The root-local-label criterion is scoped to components that have migrated. It is
-not waived for first-party NVCF code that a component vendors. NVCA has dozens of BUILD
+### The non-waivable invariant
+
+The two closure paths above resolve process, not correctness, and stating them
+without this leaves a contradiction: a retained exception cannot both close the
+initiative and be exempt from the reason the initiative exists.
+
+So one invariant is not waivable by either path:
+
+> Every first-party dependency resolves from the current checkout.
+
+A component satisfies this when the in-repository libraries it builds against are
+the ones in the tree being built, rather than a published or vendored copy of an
+earlier state. That is the entire correctness argument: it is what stops a
+library and its consumer changing together in one commit while Bazel tests the
+consumer against the older copy.
+
+Joining the root module is the ordinary way to satisfy it, and is what makes it
+automatic. It is not the only way. A retained exception may satisfy it by other
+means, for example a path-based or workspace-local override that resolves those
+dependencies to the working tree, and if it does so it is a legitimate end state
+rather than a deferral. What it may not do is record the risk and move on.
+
+Concretely, this is the criterion that a retained exception's contract has to
+demonstrate, not merely acknowledge. NVCA has dozens of BUILD files referring to
+vendored copies of NVCF Go libraries; that is the condition to remove, whether by
+migrating or by resolving those labels to the checkout.
+
+The root-local-label criterion, by contrast, is scoped to components that have
+migrated: it is how a migrated component satisfies the invariant, not an
+independent requirement. NVCA has dozens of BUILD
 files referring to vendored copies of NVCF Go libraries, and that is precisely
 the false-green condition this proposal exists to remove. The exact figure is
 deliberately not quoted here: plausible definitions of the metric disagree, and
@@ -322,9 +392,18 @@ Docker-host and Java component lanes, count toward that invariant.
    and are handled by category rather than by exception: `rules/oci-destinations`
    is migration scaffolding retired once its five consumers migrate, and the
    vendored `cel.dev/expr` module is excluded from the guard outright. `nvsnap`
-   is the only open question, and its recorded rationale contradicts its code, so
-   this phase decides it on current evidence. The Phase 2 guard is not a single
-   allowlist: it separates vendored-path exclusions, a migration and retirement
+   is the only open question, and its recorded rationale contradicts its code.
+   This phase must classify it, and classification is not the same as resolving
+   it: `nvsnap` cannot migrate before the toolchain convergence and the shared
+   OCI and stamping API exist, because it builds two `go_oci_image` targets. So
+   Phase 1 puts it in one of exactly two states, and neither is "undecided":
+
+   - A permanent exception, carrying the contract, if a real reason is found.
+   - A migration and retirement ledger entry with target Phase 6d, if not.
+
+   On current evidence the second is expected: its Bazel targets pin public
+   bases by digest. Phase 6d then does the work. The Phase 2 guard is not a
+   single allowlist: it separates vendored-path exclusions, a migration and retirement
    ledger of modules not yet resolved, and permanent service exceptions. Only the third
    category carries the exception contract. Requiring one for every entry would
    make the guard unusable during the migration itself.
@@ -357,6 +436,11 @@ Docker-host and Java component lanes, count toward that invariant.
      The problem is that the action uses host Go with `local` and `no-sandbox`,
      so it is neither hermetic nor remotely cacheable. Make the action hermetic,
      retain its dedicated local lane, or record an exception.
+   - 6d. nvsnap, if Phase 1 placed it in the ledger rather than making it a
+     permanent exception. It is scheduled here rather than earlier because it
+     builds two `go_oci_image` targets and so depends on the shared OCI and
+     stamping API from the earlier phase. Its exclusion from the public CI
+     matrix is a row decision, resolved separately from the module move.
    Each subphase carries its own owner and exit criteria. If one is judged not
    worth doing, it moves to the exception list under the contract above
    rather than staying open. Moving a component there changes the end state:
@@ -405,7 +489,10 @@ Docker-host and Java component lanes, count toward that invariant.
 ## Open questions
 
 1. Does any service genuinely need an independent dependency version today? The
-   data says no, but confirm with each owning team before removing the ability.
+   evidence gathered so far does not show one, but that evidence is thin: it
+   covers three rule sets on identical versions, not the language dependency
+   graphs, which do diverge. Confirm with each owning team before removing the
+   ability rather than treating the absence of a known case as an answer.
 2. What is the correct single Bazel version, given the subtrees and the root
    disagree and converging is a behavior change for the subtrees.
 3. Should the workers be the pilot? They are the most uniform, which is why they
