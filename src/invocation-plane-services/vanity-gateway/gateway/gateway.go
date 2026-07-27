@@ -104,6 +104,9 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 	if err := middleware.SetupHTTPMetrics(); err != nil {
 		return nil, fmt.Errorf("failed to setup HTTP metrics: %w", err)
 	}
+	if err := setupShadowMetrics(); err != nil {
+		return nil, fmt.Errorf("failed to setup shadow metrics: %w", err)
+	}
 
 	mappings, err := gatewayConfig.SetupConfigWithConfigPath(config.MappingPath)
 	if err != nil {
