@@ -77,3 +77,13 @@ addons:
   # Dynamo inference framework scheduling operator (disabled by default)
   dynamoOperator:
     enabled: false
+
+# =============================================================================
+# cert-manager (webhook TLS for grove, dynamo, nvca)
+# =============================================================================
+certManager:
+  # When true (default), install cert-manager and provision webhook certificates
+  # via Certificate resources. Set false to keep legacy in-operator cert flows.
+  enabled: true
+  # ClusterIssuer used by grove and NVCA webhook Certificates
+  clusterIssuerName: compute-plane-ca-issuer

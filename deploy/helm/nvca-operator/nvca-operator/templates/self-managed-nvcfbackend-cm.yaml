@@ -17,21 +17,6 @@ kind: ConfigMap
 metadata:
   name: nvcfbackend-self-managed
   namespace: {{ .Release.Namespace }}
-  {{- $releaseArtifactNvcaImageRepository := .Values.nvcaImage.repositoryOverride }}
-  {{- $releaseArtifactImageCredentialHelperRepository := .Values.selfManaged.imageCredHelper.imageRepository }}
-  {{- $releaseArtifactSambaRepository := .Values.selfManaged.sharedStorage.imageRepository }}
-  {{- if or $releaseArtifactNvcaImageRepository $releaseArtifactImageCredentialHelperRepository $releaseArtifactSambaRepository }}
-  annotations:
-    {{- if $releaseArtifactNvcaImageRepository }}
-    release-artifact-nvca-image: {{ printf "%s:%s" .Values.nvcaImage.repositoryOverride .Values.selfManaged.nvcaVersion | quote }}
-    {{- end }}
-    {{- if $releaseArtifactImageCredentialHelperRepository }}
-    release-artifact-nvcf-image-credential-helper-image: {{ printf "%s:%s" (include "nvcaop.imageCredHelperRepository" (dict "imageRepository" .Values.selfManaged.imageCredHelper.imageRepository "defaultRepository" .Values.image.repository)) .Values.selfManaged.imageCredHelper.imageTag | quote }}
-    {{- end }}
-    {{- if $releaseArtifactSambaRepository }}
-    release-artifact-samba-image: {{ printf "%s:%s" .Values.selfManaged.sharedStorage.imageRepository .Values.selfManaged.sharedStorage.imageTag | quote }}
-    {{- end }}
-  {{- end }}
   labels:
     {{- include "nvcaop.labels" . | nindent 4 }}
 {{- if eq .Values.ngcConfig.clusterSource "self-managed" }}
@@ -106,6 +91,17 @@ data:
       functionDeploymentStagesStageOAuthPublicKeysetEndpoint: {{ $fdsStage.publicKeysetEndpoint | default "" | quote }}
       functionDeploymentStagesProdOAuthTokenURL: {{ $fdsProd.tokenURL | default "" | quote }}
       functionDeploymentStagesProdOAuthPublicKeysetEndpoint: {{ $fdsProd.publicKeysetEndpoint | default "" | quote }}
+    {{- with .Values.webhook.certManager }}
+    webhook:
+      certManager:
+        enabled: {{ .enabled }}
+        {{- with .issuerName }}
+        issuerName: {{ . | quote }}
+        {{- end }}
+        {{- with .issuerKind }}
+        issuerKind: {{ . | quote }}
+        {{- end }}
+    {{- end }}
     {{- with .Values.agent.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}

@@ -249,8 +249,7 @@ func makeWebhookClientConfig(
 	path string,
 ) admissionregistrationv1.WebhookClientConfig {
 	sport := getWebHooksSvcPort(nb)
-	return admissionregistrationv1.WebhookClientConfig{
-		CABundle: webhookCert.CACertBytes,
+	cfg := admissionregistrationv1.WebhookClientConfig{
 		Service: &admissionregistrationv1.ServiceReference{
 			Name:      nvcaoptypes.NVCAModuleName,
 			Namespace: getSystemNamespace(nb),
@@ -258,6 +257,10 @@ func makeWebhookClientConfig(
 			Port:      &sport,
 		},
 	}
+	if !webhookCertManagerEnabled(nb) {
+		cfg.CABundle = webhookCert.CACertBytes
+	}
+	return cfg
 }
 
 func makeMutatingWebhook(

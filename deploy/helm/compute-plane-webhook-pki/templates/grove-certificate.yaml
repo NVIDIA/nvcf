@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if .Values.groveOperator.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.groveOperator.namespace }}
+  labels:
+    {{- include "compute-plane-webhook-pki.labels" . | nindent 4 }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.groveOperator.certificateName }}
+  namespace: {{ .Values.groveOperator.namespace }}
+  labels:
+    {{- include "compute-plane-webhook-pki.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.groveOperator.secretName }}
+  duration: 8760h
+  renewBefore: 360h
+  subject:
+    organizations:
+      - nvidia
+  isCA: false
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS1
+    size: 2048
+  usages:
+    - server auth
+  dnsNames:
+    - {{ .Values.groveOperator.serviceName }}
+    - {{ .Values.groveOperator.serviceName }}.{{ .Values.groveOperator.namespace }}
+    - {{ .Values.groveOperator.serviceName }}.{{ .Values.groveOperator.namespace }}.svc
+    - {{ .Values.groveOperator.serviceName }}.{{ .Values.groveOperator.namespace }}.svc.cluster.local
+  issuerRef:
+    name: {{ .Values.clusterIssuerName }}
+    kind: ClusterIssuer
+{{- end }}

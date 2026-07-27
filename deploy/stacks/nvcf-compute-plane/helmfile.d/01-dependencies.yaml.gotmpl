@@ -1,6 +1,7 @@
 # NVCF Compute Plane Releases
 #
-# Two optional releases — installed once per GPU cluster:
+# Optional add-on operators (installed once per GPU cluster):
+#   cert-manager     - webhook certificate and shared PKI for the compute plane (addons.certManager.enabled)
 #   grove-operator   — optional; topology-aware scheduling (addons.groveOperator.enabled)
 #   dynamo-operator  — optional; Dynamo inference framework scheduling (addons.dynamoOperator.enabled)
 #
@@ -16,6 +17,9 @@ environments:
 ---
 
 repositories:
+  - name: nvcf
+    url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
+    oci: true
   - name: nvidia-ai-dynamo-grove
     url: ghcr.io/ai-dynamo/grove
     oci: true
@@ -33,6 +37,36 @@ helmDefaults:
 
 releases:
 
+releases:
+
+  - name: cert-manager
+    condition: certManager.enabled
+    chart: nvcf/helm-nvcf-cert-manager
+    version: 0.1.0
+    namespace: cert-manager
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: dependencies
+    wait: true
+    waitForJobs: true
+
+  - name: compute-plane-webhook-pki
+    condition: certManager.enabled
+    chart: nvcf/helm-compute-plane-webhook-pki
+    version: 0.1.0
+    namespace: cert-manager
+    needs:
+      - cert-manager/cert-manager
+    values:
+      - clusterIssuerName: {{ dig "certManager" "clusterIssuerName" "compute-plane-ca-issuer" .Values }}
+        groveOperator:
+          enabled: {{ dig "addons" "groveOperator" "enabled" false .Values }}
+    labels:
+      release-group: dependencies
+    wait: true
+    waitForJobs: true
+
   - name: grove-operator
     # Topology-aware scheduling operator (optional; disabled by default).
     # Enable per-environment: addons.groveOperator.enabled: true
@@ -40,6 +74,12 @@ releases:
     chart: nvidia-ai-dynamo-grove/grove-charts
     version: v0.1.0-alpha.9
     namespace: grove-system
+    {{- $certManagerEnabled := dig "certManager" "enabled" true .Values }}
+    {{- if $certManagerEnabled }}
+    needs:
+      - cert-manager/cert-manager
+      - cert-manager/compute-plane-webhook-pki
+    {{- end }}
     values:
       - ../global.yaml.gotmpl
       - replicaCount: 1
@@ -88,15 +128,27 @@ releases:
           server:
             webhooks:
               port: 9443
-              certProvisionMode: auto
+              certProvisionMode: {{ if $certManagerEnabled }}manual{{ else }}auto{{ end }}
               secretName: grove-webhook-server-cert
             healthProbes:
               enable: true
               port: 9444
             metrics:
               port: 9445
-        # Leave the webhook server secret to the operator's own auto-provision
-        # flow so Helm upgrades do not overwrite it.
+        {{- if $certManagerEnabled }}
+        webhooks:
+          podCliqueSetValidationWebhook:
+            annotations:
+              cert-manager.io/inject-ca-from: grove-system/grove-webhook-cert
+          podCliqueSetDefaultingWebhook:
+            annotations:
+              cert-manager.io/inject-ca-from: grove-system/grove-webhook-cert
+          clusterTopologyValidationWebhook:
+            annotations:
+              cert-manager.io/inject-ca-from: grove-system/grove-webhook-cert
+        {{- end }}
+        # Leave the webhook server secret to cert-manager (manual mode) or the
+        # operator auto-provision flow so Helm upgrades do not overwrite it.
         webhookServerSecret:
           enabled: false
         # Init container that SSAs Grove CRDs on every pod startup. Helm does not
@@ -115,8 +167,12 @@ releases:
     chart: nvidia-ai-dynamo/dynamo-platform
     version: 1.2.1
     namespace: dynamo-system
+    {{- $certManagerEnabled := dig "certManager" "enabled" true .Values }}
     needs:
       - grove-system/grove-operator
+      {{- if $certManagerEnabled }}
+      - cert-manager/cert-manager
+      {{- end }}
     values:
       - ../global.yaml.gotmpl
       - dynamo-operator:
@@ -150,7 +206,7 @@ releases:
           webhook:
             failurePolicy: Fail
             certManager:
-              enabled: false
+              enabled: {{ $certManagerEnabled }}
           namespaceRestriction:
             enabled: false
         nats:

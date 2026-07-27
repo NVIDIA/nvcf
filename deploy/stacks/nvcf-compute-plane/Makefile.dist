@@ -35,7 +35,7 @@ REQUIRED_HELMFILE_MINOR := 1
 REQUIRED_HELM_MAJOR := 3
 
 # Namespaces owned by the compute-plane stack (used by destroy target)
-NAMESPACES := nvca-operator grove-system dynamo-system
+NAMESPACES := nvca-operator grove-system dynamo-system cert-manager
 
 # Kubeconfig file targeting a specific cluster. Used by helmfile, kubectl,
 # and nvcf-cli. Required in multi-cluster workflows to avoid registering

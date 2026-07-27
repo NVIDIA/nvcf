@@ -224,11 +224,15 @@ agent:
     requests:
       cpu: 100m
       memory: 200Mi
-## @section Webhook Container Resource configuration
+
+## @section Webhook configuration
 ## @param webhook.resources.limits.cpu CPU limit for the nvca webhook container
 ## @param webhook.resources.limits.memory Memory limit for the nvca webhook container
 ## @param webhook.resources.requests.cpu CPU request for the nvca webhook container
 ## @param webhook.resources.requests.memory Memory request for the nvca webhook container
+## @param webhook.certManager.enabled Use cert-manager for webhook TLS (requires cert-manager in cluster)
+## @param webhook.certManager.issuerName ClusterIssuer or Issuer name for the webhook Certificate
+## @param webhook.certManager.issuerKind Issuer kind (ClusterIssuer or Issuer)
 webhook:
   resources:
     limits:
@@ -237,6 +241,10 @@ webhook:
     requests:
       cpu: 50m
       memory: 50Mi
+  certManager:
+    enabled: false
+    issuerName: compute-plane-ca-issuer
+    issuerKind: ClusterIssuer
 
 ## @section NGC Configuration
 

@@ -91,6 +91,17 @@ data:
       functionDeploymentStagesStageOAuthPublicKeysetEndpoint: {{ $fdsStage.publicKeysetEndpoint | default "" | quote }}
       functionDeploymentStagesProdOAuthTokenURL: {{ $fdsProd.tokenURL | default "" | quote }}
       functionDeploymentStagesProdOAuthPublicKeysetEndpoint: {{ $fdsProd.publicKeysetEndpoint | default "" | quote }}
+    {{- with .Values.webhook.certManager }}
+    webhook:
+      certManager:
+        enabled: {{ .enabled }}
+        {{- with .issuerName }}
+        issuerName: {{ . | quote }}
+        {{- end }}
+        {{- with .issuerKind }}
+        issuerKind: {{ . | quote }}
+        {{- end }}
+    {{- end }}
     {{- with .Values.agent.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}

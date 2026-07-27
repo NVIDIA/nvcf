@@ -20,6 +20,7 @@ package webhook
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -50,6 +51,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
@@ -383,25 +385,43 @@ func (m *webhookManager) startWebhooks(ctx context.Context, shutdownSignal chan 
 		IdleTimeout:  120 * time.Second,
 	}
 
-	listener, err := net.Listen("tcp", m.cfg.Webhook.SvcAddress)
-	if err != nil {
-		return err
-	}
+	if m.cfg.Webhook.TLSSecretName == "" {
+		certWatcher, err := certwatcher.New(m.cfg.Webhook.TLSCertFile, m.cfg.Webhook.TLSKeyFile)
+		if err != nil {
+			return fmt.Errorf("create certificate watcher: %w", err)
+		}
+		go func() {
+			if err := certWatcher.Start(ctx); err != nil {
+				log.WithError(err).Error("certificate watcher stopped with error")
+			}
+		}()
+		tlsCfg := &tls.Config{
+			GetCertificate: certWatcher.GetCertificate,
+			NextProtos:     []string{"h2"},
+		}
+		listener, err := tls.Listen("tcp", m.cfg.Webhook.SvcAddress, tlsCfg)
+		if err != nil {
+			return fmt.Errorf("listen for tls webhooks: %w", err)
+		}
 
-	go func() {
-		logErr := func(err error) {
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		go func() {
+			log.Infof("Serving HTTPS at: %v", listener.Addr())
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Error(err)
 			}
+		}()
+	} else {
+		listener, err := net.Listen("tcp", m.cfg.Webhook.SvcAddress)
+		if err != nil {
+			return err
 		}
-		if m.cfg.Webhook.TLSCertFile != "" || m.cfg.Webhook.TLSKeyFile != "" {
+		go func() {
 			log.Infof("Serving HTTPS at: %v", listener.Addr())
-			logErr(server.ServeTLS(listener, m.cfg.Webhook.TLSCertFile, m.cfg.Webhook.TLSKeyFile))
-		} else {
-			log.Infof("Serving HTTP at: %v", listener.Addr())
-			logErr(server.Serve(listener))
-		}
-	}()
+			if err := server.ServeTLS(listener, m.cfg.Webhook.TLSCertFile, m.cfg.Webhook.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error(err)
+			}
+		}()
+	}
 
 	go func(ctx context.Context) {
 		<-ctx.Done()
@@ -409,11 +429,11 @@ func (m *webhookManager) startWebhooks(ctx context.Context, shutdownSignal chan 
 		newCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 
-		log.Infof("Shutting down HTTPService at %v", listener.Addr())
+		log.Info("Shutting down webhook server")
 		err = server.Shutdown(newCtx)
 		shutdownSignal <- struct{}{}
 		if err != nil && !errors.Is(err, context.Canceled) {
-			log.WithError(err).Errorf("Failed to shut down HTTPService at %s", listener.Addr())
+			log.WithError(err).Error("Failed to shut down webhook server")
 			return
 		}
 	}(ctx)

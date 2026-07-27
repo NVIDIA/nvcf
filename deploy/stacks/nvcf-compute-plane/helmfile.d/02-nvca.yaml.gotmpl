@@ -67,6 +67,9 @@ helmDefaults:
 {{- $agentMergeConfig = mergeOverwrite $agentMergeConfig ($environmentAgentMergeConfig | fromYaml | default dict) }}
 {{- end }}
 
+{{- $certManagerEnabled := dig "certManager" "enabled" true .Values }}
+{{- $clusterIssuerName := dig "certManager" "clusterIssuerName" "compute-plane-ca-issuer" .Values }}
+
 releases:
 
   - name: nvca-operator
@@ -78,6 +81,10 @@ releases:
     chart: nvcf/helm-nvca-operator
     version: 1.14.0
     namespace: nvca-operator
+    {{- if $certManagerEnabled }}
+    needs:
+      - cert-manager/cert-manager
+    {{- end }}
     values:
       - ../global.yaml.gotmpl
       # Cluster-scoped registration values produced by
@@ -139,6 +146,12 @@ releases:
         webhookConfig:
           imageConfig:
             pullPolicy: IfNotPresent
+          {{- if $certManagerEnabled }}
+          certManager:
+            enabled: true
+            issuerName: {{ $clusterIssuerName | quote }}
+            issuerKind: ClusterIssuer
+          {{- end }}
         {{- if $agentMergeConfig }}
         agentConfig:
           mergeConfig: |
