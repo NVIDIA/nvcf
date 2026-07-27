@@ -46,6 +46,11 @@ func HandlerFor(service, ver, commit string) http.Handler {
 	info := resolve(service, ver, commit)
 	body, _ := json.Marshal(info)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)
 	})

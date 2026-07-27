@@ -126,3 +126,17 @@ func TestHandler(t *testing.T) {
 	assert.Equal(t, "2.0.0", got.Version)
 	assert.Equal(t, "deadbeef1234567890abcdef1234567890abcdef", got.Commit)
 }
+
+func TestHandlerForRejectsNonGET(t *testing.T) {
+	h := HandlerFor("nvcf-my-service", "1.2.3", "abc1234def5678901234567890123456789012ab")
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(method, "/info", nil)
+			h.ServeHTTP(w, r)
+
+			assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+			assert.Empty(t, w.Body.String())
+		})
+	}
+}
