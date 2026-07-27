@@ -26,7 +26,6 @@ import (
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
-	"nvcf-cli/internal/validate"
 
 	"github.com/spf13/cobra"
 )
@@ -635,8 +634,17 @@ func runTaskCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := validateTaskCreateConfig(cfg); err != nil {
-		return err
+	if cfg.Name == "" {
+		return fmt.Errorf("task name is required (use --name or specify in JSON file)")
+	}
+	if cfg.GpuSpecification == nil {
+		return fmt.Errorf("gpuSpecification is required (use --gpu and --instance-type or specify in JSON file)")
+	}
+	if cfg.GpuSpecification.GPU == "" {
+		return fmt.Errorf("gpuSpecification.gpu is required")
+	}
+	if cfg.GpuSpecification.InstanceType == "" {
+		return fmt.Errorf("gpuSpecification.instanceType is required")
 	}
 
 	clientConfig, err := client.LoadConfig()
@@ -745,40 +753,6 @@ func runTaskCreate(cmd *cobra.Command, args []string) error {
 	}
 	if resp.Task.CreatedAt != "" {
 		logging.Plain("Created: %s", resp.Task.CreatedAt)
-	}
-	return nil
-}
-
-func validateTaskCreateConfig(cfg *TaskCreateConfig) error {
-	if cfg.Name == "" {
-		return fmt.Errorf("task name is required (use --name or specify in JSON file)")
-	}
-	if cfg.GpuSpecification == nil {
-		return fmt.Errorf("gpuSpecification is required (use --gpu and --instance-type or specify in JSON file)")
-	}
-	if cfg.GpuSpecification.GPU == "" {
-		return fmt.Errorf("gpuSpecification.gpu is required")
-	}
-	if cfg.GpuSpecification.InstanceType == "" {
-		return fmt.Errorf("gpuSpecification.instanceType is required")
-	}
-	for _, f := range []struct{ name, value string }{
-		{"--max-runtime", cfg.MaxRuntimeDuration},
-		{"--max-queued", cfg.MaxQueuedDuration},
-		{"--termination-grace", cfg.TerminationGracePeriodDuration},
-	} {
-		if f.value != "" && !validate.IsISO8601Duration(f.value) {
-			return fmt.Errorf("%s: %q is not a valid ISO 8601 duration (e.g. PT4H, PT72H)", f.name, f.value)
-		}
-	}
-	if cfg.ResultHandlingStrategy != "" {
-		upper := strings.ToUpper(cfg.ResultHandlingStrategy)
-		switch upper {
-		case "UPLOAD", "NONE":
-			cfg.ResultHandlingStrategy = upper
-		default:
-			return fmt.Errorf("--result-strategy: %q is not valid; allowed values: UPLOAD, NONE", cfg.ResultHandlingStrategy)
-		}
 	}
 	return nil
 }
