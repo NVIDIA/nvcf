@@ -588,7 +588,7 @@ func newMountOptionDefaultsObjects(provisioner string, cmData map[string]string)
 }
 
 var nvmeshMountOptionDefaults = map[string]string{
-	NVMeshStorageClassProvisioner: "ro,norecovery,nouuid",
+	NVMeshStorageClassProvisioner: NVMeshCacheMountOptions,
 }
 
 func TestResolveCacheMountOptions(t *testing.T) {
@@ -653,13 +653,13 @@ func TestResolveCacheMountOptions(t *testing.T) {
 			want:       []string{"ro", "nouuid", "noatime"},
 		},
 		{
-			// The ConfigMap is seeded on first use, so an NVMesh cluster gets the
-			// defaults even before an operator has touched it.
-			name:        "missing configmap is seeded with the nvmesh defaults",
+			// Seeding happens at agent start-up, so a reconcile that finds no
+			// ConfigMap falls back rather than creating one.
+			name:        "missing configmap falls back to configured options",
 			provisioner: NVMeshStorageClassProvisioner,
 			cmData:      nil,
 			configured:  []string{"noatime"},
-			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+			want:        []string{"noatime"},
 		},
 		{
 			name:        "missing configmap on a non-nvmesh provisioner uses configured options",

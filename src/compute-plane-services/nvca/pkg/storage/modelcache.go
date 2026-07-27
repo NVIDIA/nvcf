@@ -613,25 +613,15 @@ func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]stri
 	if cmName == "" {
 		cmName = DefaultCacheMountOptionsConfigMapName
 	}
+	// The ConfigMap is created once at agent start-up by
+	// EnsureCacheMountOptionsConfigMap, so a miss here means it was removed or
+	// start-up could not create it.
 	cm := &corev1.ConfigMap{}
 	if err := r.Client.Get(ctx,
 		client.ObjectKey{Name: cmName, Namespace: ModelCacheInitNamespace}, cm); err != nil {
-		if !apierrors.IsNotFound(err) {
-			log.V(1).Info("Could not read the cache mount option defaults, using configured mount options",
-				"configmap", cmName, "namespace", ModelCacheInitNamespace, "reason", err.Error())
-			return nil, false
-		}
-		// Seed the defaults on first use. The namespace is created by NVCA at
-		// runtime, so the ConfigMap cannot come from the chart. It is only ever
-		// created, never updated, so operator edits are preserved.
-		cm = NewCacheMountOptionsConfigMap(cmName)
-		if err := r.Client.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
-			log.V(1).Info("Could not seed the cache mount option defaults, using configured mount options",
-				"configmap", cmName, "namespace", ModelCacheInitNamespace, "reason", err.Error())
-			return nil, false
-		}
-		log.Info("Seeded the cache mount option defaults",
-			"configmap", cmName, "namespace", ModelCacheInitNamespace)
+		log.V(1).Info("Could not read the cache mount option defaults, using configured mount options",
+			"configmap", cmName, "namespace", ModelCacheInitNamespace, "reason", err.Error())
+		return nil, false
 	}
 
 	raw, found := cm.Data[provisioner]

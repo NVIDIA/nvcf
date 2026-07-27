@@ -26,6 +26,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	coordv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -67,9 +68,28 @@ func NewCacheMountOptionsConfigMap(name string) *corev1.ConfigMap {
 		"app.kubernetes.io/managed-by": "nvca",
 	}
 	cm.Data = map[string]string{
-		NVMeshStorageClassProvisioner: "ro,norecovery,nouuid",
+		NVMeshStorageClassProvisioner: NVMeshCacheMountOptions,
 	}
 	return cm
+}
+
+// EnsureCacheMountOptionsConfigMap creates the mount option ConfigMap if it is
+// absent, so the defaults exist before any model cache is reconciled. It is
+// called once at agent start-up when caching is enabled.
+//
+// The ConfigMap is only ever created, never updated, so operator edits are
+// preserved across restarts.
+func EnsureCacheMountOptionsConfigMap(ctx context.Context, c client.Client, name string) error {
+	if name == "" {
+		name = DefaultCacheMountOptionsConfigMapName
+	}
+
+	cm := NewCacheMountOptionsConfigMap(name)
+	if err := c.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create cache mount options ConfigMap %s: %w", name, err)
+	}
+
+	return nil
 }
 
 // buildControllerModelCache is different from other controller builders because it adds runnables
