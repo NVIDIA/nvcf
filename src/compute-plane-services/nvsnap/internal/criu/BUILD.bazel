@@ -7,7 +7,7 @@ go_library(
         "rpc_dump.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
         "@com_github_balajinvda_go_criu_v8//:go-criu",
         "@com_github_balajinvda_go_criu_v8//rpc",

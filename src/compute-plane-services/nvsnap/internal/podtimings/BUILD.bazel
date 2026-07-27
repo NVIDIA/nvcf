@@ -8,7 +8,7 @@ go_library(
         "summary.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/podtimings",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = ["@io_k8s_api//core/v1:core"],
 )
 

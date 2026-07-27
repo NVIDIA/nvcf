@@ -4,9 +4,9 @@ go_library(
     name = "treecopy",
     srcs = ["copier.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/treecopy",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
-        "//internal/tracing",
+        "//src/compute-plane-services/nvsnap/internal/tracing",
         "@com_github_sirupsen_logrus//:logrus",
         "@io_opentelemetry_go_otel//attribute",
         "@org_golang_x_sys//unix",
