@@ -653,8 +653,17 @@ func TestResolveCacheMountOptions(t *testing.T) {
 			want:       []string{"ro", "nouuid", "noatime"},
 		},
 		{
-			name:        "missing configmap falls back to configured options",
+			// The ConfigMap is seeded on first use, so an NVMesh cluster gets the
+			// defaults even before an operator has touched it.
+			name:        "missing configmap is seeded with the nvmesh defaults",
 			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nil,
+			configured:  []string{"noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:        "missing configmap on a non-nvmesh provisioner uses configured options",
+			provisioner: "ebs.csi.aws.com",
 			cmData:      nil,
 			configured:  []string{"noatime"},
 			want:        []string{"noatime"},

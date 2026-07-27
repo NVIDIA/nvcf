@@ -49,6 +49,29 @@ func NewModelCacheInitNamespace() *corev1.Namespace {
 	return namespace
 }
 
+// NewCacheMountOptionsConfigMap returns the ConfigMap mapping a CSI provisioner
+// to the mount options its model cache volumes require, seeded with NVMesh.
+//
+// NVMesh provisions XFS and the read-only volume attaches the same filesystem as
+// the volume it was populated from, so the kernel rejects the mount as a
+// duplicate filesystem UUID without nouuid, and rejects a dirty log on a
+// read-only mount without norecovery.
+//
+// Operators add a provisioner by adding a key. A provisioner with no entry uses
+// the configured mount options instead.
+func NewCacheMountOptionsConfigMap(name string) *corev1.ConfigMap {
+	cm := &corev1.ConfigMap{}
+	cm.Name = name
+	cm.Namespace = ModelCacheInitNamespace
+	cm.Labels = map[string]string{
+		"app.kubernetes.io/managed-by": "nvca",
+	}
+	cm.Data = map[string]string{
+		NVMeshStorageClassProvisioner: "ro,norecovery,nouuid",
+	}
+	return cm
+}
+
 // buildControllerModelCache is different from other controller builders because it adds runnables
 // to the manager and watches resources cluster-wide.
 func buildControllerModelCache(r *Reconciler, mgr ctrl.Manager, _ ControllerOptions) error {

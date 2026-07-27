@@ -630,9 +630,22 @@ func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]stri
 	cm := &corev1.ConfigMap{}
 	if err := r.Client.Get(ctx,
 		client.ObjectKey{Name: cmName, Namespace: ModelCacheInitNamespace}, cm); err != nil {
-		log.V(1).Info("Could not read the cache mount option defaults, using configured mount options",
-			"configmap", cmName, "namespace", ModelCacheInitNamespace, "reason", err.Error())
-		return nil, false
+		if !apierrors.IsNotFound(err) {
+			log.V(1).Info("Could not read the cache mount option defaults, using configured mount options",
+				"configmap", cmName, "namespace", ModelCacheInitNamespace, "reason", err.Error())
+			return nil, false
+		}
+		// Seed the defaults on first use. The namespace is created by NVCA at
+		// runtime, so the ConfigMap cannot come from the chart. It is only ever
+		// created, never updated, so operator edits are preserved.
+		cm = NewCacheMountOptionsConfigMap(cmName)
+		if err := r.Client.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
+			log.V(1).Info("Could not seed the cache mount option defaults, using configured mount options",
+				"configmap", cmName, "namespace", ModelCacheInitNamespace, "reason", err.Error())
+			return nil, false
+		}
+		log.Info("Seeded the cache mount option defaults",
+			"configmap", cmName, "namespace", ModelCacheInitNamespace)
 	}
 
 	resolved := &provisionerMountOptionDefaults{}
