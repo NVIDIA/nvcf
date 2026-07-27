@@ -1,0 +1,262 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.nvidia.boot</groupId>
+        <artifactId>nv-boot-parent</artifactId>
+        <version>2.0.1</version>
+        <relativePath/>  <!-- Use the specified repository to resolve parent -->
+    </parent>
+
+    <groupId>com.nvidia.apikeys</groupId>
+    <artifactId>nvcf-api-keys</artifactId>
+    <packaging>jar</packaging>
+    <name>NVCF API Keys Service OSS</name>
+    <version>0.0.1-SNAPSHOT</version>
+
+    <repositories>
+        <!-- Resolve parent from here -->
+        <repository>
+            <id>nvcf</id>
+            <url>https://urm.nvidia.com/artifactory/sw-nvcf-maven</url>
+        </repository>
+    </repositories>
+
+    <properties>
+        <start-class>com.nvidia.apikeys.App</start-class>
+        <common-collections4.version>4.5.0</common-collections4.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.nvidia.boot</groupId>
+                <artifactId>nv-boot-bom</artifactId>
+                <!-- There are no nested modules in this project. So, it is safe to use -->
+                <!-- ${project.parent.version} here unlike other projects that have     -->
+                <!-- modules for the core library, etc.                                 -->
+                <version>${project.parent.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Spring Dependencies (Boot 4 modular starters) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jackson</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.module</groupId>
+            <artifactId>jackson-module-blackbird</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-bootstrap</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-context</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
+        </dependency>
+
+        <!-- Nv-boot Dependencies -->
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-exceptions</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-jwt</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-reloadable-properties</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-cassandra</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-observability</artifactId>
+        </dependency>
+
+        <!-- Third-party Dependencies -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.jayway.jsonpath</groupId>
+            <artifactId>json-path</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+        </dependency>
+        <!-- DataStax driver session/node metrics bridged to Micrometer. -->
+        <dependency>
+            <groupId>org.apache.cassandra</groupId>
+            <artifactId>java-driver-metrics-micrometer</artifactId>
+        </dependency>
+
+        <!-- Pinned Dependencies -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-collections4</artifactId>
+            <version>${common-collections4.version}</version>
+        </dependency>
+
+        <!-- Test Dependencies -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-restclient</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-cassandra</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-mock-servers-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>app</finalName>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>io.github.git-commit-id</groupId>
+                <artifactId>git-commit-id-maven-plugin</artifactId>
+                <configuration>
+                    <dotGitDirectory>${project.basedir}/.git</dotGitDirectory>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <forkedProcessExitTimeoutInSeconds>120</forkedProcessExitTimeoutInSeconds>
+                </configuration>
+            </plugin>
+            <!-- Regenerate the NOTICE file for this single-module JAR with:       -->
+            <!--   mvn license:add-third-party                                     -->
+            <!-- The plugin writes directly to NOTICE at the repo root;            -->
+            <!-- commit the result alongside the dependency change.                -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>license-maven-plugin</artifactId>
+                <configuration>
+                    <!-- Don't exclude `provided` scope for tomcat-embed-* and its -->
+                    <!-- Apache-2.0 attribution must appear in NOTICE.             -->
+                    <excludedScopes>test</excludedScopes>
+                    <!-- Don't list nv-boot libraries as third-party.              -->
+                    <excludedGroups>^com\.nvidia\.boot</excludedGroups>
+                    <!-- Preserve the project attribution when regenerating NOTICE. -->
+                    <fileTemplate>${project.basedir}/config/license/NOTICE.ftl</fileTemplate>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
