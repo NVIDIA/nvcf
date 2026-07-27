@@ -284,12 +284,28 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	return nil
 }
 
+// gpuDevPatterns are the character devices a GPU workload may hold open that
+// CRIU cannot dump itself and must be told to treat as external.
+//
+// gdrdrv is the GPUDirect RDMA (gdrcopy) node. It does not match nvidia*, so
+// globbing only that prefix left it undeclared and any workload holding an fd
+// on it failed the dump with "Can't dump file N of that type (chr 506:0)" --
+// observed on NIM, which uses gdrcopy where the other engines do not. Match on
+// the device names rather than major numbers: the NVIDIA majors are
+// dynamically allocated and differ per node (nvidia-uvm was 507 on one host
+// and is documented as 511 elsewhere), while the names are stable.
+var gpuDevPatterns = []string{"nvidia*", "gdrdrv"}
+
 // nvidiaDevExternals builds CRIU --external dev[maj/min]:name entries for
-// every /dev/nvidia* character device visible in the container.
+// every GPU character device visible in the container.
 func nvidiaDevExternals(devDir string) ([]string, error) {
-	matches, err := filepath.Glob(filepath.Join(devDir, "nvidia*"))
-	if err != nil {
-		return nil, err
+	var matches []string
+	for _, pat := range gpuDevPatterns {
+		m, err := filepath.Glob(filepath.Join(devDir, pat))
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, m...)
 	}
 	var exts []string
 	for _, m := range matches {
@@ -305,7 +321,7 @@ func nvidiaDevExternals(devDir string) ([]string, error) {
 		exts = append(exts, fmt.Sprintf("dev[%d/%d]:%s", maj, min, filepath.Base(m)))
 	}
 	if len(exts) == 0 {
-		return nil, fmt.Errorf("no nvidia devices under %s", devDir)
+		return nil, fmt.Errorf("no GPU devices under %s", devDir)
 	}
 	return exts, nil
 }
