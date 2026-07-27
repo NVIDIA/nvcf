@@ -529,6 +529,19 @@ jobs:
           # CACHE holds only the cache-specific flags.
           COMMON=()
           if [ "${{ matrix.subtree.id }}" = "byoo-otel-collector" ]; then
+            # --jobs=1 is a memory guard, not a throughput setting. The
+            # collector genrule is analysed in three configurations (host,
+            # //platforms:linux_x86_64, //platforms:linux_arm64) and each
+            # `go build` of the otelcol module peaks at ~6 GB RSS, so two
+            # concurrent instances would not fit a 16 GB runner. Bazel has no
+            # per-action memory throttle for genrules ("resources:memory:N"
+            # and "cpu:N" execution requirements are ignored outside tests,
+            # and so is "exclusive"), so capping Bazel-side concurrency is the
+            # only lever. Per-build parallelism is set inside the genrule
+            # instead (go build -p $(nproc)), which is ~3x faster on a 4-vCPU
+            # runner at the same peak RSS. Nothing else in this module is
+            # expensive (the row's other ~380 actions are cache hits), so the
+            # cap costs nothing elsewhere.
             COMMON+=(--jobs=1)
             # Persist the collector genrule's Go module + build cache across CI
             # runs so cold runners restore instead of re-downloading the whole
@@ -539,6 +552,18 @@ jobs:
             COMMON+=(--action_env="GOMODCACHE=$RUNNER_TEMP/byoo-gomodcache"
                      --action_env="GOCACHE=$RUNNER_TEMP/byoo-gocache"
                      --action_env="GOPATH=$RUNNER_TEMP/byoo-gopath")
+            # Bind the collector genrule's remote-cache key to the host Go
+            # toolchain. The genrule shells out to the image's `go`, which is
+            # not a declared Bazel input, so without this a toolchain bump in
+            # the bazel-ci image would keep serving collector binaries built by
+            # the previous compiler -- including across a Go security patch.
+            # --action_env values are part of the action key, so feeding the
+            # version string through it turns a toolchain change into a cache
+            # miss and a rebuild. Must match on build AND test.
+            byoo_go="$(command -v go || echo /usr/local/go/bin/go)"
+            byoo_go_ver="$("$byoo_go" version 2>/dev/null || echo unknown)"
+            echo "byoo collector toolchain: $byoo_go_ver"
+            COMMON+=(--action_env="BYOO_GO_TOOLCHAIN=$byoo_go_ver")
           fi
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
@@ -635,12 +660,19 @@ jobs:
           # deferred to that lane (see the bazel-integration job).
           COMMON=(--flaky_test_attempts=3 --test_tag_filters=-requires-docker)
           if [ "${{ matrix.subtree.id }}" = "byoo-otel-collector" ]; then
+            # Memory guard, not throughput. See the build step for the full
+            # rationale (~6 GB peak RSS per collector build, no per-action
+            # memory throttle for genrules).
             COMMON+=(--jobs=1)
             # Match the build step's --action_env so the collector genrule reuses
-            # the cached Go module/build cache instead of re-running (see #373).
+            # the cached Go module/build cache instead of re-running (see #373),
+            # and so the two steps compute the same action key.
             COMMON+=(--action_env="GOMODCACHE=$RUNNER_TEMP/byoo-gomodcache"
                      --action_env="GOCACHE=$RUNNER_TEMP/byoo-gocache"
                      --action_env="GOPATH=$RUNNER_TEMP/byoo-gopath")
+            byoo_go="$(command -v go || echo /usr/local/go/bin/go)"
+            byoo_go_ver="$("$byoo_go" version 2>/dev/null || echo unknown)"
+            COMMON+=(--action_env="BYOO_GO_TOOLCHAIN=$byoo_go_ver")
           fi
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
