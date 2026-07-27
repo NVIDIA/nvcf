@@ -98,7 +98,17 @@ func (w *Worker) Run(ctx context.Context) error {
 				}
 			}
 			tmp := w.config.WorkerTokenPath + ".tmp"
-			if err := os.WriteFile(tmp, []byte(t.Token), 0600); err != nil {
+			// 0644 so the pylon sidecar (a different non-root UID) can read the
+			// token from the shared emptyDir; only these two infra sidecars
+			// mount it, not the customer workload container.
+			//nolint:gosec // G306: intentionally readable by the pylon sidecar
+			if err := os.WriteFile(tmp, []byte(t.Token), 0644); err != nil {
+				return err
+			}
+			// WriteFile honors umask and skips the mode when tmp already exists;
+			// chmod guarantees 0644 so the sidecar can read it.
+			//nolint:gosec // G302: intentionally readable by the pylon sidecar
+			if err := os.Chmod(tmp, 0644); err != nil {
 				return err
 			}
 			return os.Rename(tmp, w.config.WorkerTokenPath)

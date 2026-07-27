@@ -154,7 +154,7 @@ register_toolchains(
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 oci.pull(
     name = "distroless_cc",
-    digest = "sha256:80e21701e5253088ee8ca22f2ad8fc5d08ca5bf730a6eea5d68ea268c33e9831",
+    digest = "sha256:92a46f84206c3e4610043eaef50946451019e3c479b71d280015919ba311babb",
     image = "nvcr.io/nvidia/distroless/cc",
     platforms = [
         "linux/amd64",

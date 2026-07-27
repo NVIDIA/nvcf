@@ -14,6 +14,8 @@ Bazel currently builds, tests, and packages:
 - `src/libraries/java/nv-boot-parent` (Java framework libraries and tests)
 - `src/control-plane-services/cloud-tasks` (Java libraries, tests, and Spring
   Boot application)
+- `src/control-plane-services/notary` (Java libraries, tests, and Spring Boot
+  application)
 
 Other upstream-owned subtrees remain excluded until they are onboarded one at
 a time. `nv-boot-parent` and onboarded Java service directories are folded
@@ -435,12 +437,12 @@ The public GitHub Bazel matrix in `.github/workflows/bazel.yml` consumes
 project, stamped with a version, and mirrored to GHCR. The mirror is currently
 manual; automation is planned. To change the image's Bazel, Java, or operating
 system tooling, update the internal template first, publish and mirror a new
-tag, and only then update the pinned `container.image` here.
+tag, and only then update the pinned `container.image` in `.github/workflows/bazel.yml`.
 
-The root `ci/Dockerfile.bazel` and
-`.github/workflows/bazel-ci-image.yml` are legacy files and are not the
-authoritative producer for the image used by the matrix. Do not use them to
-reason about the contents of `bazel-ci:0.12.0`.
+The root `ci/Dockerfile.bazel` and `.github/workflows/bazel-ci-image.yml` were a
+stale, divergent copy (no Java, older Bazel) and have been removed. The image is
+built in `nvcf/bazel-ci-templates` and mirrored to ghcr (see above); this repo
+does not build it.
 
 The detect job also enforces the single-module import boundary:
 
