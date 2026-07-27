@@ -677,6 +677,23 @@ func (r *Reconciler) modelCacheProvisionerName(ctx context.Context) (string, boo
 	return sc.Provisioner, true
 }
 
+// redactMountOptionValues hides the value of any key=value mount option while
+// keeping the key, so a log line stays useful for debugging without echoing
+// operator supplied values. Mount options are free form and can carry
+// credentials, a CIFS password being the obvious case.
+func redactMountOptionValues(opts []string) []string {
+	redacted := make([]string, 0, len(opts))
+	for _, opt := range opts {
+		if key, _, ok := strings.Cut(opt, "="); ok {
+			redacted = append(redacted, key+"=<redacted>")
+			continue
+		}
+		redacted = append(redacted, opt)
+	}
+
+	return redacted
+}
+
 // negatesMountOption reports whether configured would cancel out required, so a
 // configured rw is not handed to the driver alongside a required ro. Kubernetes
 // does not validate mount options before they reach the mount call, which would
@@ -711,7 +728,9 @@ func (r *Reconciler) resolveCacheMountOptions(ctx context.Context, pv *corev1.Pe
 	for _, opt := range r.csiVolumeMountOptions {
 		if i := slices.IndexFunc(defaults, func(d string) bool { return negatesMountOption(d, opt) }); i >= 0 {
 			log.Info("Ignoring configured cache mount option that conflicts with a provisioner default",
-				"pv", pv.Name, "ignored", opt, "required", defaults[i])
+				"pv", pv.Name,
+				"ignored", redactMountOptionValues([]string{opt}),
+				"required", redactMountOptionValues([]string{defaults[i]}))
 			continue
 		}
 		configured = append(configured, opt)
@@ -762,7 +781,8 @@ func (r *Reconciler) reconcileSecondaryPVMountOptions(ctx context.Context,
 		return fmt.Errorf("patch secondary PV mount options: %w", err)
 	}
 	log.Info("Reconciled secondary PV mount options", "pv", secondaryPV.Name,
-		"from", secondaryPVOld.Spec.MountOptions, "to", want)
+		"from", redactMountOptionValues(secondaryPVOld.Spec.MountOptions),
+		"to", redactMountOptionValues(want))
 
 	return nil
 }

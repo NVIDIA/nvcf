@@ -725,6 +725,43 @@ func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
 	}
 }
 
+func TestRedactMountOptionValues(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []string
+		want []string
+	}{
+		{
+			name: "bare flags are kept as-is",
+			opts: []string{"ro", "norecovery", "nouuid"},
+			want: []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name: "values are hidden but keys are kept",
+			opts: []string{"ro", "password=hunter2", "vers=3.0"},
+			want: []string{"ro", "password=<redacted>", "vers=<redacted>"},
+		},
+		{
+			name: "an empty value is still redacted",
+			opts: []string{"password="},
+			want: []string{"password=<redacted>"},
+		},
+		{
+			name: "nil stays empty",
+			opts: nil,
+			want: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactMountOptionValues(tt.opts); !slices.Equal(got, tt.want) {
+				t.Errorf("redactMountOptionValues() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 	tests := []struct {
 		name        string
