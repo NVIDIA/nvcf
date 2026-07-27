@@ -398,11 +398,11 @@ Docker-host and Java component lanes, count toward that invariant.
    OCI and stamping API exist, because it builds two `go_oci_image` targets. So
    Phase 1 puts it in one of exactly two states, and neither is "undecided":
 
-   - A permanent exception, carrying the contract, if a real reason is found.
-   - A migration and retirement ledger entry with target Phase 6d, if not.
-
-   On current evidence the second is expected: its Bazel targets pin public
-   bases by digest. Phase 6d then does the work. The Phase 2 guard is not a
+   Phase 1 resolved this: `nvsnap` migrates, and it goes first. Its Bazel targets
+   pin public bases by digest, so the stale private-base rationale does not hold,
+   and nothing in the repository consumes it, so it is the safest place to
+   exercise the migration mechanics. It is neither a permanent exception nor a
+   deferred ledger entry; see Phase 5a. The Phase 2 guard is not a
    single allowlist: it separates vendored-path exclusions, a migration and retirement
    ledger of modules not yet resolved, and permanent service exceptions. Only the third
    category carries the exception contract. Requiring one for every entry would
@@ -419,8 +419,26 @@ Docker-host and Java component lanes, count toward that invariant.
    manifests and configuration before and after. Define how per-service versions
    are stamped, given that one workspace-status command runs once per Bazel
    invocation while releases stay per service.
-5. Migrate the four worker services. They are the most uniform and prove the Go
-   dependency merge and the release path end to end.
+5. Pilot in two steps, chosen on evidence gathered in Phase 1 rather than on
+   uniformity.
+
+   - 5a. `nvsnap`, to prove the mechanics. Nothing in the repository consumes it:
+     the only references outside its own directory are the exclusion comment in
+     the Bazel workflow and a NOTICE attribution. It has no release wiring and is
+     not a CI matrix row. A mistake therefore costs nothing, and it can be
+     reshaped to fit rather than accommodated. This is where label rebasing, the
+     root-module move, and the OCI and stamping contracts get exercised for the
+     first time.
+   - 5b. `image-credential-helper`, to prove the invariant. It is the live case:
+     it pins a May pseudoversion of `src/libraries/go/lib`, 33 library commits
+     behind, and also vendors the library with five source files now differing
+     from the tree. It builds green against library source that no longer exists
+     here. Migrating it is what demonstrates the invariant is enforceable on a
+     real service rather than on a convenient one.
+
+   The four worker services follow. They were the original pilot because they are
+   uniform, but they are only 8 commits stale, so they would have proved the easy
+   case first.
 6. Migrate the remaining ordinary Go services. The three special cases are
    scheduled explicitly rather than deferred, because the final phase cannot complete
    while any of them is unresolved:
@@ -436,11 +454,6 @@ Docker-host and Java component lanes, count toward that invariant.
      The problem is that the action uses host Go with `local` and `no-sandbox`,
      so it is neither hermetic nor remotely cacheable. Make the action hermetic,
      retain its dedicated local lane, or record an exception.
-   - 6d. nvsnap, if Phase 1 placed it in the ledger rather than making it a
-     permanent exception. It is scheduled here rather than earlier because it
-     builds two `go_oci_image` targets and so depends on the shared OCI and
-     stamping API from the earlier phase. Its exclusion from the public CI
-     matrix is a row decision, resolved separately from the module move.
    Each subphase carries its own owner and exit criteria. If one is judged not
    worth doing, it moves to the exception list under the contract above
    rather than staying open. Moving a component there changes the end state:
