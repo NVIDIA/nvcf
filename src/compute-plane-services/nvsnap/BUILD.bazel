@@ -55,7 +55,7 @@ gazelle(
 go_oci_image(
     name = "nvsnap_agent_image",
     base = "@distroless_static",
-    binary = "//cmd/agent",
+    binary = "//src/compute-plane-services/nvsnap/cmd/agent",
     entrypoint = ["/agent"],
     registry = "nvcr.io/0651155215864979/ncp-dev/nvsnap-agent",
 )
@@ -66,7 +66,7 @@ go_oci_image(
 go_oci_image(
     name = "nvsnap_server_image",
     base = "@distroless_static",
-    binary = "//cmd/nvsnap-server",
+    binary = "//src/compute-plane-services/nvsnap/cmd/nvsnap-server",
     entrypoint = ["/nvsnap-server"],
     registry = "nvcr.io/0651155215864979/ncp-dev/nvsnap-server",
 )

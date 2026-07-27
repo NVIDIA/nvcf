@@ -66,7 +66,17 @@ exports_files(
 # gazelle:exclude migrations
 # gazelle:exclude platforms
 # gazelle:exclude rules
-# gazelle:exclude src/compute-plane-services
+# src/compute-plane-services is excluded per-subtree rather than wholesale:
+# nvsnap is part of the root module and Gazelle must manage its BUILD files.
+# gazelle:exclude src/compute-plane-services/byoo-otel-collector
+# gazelle:exclude src/compute-plane-services/ess-agent
+# gazelle:exclude src/compute-plane-services/image-credential-helper
+# gazelle:exclude src/compute-plane-services/nvca
+# gazelle:exclude src/compute-plane-services/nvcf-unbound
+# gazelle:exclude src/compute-plane-services/worker-init
+# gazelle:exclude src/compute-plane-services/worker-llm-credentials
+# gazelle:exclude src/compute-plane-services/worker-task
+# gazelle:exclude src/compute-plane-services/worker-utils
 # gazelle:exclude src/control-plane-services
 # gazelle:exclude src/invocation-plane-services
 # gazelle:exclude src/libraries/python

@@ -4,5 +4,5 @@ go_library(
     name = "mountinfo",
     srcs = ["mountinfo.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu/mountinfo",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
 )
