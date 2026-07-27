@@ -27,7 +27,19 @@
 # WORKSPACE-style repository names (@io_bazel_rules_go etc.) that conflict
 # with our bzlmod setup. Re-enable per-subtree as Phase B brings each subtree
 # native.
-src/compute-plane-services
+#
+# src/compute-plane-services is carved out per-subtree rather than ignored
+# wholesale, because nvsnap is now part of the root module and must stay
+# loadable. The siblings below still carry nested MODULE.bazel files.
+src/compute-plane-services/byoo-otel-collector
+src/compute-plane-services/ess-agent
+src/compute-plane-services/image-credential-helper
+src/compute-plane-services/nvca
+src/compute-plane-services/nvcf-unbound
+src/compute-plane-services/worker-init
+src/compute-plane-services/worker-llm-credentials
+src/compute-plane-services/worker-task
+src/compute-plane-services/worker-utils
 # src/control-plane-services is carved out per-subtree: cloud-tasks is native
 # (Phase B) and must stay loadable, while these siblings still carry nested
 # MODULE.bazel / WORKSPACE-style BUILD files that conflict with bzlmod.

@@ -97,11 +97,14 @@ jobs:
           #    rendered template assets (empty-YAML-doc skip + stripSPDXHeaders
           #    in golden comparisons), and the version-adaptive completeJob for
           #    envtest Job completion.
-          #  nvsnap (src/compute-plane-services/nvsnap): intentionally NOT a
-          #    matrix row. It is a self-contained Bazel module whose OCI base is
-          #    its own private agent image (not publicly pullable), so it is not
-          #    externally buildable and is built only by its own internal CI.
-          #    Excluded from the public build pending a public base (NVIDIA/nvcf#39).
+            #  nvsnap (src/compute-plane-services/nvsnap): a root-module row.
+            #    Previously excluded on the grounds that its OCI base was a
+            #    private image; that is no longer true, its bases are public
+            #    and digest-pinned. It builds from the repository root scoped
+            #    to its own subtree, the same shape as the Java components.
+            #    Without a row, a change touching only nvsnap selects no row
+            #    and runs no Bazel, which is how its build stayed broken for
+            #    twelve days.
           # Row fields:
           #   id|path|tests_skip|component_kind|ci_lane
           # Static non-Java rows use only the first three fields.
@@ -123,7 +126,8 @@ jobs:
           worker-utils|src/compute-plane-services/worker-utils|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
           helm-reval|src/control-plane-services/helm-reval|false
-          stargate|src/libraries/rust/stargate|false'
+          stargate|src/libraries/rust/stargate|false
+          nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container'
 
           # Java rows are discovered from component-local bazel-java-ci.json
           # descriptors. The descriptor's parent directory is the component
@@ -160,7 +164,7 @@ jobs:
           # ride the root row: discovered Java components and stargate have
           # their own scoped rows, so src/libraries/ is narrowed to
           # src/libraries/go/.
-          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
+          ROOT_GLOBS=(MODULE.bazel .bazelignore .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
@@ -247,11 +251,14 @@ jobs:
             id="$(echo "$id" | xargs)"; [ -z "$id" ] && continue
             component_kind="$(echo "$component_kind" | xargs)"
             ci_lane="$(echo "$ci_lane" | xargs)"
-            # Discovered Java rows belong to the root module. Existing static
-            # non-Java rows retain their module-local behavior.
+            # Components that belong to the root module build from the
+            # repository root and scope to their own subtree. That was
+            # Java-only until nvsnap joined the root module; the discriminator
+            # is module membership, not language. Nested modules keep their
+            # module-local behavior.
             case "$component_kind" in
-              java-*) workdir="."; scope="//${path}/..."; scoped="root" ;;
-              *)      workdir="$path"; scope="//..."; scoped="" ;;
+              java-*|go-root) workdir="."; scope="//${path}/..."; scoped="root" ;;
+              *)              workdir="$path"; scope="//..."; scoped="" ;;
             esac
             hit=false
             if [ "$run_all" = "true" ]; then

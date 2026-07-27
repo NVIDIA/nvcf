@@ -11,11 +11,11 @@ go_library(
         "watcher.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
-        "//internal/checkpointstore",
-        "//internal/criu/mountinfo",
-        "//internal/tracing",
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "//src/compute-plane-services/nvsnap/internal/criu/mountinfo",
+        "//src/compute-plane-services/nvsnap/internal/tracing",
         "@com_github_sirupsen_logrus//:logrus",
         "@io_k8s_api//core/v1:core",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
@@ -31,6 +31,7 @@ go_library(
 go_test(
     name = "rootfsonly_test",
     srcs = [
+        "capture_method_test.go",
         "classify_test.go",
         "composer_test.go",
         "entry_argv_test.go",
@@ -41,7 +42,7 @@ go_test(
     ],
     embed = [":rootfsonly"],
     deps = [
-        "//internal/checkpointstore",
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "@io_k8s_api//core/v1:core",
         "@io_k8s_apimachinery//pkg/api/resource",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
