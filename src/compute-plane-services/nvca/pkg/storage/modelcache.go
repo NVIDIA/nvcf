@@ -583,14 +583,6 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 
 var accessModesRO = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
 
-// provisionerMountOptionDefaults is the resolved answer for the model cache
-// storage class: the mount options its provisioner requires, and whether the
-// provisioner had an entry at all.
-type provisionerMountOptionDefaults struct {
-	options []string
-	found   bool
-}
-
 // provisionerDefaultMountOptions returns the mount options required by the
 // provisioner of the model cache storage class, taken from the mount option
 // ConfigMap. It reports false when the provisioner has no entry, in which case
@@ -601,25 +593,19 @@ type provisionerMountOptionDefaults struct {
 // provisioned by NVMesh at all. It is instead resolved from the storage class
 // named by DefaultModelCacheStorageClassName, or the override.
 //
-// Both objects are cluster-owned and effectively static, so the answer is
-// resolved once and cached. A failed lookup is deliberately not cached, so a
-// storage class or ConfigMap created after the agent starts is picked up on a
-// later reconcile rather than being written off forever.
+// The provisioner is resolved once, as a one time init: a StorageClass
+// provisioner is immutable, so it cannot change while the class exists. The
+// ConfigMap is read on each call so that an operator editing it takes effect
+// without restarting the agent.
+//
+// A failed lookup is deliberately not remembered, so a storage class created
+// after the agent starts is picked up on a later reconcile rather than being
+// written off forever.
 func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]string, bool) {
-	if cached := r.modelCacheDefaults.Load(); cached != nil {
-		return cached.options, cached.found
-	}
-
 	log := logf.FromContext(ctx)
 
-	scName := r.modelCacheStorageClass
-	if scName == "" {
-		scName = DefaultModelCacheStorageClassName
-	}
-	sc := &storagev1.StorageClass{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: scName}, sc); err != nil {
-		log.V(1).Info("Could not resolve the model cache storage class, using configured mount options",
-			"storageclass", scName, "reason", err.Error())
+	provisioner, ok := r.modelCacheProvisionerName(ctx)
+	if !ok {
 		return nil, false
 	}
 
@@ -648,22 +634,47 @@ func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]stri
 			"configmap", cmName, "namespace", ModelCacheInitNamespace)
 	}
 
-	resolved := &provisionerMountOptionDefaults{}
-	if raw, ok := cm.Data[sc.Provisioner]; ok {
-		resolved.found = true
-		for _, opt := range strings.Split(raw, ",") {
-			if opt = strings.TrimSpace(opt); opt != "" {
-				resolved.options = append(resolved.options, opt)
-			}
+	raw, found := cm.Data[provisioner]
+	if !found {
+		return nil, false
+	}
+
+	var options []string
+	for _, opt := range strings.Split(raw, ",") {
+		if opt = strings.TrimSpace(opt); opt != "" {
+			options = append(options, opt)
 		}
 	}
-	r.modelCacheDefaults.Store(resolved)
 
-	log.Info("Resolved cache mount option defaults for the model cache provisioner",
-		"storageclass", scName, "provisioner", sc.Provisioner,
-		"configmap", cmName, "found", resolved.found, "defaults", resolved.options)
+	return options, true
+}
 
-	return resolved.options, resolved.found
+// modelCacheProvisionerName returns the provisioner of the model cache storage
+// class. This is the one time init: the value is read from the cluster on first
+// use and kept, because a StorageClass provisioner is immutable.
+func (r *Reconciler) modelCacheProvisionerName(ctx context.Context) (string, bool) {
+	if cached := r.modelCacheProvisioner.Load(); cached != nil {
+		return *cached, true
+	}
+
+	log := logf.FromContext(ctx)
+	scName := r.modelCacheStorageClass
+	if scName == "" {
+		scName = DefaultModelCacheStorageClassName
+	}
+
+	sc := &storagev1.StorageClass{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: scName}, sc); err != nil {
+		log.V(1).Info("Could not resolve the model cache storage class, using configured mount options",
+			"storageclass", scName, "reason", err.Error())
+		return "", false
+	}
+
+	r.modelCacheProvisioner.Store(&sc.Provisioner)
+	log.Info("Resolved the model cache storage class provisioner",
+		"storageclass", scName, "provisioner", sc.Provisioner)
+
+	return sc.Provisioner, true
 }
 
 // negatesMountOption reports whether configured would cancel out required, so a

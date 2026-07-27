@@ -693,6 +693,38 @@ func TestResolveCacheMountOptions(t *testing.T) {
 	}
 }
 
+// The provisioner is a one time init, but the ConfigMap is read on every use so
+// an operator edit takes effect without restarting the agent.
+func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithObjects(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := &Reconciler{Client: c}
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
+
+	want := []string{"ro", "norecovery", "nouuid"}
+	if got := r.resolveCacheMountOptions(ctx, pv); !slices.Equal(got, want) {
+		t.Fatalf("before edit = %v, want %v", got, want)
+	}
+
+	cm := &corev1.ConfigMap{}
+	key := client.ObjectKey{Name: DefaultCacheMountOptionsConfigMapName, Namespace: ModelCacheInitNamespace}
+	if err := c.Get(ctx, key, cm); err != nil {
+		t.Fatalf("get configmap: %v", err)
+	}
+	cm.Data[NVMeshStorageClassProvisioner] = "ro,norecovery,nouuid,noatime"
+	if err := c.Update(ctx, cm); err != nil {
+		t.Fatalf("update configmap: %v", err)
+	}
+
+	want = []string{"ro", "norecovery", "nouuid", "noatime"}
+	if got := r.resolveCacheMountOptions(ctx, pv); !slices.Equal(got, want) {
+		t.Errorf("after edit = %v, want %v (edit did not take effect without a restart)", got, want)
+	}
+}
+
 func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 	tests := []struct {
 		name        string

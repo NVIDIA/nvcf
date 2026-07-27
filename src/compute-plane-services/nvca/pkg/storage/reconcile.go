@@ -216,11 +216,12 @@ type Reconciler struct {
 
 	// modelCacheStorageClass is the storage class whose provisioner selects the
 	// mount option defaults, and cacheMountOptionsConfigMap holds those defaults
-	// per provisioner. modelCacheDefaults caches the resolved answer, looked up
-	// once on first use.
+	// per provisioner. modelCacheProvisioner is the one time init: a
+	// StorageClass provisioner is immutable, so it is read once and kept. The
+	// ConfigMap is read on each use so operator edits take effect.
 	modelCacheStorageClass     string
 	cacheMountOptionsConfigMap string
-	modelCacheDefaults         atomic.Pointer[provisionerMountOptionDefaults]
+	modelCacheProvisioner      atomic.Pointer[string]
 
 	tracer            oteltrace.Tracer
 	nowFunc           func() time.Time
