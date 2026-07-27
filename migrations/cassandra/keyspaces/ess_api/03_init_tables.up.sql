@@ -27,6 +27,7 @@ CREATE TYPE IF NOT EXISTS ess_api.entity_type (
 CREATE TABLE IF NOT EXISTS ess_api.namespaces (
     namespace                             text,
     oauth_authorizations                  map<text, frozen<authorization>>, -- new primary column for tenant (non-notary) auths, oauth wins over ssa on read-merge
+    ssa_authorizations                    map<text, frozen<authorization>>, -- legacy column kept until all supported ESS versions stop selecting it
     notary_authorizations                 map<text, frozen<authorization>>,
     entity_types                          map<text, frozen<entity_type>>,
     created_at                            timestamp,
