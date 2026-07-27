@@ -590,7 +590,7 @@ jobs:
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression
                    --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             # Force the upload flag explicitly. The root module's .bazelrc pins
             # --config=remote, which sets --remote_upload_local_results=false
             # (internal read-only dev cache). Without overriding it back to true
@@ -699,7 +699,7 @@ jobs:
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression
                    --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             # Force the upload flag explicitly. The root module's .bazelrc pins
             # --config=remote, which sets --remote_upload_local_results=false
             # (internal read-only dev cache). Without overriding it back to true
@@ -824,7 +824,7 @@ jobs:
                    --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
               CACHE+=(--remote_upload_local_results=true)
             else
@@ -860,7 +860,7 @@ jobs:
                    --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
               CACHE+=(--remote_upload_local_results=true)
             else
