@@ -82,6 +82,13 @@ jobs:
       - name: Check Java import boundaries
         run: bash tools/ci/check-java-import-boundaries
 
+      # Behavioral tests for the CI shell this workflow depends on. actionlint
+      # covers syntax; these cover the decisions.
+      - name: Test CI shell helpers
+        run: |
+          bash tools/ci/test-bazel-cache-upload-mode
+          bash tools/ci/test-bazel-remote-probe
+
       - name: Compute changed subtrees
         id: detect
         env:
@@ -430,14 +437,14 @@ jobs:
           if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
             printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
-            # Upload results only from main pushes; every other trigger
-            # (PRs) is read-only so it can never poison the cache.
-            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
-              upload=true
-            fi
+            # Who may write to the shared cache lives in a script so it is
+            # testable and stated once; see tools/ci/bazel-cache-upload-mode
+            # and its test for the rationale and the full event matrix.
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
             echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
             # Make the mode visible in the log so a missing warm-write is never
-            # a silent guess: read-only PRs show upload=false, main pushes true.
+            # a silent guess: read-only PRs show upload=false, merge-queue runs
+            # and main pushes true.
             if [ "$upload" = "true" ]; then
               echo "remote cache ready: read-write (warming; upload=true)"
             else
@@ -808,7 +815,7 @@ jobs:
             printf '%s\n' "$CACHE_CA" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
             upload=false
-            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then upload=true; fi
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
             echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
             echo "remote cache ready (upload=$upload)"
           else
