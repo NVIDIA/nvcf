@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Behavioral test for tools/ci/check-nested-modules.
+#
+# A guard that only ever passes is indistinguishable from no guard, so assert
+# the failures directly: an unlisted nested module must fail, and so must a
+# ledger entry whose module is gone. Each case builds a throwaway tree rather
+# than depending on the real repository, so these stay true as the real ledger
+# shrinks.
+set -euo pipefail
+
+script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-nested-modules"
+fail=0
+
+# Build a fake repo: root MODULE.bazel plus a nested one per argument.
+make_tree() {
+    local dir; dir="$(mktemp -d)"
+    touch "${dir}/MODULE.bazel"
+    local p
+    for p in "$@"; do
+        mkdir -p "${dir}/${p}"
+        touch "${dir}/${p}/MODULE.bazel"
+    done
+    printf '%s' "${dir}"
+}
+
+run() {  # run <root> <ledger-contents> -> sets $out and $rc
+    local root="$1" contents="$2" ledger
+    ledger="$(mktemp)"
+    printf '%s\n' "${contents}" > "${ledger}"
+    set +e
+    out="$(bash "${script}" --root "${root}" --ledger "${ledger}" 2>&1)"
+    rc=$?
+    set -e
+    rm -f "${ledger}"
+}
+
+expect() {  # expect <desc> <want-rc> [substring]
+    local desc="$1" want="$2" substr="${3:-}"
+    if [ "${rc}" != "${want}" ]; then
+        printf 'FAIL %s: want exit %s, got %s\n%s\n' "${desc}" "${want}" "${rc}" "${out}"
+        fail=1
+        return
+    fi
+    if [ -n "${substr}" ] && ! printf '%s' "${out}" | grep -q -- "${substr}"; then
+        printf 'FAIL %s: output missing %q\n%s\n' "${desc}" "${substr}" "${out}"
+        fail=1
+        return
+    fi
+    printf 'ok   %s\n' "${desc}"
+}
+
+# Fully classified tree passes, and the root module is not counted as nested.
+t="$(make_tree svc/a svc/b vendor/x)"
+run "${t}" 'ledger   svc/a
+ledger   svc/b
+vendored vendor/x'
+expect "classified tree passes" 0 "nested modules: 3 classified"
+expect "counts only unmigrated as remaining" 0 "awaiting migration: 2"
+rm -rf "${t}"
+
+# A new nested module that nobody declared must fail and be named.
+t="$(make_tree svc/a svc/sneaky)"
+run "${t}" 'ledger svc/a'
+expect "unlisted nested module fails" 1 "svc/sneaky"
+rm -rf "${t}"
+
+# A ledger entry whose module migrated must fail, so the backlog stays honest.
+t="$(make_tree svc/a)"
+run "${t}" 'ledger svc/a
+ledger svc/already-migrated'
+expect "stale ledger entry fails" 1 "svc/already-migrated"
+rm -rf "${t}"
+
+# Both directions at once are both reported, not just the first.
+t="$(make_tree svc/a svc/new)"
+run "${t}" 'ledger svc/a
+ledger svc/gone'
+expect "reports unlisted and stale together" 1 "svc/new"
+expect "  ... and names the stale one too" 1 "svc/gone"
+rm -rf "${t}"
+
+# Exceptions are classified but counted separately from the backlog.
+t="$(make_tree svc/a svc/keeps-its-own)"
+run "${t}" 'ledger    svc/a
+exception svc/keeps-its-own'
+expect "exception passes the guard" 0 "permanent exceptions: 1"
+expect "exception is not counted as backlog" 0 "awaiting migration: 1"
+rm -rf "${t}"
+
+# Comments and blank lines are ignored rather than parsed as entries.
+t="$(make_tree svc/a)"
+run "${t}" '# a comment
+
+ledger svc/a
+'
+expect "comments and blanks ignored" 0 "nested modules: 1 classified"
+rm -rf "${t}"
+
+# A typo in the category must be loud, not silently treated as classified.
+t="$(make_tree svc/a)"
+run "${t}" 'ledgar svc/a'
+expect "unknown category is an error" 2 "unknown category"
+rm -rf "${t}"
+
+# A missing ledger is a setup error, distinct from a policy violation.
+t="$(make_tree svc/a)"
+set +e
+out="$(bash "${script}" --root "${t}" --ledger "${t}/nope.txt" 2>&1)"; rc=$?
+set -e
+expect "missing ledger is a setup error" 2 "ledger not found"
+rm -rf "${t}"
+
+if [ "${fail}" -ne 0 ]; then
+    echo "check-nested-modules: FAILED" >&2
+    exit 1
+fi
+echo "check-nested-modules: all checks passed"

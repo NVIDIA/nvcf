@@ -63,3 +63,8 @@ jobs:
 
       - name: Check Go toolchain declarations agree
         run: tools/ci/check-go-version
+
+      - name: Check nested Bazel module inventory
+        run: |
+          bash tools/ci/test-check-nested-modules
+          bash tools/ci/check-nested-modules
