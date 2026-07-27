@@ -80,8 +80,11 @@ setup
 mkdir -p "${WORK}/repo/src/compute-plane-services/byoo-otel-collector"
 if out=$(cd "${WORK}/repo" && ./tools/ci/check-go-version 2>&1); then
     fail "byoo present without go.work should be reported as a failure"
+elif grep -q 'go.work is missing; the host toolchain requirement cannot be stated' <<<"${out}"; then
+    pass "byoo present without go.work is detected, with the specific diagnostic"
 else
-    pass "byoo present without go.work is detected"
+    fail "checker failed, but not with the missing-go.work diagnostic:"
+    sed 's/^/    /' <<<"${out}" >&2
 fi
 
 echo
