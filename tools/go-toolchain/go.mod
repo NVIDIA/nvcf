@@ -1,7 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// The Go toolchain version for this repository, declared once.
+// The hermetic Bazel Go SDK version, declared once.
+//
+// This governs everything built through rules_go. It does NOT govern the host
+// Go shipped in the bazel-ci container image: byoo-otel-collector's otelcol
+// genrule builds against $PATH go, and that toolchain is paired with
+// byoo-otel-collector/go.work instead. The two are allowed to differ, and
+// tools/ci/check-go-version states both.
 //
 // This module has no source and is never built. It exists so that one file
 // declares the toolchain and every consumer derives from it rather than

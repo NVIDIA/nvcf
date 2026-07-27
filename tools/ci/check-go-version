@@ -2,18 +2,26 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Asserts that every Go toolchain declaration agrees with the single source of
-# truth in tools/go-toolchain/go.mod.
+# Asserts that Go toolchain declarations are consistent.
 #
-# Most consumers derive the version rather than repeat it: Bazel reads the
-# anchor through go_sdk.from_file, and GitHub Actions read it through setup-go's
-# go-version-file. Two places cannot derive it and are checked here instead:
-# go.work.bazel, whose go directive Bazel requires to be a literal, and the
-# bazel-ci container image, which is built in a different repository.
+# There are deliberately TWO toolchains here, not one, and conflating them is a
+# mistake this script exists partly to prevent:
 #
-# Before this existed the repository carried four different answers at once:
-# 1.25.0 in Bazel, 1.25.6 in the CI image, 1.26.0 in two workflows, and 1.25.11
-# in a service go.mod. CI linted with one and compiled with another.
+#   1. The hermetic Bazel SDK, declared once in tools/go-toolchain/go.mod.
+#      Everything built through rules_go uses it. Bazel derives it via
+#      go_sdk.from_file and GitHub Actions via setup-go's go-version-file, so
+#      almost nothing repeats the literal.
+#
+#   2. The host Go shipped in the bazel-ci container image. Exactly one thing
+#      uses it: byoo-otel-collector's otelcol genrule, which shells out to
+#      `go build` against $PATH because the collector's 250-module graph does
+#      not resolve under rules_go. That toolchain is paired with
+#      src/compute-plane-services/byoo-otel-collector/go.work, and the pairing
+#      is what must hold, not equality with the Bazel SDK.
+#
+# Before this existed, four versions were live at once: 1.25.0 in Bazel, 1.25.6
+# in the CI image, 1.26.0 in two workflows, and 1.25.11 in a service go.mod. CI
+# linted with one and compiled with another.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -54,10 +62,27 @@ else
   echo "  ok: MODULE.bazel derives the SDK from the anchor"
 fi
 
-# The bazel-ci image is built in another repository, so this is advisory: it
-# reports the version this repository expects it to ship.
-echo "  note: the bazel-ci container image must ship Go ${expected};"
-echo "        it is built outside this repository and cannot be checked here."
+# The host toolchain is a separate concern. byoo-otel-collector's otelcol
+# genrule compiles against the bazel-ci image's Go, so the version that image
+# ships must match byoo's go.work, NOT the hermetic Bazel SDK above. Asserting
+# equality with the SDK here would break that pairing and silently change how
+# the shipped collector binary is compiled.
+byoo_dir="src/compute-plane-services/byoo-otel-collector"
+byoo_work="${byoo_dir}/go.work"
+if [ ! -d "${byoo_dir}" ]; then
+  echo "  host toolchain: byoo-otel-collector is absent; nothing requires host Go"
+elif [ -f "${byoo_work}" ]; then
+  byoo_go="$(awk '/^go / { print $2; exit }' "${byoo_work}")"
+  echo "  host toolchain: byoo-otel-collector expects Go ${byoo_go}"
+  echo "                  the bazel-ci image must ship that version, because"
+  echo "                  the otelcol genrule builds against \$PATH go."
+  if [ "${byoo_go}" = "${expected}" ]; then
+    echo "  note: it currently equals the Bazel SDK version; that is incidental,"
+    echo "        the two are allowed to differ."
+  fi
+else
+  report "${byoo_dir} exists but ${byoo_work} is missing; the host toolchain requirement cannot be stated"
+fi
 
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} Go toolchain declaration(s) disagree with ${anchor_file}" >&2

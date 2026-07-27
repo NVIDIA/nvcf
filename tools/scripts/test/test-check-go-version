@@ -58,6 +58,32 @@ setup
 printf 'module x\n\ngo 1.26.5\n' >"${WORK}/repo/tools/go-toolchain/go.mod"
 if run; then fail "missing toolchain directive not detected"; else pass "missing toolchain directive is detected"; fi
 
+# The host toolchain is a separate concern and must be reported, not equated
+# with the Bazel SDK. byoo-otel-collector's otelcol genrule builds against the
+# image's $PATH go, so its go.work is what states that requirement.
+setup
+mkdir -p "${WORK}/repo/src/compute-plane-services/byoo-otel-collector"
+printf 'go 1.25.6\n' \
+    >"${WORK}/repo/src/compute-plane-services/byoo-otel-collector/go.work"
+if out=$(cd "${WORK}/repo" && ./tools/ci/check-go-version 2>&1); then
+    if grep -q '1\.25\.6' <<<"${out}"; then
+        pass "a host toolchain differing from the Bazel SDK is reported, not rejected"
+    else
+        fail "host toolchain version not reported"
+    fi
+else
+    fail "a differing host toolchain must not fail the check:"
+    sed 's/^/    /' <<<"${out}" >&2
+fi
+
+setup
+mkdir -p "${WORK}/repo/src/compute-plane-services/byoo-otel-collector"
+if out=$(cd "${WORK}/repo" && ./tools/ci/check-go-version 2>&1); then
+    fail "byoo present without go.work should be reported as a failure"
+else
+    pass "byoo present without go.work is detected"
+fi
+
 echo
 if [ "${FAILURES}" -ne 0 ]; then echo "${FAILURES} test(s) failed" >&2; exit 1; fi
 echo "all tests passed"
