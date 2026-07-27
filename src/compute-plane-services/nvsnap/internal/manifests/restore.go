@@ -36,6 +36,9 @@ type sourcePod struct {
 		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
+		ImagePullSecrets []struct {
+			Name string `json:"name"`
+		} `json:"imagePullSecrets"`
 		Containers []struct {
 			Name  string   `json:"name"`
 			Image string   `json:"image"`
@@ -68,6 +71,7 @@ type restoreParams struct {
 	StdoutTo         string
 	PrepDirs         []string
 	CarryEnv         []envVar
+	PullSecrets      []string
 }
 
 type envVar struct{ Name, Value string }
@@ -134,10 +138,16 @@ func RenderRestore(src []byte) ([]byte, error) {
 	if threshold == 0 {
 		threshold = 60
 	}
+	// A malformed value is a manifest bug, not a reason to quietly use the
+	// default: silently falling back to the source's threshold can make a
+	// restore give up early and look like a workload failure.
 	if v := p.Metadata.Annotations["nvsnap.io/restore-failure-threshold"]; v != "" {
-		if n, cerr := strconv.Atoi(v); cerr == nil && n > 0 {
-			threshold = n
+		n, cerr := strconv.Atoi(v)
+		if cerr != nil || n <= 0 {
+			return nil, fmt.Errorf("%s: nvsnap.io/restore-failure-threshold=%q is not a positive integer",
+				p.Metadata.Name, v)
 		}
+		threshold = n
 	}
 
 	var prep []string
@@ -149,6 +159,20 @@ func RenderRestore(src []byte) ([]byte, error) {
 		if carriedEnv[e.Name] {
 			carried = append(carried, envVar{Name: e.Name, Value: e.Value})
 		}
+	}
+
+	// The placeholder pulls the SAME image as the source, so it needs the same
+	// credentials. Hardcoding one secret meant a NIM placeholder could not pull
+	// nvcr.io/nim/* at all -- the source declares nim-pull-secret alongside
+	// ours, and the restore pod silently lost it.
+	var pullSecrets []string
+	for _, ps := range p.Spec.ImagePullSecrets {
+		if ps.Name != "" {
+			pullSecrets = append(pullSecrets, ps.Name)
+		}
+	}
+	if len(pullSecrets) == 0 {
+		pullSecrets = []string{"nvsnap-pull-secret"}
 	}
 
 	var buf bytes.Buffer
@@ -163,6 +187,7 @@ func RenderRestore(src []byte) ([]byte, error) {
 		StdoutTo:         out,
 		PrepDirs:         prep,
 		CarryEnv:         carried,
+		PullSecrets:      pullSecrets,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render %s: %w", p.Metadata.Name, err)
@@ -199,7 +224,9 @@ spec:
   nodeName: __NODE_NAME__
 
   imagePullSecrets:
-    - name: nvsnap-pull-secret
+{{- range .PullSecrets }}
+    - name: {{ . }}
+{{- end }}
 
   containers:
     - name: restore

@@ -27,6 +27,7 @@ spec:
 
   imagePullSecrets:
     - name: nvsnap-pull-secret
+    - name: nim-pull-secret
 
   containers:
     - name: restore

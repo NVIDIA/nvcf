@@ -729,8 +729,16 @@ void nvsnap_quiesce_worker_restart_if_needed(void)
 {
     if (!g_quiesce_worker_needs_restart)
         return;
-    g_quiesce_worker_needs_restart = 0;
+
     nvsnap_start_quiesce_worker();
+
+    /* Drop the request only once a worker actually exists. pthread_create can
+     * fail (EAGAIN under thread pressure, RLIMIT_NPROC), and clearing the flag
+     * first would discard the request permanently, leaving a forked child with
+     * no quiesce poller and no way to notice. Leaving it set means the next
+     * caller retries. */
+    if (g_quiesce_worker_thread_started)
+        g_quiesce_worker_needs_restart = 0;
 }
 
 __attribute__((constructor(103)))  /* Run after main init (101) and NvSnap init (102) */

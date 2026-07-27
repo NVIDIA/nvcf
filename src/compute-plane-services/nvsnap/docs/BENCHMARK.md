@@ -29,7 +29,7 @@ Phase split from the vllm-small `-v4` restore.log: A cut the CPU pages-restore
 phase 13.5 s to 3.8 s (-72%); B cut the cuda_plugin GPU restore phase by one
 cuInit per pid (~2.7 s x 2 pids). Both are best-effort and correctness-neutral:
 A is a no-op on a non-THP node, B issues the same driver operations in the same
-order. 5/5 single-GPU e2e PASS on the A+B build. Design:
+order. All four workloads above pass e2e on the A+B build. Design:
 `docs/proposals/single-gpu-restore-speedup.md`.
 
 ## Warm cache restore (cachedir), June 2026

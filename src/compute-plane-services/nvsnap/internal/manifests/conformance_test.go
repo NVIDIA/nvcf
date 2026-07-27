@@ -14,6 +14,7 @@ SPDX-License-Identifier: Apache-2.0
 package manifests
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,4 +147,42 @@ func image(body string) string {
 		}
 	}
 	return ""
+}
+
+// A malformed restore-failure-threshold must be rejected rather than silently
+// falling back to the source's value, which would make a restore give up early
+// and present as a workload failure.
+func TestRestoreThresholdRejectsBadValues(t *testing.T) {
+	base := `apiVersion: v1
+kind: Pod
+metadata:
+  name: w
+  namespace: nvsnap-system
+  annotations:
+    nvsnap.io/path: "criu"
+    nvsnap.io/port: "8000"
+    nvsnap.io/restore-failure-threshold: %q
+spec:
+  containers:
+    - name: c
+      image: img:1
+      args: ["nohup setsid srv > /w.out 2>&1 < /dev/null &"]
+`
+	for _, bad := range []string{"abc", "0", "-5", "1.5", ""} {
+		src := []byte(fmt.Sprintf(base, bad))
+		_, err := RenderRestore(src)
+		if bad == "" {
+			if err != nil {
+				t.Errorf("empty threshold should fall through to the default, got %v", err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("threshold %q accepted; want an error naming the annotation", bad)
+		}
+	}
+	// A good value still renders.
+	if _, err := RenderRestore([]byte(fmt.Sprintf(base, "120"))); err != nil {
+		t.Errorf("valid threshold rejected: %v", err)
+	}
 }

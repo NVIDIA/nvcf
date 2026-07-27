@@ -111,18 +111,26 @@ verify-self-disable:
 	    case "$$f" in */self_disable.c) continue;; esac; \
 	    awk -v F="$$f" ' \
 	        /^[[:space:]]*[*]/ { next } \
-	        /__attribute__\(\(constructor/ { p=12; f=0; L=NR; next } \
-	        p>0 { if (/nvsnap_self_disabled/) { p=0; next } \
-	              p--; if (p==0) { print F ":" L; bad=1 } } \
+	        /^[[:space:]]*\/\// { next } \
+	        /__attribute__\(\(constructor/ { want=1; L=NR; next } \
+	        want && /^[[:space:]]*(static[[:space:]]+)?void[[:space:]]+[A-Za-z_].*\(/ { next } \
+	        want && /^[[:space:]]*\{[[:space:]]*$$/ { next } \
+	        want && /^[[:space:]]*$$/ { next } \
+	        want { \
+	            if ($$0 ~ /if[[:space:]]*\([[:space:]]*nvsnap_self_disabled\(\)[[:space:]]*\)/) { want=0; next } \
+	            print F ":" L; bad=1; want=0 \
+	        } \
 	        END { exit bad?1:0 }' "$$f" || bad=1; \
 	done; \
 	if [ "$$bad" != "0" ]; then \
-	    echo "ERROR: the constructors listed above do not call nvsnap_self_disabled()."; \
-	    echo "       They will run inside CRIU (via /etc/ld.so.preload) and hang the dump."; \
-	    echo "       Add 'if (nvsnap_self_disabled()) return;' as the first statement."; \
+	    echo "ERROR: the constructors listed above do not call nvsnap_self_disabled()"; \
+	    echo "       as their FIRST statement. They will run inside CRIU (via"; \
+	    echo "       /etc/ld.so.preload) and hang the dump."; \
+	    echo "       Required first line of the body:"; \
+	    echo "           if (nvsnap_self_disabled()) return;"; \
 	    exit 1; \
 	fi; \
-	echo "verify-self-disable: OK (all constructors guarded)"
+	echo "verify-self-disable: OK (guard is the first statement in every constructor)"
 
 # C compilation
 src/%.o: src/%.c

@@ -635,3 +635,100 @@ func TestSetState_PropagatesNon404Errors(t *testing.T) {
 		t.Errorf("expected error to mention transport problem; got: %v", err)
 	}
 }
+
+// flakyCatalog returns ErrCatalogHashNotFound for the first failN calls to
+// simulate the real ordering on the cachedir path: the agent promotes before
+// nvsnap-server has written the hash onto the catalog row.
+type flakyCatalog struct {
+	mu      sync.Mutex
+	failN   int
+	calls   []stubCatalogCall
+	hardErr error
+}
+
+func (f *flakyCatalog) UpdatePVCPromoteState(id, state, pvcName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, stubCatalogCall{id: id, state: state, pvcName: pvcName})
+	if f.hardErr != nil {
+		return f.hardErr
+	}
+	if len(f.calls) <= f.failN {
+		return ErrCatalogHashNotFound
+	}
+	return nil
+}
+
+func (f *flakyCatalog) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.calls) }
+func (f *flakyCatalog) succeeded() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// The final call is the one that returned nil.
+	return len(f.calls) > f.failN
+}
+
+// A terminal ready-state write must survive the catalog row not yet carrying
+// the hash. Dropping it leaves pvc_promote_state empty forever, which is what
+// stalls consumers that gate warm-start on it (nvsnap#469).
+func TestSetStateRetriesTerminalWriteUntilHashLands(t *testing.T) {
+	prevInterval, prevAttempts := stateRetryInterval, stateRetryAttempts
+	stateRetryInterval, stateRetryAttempts = time.Millisecond, 50
+	defer func() { stateRetryInterval, stateRetryAttempts = prevInterval, prevAttempts }()
+
+	cat := &flakyCatalog{failN: 3}
+	b := &PerCapturePVCBackend{Catalog: cat}
+
+	if err := b.setState("hash", pvcStateReady, "rox-hash"); err != nil {
+		t.Fatalf("setState returned %v; the retry must be asynchronous, not surfaced", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !cat.succeeded() {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !cat.succeeded() {
+		t.Fatalf("ready state never written after %d attempts", cat.count())
+	}
+	last := cat.calls[len(cat.calls)-1]
+	if last.state != pvcStateReady || last.pvcName != "rox-hash" {
+		t.Errorf("final write = (%s,%s), want (%s,rox-hash)", last.state, last.pvcName, pvcStateReady)
+	}
+}
+
+// A non-retryable catalog error must stop the loop rather than spin to the cap.
+func TestSetStateRetryStopsOnNonRetryableError(t *testing.T) {
+	prevInterval, prevAttempts := stateRetryInterval, stateRetryAttempts
+	stateRetryInterval, stateRetryAttempts = time.Millisecond, 50
+	defer func() { stateRetryInterval, stateRetryAttempts = prevInterval, prevAttempts }()
+
+	cat := &flakyCatalog{failN: 1}
+	b := &PerCapturePVCBackend{Catalog: cat}
+	if err := b.setState("hash", pvcStateReady, "rox-hash"); err != nil {
+		t.Fatalf("setState: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	cat.mu.Lock()
+	cat.hardErr = errors.New("catalog unreachable")
+	cat.mu.Unlock()
+
+	time.Sleep(80 * time.Millisecond)
+	n := cat.count()
+	time.Sleep(80 * time.Millisecond)
+	if cat.count() != n {
+		t.Errorf("retry kept going after a non-retryable error (%d -> %d)", n, cat.count())
+	}
+}
+
+// Intermediate states stay best-effort: a later write supersedes them, so
+// retrying each one would be noise.
+func TestSetStateDoesNotRetryIntermediateStates(t *testing.T) {
+	cat := &flakyCatalog{failN: 99}
+	b := &PerCapturePVCBackend{Catalog: cat}
+	if err := b.setState("hash", pvcStateSnapshotting, ""); err != nil {
+		t.Fatalf("setState: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if got := cat.count(); got != 1 {
+		t.Errorf("intermediate state attempted %d times, want 1 (no retry)", got)
+	}
+}

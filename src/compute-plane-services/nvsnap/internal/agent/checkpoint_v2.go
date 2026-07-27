@@ -186,13 +186,12 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}).Info("criu-v2: dumping in-namespace")
 
 	// 5. nsenter into the container's mnt/pid/net/ipc/uts namespaces and
-	// dump. Environment is deliberately minimal: PATH covers the staged bundle so
-	// the CUDA plugin finds cuda-checkpoint, and LD_LIBRARY_PATH points at
-	// the bundle's own glibc stack — criu's RUNPATH covers only its direct
-	// deps, not transitive ones (libnftables -> libmnl failed without it).
-	// No agent driver-lib paths (those are poison inside the container);
-	// /criu-bundle/lib carries no driver libs, so cuda-checkpoint still
-	// resolves libcuda from the container's own search paths.
+	// dump. Environment is deliberately minimal: PATH covers the staged bundle
+	// so the CUDA plugin finds cuda-checkpoint. LD_LIBRARY_PATH is deliberately
+	// NOT set — the bundle's libraries carry RPATH=$ORIGIN (see Dockerfile.base),
+	// so criu resolves its whole dependency graph, transitive deps included,
+	// from /criu-bundle/lib on its own. Setting it here would leak the bundle's
+	// glibc into cuda-checkpoint and abort restore into newer-glibc containers.
 	// -r/-w: root and cwd must follow the entered mount namespace — without
 	// them nsenter keeps the agent's root and the staged bundle path
 	// resolves against the wrong filesystem ("No such file or directory").
@@ -303,7 +302,7 @@ func nvidiaDevExternals(devDir string) ([]string, error) {
 	for _, pat := range gpuDevPatterns {
 		m, err := filepath.Glob(filepath.Join(devDir, pat))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("glob GPU device pattern %q in %s: %w", pat, devDir, err)
 		}
 		matches = append(matches, m...)
 	}
