@@ -9,6 +9,7 @@
     "com.github.java-json-tools:json-patch": -1031005245,
     "com.google.protobuf:protobuf-java": 1906581597,
     "com.google.protobuf:protobuf-java-util": -1626074784,
+    "com.jayway.jsonpath:json-path": 489827081,
     "commons-codec:commons-codec": -1269462382,
     "commons-logging:commons-logging": -916690979,
     "io.cloudevents:cloudevents-core": -2103567774,
@@ -32,6 +33,7 @@
     "org.apache.cassandra:java-driver-metrics-micrometer": -465267397,
     "org.apache.commons:commons-collections4": 1132363499,
     "org.apache.commons:commons-lang3": -278168457,
+    "org.apache.commons:commons-pool2": -1576571923,
     "org.assertj:assertj-core": 1863574844,
     "org.awaitility:awaitility": -1630939750,
     "org.bouncycastle:bcprov-jdk18on": -1405390253,
@@ -425,6 +427,8 @@
     "org.apache.commons:commons-compress:jar:sources": -1845261624,
     "org.apache.commons:commons-lang3": 759645435,
     "org.apache.commons:commons-lang3:jar:sources": 1890991939,
+    "org.apache.commons:commons-pool2": -896009560,
+    "org.apache.commons:commons-pool2:jar:sources": 611628049,
     "org.apache.logging.log4j:log4j-api": 191755139,
     "org.apache.logging.log4j:log4j-api:jar:sources": 1226633672,
     "org.apache.logging.log4j:log4j-to-slf4j": 357996538,
@@ -1918,6 +1922,13 @@
         "sources": "eec245e820ec2800a1780cf756aefb427c1c6170e06902e67ac15b6910ce6335"
       },
       "version": "3.20.0"
+    },
+    "org.apache.commons:commons-pool2": {
+      "shasums": {
+        "jar": "5273c8bc8c0dca2211175c0d27efbd7228efae99689aac001a8e1ef8e872e9ef",
+        "sources": "91d50152d046429d794a197e7b466550b81838f6114fa4821de0cb767e3b218b"
+      },
+      "version": "2.12.1"
     },
     "org.apache.logging.log4j:log4j-api": {
       "shasums": {
@@ -6326,6 +6337,11 @@
       "org.apache.commons.lang3.tuple",
       "org.apache.commons.lang3.util"
     ],
+    "org.apache.commons:commons-pool2": [
+      "org.apache.commons.pool2",
+      "org.apache.commons.pool2.impl",
+      "org.apache.commons.pool2.proxy"
+    ],
     "org.apache.logging.log4j:log4j-api": [
       "org.apache.logging.log4j",
       "org.apache.logging.log4j.internal",
@@ -10220,6 +10236,8 @@
       "org.apache.commons:commons-compress:jar:sources",
       "org.apache.commons:commons-lang3",
       "org.apache.commons:commons-lang3:jar:sources",
+      "org.apache.commons:commons-pool2",
+      "org.apache.commons:commons-pool2:jar:sources",
       "org.apache.logging.log4j:log4j-api",
       "org.apache.logging.log4j:log4j-api:jar:sources",
       "org.apache.logging.log4j:log4j-to-slf4j",
@@ -10914,6 +10932,8 @@
       "org.apache.commons:commons-compress:jar:sources",
       "org.apache.commons:commons-lang3",
       "org.apache.commons:commons-lang3:jar:sources",
+      "org.apache.commons:commons-pool2",
+      "org.apache.commons:commons-pool2:jar:sources",
       "org.apache.logging.log4j:log4j-api",
       "org.apache.logging.log4j:log4j-api:jar:sources",
       "org.apache.logging.log4j:log4j-to-slf4j",

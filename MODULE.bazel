@@ -170,9 +170,8 @@ use_repo(
 # The pinned lock file (//:maven_install.json) makes resolution reproducible and
 # lets `bazel mod` run offline. Repositories intentionally lists only Maven
 # Central so the foundation builds anywhere, including the public GitHub mirror.
-# Standalone Java modules (src/libraries/java/nv-boot-parent,
-# src/control-plane-services/cloud-tasks) instead own their own MODULE.bazel and
-# nv_third_party_deps hub and are ignored by the root build (see .bazelignore).
+# Onboarded Java components use this root module and dependency hub. Their
+# Maven POMs remain independent coexistence paths.
 # ============================================================================
 bazel_dep(name = "rules_java", version = "9.3.0")
 bazel_dep(name = "rules_jvm_external", version = "7.0")
@@ -263,6 +262,7 @@ maven.install(
         "at.yawk.lz4:lz4-java:1.10.3",
         "com.github.ben-manes.caffeine:guava",
         "com.github.java-json-tools:json-patch:1.13",
+        "com.jayway.jsonpath:json-path",
         "commons-codec:commons-codec",
         # nv-boot-parent overrides the Spring Boot BOM's lower version.
         "commons-logging:commons-logging:1.4.0",
@@ -276,6 +276,7 @@ maven.install(
         "org.apache.cassandra:java-driver-metrics-micrometer",
         "org.apache.commons:commons-collections4:4.5.0",
         "org.apache.commons:commons-lang3:3.20.0",
+        "org.apache.commons:commons-pool2",
         "org.bouncycastle:bcprov-jdk18on:1.84",
         "org.jacoco:org.jacoco.agent:jar:runtime:0.8.14",
         "org.jacoco:org.jacoco.cli:0.8.14",
