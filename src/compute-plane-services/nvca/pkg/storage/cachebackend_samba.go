@@ -137,6 +137,7 @@ func EnsureSambaModelCacheInfra(
 	c client.Client,
 	cacheHandle string,
 	image string,
+	storageClassName string,
 	resources corev1.ResourceRequirements,
 	size resource.Quantity,
 ) (ready bool, err error) {
@@ -158,7 +159,7 @@ func EnsureSambaModelCacheInfra(
 		NewModelCacheInitNamespace(),
 		rwSecret,
 		roSecret,
-		newSambaModelCacheDataPVC(cacheHandle, size),
+		newSambaModelCacheDataPVC(cacheHandle, storageClassName, size),
 		newSambaModelCacheDeployment(cacheHandle, image, resources),
 		newSambaModelCacheService(cacheHandle),
 		newSambaModelCacheNetworkPolicy(cacheHandle),
@@ -230,8 +231,10 @@ func newSambaModelCacheSecrets() (rw, ro *corev1.Secret) {
 // not labeled with modelCacheHandleLabelKey on purpose: cleanupInitModelCache
 // deletes the (handle-labeled) ephemeral writer RW PVC, and labeling the durable
 // backing PVC with the same handle would collide with that single-PVC cleanup.
-func newSambaModelCacheDataPVC(cacheHandle string, size resource.Quantity) *corev1.PersistentVolumeClaim {
-	storageClassName := SambaModelCacheDataStorageClassName
+func newSambaModelCacheDataPVC(cacheHandle, storageClassName string, size resource.Quantity) *corev1.PersistentVolumeClaim {
+	if storageClassName == "" {
+		storageClassName = SambaModelCacheDataStorageClassName
+	}
 	labels := sambaModelCacheSelector(cacheHandle)
 	labels[sambaModelCacheComponentLabelKey] = sambaModelCacheComponentLabelValue
 	return &corev1.PersistentVolumeClaim{

@@ -455,7 +455,8 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 	err = nvcaotel.InvokeWithSpan(ctx, modelCacheTracer, "nvca.modelcache.samba.ensure_infra",
 		func(ctx context.Context) error {
 			var e error
-			ready, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle, r.cfg.Agent.SharedStorage.Server.Image, smbResources, capacity)
+			ready, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle,
+				r.cfg.Agent.SharedStorage.Server.Image, r.modelCacheStorageClassName(), smbResources, capacity)
 			return e
 		},
 		oteltrace.WithAttributes(otelattr.String("nvcf.modelcache.handle", cacheHandle)),
@@ -649,6 +650,19 @@ func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]stri
 	return options, true
 }
 
+// modelCacheStorageClassName returns the storage class NVCA uses for model cache
+// volumes: the configured override when set, otherwise the default. NVCA owns
+// this choice rather than taking it from the request spec, so every model cache
+// volume in a cluster lands on the same class and its provisioner is the one
+// the mount option defaults were resolved from.
+func (r *Reconciler) modelCacheStorageClassName() string {
+	if r.modelCacheStorageClass != "" {
+		return r.modelCacheStorageClass
+	}
+
+	return DefaultModelCacheStorageClassName
+}
+
 // modelCacheProvisionerName returns the provisioner of the model cache storage
 // class. This is the one time init: the value is read from the cluster on first
 // use and kept, because a StorageClass provisioner is immutable.
@@ -658,10 +672,7 @@ func (r *Reconciler) modelCacheProvisionerName(ctx context.Context) (string, boo
 	}
 
 	log := logf.FromContext(ctx)
-	scName := r.modelCacheStorageClass
-	if scName == "" {
-		scName = DefaultModelCacheStorageClassName
-	}
+	scName := r.modelCacheStorageClassName()
 
 	sc := &storagev1.StorageClass{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: scName}, sc); err != nil {
@@ -813,6 +824,19 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 	rwPVC, initJob, workerPullSecrets, err := r.findAndDecodeCacheArtifacts(icmsReq, st.Namespace)
 	if err != nil {
 		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("find and decode artifacts: %w", err))
+	}
+
+	// NVCA owns the storage class for model cache volumes rather than taking it
+	// from the request spec, so every volume lands on the class whose
+	// provisioner the mount option defaults were resolved from. Encryption
+	// overrides this below with its own per-NCA class.
+	if scName := r.modelCacheStorageClassName(); rwPVC.Spec.StorageClassName == nil ||
+		*rwPVC.Spec.StorageClassName != scName {
+		if rwPVC.Spec.StorageClassName != nil {
+			log.V(1).Info("Overriding the model cache storage class from the request spec",
+				"pvc", rwPVC.Name, "spec", *rwPVC.Spec.StorageClassName, "configured", scName)
+		}
+		rwPVC.Spec.StorageClassName = &scName
 	}
 
 	if enc := stCopy.Spec.ModelCache.Encryption; enc != nil {

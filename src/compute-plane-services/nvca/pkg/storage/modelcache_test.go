@@ -725,6 +725,34 @@ func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
 	}
 }
 
+func TestModelCacheStorageClassName(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured string
+		want       string
+	}{
+		{
+			name:       "unset falls back to the default",
+			configured: "",
+			want:       DefaultModelCacheStorageClassName,
+		},
+		{
+			name:       "configured value wins",
+			configured: "custom-sc",
+			want:       "custom-sc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Reconciler{modelCacheStorageClass: tt.configured}
+			if got := r.modelCacheStorageClassName(); got != tt.want {
+				t.Errorf("modelCacheStorageClassName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRedactMountOptionValues(t *testing.T) {
 	tests := []struct {
 		name string
