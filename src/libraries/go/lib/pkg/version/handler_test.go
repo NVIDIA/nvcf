@@ -103,10 +103,11 @@ func TestHandlerFor(t *testing.T) {
 }
 
 func TestHandler(t *testing.T) {
+	oldService, oldVersion, oldGitHash := Service, Version, GitHash
 	t.Cleanup(func() {
-		Service = ""
-		Version = ""
-		GitHash = ""
+		Service = oldService
+		Version = oldVersion
+		GitHash = oldGitHash
 	})
 
 	Service = "nvcf-my-service"
