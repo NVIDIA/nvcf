@@ -16,6 +16,27 @@ fail()
   status=1
 }
 
+schema_inventory=$(
+  # shellcheck disable=SC2016
+  sed -n 's/^| `\([^`]*\)`[[:space:]]*| \[[^]]*\].*$/\1/p' \
+    "${keyspaces}/README.md"
+)
+if [ -z "${schema_inventory}" ]; then
+  fail "schema inventory is empty or malformed"
+fi
+for keyspace_name in ${schema_inventory}; do
+  for migration_name in \
+    01_init_keyspace.up.sql \
+    02_init_roles.up.sql \
+    03_init_tables.up.sql
+  do
+    migration="${keyspaces}/${keyspace_name}/${migration_name}"
+    if [ ! -f "${migration}" ]; then
+      fail "schema inventory entry ${keyspace_name} is missing ${migration_name}"
+    fi
+  done
+done
+
 if grep -R -n -F 'envOrDefault "REPLICA_COUNT"' "${keyspaces}"; then
   fail "keyspace migrations contain templates unsupported by stock golang-migrate"
 fi
