@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Tests for tools/ci/check-go-version.
+#
+# The check exists because four different Go versions were live at once, so the
+# cases here are the specific drifts that actually happened: a workflow pinning
+# a literal, go.work.bazel disagreeing, and MODULE.bazel reintroducing a
+# hardcoded SDK version.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+CHECK="tools/ci/check-go-version"
+FAILURES=0
+
+pass() { echo "ok: $*"; }
+fail() { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "${WORK}"' EXIT
+
+# A minimal repository shaped like the real one.
+setup() {
+    rm -rf "${WORK}/repo"
+    mkdir -p "${WORK}/repo/tools/go-toolchain" "${WORK}/repo/tools/ci" \
+             "${WORK}/repo/.github/workflows"
+    cp "${REPO_ROOT}/${CHECK}" "${WORK}/repo/tools/ci/"
+    printf 'module x\n\ngo 1.26.5\n\ntoolchain go1.26.5\n' \
+        >"${WORK}/repo/tools/go-toolchain/go.mod"
+    printf 'go 1.26.5\n\nuse (\n\t./a\n)\n' >"${WORK}/repo/go.work.bazel"
+    printf 'go_sdk.from_file(go_mod = "//tools/go-toolchain:go.mod")\n' \
+        >"${WORK}/repo/MODULE.bazel"
+    printf 'jobs:\n  a:\n    steps:\n      - uses: actions/setup-go@v5\n        with:\n          go-version-file: tools/go-toolchain/go.mod\n' \
+        >"${WORK}/repo/.github/workflows/a.yml"
+}
+
+run() { (cd "${WORK}/repo" && ./tools/ci/check-go-version >/dev/null 2>&1); }
+
+setup
+if run; then pass "a consistent repository passes"; else fail "consistent repository rejected"; fi
+
+setup
+printf 'go 1.25.0\n\nuse (\n\t./a\n)\n' >"${WORK}/repo/go.work.bazel"
+if run; then fail "go.work.bazel drift not detected"; else pass "go.work.bazel drift is detected"; fi
+
+setup
+printf 'jobs:\n  a:\n    steps:\n      - uses: actions/setup-go@v5\n        with:\n          go-version: '"'"'1.26.0'"'"'\n' \
+    >"${WORK}/repo/.github/workflows/a.yml"
+if run; then fail "workflow literal not detected"; else pass "workflow literal pin is detected"; fi
+
+setup
+printf 'go_sdk.download(version = "1.25.0")\n' >"${WORK}/repo/MODULE.bazel"
+if run; then fail "go_sdk.download not detected"; else pass "reintroduced go_sdk.download is detected"; fi
+
+setup
+printf 'module x\n\ngo 1.26.5\n' >"${WORK}/repo/tools/go-toolchain/go.mod"
+if run; then fail "missing toolchain directive not detected"; else pass "missing toolchain directive is detected"; fi
+
+echo
+if [ "${FAILURES}" -ne 0 ]; then echo "${FAILURES} test(s) failed" >&2; exit 1; fi
+echo "all tests passed"

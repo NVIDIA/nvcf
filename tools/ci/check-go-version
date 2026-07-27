@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Asserts that every Go toolchain declaration agrees with the single source of
+# truth in tools/go-toolchain/go.mod.
+#
+# Most consumers derive the version rather than repeat it: Bazel reads the
+# anchor through go_sdk.from_file, and GitHub Actions read it through setup-go's
+# go-version-file. Two places cannot derive it and are checked here instead:
+# go.work.bazel, whose go directive Bazel requires to be a literal, and the
+# bazel-ci container image, which is built in a different repository.
+#
+# Before this existed the repository carried four different answers at once:
+# 1.25.0 in Bazel, 1.25.6 in the CI image, 1.26.0 in two workflows, and 1.25.11
+# in a service go.mod. CI linted with one and compiled with another.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${repo_root}"
+
+anchor_file="tools/go-toolchain/go.mod"
+expected="$(awk '/^toolchain go/ { sub(/^go/, "", $2); print $2; exit }' "${anchor_file}")"
+if [ -z "${expected}" ]; then
+  echo "error: no toolchain directive in ${anchor_file}" >&2
+  exit 1
+fi
+echo "expected Go toolchain: ${expected}  (from ${anchor_file})"
+
+failures=0
+report() { echo "  MISMATCH: $*" >&2; failures=$((failures + 1)); }
+
+# go.work.bazel must match: Bazel requires a literal there.
+work_go="$(awk '/^go / { print $2; exit }' go.work.bazel)"
+if [ "${work_go}" != "${expected}" ]; then
+  report "go.work.bazel declares ${work_go}"
+else
+  echo "  ok: go.work.bazel"
+fi
+
+# No workflow may pin a literal; they must derive from the anchor.
+if literals=$(grep -rn "go-version: '" .github/workflows/*.yml 2>/dev/null); then
+  while IFS= read -r line; do
+    report "workflow pins a literal Go version: ${line}"
+  done <<<"${literals}"
+else
+  echo "  ok: no workflow pins a literal Go version"
+fi
+
+# Nothing may reintroduce a literal SDK version in the root module.
+if grep -q 'go_sdk.download(version' MODULE.bazel; then
+  report "MODULE.bazel uses go_sdk.download with a literal; use go_sdk.from_file"
+else
+  echo "  ok: MODULE.bazel derives the SDK from the anchor"
+fi
+
+# The bazel-ci image is built in another repository, so this is advisory: it
+# reports the version this repository expects it to ship.
+echo "  note: the bazel-ci container image must ship Go ${expected};"
+echo "        it is built outside this repository and cannot be checked here."
+
+if [ "${failures}" -ne 0 ]; then
+  echo "${failures} Go toolchain declaration(s) disagree with ${anchor_file}" >&2
+  exit 1
+fi
+echo "all Go toolchain declarations agree"
