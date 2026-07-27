@@ -73,14 +73,47 @@ fi
 #    rox-/rwx- naming, NOT from the StorageClass -- the L2 class is routinely
 #    shared with unrelated workloads.
 step "per-capture PVCs"
-for pvc in $(kubectl get pvc -n "$NAMESPACE" -o name 2>/dev/null); do
-    say "  $pvc"; run kubectl delete "$pvc" -n "$NAMESPACE" --ignore-not-found --wait=false
-done
+# Ownership is established from OUR naming convention and labels, never from
+# namespace membership alone -- NVSNAP_NAMESPACE is configurable and a shared
+# namespace may hold volumes we do not own. Anything else here is left alone.
+OWNED_PVCS=$(kubectl get pvc -n "$NAMESPACE" -o json 2>/dev/null | python3 -c '
+import json,sys
+for i in json.load(sys.stdin).get("items", []):
+    n = i["metadata"]["name"]
+    lbl = i["metadata"].get("labels") or {}
+    ours = n.startswith("rox-") or n.startswith("rwx-") \
+        or any(k.startswith("nvsnap.io/") for k in lbl) \
+        or lbl.get("app.kubernetes.io/part-of") == "nvsnap"
+    if ours:
+        print(n)
+')
+if [ -z "$OWNED_PVCS" ]; then
+    say "  none matching the nvsnap naming/label convention"
+else
+    for pvc in $OWNED_PVCS; do
+        say "  $pvc"; run kubectl delete pvc "$pvc" -n "$NAMESPACE" --ignore-not-found --wait=false
+    done
+    # PVC deletion is asynchronous. Scanning PVs before the claims are gone
+    # skips volumes still Bound; they go Released moments later, after this
+    # script has moved on, leaving exactly the stranded capacity it exists to
+    # reclaim. Wait for the claims to actually disappear.
+    if [ "$APPLY" = "1" ]; then
+        say "  waiting for claims to clear..."
+        for _ in $(seq 1 60); do
+            left=$(kubectl get pvc -n "$NAMESPACE" --no-headers 2>/dev/null \
+                   | awk '{print $1}' | grep -cE '^(rox|rwx)-' || true)
+            [ "${left:-0}" = "0" ] && break
+            sleep 2
+        done
+        [ "${left:-0}" = "0" ] || say "  WARNING: $left claim(s) still present; their PVs are left untouched"
+    fi
+fi
 
-# Released PVs whose claimRef pointed at our namespace. A Retain policy means
-# the backing volume outlives the PV, so flip to Delete first and let the CSI
-# driver reclaim it -- otherwise capacity is stranded silently, which is how
-# ~1.2 TB accumulated unnoticed on one cluster.
+# Released PVs whose claim was one of ours. Ownership is the claimRef name
+# (our rox-/rwx- convention) plus the namespace -- never the StorageClass,
+# which is routinely shared. A Retain policy means the backing volume outlives
+# the PV, so flip to Delete first and let the CSI driver reclaim it; otherwise
+# capacity is stranded silently, which is how ~1.2 TB accumulated unnoticed.
 step "orphaned PVs previously claimed by $NAMESPACE"
 for pv in $(kubectl get pv -o json 2>/dev/null \
         | python3 -c '
@@ -90,6 +123,8 @@ for i in json.load(sys.stdin)["items"]:
     cr=i["spec"].get("claimRef") or {}
     if cr.get("namespace")!=ns:            # ownership, not storage class
         continue
+    if not (cr.get("name","").startswith("rox-") or cr.get("name","").startswith("rwx-")):
+        continue                            # our per-capture naming only
     if i["status"]["phase"] not in ("Released","Available","Failed"):
         continue                            # never touch a Bound volume
     print(i["metadata"]["name"])
@@ -149,8 +184,25 @@ spec:
           hostPath: { path: /var/lib, type: Directory }
 YAML
         kubectl rollout status ds/nvsnap-cleanup -n "$CLEANER_NS" --timeout=180s
+        # rollout status only proves the pods started. rm -rf may still be
+        # running, and deleting the DaemonSet now would kill it partway. Wait
+        # for every pod to print DONE before tearing the cleaner down.
+        want=$(kubectl get ds nvsnap-cleanup -n "$CLEANER_NS" \
+               -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null)
+        done_count=0
+        for _ in $(seq 1 90); do
+            done_count=$(kubectl logs -n "$CLEANER_NS" -l app=nvsnap-cleanup --tail=-1 2>/dev/null \
+                         | grep -c '^DONE$' || true)
+            [ "${done_count:-0}" -ge "${want:-1}" ] && break
+            sleep 2
+        done
         kubectl logs -n "$CLEANER_NS" -l app=nvsnap-cleanup --tail=20 --prefix 2>/dev/null | sed 's/^/    /'
         kubectl delete ds nvsnap-cleanup -n "$CLEANER_NS" --ignore-not-found
+        if [ "${done_count:-0}" -lt "${want:-1}" ]; then
+            say "  ERROR: only $done_count/$want nodes reported completion; node state may remain"
+            exit 1
+        fi
+        say "  completed on $done_count/$want nodes"
     else
         say "  [dry-run] would run a privileged DaemonSet removing the paths above on every node"
     fi

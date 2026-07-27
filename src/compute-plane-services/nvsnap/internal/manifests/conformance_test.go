@@ -179,10 +179,19 @@ spec:
 		}
 		if err == nil {
 			t.Errorf("threshold %q accepted; want an error naming the annotation", bad)
+			continue
+		}
+		// Any unrelated render error would otherwise satisfy this test.
+		if !strings.Contains(err.Error(), "restore-failure-threshold") {
+			t.Errorf("threshold %q rejected by an unrelated error: %v", bad, err)
 		}
 	}
-	// A good value still renders.
-	if _, err := RenderRestore([]byte(fmt.Sprintf(base, "120"))); err != nil {
-		t.Errorf("valid threshold rejected: %v", err)
+	// A good value must actually reach the manifest, not merely render.
+	out, err := RenderRestore([]byte(fmt.Sprintf(base, "120")))
+	if err != nil {
+		t.Fatalf("valid threshold rejected: %v", err)
+	}
+	if !strings.Contains(string(out), "failureThreshold: 120") {
+		t.Error("threshold 120 was accepted but not applied to the placeholder")
 	}
 }

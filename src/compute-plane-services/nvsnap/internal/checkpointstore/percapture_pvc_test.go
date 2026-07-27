@@ -696,28 +696,55 @@ func TestSetStateRetriesTerminalWriteUntilHashLands(t *testing.T) {
 }
 
 // A non-retryable catalog error must stop the loop rather than spin to the cap.
+// The error is scripted up front so the branch is reached deterministically,
+// rather than racing a sleep against the first retry.
 func TestSetStateRetryStopsOnNonRetryableError(t *testing.T) {
 	prevInterval, prevAttempts := stateRetryInterval, stateRetryAttempts
-	stateRetryInterval, stateRetryAttempts = time.Millisecond, 50
+	stateRetryInterval, stateRetryAttempts = time.Millisecond, 200
 	defer func() { stateRetryInterval, stateRetryAttempts = prevInterval, prevAttempts }()
 
-	cat := &flakyCatalog{failN: 1}
+	// First call: hash-not-found (triggers the retry goroutine).
+	// Every call after that: a hard error the retry must not survive.
+	cat := &scriptedCatalog{results: []error{ErrCatalogHashNotFound}, rest: errors.New("catalog unreachable")}
 	b := &PerCapturePVCBackend{Catalog: cat}
 	if err := b.setState("hash", pvcStateReady, "rox-hash"); err != nil {
 		t.Fatalf("setState: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond)
-	cat.mu.Lock()
-	cat.hardErr = errors.New("catalog unreachable")
-	cat.mu.Unlock()
 
-	time.Sleep(80 * time.Millisecond)
-	n := cat.count()
-	time.Sleep(80 * time.Millisecond)
-	if cat.count() != n {
-		t.Errorf("retry kept going after a non-retryable error (%d -> %d)", n, cat.count())
+	// The loop must stop on the hard error: exactly one retry after the initial
+	// call, and no growth thereafter.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && cat.count() < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	settled := cat.count()
+	time.Sleep(100 * time.Millisecond)
+	if got := cat.count(); got != settled {
+		t.Errorf("retry continued past a non-retryable error (%d -> %d)", settled, got)
+	}
+	if settled > 2 {
+		t.Errorf("expected to stop at the first hard error, saw %d calls", settled)
 	}
 }
+
+// scriptedCatalog returns results in order, then rest for every later call.
+type scriptedCatalog struct {
+	mu      sync.Mutex
+	results []error
+	rest    error
+	n       int
+}
+
+func (s *scriptedCatalog) UpdatePVCPromoteState(_, _, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.n++
+	if s.n <= len(s.results) {
+		return s.results[s.n-1]
+	}
+	return s.rest
+}
+func (s *scriptedCatalog) count() int { s.mu.Lock(); defer s.mu.Unlock(); return s.n }
 
 // Intermediate states stay best-effort: a later write supersedes them, so
 // retrying each one would be noise.
