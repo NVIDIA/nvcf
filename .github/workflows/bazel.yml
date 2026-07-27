@@ -82,6 +82,13 @@ jobs:
       - name: Check Java import boundaries
         run: bash tools/ci/check-java-import-boundaries
 
+      # Behavioral tests for the CI shell this workflow depends on. actionlint
+      # covers syntax; these cover the decisions.
+      - name: Test CI shell helpers
+        run: |
+          bash tools/ci/test-bazel-cache-upload-mode
+          bash tools/ci/test-bazel-remote-probe
+
       - name: Compute changed subtrees
         id: detect
         env:
@@ -430,23 +437,10 @@ jobs:
           if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
             printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
-            # Upload from merge-queue runs and main pushes; PRs stay
-            # read-only so they can never poison the cache.
-            #
-            # merge_group is the primary writer. Its tree is exactly what is
-            # about to become main, and each queue entry gets its own ref, so
-            # these runs are never cancelled by the next merge. Main-push runs
-            # all share the concurrency group bazel-refs/heads/main with
-            # cancel-in-progress, so a second merge landing minutes later kills
-            # the first one's warm-write: that is how the byoo collector, whose
-            # own PR existed to make it cacheable, ended up never warming the
-            # cache. Main pushes still upload, as a backstop for anything that
-            # reaches main without going through the queue.
-            if [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
-              upload=true
-            elif [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
-              upload=true
-            fi
+            # Who may write to the shared cache lives in a script so it is
+            # testable and stated once; see tools/ci/bazel-cache-upload-mode
+            # and its test for the rationale and the full event matrix.
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
             echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
             # Make the mode visible in the log so a missing warm-write is never
             # a silent guess: read-only PRs show upload=false, merge-queue runs
@@ -821,10 +815,7 @@ jobs:
             printf '%s\n' "$CACHE_CA" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
             upload=false
-            # See the bazel job's gate above for why merge_group is the
-            # primary writer rather than main pushes.
-            if [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then upload=true
-            elif [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then upload=true; fi
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
             echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
             echo "remote cache ready (upload=$upload)"
           else
