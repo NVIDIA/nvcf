@@ -62,7 +62,7 @@ Task commands require `NVCF_API_KEY` set to a task-scoped key and `NVCF_BASE_NVC
 | `task events [taskId] [--limit=N]` | List lifecycle events for a task | |
 | `task results [taskId]` | List result artifacts for a completed task | Returns empty list when `resultHandlingStrategy` is `NONE`; result upload not yet supported |
 | `task cancel [taskId]` | Cancel a running task | No-op if already in terminal state |
-| `task delete [taskId]` | Delete a task record | **Stop for last-look confirmation. State task ID + status. Do not proceed even if the prompt already requested deletion.** |
+| `task delete [taskId]` | Delete a task record | **Stop, state task ID + current status, and wait for a subsequent user reply explicitly confirming deletion of that specific task. Do not treat the original delete request as confirmation.** |
 | `task update-secrets [taskId] --secrets NAME=value` | Update secrets on a task; supplied secrets are added or updated by name, existing secrets not in the request are preserved | Values are encrypted at rest |
 | `task bulk --task-ids=ID1[,ID2,…]` | Fetch details for multiple tasks in one request | |
 
