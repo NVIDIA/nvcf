@@ -313,6 +313,14 @@ motivation without doing detective work. Always include:
 <new or updated third-party packages, license review result, NOTICE update status, or "None">
 ```
 
+### Merge preparation
+
+Before merging:
+
+- Set the Pull Request title to the intended squash commit subject.
+- Refresh the description. Remove outdated plans, status, and test results.
+- Squash merge with a concise message that omits intermediate work logs.
+
 ## PR scope and batching
 
 Group changes that share a root cause into one Pull Request. Do not open one PR

@@ -68,6 +68,9 @@ type OpenTelemetryConfig struct {
 const (
 	defaultLogChunkMaxPayloadBytes       = 262144
 	minConfiguredLogChunkMaxPayloadBytes = 4
+	defaultLogExporterBatchFlushTimeout  = "200ms"
+	// Leave 100 KB below the 1 MB receiver limit for the export envelope.
+	defaultLogExporterBatchSizeBytes = int64(900_000)
 )
 
 const (
@@ -265,6 +268,18 @@ func logExporterSendingQueue() map[string]interface{} {
 		"num_consumers": 10,
 		"queue_size":    1000,
 	}
+}
+
+func enableChunkedLogExporterBatching(otelConfig *OpenTelemetryConfig, exporterID string) {
+	exporter := otelConfig.Exporters[exporterID]
+	queue := mapFromInterface(exporter["sending_queue"])
+	queue["batch"] = map[string]interface{}{
+		"flush_timeout": defaultLogExporterBatchFlushTimeout,
+		"sizer":         "bytes",
+		"min_size":      defaultLogExporterBatchSizeBytes,
+		"max_size":      defaultLogExporterBatchSizeBytes,
+	}
+	exporter["sending_queue"] = queue
 }
 
 func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {
@@ -857,6 +872,9 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 				"dry_run":           logChunking.DryRun,
 			}
 			logPipeline.Processors = append(logPipeline.Processors, "logchunk/byoo")
+			if !logChunking.DryRun {
+				enableChunkedLogExporterBatching(otelConfig, exporterId)
+			}
 		}
 		logPipeline.Processors = append(logPipeline.Processors, "batch")
 		otelConfig.Service.Pipelines["logs"] = logPipeline

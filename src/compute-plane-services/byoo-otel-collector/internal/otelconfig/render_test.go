@@ -482,8 +482,8 @@ func TestGenerateExportersAndServiceAddsLogChunkDefaultsWhenEnabled(t *testing.T
 			Logs: &Telemetry{
 				Name:     "example-logs",
 				Protocol: ProtocolHTTP,
-				Provider: ProviderSplunk,
-				Endpoint: "https://splunk.example.invalid",
+				Provider: ProviderKratosLogs,
+				Endpoint: "https://kratos.example.invalid",
 			},
 		},
 	}
@@ -502,8 +502,18 @@ func TestGenerateExportersAndServiceAddsLogChunkDefaultsWhenEnabled(t *testing.T
 		"max_payload_bytes": defaultLogChunkMaxPayloadBytes,
 		"dry_run":           false,
 	}, otelConfig.Processors["logchunk/byoo"])
-	exporter := otelConfig.Exporters["splunk_hec/SPLUNK-example-logs-logs"]
-	assert.NotContains(t, exporter["sending_queue"].(map[string]interface{}), "batch")
+	exporter := otelConfig.Exporters["otlp_http/KRATOS-example-logs-logs"]
+	assert.Equal(t, map[string]interface{}{
+		"enabled":       true,
+		"num_consumers": 10,
+		"queue_size":    1000,
+		"batch": map[string]interface{}{
+			"flush_timeout": defaultLogExporterBatchFlushTimeout,
+			"sizer":         "bytes",
+			"min_size":      defaultLogExporterBatchSizeBytes,
+			"max_size":      defaultLogExporterBatchSizeBytes,
+		},
+	}, exporter["sending_queue"])
 }
 
 func TestGenerateExportersAndServiceUsesExporterHelperQueueBatchConfig(t *testing.T) {

@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.0'
+          go-version-file: tools/go-toolchain/go.mod
 
       - name: Run check-license
         run: ./tools/ci/check-license
@@ -41,7 +41,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.0'
+          go-version-file: tools/go-toolchain/go.mod
 
       - name: Run check-dependency-licenses
         run: ./tools/ci/check-dependency-licenses
@@ -56,7 +56,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.0'
+          go-version-file: tools/go-toolchain/go.mod
 
       - uses: actions/setup-python@v5
         with:

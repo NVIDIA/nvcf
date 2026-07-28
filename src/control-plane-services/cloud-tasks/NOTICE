@@ -1,5 +1,5 @@
 
-Lists of 263 third-party dependencies.
+Lists of 264 third-party dependencies.
      (Apache License, Version 2.0) LZ4 Java Compression (at.yawk.lz4:lz4-java:1.10.3 - https://github.com/yawkat/lz4-java)
      (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.34 - http://logback.qos.ch)
      (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.34 - http://logback.qos.ch)
@@ -144,9 +144,10 @@ Lists of 263 third-party dependencies.
      (Apache-2.0) Apache Commons Lang (org.apache.commons:commons-lang3:3.20.0 - https://commons.apache.org/proper/commons-lang/)
      (Apache-2.0) Apache Log4j API (org.apache.logging.log4j:log4j-api:2.25.4 - https://logging.apache.org/log4j/2.x/)
      (Apache-2.0) Log4j API to SLF4J Adapter (org.apache.logging.log4j:log4j-to-slf4j:2.25.4 - https://logging.apache.org/log4j/2.x/)
-     (Apache License, Version 2.0) tomcat-embed-core (org.apache.tomcat.embed:tomcat-embed-core:11.0.22 - https://tomcat.apache.org/)
-     (Apache License, Version 2.0) tomcat-embed-el (org.apache.tomcat.embed:tomcat-embed-el:11.0.22 - https://tomcat.apache.org/)
-     (Apache License, Version 2.0) tomcat-embed-websocket (org.apache.tomcat.embed:tomcat-embed-websocket:11.0.22 - https://tomcat.apache.org/)
+     (Apache License, Version 2.0) tomcat-embed-core (org.apache.tomcat.embed:tomcat-embed-core:11.0.24 - https://tomcat.apache.org/)
+     (Apache License, Version 2.0) tomcat-embed-el (org.apache.tomcat.embed:tomcat-embed-el:11.0.24 - https://tomcat.apache.org/)
+     (Apache License, Version 2.0) tomcat-embed-websocket (org.apache.tomcat.embed:tomcat-embed-websocket:11.0.24 - https://tomcat.apache.org/)
+     (Apache License, Version 2.0) tomcat-annotations-api (org.apache.tomcat:tomcat-annotations-api:11.0.24 - https://tomcat.apache.org/)
      (Eclipse Public License - v 2.0) AspectJ Weaver (org.aspectj:aspectjweaver:1.9.25.1 - https://www.eclipse.org/aspectj/)
      (The Apache Software License, Version 2.0) jose4j (org.bitbucket.b_c:jose4j:0.9.6 - https://bitbucket.org/b_c/jose4j/)
      (Bouncy Castle Licence) Bouncy Castle PKIX, CMS, EAC, TSP, PKCS, OCSP, CMP, and CRMF APIs (org.bouncycastle:bcpkix-jdk18on:1.80 - https://www.bouncycastle.org/download/bouncy-castle-java/)
