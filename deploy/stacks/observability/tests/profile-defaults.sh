@@ -111,6 +111,8 @@ helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
   --set controlPlane.enabled=true >"$work_dir/chart-control-defaults.yaml"
 helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
   --set computePlane.enabled=true >"$work_dir/chart-compute-defaults.yaml"
+helm template otel-collector "$stack_dir/charts/nvcf-otel-collector" \
+  >"$work_dir/chart-collector-defaults.yaml"
 
 control_manifests="$(find "$work_dir/control" -type f -name '*.yaml' -print)"
 compute_manifests="$(find "$work_dir/compute" -type f -name '*.yaml' -print)"
@@ -121,6 +123,10 @@ compute_worker_disabled_manifests="$(find "$work_dir/compute-worker-disabled" -t
 chart_control_manifests="$work_dir/chart-control-defaults.yaml"
 chart_compute_manifests="$work_dir/chart-compute-defaults.yaml"
 worker_monitor_manifest="$work_dir/chart-worker-podmonitor.yaml"
+collector_manifests="$work_dir/chart-collector-defaults.yaml"
+
+grep -q '^      - secrets$' "$collector_manifests" ||
+  fail "Target Allocator RBAC must allow referenced Secret discovery"
 
 sed -n '/name: nvcf-default-monitors-worker/,$p' \
   "$chart_compute_manifests" >"$worker_monitor_manifest"
