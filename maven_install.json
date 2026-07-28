@@ -34,6 +34,10 @@
     "org.apache.commons:commons-collections4": 1132363499,
     "org.apache.commons:commons-lang3": -278168457,
     "org.apache.commons:commons-pool2": -1576571923,
+    "org.apache.tomcat.embed:tomcat-embed-core": 1111422783,
+    "org.apache.tomcat.embed:tomcat-embed-el": -1143469369,
+    "org.apache.tomcat.embed:tomcat-embed-websocket": -1668976381,
+    "org.apache.tomcat:tomcat-annotations-api": 409345526,
     "org.assertj:assertj-core": 1863574844,
     "org.awaitility:awaitility": -1630939750,
     "org.bouncycastle:bcprov-jdk18on": -1405390253,
@@ -433,12 +437,14 @@
     "org.apache.logging.log4j:log4j-api:jar:sources": 1226633672,
     "org.apache.logging.log4j:log4j-to-slf4j": 357996538,
     "org.apache.logging.log4j:log4j-to-slf4j:jar:sources": -1847454236,
-    "org.apache.tomcat.embed:tomcat-embed-core": -2079786590,
-    "org.apache.tomcat.embed:tomcat-embed-core:jar:sources": -745705587,
-    "org.apache.tomcat.embed:tomcat-embed-el": -727131551,
-    "org.apache.tomcat.embed:tomcat-embed-el:jar:sources": 1938415424,
-    "org.apache.tomcat.embed:tomcat-embed-websocket": 1876889190,
-    "org.apache.tomcat.embed:tomcat-embed-websocket:jar:sources": -1809736441,
+    "org.apache.tomcat.embed:tomcat-embed-core": -1769099015,
+    "org.apache.tomcat.embed:tomcat-embed-core:jar:sources": 34545896,
+    "org.apache.tomcat.embed:tomcat-embed-el": 269479214,
+    "org.apache.tomcat.embed:tomcat-embed-el:jar:sources": -1302078985,
+    "org.apache.tomcat.embed:tomcat-embed-websocket": 928071220,
+    "org.apache.tomcat.embed:tomcat-embed-websocket:jar:sources": 1868234396,
+    "org.apache.tomcat:tomcat-annotations-api": -557304857,
+    "org.apache.tomcat:tomcat-annotations-api:jar:sources": -555315991,
     "org.apiguardian:apiguardian-api": -1579303244,
     "org.apiguardian:apiguardian-api:jar:sources": 768152577,
     "org.aspectj:aspectjweaver": -278059941,
@@ -537,11 +543,11 @@
     "org.slf4j:jul-to-slf4j:jar:sources": -662175280,
     "org.slf4j:slf4j-api": -1249720338,
     "org.slf4j:slf4j-api:jar:sources": -297247278,
-    "org.springdoc:springdoc-openapi-starter-common": 130340199,
+    "org.springdoc:springdoc-openapi-starter-common": 789756479,
     "org.springdoc:springdoc-openapi-starter-common:jar:sources": 776689800,
-    "org.springdoc:springdoc-openapi-starter-webflux-api": 2033495665,
+    "org.springdoc:springdoc-openapi-starter-webflux-api": -1853587369,
     "org.springdoc:springdoc-openapi-starter-webflux-api:jar:sources": -1775632648,
-    "org.springdoc:springdoc-openapi-starter-webmvc-api": -1330546544,
+    "org.springdoc:springdoc-openapi-starter-webmvc-api": -1571036310,
     "org.springdoc:springdoc-openapi-starter-webmvc-api:jar:sources": -1201450538,
     "org.springframework.boot:spring-boot": -217042451,
     "org.springframework.boot:spring-boot-actuator": 391557646,
@@ -641,20 +647,20 @@
     "org.springframework.boot:spring-boot-starter-security:jar:sources": -1720617031,
     "org.springframework.boot:spring-boot-starter-test": 1844551537,
     "org.springframework.boot:spring-boot-starter-test:jar:sources": -480189945,
-    "org.springframework.boot:spring-boot-starter-tomcat": 968892076,
-    "org.springframework.boot:spring-boot-starter-tomcat-runtime": 1789613861,
+    "org.springframework.boot:spring-boot-starter-tomcat": -736524407,
+    "org.springframework.boot:spring-boot-starter-tomcat-runtime": 534744375,
     "org.springframework.boot:spring-boot-starter-tomcat-runtime:jar:sources": 1011838045,
     "org.springframework.boot:spring-boot-starter-tomcat:jar:sources": 1319064174,
-    "org.springframework.boot:spring-boot-starter-validation": -96834434,
+    "org.springframework.boot:spring-boot-starter-validation": -77518058,
     "org.springframework.boot:spring-boot-starter-validation:jar:sources": -1002865328,
-    "org.springframework.boot:spring-boot-starter-web": 1283006341,
+    "org.springframework.boot:spring-boot-starter-web": -1875236601,
     "org.springframework.boot:spring-boot-starter-web:jar:sources": -768709610,
     "org.springframework.boot:spring-boot-starter-webflux": 484244077,
     "org.springframework.boot:spring-boot-starter-webflux-test": 248412203,
     "org.springframework.boot:spring-boot-starter-webflux-test:jar:sources": -1654084055,
     "org.springframework.boot:spring-boot-starter-webflux:jar:sources": 1008425882,
-    "org.springframework.boot:spring-boot-starter-webmvc": -1517079847,
-    "org.springframework.boot:spring-boot-starter-webmvc-test": -33388766,
+    "org.springframework.boot:spring-boot-starter-webmvc": 1516404787,
+    "org.springframework.boot:spring-boot-starter-webmvc-test": -17141819,
     "org.springframework.boot:spring-boot-starter-webmvc-test:jar:sources": -1751111514,
     "org.springframework.boot:spring-boot-starter-webmvc:jar:sources": -2120956724,
     "org.springframework.boot:spring-boot-starter:jar:sources": 1138639700,
@@ -662,9 +668,9 @@
     "org.springframework.boot:spring-boot-test-autoconfigure": 2011168683,
     "org.springframework.boot:spring-boot-test-autoconfigure:jar:sources": 392165449,
     "org.springframework.boot:spring-boot-test:jar:sources": -1764708648,
-    "org.springframework.boot:spring-boot-tomcat": 338031270,
+    "org.springframework.boot:spring-boot-tomcat": -807291440,
     "org.springframework.boot:spring-boot-tomcat:jar:sources": -1529683395,
-    "org.springframework.boot:spring-boot-validation": -1013194267,
+    "org.springframework.boot:spring-boot-validation": 892547576,
     "org.springframework.boot:spring-boot-validation:jar:sources": -1684576067,
     "org.springframework.boot:spring-boot-web-server": -327455550,
     "org.springframework.boot:spring-boot-web-server:jar:sources": 990724443,
@@ -1946,24 +1952,31 @@
     },
     "org.apache.tomcat.embed:tomcat-embed-core": {
       "shasums": {
-        "jar": "78cd7cd7c104b6b87142c1b0bd902e1ce005b0245c3cefa8a06759148947200b",
-        "sources": "0bfbdc27e60d4db5b83e0f51193bae5f4bd02ac270fd78b06945e219fc473359"
+        "jar": "e7b966dcaac8c5ffa4f10e44031ebf5b71f2123560c08ac8b7120028615aea08",
+        "sources": "4b999b9c9051bc0510da4365825375185fe89d37909bc98abe0a2703318ceb2a"
       },
-      "version": "11.0.22"
+      "version": "11.0.24"
     },
     "org.apache.tomcat.embed:tomcat-embed-el": {
       "shasums": {
-        "jar": "1b34c33b858c141df36c501b4d809e68036c406bca3671a86facae297917c7de",
-        "sources": "da3724004575f5c8fa7e45649f2900ec53e7ecfb502b6ce227ca9cf86b36a156"
+        "jar": "ad0546f12dace008aacce18ba13222137760b310ca719e173d3e13021b9af6c6",
+        "sources": "f45b9db6814b24242ccd18a39a1bb55a4379a4433cb2b3def835552722aaf57e"
       },
-      "version": "11.0.22"
+      "version": "11.0.24"
     },
     "org.apache.tomcat.embed:tomcat-embed-websocket": {
       "shasums": {
-        "jar": "210e0c7ab194a76cc7283df0be365276091b042369dae125fb477828ba67e922",
-        "sources": "711f09af528ac5af172c664244bcba4748eac00811ef7c6b52ddd6836b5a4a28"
+        "jar": "825160101f0da4a10e19b5730c2ae2f99f8c2c7a7211ac05562726c5e97ab91e",
+        "sources": "84e653ac6d37852e697ddfeb7fce66250aa8f9bcf7d92b7d3d048655e60c4268"
       },
-      "version": "11.0.22"
+      "version": "11.0.24"
+    },
+    "org.apache.tomcat:tomcat-annotations-api": {
+      "shasums": {
+        "jar": "98294a0c51879caff193f60cfd82e6ab551b7530d4fb618a24e6df63e40125d4",
+        "sources": "d08e569b03d56f4a19195cb275b15ab189933ffe82a9877c6223bc78876b35a6"
+      },
+      "version": "11.0.24"
     },
     "org.apiguardian:apiguardian-api": {
       "shasums": {
@@ -3856,6 +3869,9 @@
     "org.apache.logging.log4j:log4j-to-slf4j": [
       "org.apache.logging.log4j:log4j-api",
       "org.slf4j:slf4j-api"
+    ],
+    "org.apache.tomcat.embed:tomcat-embed-core": [
+      "org.apache.tomcat:tomcat-annotations-api"
     ],
     "org.apache.tomcat.embed:tomcat-embed-websocket": [
       "org.apache.tomcat.embed:tomcat-embed-core"
@@ -6451,6 +6467,11 @@
       "org.apache.tomcat.websocket",
       "org.apache.tomcat.websocket.pojo",
       "org.apache.tomcat.websocket.server"
+    ],
+    "org.apache.tomcat:tomcat-annotations-api": [
+      "jakarta.annotation",
+      "jakarta.annotation.security",
+      "jakarta.annotation.sql"
     ],
     "org.apiguardian:apiguardian-api": [
       "org.apiguardian.api"
@@ -10248,6 +10269,8 @@
       "org.apache.tomcat.embed:tomcat-embed-el:jar:sources",
       "org.apache.tomcat.embed:tomcat-embed-websocket",
       "org.apache.tomcat.embed:tomcat-embed-websocket:jar:sources",
+      "org.apache.tomcat:tomcat-annotations-api",
+      "org.apache.tomcat:tomcat-annotations-api:jar:sources",
       "org.apiguardian:apiguardian-api",
       "org.apiguardian:apiguardian-api:jar:sources",
       "org.aspectj:aspectjweaver",
@@ -10944,6 +10967,8 @@
       "org.apache.tomcat.embed:tomcat-embed-el:jar:sources",
       "org.apache.tomcat.embed:tomcat-embed-websocket",
       "org.apache.tomcat.embed:tomcat-embed-websocket:jar:sources",
+      "org.apache.tomcat:tomcat-annotations-api",
+      "org.apache.tomcat:tomcat-annotations-api:jar:sources",
       "org.apiguardian:apiguardian-api",
       "org.apiguardian:apiguardian-api:jar:sources",
       "org.aspectj:aspectjweaver",

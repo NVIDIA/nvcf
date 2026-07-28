@@ -17,10 +17,10 @@ go_library(
         "store.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
-        "//internal/tracing",
-        "//internal/treecopy",
+        "//src/compute-plane-services/nvsnap/internal/tracing",
+        "//src/compute-plane-services/nvsnap/internal/treecopy",
         "@com_github_sirupsen_logrus//:logrus",
         "@io_k8s_api//coordination/v1:coordination",
         "@io_k8s_api//core/v1:core",

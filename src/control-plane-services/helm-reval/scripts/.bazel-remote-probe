@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Probe the nvcfbarn remote cache and export BAZEL_REMOTE_FLAGS with the
+# Probe the configured remote cache and export BAZEL_REMOTE_FLAGS with the
 # right --remote_cache + --tls_certificate flags, or empty if the cache is
 # unreachable / disabled. Source this file (do NOT execute it) so the
 # exported var is visible in the parent shell.
@@ -8,29 +8,32 @@
 # Driven by four CI/CD variables; all default to safe values that fall back
 # to local-only cleanly:
 #   NVCF_BAZEL_REMOTE       "1" to enable, "0" to disable (default 1).
-#   NVCF_BAZEL_REMOTE_HOST  cache host (default nvcfbarn.nvidia.com).
+#   NVCF_BAZEL_REMOTE_HOST  cache host. Unset disables the cache (no default:
+#                           the previous default host was decommissioned).
 #   NVCF_BAZEL_REMOTE_PORT  cache port (443 for the TLS sidecar).
 #   NVCF_BAZEL_REMOTE_TLS   "1" to use grpcs:// + --tls_certificate (default 1).
 #   BAZEL_REMOTE_CA_PEM     File-type CI variable holding the cache's PEM cert.
 #                           Required when TLS=1.
 
 BAZEL_REMOTE_FLAGS=""
-if [ "${NVCF_BAZEL_REMOTE:-1}" != "1" ]; then
-  echo "[bazel-remote] NVCF_BAZEL_REMOTE=${NVCF_BAZEL_REMOTE:-unset}; remote cache disabled"
+if [ "${NVCF_BAZEL_REMOTE:-1}" != "1" ] || [ -z "${NVCF_BAZEL_REMOTE_HOST:-}" ]; then
+  echo "[bazel-remote] remote cache disabled (NVCF_BAZEL_REMOTE=${NVCF_BAZEL_REMOTE:-unset}, NVCF_BAZEL_REMOTE_HOST=${NVCF_BAZEL_REMOTE_HOST:-unset}); building local-only"
 else
-  host="${NVCF_BAZEL_REMOTE_HOST:-nvcfbarn.nvidia.com}"
+  host="${NVCF_BAZEL_REMOTE_HOST}"
   port="${NVCF_BAZEL_REMOTE_PORT:-443}"
   tls="${NVCF_BAZEL_REMOTE_TLS:-1}"
-  if [ "${tls}" = "1" ] && [ -z "${BAZEL_REMOTE_CA_PEM:-}" ]; then
+  if [ "${tls}" = "1" ] && [ ! -r "${BAZEL_REMOTE_CA_PEM:-}" ]; then
     # TLS requires a CA pem. grpcurl can probe with `-insecure`, but
     # Bazel's own gRPC client cannot: with `grpcs://` and no
     # `--tls_certificate` it tries the system trust store, which does
-    # not contain the nvcfbarn self-signed cert, and fails mid-build
+    # not contain the cache's self-signed cert, and fails mid-build
     # with "General OpenSslEngine problem". Skip the cache cleanly
     # instead of greenlighting an unusable URL. Hit on
     # dns-cache/nvcf-unbound!41; set BAZEL_REMOTE_CA_PEM (file-type CI
-    # variable) to enable.
-    echo "[bazel-remote] grpcs://${host}:${port} requested but BAZEL_REMOTE_CA_PEM is unset; remote cache disabled. Set the file-type CI variable to enable."
+    # variable) to enable. The test is -r, not -z: a variable set to a
+    # path that does not exist would otherwise reach the `cp` below and
+    # fail the job instead of cleanly declining the cache.
+    echo "[bazel-remote] grpcs://${host}:${port} requested but BAZEL_REMOTE_CA_PEM is unset or unreadable (${BAZEL_REMOTE_CA_PEM:-unset}); remote cache disabled. Set the file-type CI variable to enable."
   else
     probe_args=(-d '{"instance_name":""}')
     cache_url="grpc://${host}:${port}"

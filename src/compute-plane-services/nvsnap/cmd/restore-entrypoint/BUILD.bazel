@@ -6,8 +6,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/restore-entrypoint",
     visibility = ["//visibility:private"],
     deps = [
-        "//internal/streamer",
-        "//internal/tracing",
+        "//src/compute-plane-services/nvsnap/internal/streamer",
+        "//src/compute-plane-services/nvsnap/internal/tracing",
         "@com_github_balajinvda_go_criu_v8//:go-criu",
         "@com_github_balajinvda_go_criu_v8//rpc",
         "@com_github_vishvananda_netlink//:netlink",

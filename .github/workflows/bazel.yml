@@ -52,13 +52,19 @@ concurrency:
   group: bazel-${{ github.ref }}
   cancel-in-progress: true
 
-# NOTE: keep the bazel-ci image tag as a string literal in
-# container.image and any tag-bump bookkeeping. GitHub Actions
-# evaluates job-level `container.image` before the workflow-level
-# `env:` context is reliably available, so referencing
-# `${{ env.BAZEL_CI_IMAGE }}` here causes the matrix to expand to
-# zero jobs on push events (validated empirically; PR-event runs
-# happen to work). The duplication is intentional.
+# The bazel-ci job container comes from the repository variable
+# BAZEL_CI_IMAGE, so the image is bumped in one place (repo settings) instead
+# of being edited in every workflow that runs in it.
+#
+# It must be `vars`, NOT `env`. GitHub Actions evaluates job-level
+# `container.image` before the workflow-level `env:` context is reliably
+# available, so `${{ env.BAZEL_CI_IMAGE }}` made the matrix expand to zero jobs
+# on push events (validated empirically; PR-event runs happened to work). The
+# `vars` context does not have that ordering problem.
+#
+# The `||` fallback keeps CI working if the variable is unset or unavailable
+# (for example on a fork). Keep the fallback in step with the variable; it is a
+# safety net, not the source of truth.
 
 jobs:
   detect:
@@ -75,6 +81,13 @@ jobs:
 
       - name: Check Java import boundaries
         run: bash tools/ci/check-java-import-boundaries
+
+      # Behavioral tests for the CI shell this workflow depends on. actionlint
+      # covers syntax; these cover the decisions.
+      - name: Test CI shell helpers
+        run: |
+          bash tools/ci/test-bazel-cache-upload-mode
+          bash tools/ci/test-bazel-remote-probe
 
       - name: Compute changed subtrees
         id: detect
@@ -97,16 +110,25 @@ jobs:
           #    rendered template assets (empty-YAML-doc skip + stripSPDXHeaders
           #    in golden comparisons), and the version-adaptive completeJob for
           #    envtest Job completion.
-          #  nvsnap (src/compute-plane-services/nvsnap): intentionally NOT a
-          #    matrix row. It is a self-contained Bazel module whose OCI base is
-          #    its own private agent image (not publicly pullable), so it is not
-          #    externally buildable and is built only by its own internal CI.
-          #    Excluded from the public build pending a public base (NVIDIA/nvcf#39).
+            #  nvsnap (src/compute-plane-services/nvsnap): a root-module row.
+            #    Previously excluded on the grounds that its OCI base was a
+            #    private image; that is no longer true, its bases are public
+            #    and digest-pinned. It builds from the repository root scoped
+            #    to its own subtree, the same shape as the Java components.
+            #    Without a row, a change touching only nvsnap selects no row
+            #    and runs no Bazel, which is how its build stayed broken for
+            #    twelve days.
           # Row fields:
           #   id|path|tests_skip|component_kind|ci_lane
           # Static non-Java rows use only the first three fields.
-          ROWS='root|.|false
-          grpc-proxy|src/invocation-plane-services/grpc-proxy|false
+          # Order matters: rows are dispatched top-down and max-parallel caps
+          # how many run at once, so a long row placed late waits for a slot
+          # before it even starts. byoo-otel-collector is the longest row (its
+          # collector genrule dominates the build), so it leads. Keep the
+          # longest-first ordering when adding rows.
+          ROWS='byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false
+          root|.|false
+          grpc-proxy|src/invocation-plane-services/grpc-proxy|false|service|docker-host
           nats-auth-callout|src/control-plane-services/nats-auth-callout|false
           ratelimiter|src/invocation-plane-services/ratelimiter|false
           http-invocation|src/invocation-plane-services/http-invocation|false
@@ -115,7 +137,6 @@ jobs:
           nvca|src/compute-plane-services/nvca|false
           ess-agent|src/compute-plane-services/ess-agent|false
           image-credential-helper|src/compute-plane-services/image-credential-helper|false
-          byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false
           nvcf-unbound|src/compute-plane-services/nvcf-unbound|false
           worker-init|src/compute-plane-services/worker-init|false
           worker-llm-credentials|src/compute-plane-services/worker-llm-credentials|false
@@ -123,7 +144,8 @@ jobs:
           worker-utils|src/compute-plane-services/worker-utils|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
           helm-reval|src/control-plane-services/helm-reval|false
-          stargate|src/libraries/rust/stargate|false'
+          stargate|src/libraries/rust/stargate|false
+          nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container'
 
           # Java rows are discovered from component-local bazel-java-ci.json
           # descriptors. The descriptor's parent directory is the component
@@ -160,7 +182,7 @@ jobs:
           # ride the root row: discovered Java components and stargate have
           # their own scoped rows, so src/libraries/ is narrowed to
           # src/libraries/go/.
-          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
+          ROOT_GLOBS=(MODULE.bazel .bazelignore .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
@@ -239,22 +261,22 @@ jobs:
           # tests. They run directly on the GitHub host where a Docker daemon is
           # available, executing their FULL suite with no tag filter. Such a row
           # is not also placed in the build-container matrix.
-          # NOTE: grpc-proxy also owns a requires-docker test but is a nested Rust
-          # module whose test has never run in CI; wiring+validating it is tracked
-          # separately (NVIDIA/nvcf#396) to keep this change scoped to the Java
-          # subtrees. It stays in the build-container matrix for now (build
-          # coverage).
+          # grpc-proxy owns a requires-docker test (proxy/geo:geo_test) and runs in
+          # this docker-host lane (NVIDIA/nvcf#396).
           include="[]"
           include_docker="[]"
           while IFS='|' read -r id path tests_skip component_kind ci_lane; do
             id="$(echo "$id" | xargs)"; [ -z "$id" ] && continue
             component_kind="$(echo "$component_kind" | xargs)"
             ci_lane="$(echo "$ci_lane" | xargs)"
-            # Discovered Java rows belong to the root module. Existing static
-            # non-Java rows retain their module-local behavior.
+            # Components that belong to the root module build from the
+            # repository root and scope to their own subtree. That was
+            # Java-only until nvsnap joined the root module; the discriminator
+            # is module membership, not language. Nested modules keep their
+            # module-local behavior.
             case "$component_kind" in
-              java-*) workdir="."; scope="//${path}/..."; scoped="root" ;;
-              *)      workdir="$path"; scope="//..."; scoped="" ;;
+              java-*|go-root) workdir="."; scope="//${path}/..."; scoped="root" ;;
+              *)              workdir="$path"; scope="//..."; scoped="" ;;
             esac
             hit=false
             if [ "$run_all" = "true" ]; then
@@ -323,7 +345,7 @@ jobs:
       # Bazelisk then selects the root .bazelversion release. Update this tag
       # only after the corresponding internal image has been published and
       # mirrored.
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.13.0
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.13.0' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -415,14 +437,14 @@ jobs:
           if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
             printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
-            # Upload results only from main pushes; every other trigger
-            # (PRs) is read-only so it can never poison the cache.
-            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
-              upload=true
-            fi
+            # Who may write to the shared cache lives in a script so it is
+            # testable and stated once; see tools/ci/bazel-cache-upload-mode
+            # and its test for the rationale and the full event matrix.
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
             echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
             # Make the mode visible in the log so a missing warm-write is never
-            # a silent guess: read-only PRs show upload=false, main pushes true.
+            # a silent guess: read-only PRs show upload=false, merge-queue runs
+            # and main pushes true.
             if [ "$upload" = "true" ]; then
               echo "remote cache ready: read-write (warming; upload=true)"
             else
@@ -532,6 +554,19 @@ jobs:
           # CACHE holds only the cache-specific flags.
           COMMON=()
           if [ "${{ matrix.subtree.id }}" = "byoo-otel-collector" ]; then
+            # --jobs=1 is a memory guard, not a throughput setting. The
+            # collector genrule is analysed in three configurations (host,
+            # //platforms:linux_x86_64, //platforms:linux_arm64) and each
+            # `go build` of the otelcol module peaks at ~6 GB RSS, so two
+            # concurrent instances would not fit a 16 GB runner. Bazel has no
+            # per-action memory throttle for genrules ("resources:memory:N"
+            # and "cpu:N" execution requirements are ignored outside tests,
+            # and so is "exclusive"), so capping Bazel-side concurrency is the
+            # only lever. Per-build parallelism is set inside the genrule
+            # instead (go build -p $(nproc)), which is ~3x faster on a 4-vCPU
+            # runner at the same peak RSS. Nothing else in this module is
+            # expensive (the row's other ~380 actions are cache hits), so the
+            # cap costs nothing elsewhere.
             COMMON+=(--jobs=1)
             # Persist the collector genrule's Go module + build cache across CI
             # runs so cold runners restore instead of re-downloading the whole
@@ -542,6 +577,18 @@ jobs:
             COMMON+=(--action_env="GOMODCACHE=$RUNNER_TEMP/byoo-gomodcache"
                      --action_env="GOCACHE=$RUNNER_TEMP/byoo-gocache"
                      --action_env="GOPATH=$RUNNER_TEMP/byoo-gopath")
+            # Bind the collector genrule's remote-cache key to the host Go
+            # toolchain. The genrule shells out to the image's `go`, which is
+            # not a declared Bazel input, so without this a toolchain bump in
+            # the bazel-ci image would keep serving collector binaries built by
+            # the previous compiler -- including across a Go security patch.
+            # --action_env values are part of the action key, so feeding the
+            # version string through it turns a toolchain change into a cache
+            # miss and a rebuild. Must match on build AND test.
+            byoo_go="$(command -v go || echo /usr/local/go/bin/go)"
+            byoo_go_ver="$("$byoo_go" version 2>/dev/null || echo unknown)"
+            echo "byoo collector toolchain: $byoo_go_ver"
+            COMMON+=(--action_env="BYOO_GO_TOOLCHAIN=$byoo_go_ver")
           fi
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
@@ -550,7 +597,7 @@ jobs:
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression
                    --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             # Force the upload flag explicitly. The root module's .bazelrc pins
             # --config=remote, which sets --remote_upload_local_results=false
             # (internal read-only dev cache). Without overriding it back to true
@@ -638,12 +685,19 @@ jobs:
           # deferred to that lane (see the bazel-integration job).
           COMMON=(--flaky_test_attempts=3 --test_tag_filters=-requires-docker)
           if [ "${{ matrix.subtree.id }}" = "byoo-otel-collector" ]; then
+            # Memory guard, not throughput. See the build step for the full
+            # rationale (~6 GB peak RSS per collector build, no per-action
+            # memory throttle for genrules).
             COMMON+=(--jobs=1)
             # Match the build step's --action_env so the collector genrule reuses
-            # the cached Go module/build cache instead of re-running (see #373).
+            # the cached Go module/build cache instead of re-running (see #373),
+            # and so the two steps compute the same action key.
             COMMON+=(--action_env="GOMODCACHE=$RUNNER_TEMP/byoo-gomodcache"
                      --action_env="GOCACHE=$RUNNER_TEMP/byoo-gocache"
                      --action_env="GOPATH=$RUNNER_TEMP/byoo-gopath")
+            byoo_go="$(command -v go || echo /usr/local/go/bin/go)"
+            byoo_go_ver="$("$byoo_go" version 2>/dev/null || echo unknown)"
+            COMMON+=(--action_env="BYOO_GO_TOOLCHAIN=$byoo_go_ver")
           fi
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
@@ -652,7 +706,7 @@ jobs:
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression
                    --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             # Force the upload flag explicitly. The root module's .bazelrc pins
             # --config=remote, which sets --remote_upload_local_results=false
             # (internal read-only dev cache). Without overriding it back to true
@@ -761,7 +815,7 @@ jobs:
             printf '%s\n' "$CACHE_CA" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
             upload=false
-            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then upload=true; fi
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
             echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
             echo "remote cache ready (upload=$upload)"
           else
@@ -777,7 +831,7 @@ jobs:
                    --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
               CACHE+=(--remote_upload_local_results=true)
             else
@@ -813,7 +867,7 @@ jobs:
                    --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
               CACHE+=(--remote_upload_local_results=true)
             else
