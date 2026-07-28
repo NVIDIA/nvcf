@@ -21,6 +21,7 @@ import "strings"
 
 // Following variables are set by CI during compilation.
 var (
+	Service string
 	Version string
 	GitHash string
 	// Dirty is set to "true" if current git working directory has
