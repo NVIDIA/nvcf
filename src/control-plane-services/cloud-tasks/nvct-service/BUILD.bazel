@@ -111,6 +111,12 @@ java_oci_image(
 sh_test(
     name = "image_contract_test",
     srcs = ["image_contract_test.sh"],
-    args = ["$(location :nvct-service-oss-image.tar)"],
-    data = [":nvct-service-oss-image.tar"],
+    args = [
+        "$(location :nvct-service-oss-image.tar)",
+        "$(location :nvct-service-oss-image_index)",
+    ],
+    data = [
+        ":nvct-service-oss-image.tar",
+        ":nvct-service-oss-image_index",
+    ],
 )

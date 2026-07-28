@@ -103,7 +103,12 @@ if [[ ! -f "${config}" ]]; then
   exit 1
 fi
 
+# Two views of the same config. The flattened one is for structural patterns
+# like "Entrypoint":[...] , which are written without whitespace. Env values are
+# compared against the file as written, because deleting spaces would also
+# delete them from inside values such as JDK_JAVA_OPTIONS.
 config_flat="$(tr -d ' \n' < "${config}")"
+config_raw="$(cat "${config}")"
 
 expected_entrypoint='"Entrypoint":["/usr/bin/shelless_ulimit","/usr/bin/java","-jar","/usr/share/app.jar"]'
 if ! printf '%s' "${config_flat}" | grep -F "${expected_entrypoint}" >/dev/null; then
@@ -112,9 +117,123 @@ if ! printf '%s' "${config_flat}" | grep -F "${expected_entrypoint}" >/dev/null;
   exit 1
 fi
 
-for expected in 'ULIMIT_FLAG=1' 'MaxRAMPercentage=40.0' '"WorkingDir":"/home/app"'; do
-  if ! printf '%s' "${config_flat}" | grep -F "${expected}" >/dev/null; then
+# Match whole Env elements, quotes included, not substrings. Grepping for
+# MaxRAMPercentage=40.0 alone passes even if the other three JDK_JAVA_OPTIONS
+# values are dropped, and a bare ULIMIT_FLAG=1 would also be satisfied by a
+# differently named variable such as MY_ULIMIT_FLAG=1. The surrounding quotes
+# anchor each check to a complete entry.
+expected_jdk_opts='-XX:MaxRAMPercentage=40.0 -XX:+EnableDynamicAgentLoading -Dreactor.netty.pool.maxIdleTime=30000 -Dreactor.netty.pool.maxConnections=500'
+for expected in \
+  "\"ULIMIT_FLAG=1\"" \
+  "\"JDK_JAVA_OPTIONS=${expected_jdk_opts}\""; do
+  if ! printf '%s' "${config_raw}" | grep -F "${expected}" >/dev/null; then
     echo "image config is missing expected runtime setting: ${expected}" >&2
+    printf '%s' "${config_flat}" | grep -o '"Env":\[[^]]*\]' >&2 || true
     exit 1
   fi
+done
+
+if ! printf '%s' "${config_flat}" | grep -F '"WorkingDir":"/home/app"' >/dev/null; then
+  echo "image working directory is not /home/app" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 5. the image index carries both architectures, each with the same contract
+# ---------------------------------------------------------------------------
+# Everything above inspects the host-architecture tar. That proves nothing
+# about the arm64 half, and a multi-arch index whose second platform is absent
+# or misconfigured builds and pushes without complaint. Walk the OCI layout
+# directly: index.json -> manifest list -> per-platform manifest -> config.
+#
+# Parsed with grep and sed rather than jq to keep the test hermetic; the
+# structures read here are small and fixed-shape.
+index_dir="${2:-}"
+if [[ -z "${index_dir}" ]]; then
+  echo "usage: $0 <image.tar> <image_index dir>" >&2
+  exit 1
+fi
+if [[ ! -f "${index_dir}/index.json" ]]; then
+  echo "not an OCI layout (no index.json): ${index_dir}" >&2
+  exit 1
+fi
+
+blob_for() {  # blob_for <digest as sha256:hex>
+  printf '%s/blobs/%s/%s' "${index_dir}" "${1%%:*}" "${1#*:}"
+}
+
+# index.json holds one descriptor pointing at the manifest list.
+top_digest="$(tr -d ' \n' < "${index_dir}/index.json" \
+  | grep -o '"digest":"sha256:[0-9a-f]*"' | head -1 | cut -d'"' -f4)"
+if [[ -z "${top_digest}" ]]; then
+  echo "index.json has no manifest descriptor" >&2
+  exit 1
+fi
+manifest_list="$(blob_for "${top_digest}")"
+if [[ ! -f "${manifest_list}" ]]; then
+  echo "index.json points at a missing blob: ${top_digest}" >&2
+  exit 1
+fi
+
+list_flat="$(tr -d ' \n' < "${manifest_list}")"
+
+for arch in amd64 arm64; do
+  # Split the manifests array into one line per entry so a digest is only ever
+  # read from the same entry that declares the architecture.
+  entry="$(printf '%s' "${list_flat}" \
+    | sed 's/}, *{/}\n{/g' \
+    | grep -F "\"architecture\":\"${arch}\"" | head -1)"
+  if [[ -z "${entry}" ]]; then
+    echo "image index has no ${arch} manifest" >&2
+    printf '%s' "${list_flat}" | grep -o '"architecture":"[a-z0-9]*"' >&2 || true
+    exit 1
+  fi
+
+  man_digest="$(printf '%s' "${entry}" | grep -o '"digest":"sha256:[0-9a-f]*"' | head -1 | cut -d'"' -f4)"
+  man_blob="$(blob_for "${man_digest}")"
+  if [[ ! -f "${man_blob}" ]]; then
+    echo "${arch} manifest blob is missing: ${man_digest}" >&2
+    exit 1
+  fi
+
+  cfg_digest="$(tr -d ' \n' < "${man_blob}" \
+    | grep -o '"config":{[^}]*}' | grep -o '"digest":"sha256:[0-9a-f]*"' | head -1 | cut -d'"' -f4)"
+  cfg_blob="$(blob_for "${cfg_digest}")"
+  if [[ ! -f "${cfg_blob}" ]]; then
+    echo "${arch} config blob is missing: ${cfg_digest}" >&2
+    exit 1
+  fi
+
+  arch_cfg="$(tr -d ' \n' < "${cfg_blob}")"
+  arch_raw="$(cat "${cfg_blob}")"
+
+  # The config must declare the architecture it was filed under, otherwise the
+  # index is mislabelled and runtimes pull the wrong image for their platform.
+  if ! printf '%s' "${arch_cfg}" | grep -F "\"architecture\":\"${arch}\"" >/dev/null; then
+    echo "${arch} entry points at a config declaring a different architecture" >&2
+    exit 1
+  fi
+
+  # Same runtime contract as the host-architecture checks above.
+  if ! printf '%s' "${arch_cfg}" | grep -F "${expected_entrypoint}" >/dev/null; then
+    echo "${arch} image has the wrong entrypoint" >&2
+    printf '%s' "${arch_cfg}" | grep -o '"Entrypoint":[^]]*]' >&2 || true
+    exit 1
+  fi
+  for expected in \
+    "\"ULIMIT_FLAG=1\"" \
+    "\"JDK_JAVA_OPTIONS=${expected_jdk_opts}\""; do
+    if ! printf '%s' "${arch_raw}" | grep -F "${expected}" >/dev/null; then
+      echo "${arch} image config is missing expected runtime setting: ${expected}" >&2
+      printf '%s' "${arch_cfg}" | grep -o '"Env":\[[^]]*\]' >&2 || true
+      exit 1
+    fi
+  done
+
+  if ! printf '%s' "${arch_cfg}" | grep -F '"WorkingDir":"/home/app"' >/dev/null; then
+    echo "${arch} image working directory is not /home/app" >&2
+    exit 1
+  fi
+
+  echo "ok: ${arch} manifest present with the expected runtime contract"
 done
