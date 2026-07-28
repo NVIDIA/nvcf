@@ -59,6 +59,8 @@ navigation:
         path: ../../docs/user/optional-enhancements.md
       - page: LLM Function Enablement
         path: ../../docs/user/llm-function-enablement.md
+      - page: LLM Request Router Load Balancing
+        path: ../../docs/user/llm-request-router-load-balancing.md
       - page: Gateway Routing
         path: ../../docs/user/gateway-routing.md
       - page: Third-Party Registries

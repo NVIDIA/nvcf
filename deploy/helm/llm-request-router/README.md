@@ -97,6 +97,12 @@ The chart can pass a Stargate load-balancer config in either of two ways:
 
 `config` takes precedence over `configPath` when both are set. If neither value is set, Stargate uses its built-in default algorithm, `power-of-two`.
 
+See the
+[Stargate load balancer configuration](../../../src/libraries/rust/stargate/docs/load-balancer-configuration.md)
+for the JSON schema, algorithm behavior, and tuning fields. See
+[LLM Request Router Load Balancing](../../../docs/user/llm-request-router-load-balancing.md)
+for stack ownership, trusted headers, rollout checks, and troubleshooting.
+
 Example:
 
 ```yaml
@@ -116,14 +122,6 @@ llmRequestRouter:
         }
       }
 ```
-
-Supported routing algorithms:
-
-- `power-of-two`, the default; samples two candidates and picks the one with more input-TPS headroom.
-- `groq-multiregion`; estimates time-to-first-token from RTT and queue/input-token work, and can use `x-cache-affinity-key` for a stable per-key backend subset.
-- `round-robin`; cycles through candidates sequentially.
-- `random`; picks a candidate uniformly.
-- `pulsar`; uses weighted rendezvous hashing and KV-cache feasibility gates. PULSAR requires suitable backend KV metrics for full behavior, so use it intentionally rather than as the default local E2E route.
 
 `x-cache-affinity-key` is the router-facing sticky-cache header. It is an opaque stable key used by `groq-multiregion` and `pulsar`; Stargate does not derive it from request bodies.
 

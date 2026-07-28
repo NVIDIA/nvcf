@@ -194,6 +194,9 @@ For Responses API follow-up calls, `previous_response_id` does not override the 
 
 Sticky routing only affects backend selection when the LLM request router is configured with a cache-affinity-aware routing method for the target model. Clients should only use `x-multi-turn-session-id`. The gateway derives and forwards the internal `x-cache-affinity-key`; clients should not send that header.
 
+For request-router algorithm allowlists, trusted headers, and rollout checks,
+see [LLM Request Router Load Balancing](./llm-request-router-load-balancing.md).
+
 ## Metrics
 
 LLM API Gateway request metrics include a `function_id` label. The value is the

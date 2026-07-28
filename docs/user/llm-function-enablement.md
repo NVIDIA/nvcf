@@ -9,6 +9,8 @@ routing.
 For LLM function payload shape and invocation examples, see
 [Function Creation](./function-creation.md) and
 [LLM Gateway](./llm-gateway.md).
+For request-router deployment, trusted headers, and rollout validation, see
+[LLM Request Router Load Balancing](./llm-request-router-load-balancing.md).
 
 ## When to Enable
 
@@ -161,7 +163,8 @@ updated worker transport settings.
 Verify the LLM control plane components:
 
 ```bash
-kubectl get deploy -n nvcf llm-api-gateway llm-request-router
+kubectl get deployment -n nvcf llm-api-gateway
+kubectl get statefulset -n nvcf llm-request-router
 kubectl get pods -n nvcf | grep -E 'llm-api-gateway|llm-request-router'
 kubectl get httproute -A | grep llm
 ```
@@ -201,7 +204,7 @@ Useful logs:
 
 ```bash
 kubectl logs -n nvcf deploy/llm-api-gateway --tail=100
-kubectl logs -n nvcf deploy/llm-request-router --tail=100
+kubectl logs -n nvcf statefulset/llm-request-router --tail=100
 kubectl logs -n nvcf-backend <function-pod> -c llm-worker --tail=100
 ```
 

@@ -62,6 +62,7 @@ rust_library(
         ],
     ),
     aliases = aliases(),
+    compile_data = ["//:load_balancer_configuration_doc"],
     crate_name = "stargate",
     edition = "2024",
     proc_macro_deps = all_crate_deps(proc_macro = True),

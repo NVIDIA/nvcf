@@ -17,3 +17,9 @@ filegroup(
     srcs = glob(["benches/**"]),
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "load_balancer_configuration_doc",
+    srcs = ["docs/load-balancer-configuration.md"],
+    visibility = ["//visibility:public"],
+)
