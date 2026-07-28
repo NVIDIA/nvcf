@@ -70,7 +70,7 @@ tonic = "=0.14.6"
 opentelemetry = "=0.32.0"
 opentelemetry-http = "=0.32.0"
 opentelemetry_sdk = { version = "=0.32.1", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "=0.32.0", default-features = false, features = ["grpc-tonic", "tls-roots", "tls-aws-lc", "trace"] }
+opentelemetry-otlp = { version = "=0.32.0", default-features = false, features = ["grpc-tonic", "tls-roots", "tls-webpki-roots", "tls-aws-lc", "trace"] }
 prometheus = "=0.14.0"
 tracing = "=0.1.44"
 tracing-opentelemetry = "=0.33.0"
