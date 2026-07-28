@@ -59,9 +59,10 @@ The profile-specific defaults are:
 | Autoscaler integration | Off | On | Off | On |
 | NVCA collector | Off | Off | Off | Off |
 
-Selecting a plane automatically enables its complete default monitor set. No
-separate plane-monitor flag is required. Individual monitors remain
-fine-grained opt-outs, and `all` enables both monitor sets.
+Selecting a plane defaults its complete monitor set on. No separate
+plane-monitor value is required for the normal path, and `all` defaults both
+sets on. Explicit `defaultMonitors.controlPlane.enabled` and
+`defaultMonitors.computePlane.enabled` values override the profile defaults.
 
 Control-plane monitoring covers State Metric Service, Invocation Service, gRPC
 Proxy, and LLM API Gateway. Compute monitoring selects NVCA in `nvca-system`,
@@ -82,6 +83,23 @@ result without reimplementing profile logic or installing this stack again.
 
 Profiles provide normal defaults. Advanced installations can override shared
 component ownership with `install`, `existing`, or `disabled`.
+
+Monitor groups can also be overridden without changing the selected profile:
+
+```yaml
+observability:
+  profile: control
+
+defaultMonitors:
+  controlPlane:
+    enabled: false
+  computePlane:
+    enabled: true
+```
+
+These values control only monitor rendering. They do not change the selected
+plane contract, BYOO support, or autoscaler integration. The `disabled` profile
+still omits the entire observability release.
 
 The fully expanded ownership configuration below is equivalent to setting only
 `observability.profile: control`:

@@ -44,6 +44,23 @@ render_monitors() {
     template --output-dir "$output_dir" >/dev/null
 }
 
+render_monitor_overrides() {
+  local profile="$1"
+  local output_name="$2"
+  local control_enabled="$3"
+  local compute_enabled="$4"
+  local output_dir="$work_dir/$output_name"
+
+  HELMFILE_ENV=local helmfile \
+    --file "$stack_dir/helmfile.d" \
+    --environment default \
+    --state-values-set "observability.profile=$profile" \
+    --state-values-set "defaultMonitors.controlPlane.enabled=$control_enabled" \
+    --state-values-set "defaultMonitors.computePlane.enabled=$compute_enabled" \
+    --selector name=default-monitors \
+    template --output-dir "$output_dir" >/dev/null
+}
+
 enabled_releases="$(
   cat <<'EOF'
 default-monitors
@@ -67,6 +84,9 @@ for profile in control compute all; do
   render_monitors "$profile"
 done
 
+render_monitor_overrides control control-swapped false true
+render_monitor_overrides compute compute-swapped true false
+
 helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
   --set controlPlane.enabled=true >"$work_dir/chart-control-defaults.yaml"
 helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
@@ -75,6 +95,8 @@ helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
 control_manifests="$(find "$work_dir/control" -type f -name '*.yaml' -print)"
 compute_manifests="$(find "$work_dir/compute" -type f -name '*.yaml' -print)"
 all_manifests="$(find "$work_dir/all" -type f -name '*.yaml' -print)"
+control_swapped_manifests="$(find "$work_dir/control-swapped" -type f -name '*.yaml' -print)"
+compute_swapped_manifests="$(find "$work_dir/compute-swapped" -type f -name '*.yaml' -print)"
 chart_control_manifests="$work_dir/chart-control-defaults.yaml"
 chart_compute_manifests="$work_dir/chart-compute-defaults.yaml"
 
@@ -85,6 +107,11 @@ for monitor in state-metrics invocation-service grpc-proxy llm-api-gateway; do
     fail "control profile is missing $monitor monitor"
   grep -q "nvcf-default-monitors-$monitor" $all_manifests ||
     fail "all profile is missing $monitor monitor"
+  grep -q "nvcf-default-monitors-$monitor" $compute_swapped_manifests ||
+    fail "explicit control monitor override did not win for compute profile"
+  if grep -q "nvcf-default-monitors-$monitor" $control_swapped_manifests; then
+    fail "explicit control monitor override did not disable $monitor"
+  fi
   if grep -q "nvcf-default-monitors-$monitor" $compute_manifests; then
     fail "compute profile rendered $monitor control-plane monitor"
   fi
@@ -97,6 +124,11 @@ for monitor in nvca dcgm worker; do
     fail "compute profile is missing $monitor monitor"
   grep -q "nvcf-default-monitors-$monitor" $all_manifests ||
     fail "all profile is missing $monitor monitor"
+  grep -q "nvcf-default-monitors-$monitor" $control_swapped_manifests ||
+    fail "explicit compute monitor override did not win for control profile"
+  if grep -q "nvcf-default-monitors-$monitor" $compute_swapped_manifests; then
+    fail "explicit compute monitor override did not disable $monitor"
+  fi
   if grep -q "nvcf-default-monitors-$monitor" $control_manifests; then
     fail "control profile rendered $monitor compute-plane monitor"
   fi

@@ -114,10 +114,12 @@ environments:
 {{- $_ := set $collectorConfig "exporters" $collectorExporters }}
 {{- $defaultMonitors := deepCopy (dig "defaultMonitors" dict .Values) }}
 {{- $controlPlaneMonitors := deepCopy (dig "controlPlane" dict $defaultMonitors) }}
-{{- $_ := set $controlPlaneMonitors "enabled" $controlEnabled }}
+{{- $controlPlaneMonitorsEnabled := dig "defaultMonitors" "controlPlane" "enabled" $controlEnabled .Values }}
+{{- $_ := set $controlPlaneMonitors "enabled" $controlPlaneMonitorsEnabled }}
 {{- $_ := set $defaultMonitors "controlPlane" $controlPlaneMonitors }}
 {{- $computePlaneMonitors := deepCopy (dig "computePlane" dict $defaultMonitors) }}
-{{- $_ := set $computePlaneMonitors "enabled" $computeEnabled }}
+{{- $computePlaneMonitorsEnabled := dig "defaultMonitors" "computePlane" "enabled" $computeEnabled .Values }}
+{{- $_ := set $computePlaneMonitors "enabled" $computePlaneMonitorsEnabled }}
 {{- $_ := set $defaultMonitors "computePlane" $computePlaneMonitors }}
 
 repositories:

@@ -27,8 +27,8 @@ dcgm:
   port: dcgm-metrics
   labels: {}
 
-# These plane gates are internal inputs derived from observability.profile by
-# the parent stack. They are not public user-facing switches.
+# The parent stack derives these monitor-group defaults from
+# observability.profile. Explicit user values override those profile defaults.
 controlPlane:
   enabled: false
   interval: 30s
