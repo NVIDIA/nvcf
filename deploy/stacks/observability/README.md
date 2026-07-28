@@ -22,7 +22,7 @@ The stack can own:
 | Profile | Control targets | Compute targets | Result |
 | --- | --- | --- | --- |
 | `disabled` | No | No | Render no observability releases or resources. |
-| `control` | Yes | No | Install one stack for control-plane metrics and the autoscaler backend contract. |
+| `control` | Yes | No | Install one stack for control-plane metrics and the autoscaler backend. |
 | `compute` | No | Yes | Install one stack for NVCA, DCGM, and worker metrics; resolve NVCA BYOO support on. |
 | `all` | Yes | Yes | Install the union once; do not duplicate shared components. |
 
@@ -69,15 +69,10 @@ Proxy, and LLM API Gateway. Compute monitoring selects NVCA in `nvca-system`,
 DCGM pods that carry NVCA's DCGM metrics label, and pods exposing a `metrics`
 port in NVCA-managed workload namespaces.
 
-For `compute` and `all`, the resolved profile contract defaults BYOO support on.
+For `compute` and `all`, the profile defaults BYOO support on.
 The NVCA installer should map that value to its existing `BYOObservability`
 feature gate. The feature gate enables the per-function BYOO collector path; it
 does not create a second shared collector. This stack does not deploy NVCA.
-
-Every enabled profile publishes its resolved consumer defaults in the
-`nvcf-observability-profile` ConfigMap in the contract namespace, `nvcf` by
-default. That contract lets separately packaged consumers use the profile
-result without reimplementing profile logic or installing this stack again.
 
 ## Fine-Grained Overrides
 
@@ -100,7 +95,7 @@ defaultMonitors:
 ```
 
 These values control only monitor rendering. They do not change the selected
-plane contract, BYOO support, or autoscaler integration. The `disabled` profile
+profile, BYOO support, or autoscaler integration. The `disabled` profile
 still omits the entire observability release. Compute monitor overrides live
 under `defaultMonitors.computePlane.services` for ServiceMonitors,
 `defaultMonitors.computePlane.dcgm`, and
@@ -170,12 +165,13 @@ PromQL:       http://vmsingle.monitoring.svc.cluster.local:8428
 
 An external backend must provide both endpoints for `control` and `all`.
 
-## Autoscaler Contract
+## Autoscaler Integration
 
 The autoscaler is a control-plane consumer, not a second observability stack.
 It reads from the same `metricsBackend.promqlEndpoint` selected by the profile.
-For `control` and `all`, the stack publishes that resolved contract as
-`nvcf-observability-autoscaler` in the `nvcf` namespace:
+For `control` and `all`, the self-managed stack renders the resolved backend
+settings directly into the function autoscaler chart's existing
+`function-autoscaler-env` ConfigMap:
 
 ```yaml
 data:
@@ -184,18 +180,19 @@ data:
   TIMESERIES_DB__IGNORE_ENV: "true"
 ```
 
-`autoscalerIntegration.namespace` sets the contract release namespace, and
-`autoscalerIntegration.configMapName` overrides the autoscaler ConfigMap name.
 For an external backend, `metricsBackend.authentication.mode` supports `none`,
 `token`, and `mtls`. Token mode also requires `authnEndpoint`; mTLS mode
 requires paths for the mounted client certificate and private key.
 
+The autoscaler chart owns this environment ConfigMap and its rollout checksum.
+Its Vault Agent template remains a separate ConfigMap because it is mounted as
+a file and has a separate lifecycle. There is no generic observability profile
+or contract ConfigMap.
+
 The self-managed Helmfile deploys the function autoscaler for `control` and
-`all` and consumes this ConfigMap through the chart's external `envFrom`
-reference. It also supplies the Cassandra and NVCF API endpoints needed by the
+`all`. It also supplies the Cassandra and NVCF API endpoints needed by the
 self-managed runtime. The autoscaler does not need another observability enable
-flag, backend mode, or duplicated VictoriaMetrics URL. The `compute` and
-`disabled` profiles do not deploy it.
+flag or backend mode. The `compute` and `disabled` profiles do not deploy it.
 
 ## Monitor Contracts
 
@@ -206,6 +203,10 @@ contracts.
 Default monitors carry
 `nvcf.nvidia.com/observability-target: "true"` so the Target Allocator selects
 only NVCF-owned scrape targets.
+
+The default monitor chart uses one generic ServiceMonitor template and one
+generic PodMonitor template. Individual targets are data in chart values rather
+than target-specific templates.
 
 The default namespace is `monitoring`. If a deployment changes it, it must also
 provide NetworkPolicy reachability for the collector.

@@ -28,7 +28,6 @@ deployments.
 - `environments/base.yaml`: scaffold defaults and scrape contracts
 - `charts/nvcf-otel-collector`: OpenTelemetryCollector resource and Target Allocator RBAC
 - `charts/nvcf-default-monitors`: centrally owned concrete monitor resources
-- `charts/nvcf-observability-contract`: resolved settings for consumers such as the autoscaler
 - `values/victoria-metrics.yaml.gotmpl`: values bridge for the VictoriaMetrics chart
 
 ## Profiles

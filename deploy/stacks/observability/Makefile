@@ -24,7 +24,6 @@ template: clean
 
 test:
 	@helm lint charts/nvcf-default-monitors
-	@helm lint charts/nvcf-observability-contract
 	@helm lint charts/nvcf-otel-collector
 	@helm lint ../../helm/function-autoscaler \
 		--set functionautoscaler.image.registry=nvcr.io \

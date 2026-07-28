@@ -27,13 +27,6 @@ metricsBackend:
     clientCertificatePath: ""
     clientPrivateKeyPath: ""
 
-autoscalerIntegration:
-  namespace: nvcf
-  configMapName: nvcf-observability-autoscaler
-  # Self-hosted control-plane metrics do not require the hosted TSDB's
-  # environment label or authentication flow.
-  ignoreEnv: true
-
 prometheusOperatorCrds:
   version: "30.0.0"
   values:
@@ -168,12 +161,15 @@ defaultMonitors:
       enabled: true
       namespaceSelector:
         any: true
+      selector:
+        nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
       interval: 30s
       path: /metrics
       port: dcgm-metrics
       labels: {}
     worker:
       enabled: true
+      namespace: ""
       namespaceSelector:
         matchExpressions:
           - key: nvca.nvcf.nvidia.io/workload-instance-type

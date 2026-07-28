@@ -141,8 +141,7 @@ observability:
 
 # Defaults consumed only for the control and all observability profiles.
 functionAutoscaler:
-  # The first chart release containing external envFrom support.
-  chartVersion: "0.2.0"
+  chartVersion: "0.1.0"
   image:
     # Keep the stack's image pin independent of the chart's release metadata.
     tag: "1.18.3"
@@ -155,6 +154,10 @@ functionAutoscaler:
     # Self-managed NVCF currently uses its internal unauthenticated gRPC path.
     disableAuth: true
     dryRun: false
+  timeseriesDb:
+    # Self-hosted control-plane metrics do not require the hosted TSDB's
+    # environment label.
+    ignoreEnv: true
 
 accounts:
   limits:

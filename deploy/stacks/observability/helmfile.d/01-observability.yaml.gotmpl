@@ -70,8 +70,6 @@ environments:
 {{- $discoveryRbacEnabled := eq $discoveryRbacMode "install" }}
 {{- $victoriaMetricsEnabled := eq $metricsBackendMode "install" }}
 {{- $defaultMonitorsEnabled := $profileEnabled }}
-{{- $autoscalerIntegrationEnabled := $controlEnabled }}
-{{- $contractNamespace := dig "autoscalerIntegration" "namespace" "nvcf" .Values }}
 {{- $victoriaMetricsNamespace := dig "victoriaMetrics" "namespace" $observabilityNamespace .Values }}
 {{- $bundledRemoteWriteEndpoint := printf "http://vmsingle.%s.svc.cluster.local:8428/api/v1/write" $victoriaMetricsNamespace }}
 {{- $bundledPromqlEndpoint := printf "http://vmsingle.%s.svc.cluster.local:8428" $victoriaMetricsNamespace }}
@@ -238,34 +236,6 @@ releases:
     {{- end }}
     values:
       - {{- toYaml $defaultMonitors | nindent 8 }}
-    labels:
-      release-group: observability
-  {{- end }}
-
-  {{- if $profileEnabled }}
-  - name: observability-contract
-    chart: ../charts/nvcf-observability-contract
-    namespace: {{ $contractNamespace }}
-    {{- if $victoriaMetricsEnabled }}
-    needs:
-      - {{ $victoriaMetricsNamespace }}/victoria-metrics
-    {{- end }}
-    values:
-      - profile: {{ $profile | quote }}
-        controlTargetsEnabled: {{ $controlEnabled }}
-        computeTargetsEnabled: {{ $computeEnabled }}
-        byooSupportEnabled: {{ $computeEnabled }}
-        nvcaCollectorEnabled: false
-        autoscaler:
-          enabled: {{ $autoscalerIntegrationEnabled }}
-          namespace: {{ dig "autoscalerIntegration" "namespace" "nvcf" .Values | quote }}
-          configMapName: {{ dig "autoscalerIntegration" "configMapName" "nvcf-observability-autoscaler" .Values | quote }}
-          promqlEndpoint: {{ $promqlEndpoint | quote }}
-          authMode: {{ $metricsBackendAuthMode | quote }}
-          authnEndpoint: {{ $metricsBackendAuthnEndpoint | quote }}
-          clientCertificatePath: {{ $metricsBackendClientCertificatePath | quote }}
-          clientPrivateKeyPath: {{ $metricsBackendClientPrivateKeyPath | quote }}
-          ignoreEnv: {{ dig "autoscalerIntegration" "ignoreEnv" true .Values }}
     labels:
       release-group: observability
   {{- end }}

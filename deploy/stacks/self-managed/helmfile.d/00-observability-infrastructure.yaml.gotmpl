@@ -20,7 +20,7 @@ helmfiles:
           {{- toYaml (dig "global" (dict) .Values) | nindent 10 }}
       - observability:
           {{- toYaml $observability | nindent 10 }}
-      {{- range $key := list "metricsBackend" "autoscalerIntegration" "prometheusOperatorCrds" "opentelemetryOperator" "collector" "victoriaMetrics" "defaultMonitors" }}
+      {{- range $key := list "metricsBackend" "prometheusOperatorCrds" "opentelemetryOperator" "collector" "victoriaMetrics" "defaultMonitors" }}
       {{- with (index $.Values $key) }}
       - {{ $key }}:
           {{- toYaml . | nindent 10 }}
