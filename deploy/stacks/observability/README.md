@@ -95,11 +95,16 @@ defaultMonitors:
     enabled: false
   computePlane:
     enabled: true
+    worker:
+      enabled: false
 ```
 
 These values control only monitor rendering. They do not change the selected
 plane contract, BYOO support, or autoscaler integration. The `disabled` profile
-still omits the entire observability release.
+still omits the entire observability release. Compute monitor overrides live
+under `defaultMonitors.computePlane.nvca`,
+`defaultMonitors.computePlane.dcgm`, and
+`defaultMonitors.computePlane.worker`.
 
 The fully expanded ownership configuration below is equivalent to setting only
 `observability.profile: control`:

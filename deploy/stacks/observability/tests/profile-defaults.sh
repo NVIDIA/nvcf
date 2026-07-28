@@ -61,6 +61,18 @@ render_monitor_overrides() {
     template --output-dir "$output_dir" >/dev/null
 }
 
+render_compute_monitor_override() {
+  local output_dir="$work_dir/compute-worker-disabled"
+
+  HELMFILE_ENV=local helmfile \
+    --file "$stack_dir/helmfile.d" \
+    --environment default \
+    --state-values-set observability.profile=compute \
+    --state-values-set defaultMonitors.computePlane.worker.enabled=false \
+    --selector name=default-monitors \
+    template --output-dir "$output_dir" >/dev/null
+}
+
 enabled_releases="$(
   cat <<'EOF'
 default-monitors
@@ -86,6 +98,7 @@ done
 
 render_monitor_overrides control control-swapped false true
 render_monitor_overrides compute compute-swapped true false
+render_compute_monitor_override
 
 helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
   --set controlPlane.enabled=true >"$work_dir/chart-control-defaults.yaml"
@@ -97,6 +110,7 @@ compute_manifests="$(find "$work_dir/compute" -type f -name '*.yaml' -print)"
 all_manifests="$(find "$work_dir/all" -type f -name '*.yaml' -print)"
 control_swapped_manifests="$(find "$work_dir/control-swapped" -type f -name '*.yaml' -print)"
 compute_swapped_manifests="$(find "$work_dir/compute-swapped" -type f -name '*.yaml' -print)"
+compute_worker_disabled_manifests="$(find "$work_dir/compute-worker-disabled" -type f -name '*.yaml' -print)"
 chart_control_manifests="$work_dir/chart-control-defaults.yaml"
 chart_compute_manifests="$work_dir/chart-compute-defaults.yaml"
 
@@ -133,6 +147,14 @@ for monitor in nvca dcgm worker; do
     fail "control profile rendered $monitor compute-plane monitor"
   fi
 done
+
+for monitor in nvca dcgm; do
+  grep -q "nvcf-default-monitors-$monitor" $compute_worker_disabled_manifests ||
+    fail "nested worker override disabled the $monitor monitor"
+done
+if grep -q "nvcf-default-monitors-worker" $compute_worker_disabled_manifests; then
+  fail "nested worker monitor override was ignored"
+fi
 
 for profile in control compute all; do
   HELMFILE_ENV=local helmfile \

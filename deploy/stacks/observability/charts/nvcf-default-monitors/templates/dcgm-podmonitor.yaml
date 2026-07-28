@@ -15,24 +15,24 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
-{{- if and .Values.computePlane.enabled .Values.dcgm.enabled }}
+{{- if and .Values.computePlane.enabled .Values.computePlane.dcgm.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: {{ include "nvcf-default-monitors.name" . }}-dcgm
-  namespace: {{ default .Release.Namespace .Values.dcgm.namespace }}
+  namespace: {{ default .Release.Namespace .Values.computePlane.dcgm.namespace }}
   labels:
     {{- include "nvcf-default-monitors.labels" . | nindent 4 }}
-    {{- with .Values.dcgm.labels }}
+    {{- with .Values.computePlane.dcgm.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   podMetricsEndpoints:
-    - interval: {{ .Values.dcgm.interval | quote }}
-      path: {{ .Values.dcgm.path | quote }}
-      port: {{ .Values.dcgm.port | quote }}
+    - interval: {{ .Values.computePlane.dcgm.interval | quote }}
+      path: {{ .Values.computePlane.dcgm.path | quote }}
+      port: {{ .Values.computePlane.dcgm.port | quote }}
   namespaceSelector:
-    {{- toYaml .Values.dcgm.namespaceSelector | nindent 4 }}
+    {{- toYaml .Values.computePlane.dcgm.namespaceSelector | nindent 4 }}
   selector:
     matchLabels:
       nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"

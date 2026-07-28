@@ -152,33 +152,34 @@ defaultMonitors:
         enabled: true
         selector:
           app.kubernetes.io/instance: llm-api-gateway
-  nvca:
-    enabled: true
-    namespaceSelector:
-      matchNames:
-        - nvca-system
-    interval: 30s
-    path: /metrics
-    port: nvca
-    selector:
-      app.kubernetes.io/name: nvca
-    labels: {}
-  dcgm:
-    enabled: true
-    namespaceSelector:
-      any: true
-    interval: 30s
-    path: /metrics
-    port: dcgm-metrics
-    labels: {}
-  worker:
-    enabled: true
-    namespaceSelector:
-      matchExpressions:
-        - key: nvca.nvcf.nvidia.io/workload-instance-type
-          operator: Exists
-    interval: 30s
-    path: /metrics
-    port: metrics
-    selector: {}
-    labels: {}
+  computePlane:
+    nvca:
+      enabled: true
+      namespaceSelector:
+        matchNames:
+          - nvca-system
+      interval: 30s
+      path: /metrics
+      port: nvca
+      selector:
+        app.kubernetes.io/name: nvca
+      labels: {}
+    dcgm:
+      enabled: true
+      namespaceSelector:
+        any: true
+      interval: 30s
+      path: /metrics
+      port: dcgm-metrics
+      labels: {}
+    worker:
+      enabled: true
+      namespaceSelector:
+        matchExpressions:
+          - key: nvca.nvcf.nvidia.io/workload-instance-type
+            operator: Exists
+      interval: 30s
+      path: /metrics
+      port: metrics
+      selector: {}
+      labels: {}

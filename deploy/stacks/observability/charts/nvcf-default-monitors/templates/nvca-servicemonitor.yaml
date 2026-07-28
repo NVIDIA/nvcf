@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
-{{- if and .Values.computePlane.enabled .Values.nvca.enabled }}
+{{- if and .Values.computePlane.enabled .Values.computePlane.nvca.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -23,17 +23,17 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nvcf-default-monitors.labels" . | nindent 4 }}
-    {{- with .Values.nvca.labels }}
+    {{- with .Values.computePlane.nvca.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   namespaceSelector:
-    {{- toYaml .Values.nvca.namespaceSelector | nindent 4 }}
+    {{- toYaml .Values.computePlane.nvca.namespaceSelector | nindent 4 }}
   selector:
     matchLabels:
-      {{- toYaml .Values.nvca.selector | nindent 6 }}
+      {{- toYaml .Values.computePlane.nvca.selector | nindent 6 }}
   endpoints:
-    - interval: {{ .Values.nvca.interval | quote }}
-      path: {{ .Values.nvca.path | quote }}
-      port: {{ .Values.nvca.port | quote }}
+    - interval: {{ .Values.computePlane.nvca.interval | quote }}
+      path: {{ .Values.computePlane.nvca.path | quote }}
+      port: {{ .Values.computePlane.nvca.port | quote }}
 {{- end }}

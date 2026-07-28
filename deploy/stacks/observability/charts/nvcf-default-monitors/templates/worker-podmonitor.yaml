@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
-{{- if and .Values.computePlane.enabled .Values.worker.enabled }}
+{{- if and .Values.computePlane.enabled .Values.computePlane.worker.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -23,16 +23,16 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nvcf-default-monitors.labels" . | nindent 4 }}
-    {{- with .Values.worker.labels }}
+    {{- with .Values.computePlane.worker.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   namespaceSelector:
-    {{- toYaml .Values.worker.namespaceSelector | nindent 4 }}
+    {{- toYaml .Values.computePlane.worker.namespaceSelector | nindent 4 }}
   selector:
-    matchLabels: {{ .Values.worker.selector | toJson }}
+    matchLabels: {{ .Values.computePlane.worker.selector | toJson }}
   podMetricsEndpoints:
-    - interval: {{ .Values.worker.interval | quote }}
-      path: {{ .Values.worker.path | quote }}
-      port: {{ .Values.worker.port | quote }}
+    - interval: {{ .Values.computePlane.worker.interval | quote }}
+      path: {{ .Values.computePlane.worker.path | quote }}
+      port: {{ .Values.computePlane.worker.port | quote }}
 {{- end }}
