@@ -516,7 +516,7 @@ sis:
   {{- end }}
   image:
     registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/spot
+    repository: {{ .Values.global.image.repository }}/icms-service-oss
     {{- if dig "sis" "image" "tag" "" .Values }}
     tag: {{ dig "sis" "image" "tag" "" .Values }}
     {{- end }}
