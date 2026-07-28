@@ -23,8 +23,12 @@ limitations under the License.
 {{- $groupName := get $group "name" }}
 {{- $groupValues := get $group "values" }}
 {{- if $groupValues.enabled }}
+{{- $disabledServices := default list $groupValues.disabledServices }}
+{{- if not (kindIs "slice" $disabledServices) }}
+{{- fail (printf "%s.disabledServices must be a list" $groupName) }}
+{{- end }}
 {{- range $svc := $groupValues.services }}
-{{- if $svc.enabled }}
+{{- if and $svc.enabled (not (has $svc.name $disabledServices)) }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
