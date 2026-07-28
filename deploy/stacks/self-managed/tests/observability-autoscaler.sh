@@ -124,6 +124,23 @@ for expected in \
     fail "external backend did not render autoscaler value: $expected"
 done
 
+write_autoscaler_values "$work_dir/mtls-autoscaler-values.yaml" \
+  --state-values-set metricsBackend.mode=existing \
+  --state-values-set metricsBackend.type=external \
+  --state-values-set-string metricsBackend.promqlEndpoint=https://metrics.example.com \
+  --state-values-set metricsBackend.authentication.mode=mtls \
+  --state-values-set-string metricsBackend.authentication.clientCertificatePath=/tls/client.crt \
+  --state-values-set-string metricsBackend.authentication.clientPrivateKeyPath=/tls/client.key
+
+mtls_autoscaler_values="$work_dir/mtls-autoscaler-values.yaml"
+for expected in \
+  'TIMESERIES_DB__AUTH_MODE: mtls' \
+  'TIMESERIES_DB__CLIENT_CERTIFICATE_PATH: /tls/client.crt' \
+  'TIMESERIES_DB__CLIENT_PRIVATE_KEY_PATH: /tls/client.key'; do
+  grep -q "$expected" "$mtls_autoscaler_values" ||
+    fail "mTLS backend did not render autoscaler value: $expected"
+done
+
 if HELMFILE_ENV=base helmfile \
   "${helmfile_args[@]}" \
   "${state_values[@]}" \

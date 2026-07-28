@@ -40,3 +40,24 @@ deployments.
 Do not use Helm `lookup` to silently change profiles or component ownership
 based on live cluster state. The consuming stack must choose the profile
 explicitly.
+
+## Development
+
+- Render the local environment with `make template HELMFILE_ENV=local`.
+- Run profile and integration assertions with `make test`.
+- Run `git diff --check` before committing.
+
+## Code Style
+
+- Keep profile derivation and validation at the top of the Helmfile.
+- Keep chart templates data-driven; use one generic template per monitor kind.
+- Put stable scrape endpoints, labels, ports, and paths in the application
+  chart that exposes them.
+
+## Subtree Conventions
+
+- Keep reusable defaults in `environments/base.yaml`; environment files should
+  contain only overrides.
+- Preserve explicit user values when applying profile defaults.
+- Validate every new mode, dependency, and rendered monitor shape in
+  `tests/profile-defaults.sh`.

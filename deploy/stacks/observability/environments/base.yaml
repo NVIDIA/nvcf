@@ -159,9 +159,10 @@ defaultMonitors:
         labels: {}
     dcgm:
       enabled: true
-      namespaceSelector:
-        any: true
-      selector:
+    namespaceSelector:
+      any: true
+    selector:
+      matchLabels:
         nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
       interval: 30s
       path: /metrics
@@ -171,11 +172,12 @@ defaultMonitors:
       enabled: true
       namespace: ""
       namespaceSelector:
+        any: true
+      selector:
         matchExpressions:
-          - key: nvca.nvcf.nvidia.io/workload-instance-type
+          - key: icms-request-id
             operator: Exists
       interval: 30s
       path: /metrics
       port: metrics
-      selector: {}
       labels: {}

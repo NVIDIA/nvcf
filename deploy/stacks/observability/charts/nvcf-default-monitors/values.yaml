@@ -66,7 +66,8 @@ computePlane:
     namespaceSelector:
       any: true
     selector:
-      nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
+      matchLabels:
+        nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
     interval: 30s
     path: /metrics
     # NVCA uses this name for the injected DCGM metrics port.
@@ -77,11 +78,12 @@ computePlane:
     enabled: true
     namespace: ""
     namespaceSelector:
+      any: true
+    selector:
       matchExpressions:
-        - key: nvca.nvcf.nvidia.io/workload-instance-type
+        - key: icms-request-id
           operator: Exists
     interval: 30s
     path: /metrics
     port: metrics
-    selector: {}
     labels: {}

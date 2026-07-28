@@ -71,7 +71,7 @@ Walk me through the full deployment order
 : Summarize control-plane stages 0 through 3 from the self-managed gotmpl files. Stage 0 delegates to the shared observability Helmfile when `observability.profile` is enabled. Stage 3 installs State Metrics and the function autoscaler for `control` and `all`. Then summarize the compute-plane stage from `deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl` and `deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl`. Call out which releases run in parallel inside a stage and which are serialized by `needs:`.
 
 Which subtree do I edit to change X
-: Point at the Helmfile path for orchestration, `deploy/helm/<chart>/` for checked-in chart wiring, and the chart image repository under `src/`, `infra/`, or `migrations/` for runtime behavior. All stack sources are monorepo-native, so edits land in this repository.
+: Point at the Helmfile path for orchestration, `deploy/helm/<chart>/` for checked-in chart wiring, and the image source under `src/`, `infra/`, or `migrations/` for runtime behavior. If a referenced chart is not checked in, report its Helmfile chart reference and do not claim a local source path.
 
 What namespaces does the stack use
 : Return the list from the helmfile (`namespace:` per release).

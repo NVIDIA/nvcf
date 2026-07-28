@@ -120,6 +120,18 @@ compute_swapped_manifests="$(find "$work_dir/compute-swapped" -type f -name '*.y
 compute_worker_disabled_manifests="$(find "$work_dir/compute-worker-disabled" -type f -name '*.yaml' -print)"
 chart_control_manifests="$work_dir/chart-control-defaults.yaml"
 chart_compute_manifests="$work_dir/chart-compute-defaults.yaml"
+worker_monitor_manifest="$work_dir/chart-worker-podmonitor.yaml"
+
+sed -n '/name: nvcf-default-monitors-worker/,$p' \
+  "$chart_compute_manifests" >"$worker_monitor_manifest"
+grep -q '^    any: true$' "$worker_monitor_manifest" ||
+  fail "worker PodMonitor must use a supported all-namespaces selector"
+grep -q '^    matchExpressions:$' "$worker_monitor_manifest" ||
+  fail "worker PodMonitor must use a pod label expression"
+grep -q '^    - key: icms-request-id$' "$worker_monitor_manifest" ||
+  fail "worker PodMonitor must select NVCA-managed workload pods"
+grep -q '^      operator: Exists$' "$worker_monitor_manifest" ||
+  fail "worker PodMonitor label expression must use Exists"
 
 for monitor in state-metrics invocation-service grpc-proxy llm-api-gateway; do
   grep -q "nvcf-default-monitors-$monitor" "$chart_control_manifests" ||

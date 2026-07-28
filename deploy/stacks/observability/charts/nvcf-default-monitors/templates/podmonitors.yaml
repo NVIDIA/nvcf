@@ -39,8 +39,7 @@ spec:
   namespaceSelector:
     {{- toYaml $values.namespaceSelector | nindent 4 }}
   selector:
-    matchLabels:
-      {{- toYaml $values.selector | nindent 6 }}
+    {{- toYaml $values.selector | nindent 4 }}
   podMetricsEndpoints:
     - interval: {{ $values.interval | quote }}
       path: {{ $values.path | quote }}
