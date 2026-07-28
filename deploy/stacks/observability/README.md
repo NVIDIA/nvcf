@@ -59,6 +59,10 @@ The profile-specific defaults are:
 | Autoscaler integration | Off | On | Off | On |
 | NVCA collector | Off | Off | Off | Off |
 
+Selecting a plane automatically enables its complete default monitor set. No
+separate plane-monitor flag is required. Individual monitors remain
+fine-grained opt-outs, and `all` enables both monitor sets.
+
 Control-plane monitoring covers State Metric Service, Invocation Service, gRPC
 Proxy, and LLM API Gateway. Compute monitoring selects NVCA in `nvca-system`,
 DCGM pods that carry NVCA's DCGM metrics label, and pods exposing a `metrics`

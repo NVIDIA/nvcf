@@ -17,14 +17,13 @@ commonLabels:
   nvcf.nvidia.com/observability-target: "true"
 
 dcgm:
-  enabled: false
+  enabled: true
   namespace: ""
   namespaceSelector:
     any: true
   interval: 30s
   path: /metrics
-  # NVCA currently uses this name for the injected DCGM metrics port; keep the
-  # monitor disabled until the consuming stack owns that chart contract.
+  # NVCA uses this name for the injected DCGM metrics port.
   port: dcgm-metrics
   labels: {}
 

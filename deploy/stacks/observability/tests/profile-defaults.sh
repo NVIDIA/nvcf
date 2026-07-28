@@ -67,28 +67,40 @@ for profile in control compute all; do
   render_monitors "$profile"
 done
 
+helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
+  --set controlPlane.enabled=true >"$work_dir/chart-control-defaults.yaml"
+helm template default-monitors "$stack_dir/charts/nvcf-default-monitors" \
+  --set computePlane.enabled=true >"$work_dir/chart-compute-defaults.yaml"
+
 control_manifests="$(find "$work_dir/control" -type f -name '*.yaml' -print)"
 compute_manifests="$(find "$work_dir/compute" -type f -name '*.yaml' -print)"
 all_manifests="$(find "$work_dir/all" -type f -name '*.yaml' -print)"
+chart_control_manifests="$work_dir/chart-control-defaults.yaml"
+chart_compute_manifests="$work_dir/chart-compute-defaults.yaml"
 
-grep -q 'nvcf-default-monitors-state-metrics' $control_manifests ||
-  fail "control profile is missing control-plane monitors"
-if grep -q 'nvcf-default-monitors-nvca' $control_manifests; then
-  fail "control profile rendered compute-plane monitors"
-fi
+for monitor in state-metrics invocation-service grpc-proxy llm-api-gateway; do
+  grep -q "nvcf-default-monitors-$monitor" "$chart_control_manifests" ||
+    fail "monitor chart control defaults are missing $monitor monitor"
+  grep -q "nvcf-default-monitors-$monitor" $control_manifests ||
+    fail "control profile is missing $monitor monitor"
+  grep -q "nvcf-default-monitors-$monitor" $all_manifests ||
+    fail "all profile is missing $monitor monitor"
+  if grep -q "nvcf-default-monitors-$monitor" $compute_manifests; then
+    fail "compute profile rendered $monitor control-plane monitor"
+  fi
+done
 
 for monitor in nvca dcgm worker; do
+  grep -q "nvcf-default-monitors-$monitor" "$chart_compute_manifests" ||
+    fail "monitor chart compute defaults are missing $monitor monitor"
   grep -q "nvcf-default-monitors-$monitor" $compute_manifests ||
     fail "compute profile is missing $monitor monitor"
   grep -q "nvcf-default-monitors-$monitor" $all_manifests ||
     fail "all profile is missing $monitor monitor"
+  if grep -q "nvcf-default-monitors-$monitor" $control_manifests; then
+    fail "control profile rendered $monitor compute-plane monitor"
+  fi
 done
-
-if grep -q 'nvcf-default-monitors-state-metrics' $compute_manifests; then
-  fail "compute profile rendered control-plane monitors"
-fi
-grep -q 'nvcf-default-monitors-state-metrics' $all_manifests ||
-  fail "all profile is missing control-plane monitors"
 
 for profile in control compute all; do
   HELMFILE_ENV=local helmfile \
