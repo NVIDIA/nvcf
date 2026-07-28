@@ -21,7 +21,16 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 
+checked_in="$(mktemp "${TMPDIR:-/tmp}/dependencies.md.XXXXXX")"
+trap 'rm -f "${checked_in}"' EXIT
+cp dependencies.md "${checked_in}"
+
 GOWORK=off go run -C ./tools/collect-dependencies .
-git diff --ignore-space-at-eol --exit-code -- dependencies.md
+
+if ! cmp -s "${checked_in}" dependencies.md; then
+  echo "dependencies.md is stale; regenerate and commit it." >&2
+  diff -u "${checked_in}" dependencies.md || true
+  exit 1
+fi
 
 echo "dependencies.md is up to date."
