@@ -30,6 +30,34 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestSelfManagedOpenBaoWebhookDefaultsToIgnore(t *testing.T) {
+	const baseConfigPath = "../../deploy/stacks/self-managed/environments/base.yaml"
+
+	var config struct {
+		OpenBao struct {
+			Injector struct {
+				Webhook map[string]any `yaml:"webhook"`
+			} `yaml:"injector"`
+		} `yaml:"openbao"`
+	}
+
+	baseConfig, err := os.ReadFile(baseConfigPath)
+	if err != nil {
+		t.Fatalf("read self-managed base config: %v", err)
+	}
+	if err := yaml.Unmarshal(baseConfig, &config); err != nil {
+		t.Fatalf("parse self-managed base config: %v", err)
+	}
+
+	webhook := config.OpenBao.Injector.Webhook
+	if got, want := webhook["failurePolicy"], "Ignore"; got != want {
+		t.Fatalf("openbao injector failurePolicy = %q, want %q", got, want)
+	}
+	if selector, exists := webhook["namespaceSelector"]; exists {
+		t.Fatalf("openbao injector namespaceSelector = %#v, want it omitted", selector)
+	}
+}
+
 // TestNVCFCLINonlocalFixtureMatchesCLITemplate asserts every top-level
 // key in tests/bdd/fixtures/nvcf-cli-nonlocal.yaml.template is also
 // declared (active or commented documentation) in the canonical CLI

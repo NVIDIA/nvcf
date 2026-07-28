@@ -137,12 +137,13 @@ openbao:
     {{- end }}
     replicas: {{ .Values.openbao.injector.replicas }}
     {{- $nvcfUiEnabled := dig "addons" "nvcfUi" "enabled" false .Values }}
-    {{- with .Values.openbao.injector.webhook }}
+    {{- with dig "openbao" "injector" "webhook" dict .Values }}
     webhook:
       {{- $webhook := deepCopy . }}
-      {{- if $nvcfUiEnabled }}
-      {{- $expr := index $webhook.namespaceSelector.matchExpressions 0 }}
-      {{- $_ := set $expr "values" (append $expr.values "nvcf-ui") }}
+      {{- $matchExpressions := dig "namespaceSelector" "matchExpressions" list $webhook }}
+      {{- if and $nvcfUiEnabled $matchExpressions }}
+      {{- $expr := index $matchExpressions 0 }}
+      {{- $_ := set $expr "values" (append (dig "values" list $expr) "nvcf-ui") }}
       {{- end }}
       {{- toYaml $webhook | nindent 6 }}
     {{- end }}
