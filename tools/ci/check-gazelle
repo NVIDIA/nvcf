@@ -56,9 +56,18 @@ if grep -qE '^(ERROR|FATAL):' "${diff_out}"; then
     exit 2
 fi
 
-# Gazelle prints unified diffs for files it would change. No diff lines means
-# the generated output already matches the tree.
+# Gazelle prints unified diffs for files it would change, and exits non-zero
+# when it produces any. So a non-zero status with diff markers is the normal
+# "out of date" signal, while a non-zero status without them is a failure that
+# happened to print neither ERROR nor FATAL. Treating the latter as success
+# would report tidy BUILD files for a run that never checked them, which is the
+# exact false green this whole check exists to prevent.
 if ! grep -qE '^(\+\+\+|---) ' "${diff_out}"; then
+    if [ "${status}" -ne 0 ]; then
+        echo "error: gazelle exited ${status} without producing a diff" >&2
+        cat "${diff_out}" >&2
+        exit 2
+    fi
     echo "gazelle: BUILD files are up to date"
     exit 0
 fi

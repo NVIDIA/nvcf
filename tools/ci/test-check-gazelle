@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Behavioral test for tools/ci/check-gazelle.
+#
+# The check has to keep three outcomes apart: BUILD files are current, BUILD
+# files are stale, and Gazelle did not run. Conflating the last two is the
+# dangerous one, because a fetch or Starlark failure reported as "up to date"
+# means CI claims BUILD files were verified when nothing verified them.
+#
+# BAZEL is stubbed so none of this touches a real Bazel or the network.
+set -euo pipefail
+
+script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-gazelle"
+fail=0
+
+stub_dir="$(mktemp -d)"
+trap 'rm -rf "${stub_dir}"' EXIT
+
+# Build a fake bazel that prints a fixed payload and exits with a fixed status.
+make_bazel() {  # make_bazel <exit-status> <stdout-payload>
+    local status="$1" payload="$2" path="${stub_dir}/bazel"
+    {
+        echo '#!/usr/bin/env bash'
+        printf 'cat <<%s\n%s\n%s\n' "PAYLOAD_EOF" "${payload}" "PAYLOAD_EOF"
+        echo "exit ${status}"
+    } > "${path}"
+    chmod +x "${path}"
+    printf '%s' "${path}"
+}
+
+run() {  # run <exit-status> <payload>
+    local b; b="$(make_bazel "$1" "$2")"
+    set +e
+    out="$(BAZEL="${b}" bash "${script}" 2>&1)"
+    rc=$?
+    set -e
+}
+
+expect() {  # expect <desc> <want-rc> [substring]
+    local desc="$1" want="$2" substr="${3:-}"
+    if [ "${rc}" != "${want}" ]; then
+        printf 'FAIL %s: want exit %s, got %s\n%s\n' "${desc}" "${want}" "${rc}" "${out}"
+        fail=1; return
+    fi
+    if [ -n "${substr}" ] && ! printf '%s' "${out}" | grep -q -- "${substr}"; then
+        printf 'FAIL %s: output missing %q\n%s\n' "${desc}" "${substr}" "${out}"
+        fail=1; return
+    fi
+    printf 'ok   %s\n' "${desc}"
+}
+
+# Clean: Gazelle succeeds and prints no diff.
+run 0 'no changes'
+expect "clean tree exits 0" 0 "up to date"
+
+# Stale: Gazelle prints a unified diff. It exits non-zero when it does, which is
+# the expected signal, not a failure.
+run 1 '--- a/src/foo/BUILD.bazel
++++ b/src/foo/BUILD.bazel
+@@ -1 +1,2 @@
++    srcs = ["new_test.go"],'
+expect "diff exits 1" 1 "out of date"
+expect "  ... and shows the patch" 1 "new_test.go"
+
+# A diff reported with a zero exit is still a diff.
+run 0 '--- a/src/foo/BUILD.bazel
++++ b/src/foo/BUILD.bazel'
+expect "diff with zero status still exits 1" 1 "out of date"
+
+# Invocation failure: Gazelle could not run. This must never read as clean.
+run 1 'ERROR: no such package @@gazelle//: fetch failed'
+expect "ERROR output exits 2" 2 "did not run to completion"
+
+run 1 'FATAL: Starlark evaluation failed'
+expect "FATAL output exits 2" 2 "did not run to completion"
+
+# The case the status check exists for: a non-zero exit that prints neither a
+# recognised error prefix nor a diff. Without checking the status this fell
+# through to the success path and reported tidy BUILD files.
+run 34 'Server terminated abruptly'
+expect "silent non-zero exit fails closed" 2 "without producing a diff"
+
+# And its mirror: a zero exit with no diff is genuinely clean, not a failure.
+run 0 ''
+expect "empty output with zero status is clean" 0 "up to date"
+
+if [ "${fail}" -ne 0 ]; then
+    echo "check-gazelle: FAILED" >&2
+    exit 1
+fi
+echo "check-gazelle: all checks passed"

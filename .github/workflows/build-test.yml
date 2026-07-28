@@ -70,4 +70,6 @@ jobs:
           bash tools/ci/check-nested-modules
 
       - name: Check BUILD files match their sources
-        run: bash tools/ci/check-gazelle
+        run: |
+          bash tools/ci/test-check-gazelle
+          bash tools/ci/check-gazelle
