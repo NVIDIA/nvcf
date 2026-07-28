@@ -27,6 +27,8 @@ load("@gazelle//:def.bzl", "gazelle_test")
 # rules with the same importpath (nverrors_go_proto and errors).
 # gazelle:resolve go github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1 //src/libraries/go/lib/pkg/nvkit/api/errors/v1:errors
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 gazelle_test(
     name = "gazelle_test",
     extra_args = ["src/libraries/go/lib"],
@@ -36,8 +38,6 @@ gazelle_test(
 # Transitional non-hermetic wrapper: this shells out to `go run` through the
 # shared golangci-lint runner. Keep cache-disabled tags until lint inputs are
 # declared in Bazel.
-load("@rules_shell//shell:sh_test.bzl", "sh_test")
-
 sh_test(
     name = "golangci_lint",
     timeout = "long",

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fail if Gazelle, run from the repository root, would change any BUILD file.
+#
+# Why this exists: nothing currently notices when a BUILD file falls behind its
+# sources. nvsnap's checkpoint_v2.go and restore_v2.go landed 2026-07-14 while
+# internal/agent/BUILD.bazel was last regenerated 2026-07-02, so the build was
+# broken for twelve days and no job reported it. That was not unique: at the
+# time this check was written, more than a dozen packages had a .go file newer
+# than their BUILD.bazel.
+#
+# Root-run matters. Gazelle resolves dependencies against the module it runs
+# in, so running it per-subtree produces different, and during consolidation
+# increasingly wrong, results. The root run is the one whose output has to stay
+# stable as services migrate into the root module.
+#
+# --mode=diff makes Gazelle report rather than rewrite, so CI never leaves a
+# dirty tree and the failure output is the patch a developer needs to apply.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${root}"
+
+: "${BAZEL:=bazel}"
+
+diff_out="$(mktemp)"
+trap 'rm -f "${diff_out}"' EXIT
+
+# Gazelle exits non-zero in diff mode when there is a diff, which is the signal
+# we want rather than an error, so capture the status instead of letting set -e
+# take it.
+# Scope: Go packages only for now. Gazelle also wants to reorder attributes in
+# the src/libraries/java BUILD files, which is cosmetic and would churn files
+# the Java modules own for no functional gain. Those modules move into the root
+# in Phase 6 of docs/dev/bazel-consolidation.md; widen this then, in the change
+# that moves them, rather than reordering another team's files ahead of it.
+GO_ROOTS=(
+    src/clis
+    src/libraries/go
+    src/compute-plane-services
+    src/control-plane-services
+    src/invocation-plane-services
+)
+
+status=0
+"${BAZEL}" run //:gazelle -- --mode=diff "${GO_ROOTS[@]}" > "${diff_out}" 2>&1 || status=$?
+
+# A real failure (missing target, fetch error, Starlark error) is not the same
+# as "there is a diff". Distinguish them, otherwise a broken build reads as
+# tidy BUILD files.
+if grep -qE '^(ERROR|FATAL):' "${diff_out}"; then
+    echo "error: gazelle did not run to completion" >&2
+    cat "${diff_out}" >&2
+    exit 2
+fi
+
+# Gazelle prints unified diffs for files it would change. No diff lines means
+# the generated output already matches the tree.
+if ! grep -qE '^(\+\+\+|---) ' "${diff_out}"; then
+    echo "gazelle: BUILD files are up to date"
+    exit 0
+fi
+
+{
+    echo "error: BUILD files are out of date with their sources."
+    echo
+    echo "Regenerate from the repository root and commit the result:"
+    echo
+    echo "    bazel run //:gazelle"
+    echo
+    echo "Gazelle would apply the following:"
+    echo
+    cat "${diff_out}"
+} >&2
+exit 1
