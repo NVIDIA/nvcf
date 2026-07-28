@@ -133,6 +133,30 @@ global:
       # global.observability.metrics.enabled
       enabled: false
 
+# Shared observability infrastructure. Self-managed control-plane installs keep
+# this on because the function autoscaler depends on a populated TSDB.
+observability:
+  mode: install
+
+prometheusOperatorCrds:
+  # Disable this when the cluster already owns Prometheus Operator CRDs, such as
+  # through an existing kube-prometheus-stack install, to avoid CRD conflicts.
+  enabled: true
+
+opentelemetryOperator:
+  enabled: true
+
+controlPlaneCollector:
+  enabled: true
+
+victoriaMetrics:
+  enabled: true
+
+defaultMonitors:
+  enabled: true
+  controlPlane:
+    enabled: true
+
 accounts:
   limits:
     maxFunctions: 10
@@ -277,7 +301,7 @@ addons:
     enabled: false
 
 stateMetrics:
-  enabled: false
+  enabled: true
   # Disable ServiceMonitor for environments without Prometheus Operator
   serviceMonitor:
     enabled: false

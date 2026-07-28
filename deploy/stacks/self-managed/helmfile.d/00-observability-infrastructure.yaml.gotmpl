@@ -1,0 +1,29 @@
+environments:
+  default:
+    values:
+      - ../environments/base.yaml
+      - ../environments/{{ requiredEnv "HELMFILE_ENV" }}.yaml
+
+---
+
+{{- $observability := dig "observability" (dict) .Values }}
+{{- $mode := dig "mode" "disabled" $observability }}
+{{- if not (has $mode (list "install" "existing" "disabled")) }}
+{{- fail (printf "observability.mode must be install, existing, or disabled, got %q" $mode) }}
+{{- end }}
+{{- if ne $mode "disabled" }}
+helmfiles:
+  - path: ../../observability/helmfile.d/01-observability.yaml.gotmpl
+    selectorsInherited: true
+    values:
+      - global:
+          {{- toYaml (dig "global" (dict) .Values) | nindent 10 }}
+      - observability:
+          {{- toYaml $observability | nindent 10 }}
+      {{- range $key := list "prometheusOperatorCrds" "opentelemetryOperator" "controlPlaneCollector" "victoriaMetrics" "defaultMonitors" }}
+      {{- with (index $.Values $key) }}
+      - {{ $key }}:
+          {{- toYaml . | nindent 10 }}
+      {{- end }}
+      {{- end }}
+{{- end }}
