@@ -28,9 +28,9 @@ func importPathsFromManifest(path string) ([]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// imports.yaml is intentionally absent on the OSS mirror. With no
-			// synthetic-import manifest there are no import roots to scan.
-			return nil, nil
+			// imports.yaml is intentionally absent on the OSS mirror. Scan the
+			// native monorepo itself instead of silently collecting nothing.
+			return []string{repoRoot}, nil
 		}
 		return nil, err
 	}
@@ -68,7 +68,6 @@ func scanTree(root string, langs map[string]bool) (dependencyScan, error) {
 		Go:     map[string]struct{}{},
 		Rust:   map[string]struct{}{},
 		Python: map[string]struct{}{},
-		Java:   map[string]struct{}{},
 		Helm:   map[string]struct{}{},
 	}
 	if st, err := os.Stat(root); err != nil || !st.IsDir() {
@@ -100,10 +99,6 @@ func scanTree(root string, langs map[string]bool) (dependencyScan, error) {
 		case langs["python"] && name == "Pipfile":
 			for dep := range parsePipfile(path) {
 				out.Python[dep] = struct{}{}
-			}
-		case langs["java"] && name == "pom.xml":
-			for dep := range parsePOMDirectDependencies(path) {
-				out.Java[dep] = struct{}{}
 			}
 		}
 		return nil

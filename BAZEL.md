@@ -217,6 +217,56 @@ is implicit and is not a descriptor option. The detector supports
 dependency-aware selection, but current policy deliberately runs the full
 matrix on every PR and push for regression safety.
 
+The same descriptor also registers the component with the repository
+dependency collector. Every registered Java component must expose:
+
+```text
+//<component-directory>:runtime_inventory.json
+```
+
+The collector builds all registered inventories and merges the dependencies
+actually used by those runtime targets into root `dependencies.md`:
+
+```bash
+go run ./tools/collect-dependencies
+```
+
+This does not scan project POM files and does not list every artifact available
+in `maven_install.json`. The root lockfile keeps the complete shared Java graph;
+component runtime inventories identify the used subset. See
+`tools/collect-dependencies/README.md` for the complete model and prerequisites.
+
+## Regenerate `dependencies.md`
+
+Regenerate root `dependencies.md` when:
+
+- a component is added to or removed from the monorepo
+- a Go, Rust, Python, Java, or Helm dependency is added, removed, or upgraded
+- a Java BUILD target changes the component's runtime dependency graph
+- `MODULE.bazel` or `maven_install.json` changes the Java dependency graph
+
+Run this command from the repository root:
+
+```bash
+GITHUB_TOKEN="$(gh auth token)" \
+  go run ./tools/collect-dependencies
+```
+
+The GitHub token provides authenticated license metadata lookups and avoids
+low unauthenticated API limits. If `gh` is unavailable, omit the first line;
+generation still works but may be slower or leave some license metadata
+unresolved.
+
+Component discovery is automatic. Java components are found through
+`bazel-java-ci.json`; the other supported languages are found from their
+dependency manifests. The command may leave `dependencies.md` unchanged when a
+new component uses only dependencies already present in the repository-wide
+rollup.
+
+GitHub Actions regenerates the file and fails when the checked-in copy is
+stale. CI does not commit the update, so include a changed `dependencies.md` in
+the same commit as the dependency or component change.
+
 ## Day-to-day commands
 
 ### Build
