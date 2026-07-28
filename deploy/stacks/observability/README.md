@@ -98,12 +98,16 @@ profile cannot install individual components.
 
 ## Metrics backend and autoscaler
 
-The bundled VictoriaMetrics endpoints are:
+With the default `monitoring` namespace, the bundled VictoriaMetrics endpoints
+are:
 
 ```text
 remote write: http://vmsingle.monitoring.svc.cluster.local:8428/api/v1/write
 PromQL:       http://vmsingle.monitoring.svc.cluster.local:8428
 ```
+
+If the VictoriaMetrics namespace is overridden, replace `monitoring` in these
+hostnames with the configured namespace.
 
 An external backend always requires `remoteWriteEndpoint`; `control` and `all`
 also require `promqlEndpoint`. Authentication modes are `none`, `token`, and
@@ -135,4 +139,5 @@ also requires NetworkPolicy reachability to the collector.
 ```sh
 make template HELMFILE_ENV=local
 make test
+git diff --check
 ```
