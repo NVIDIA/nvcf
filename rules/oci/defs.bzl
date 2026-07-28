@@ -16,7 +16,8 @@
 "OCI image rules for packaging binaries into multi-arch containers."
 
 load("//rules/oci/private:go.bzl", _go_oci_image = "go_oci_image")
-load("//rules/oci/private:java.bzl", _java_oci_image = "java_oci_image")
+load("//rules/oci/private:java.bzl", _java_image_contract_test = "java_image_contract_test", _java_oci_image = "java_oci_image")
 
 go_oci_image = _go_oci_image
 java_oci_image = _java_oci_image
+java_image_contract_test = _java_image_contract_test

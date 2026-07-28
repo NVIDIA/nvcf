@@ -2,36 +2,70 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Asserts the runtime contract of the nvct-service image, which is otherwise
-# only observable by running the container:
+# Shared runtime-contract guard for java_oci_image services.
 #
-#   1. The jar is at /usr/share/app.jar, the exact path the entrypoint names,
-#      and no layer whites it out. If the layer path and the entrypoint ever
-#      disagree the image builds fine and fails at startup with "Unable to
-#      access jarfile".
+# Asserts the parts of the contract that are otherwise only observable by
+# running the container, for every architecture in the image index:
+#
+#   1. The jar is at the exact path the entrypoint names, and no layer whites
+#      it out. If the layer path and the entrypoint ever disagree the image
+#      builds fine and fails at startup with "Unable to access jarfile".
 #   2. The entrypoint keeps the base image's shelless_ulimit shim. oci_image
 #      REPLACES the base entrypoint rather than appending, so dropping the shim
 #      is silent and leaves the container on the default 1024 fd soft limit.
 #   3. Java is invoked through /usr/bin/java, not a JAVA_HOME-derived path. The
 #      base sets JAVA_HOME per architecture, so an absolute JAVA_HOME path
 #      would break the arm64 half of the image index.
-#   4. Runtime parity with the pre-Bazel Dockerfile: ULIMIT_FLAG (which the
-#      shim reads; without it the shim raises nothing), JDK_JAVA_OPTIONS
-#      (container heap sizing), and the working directory.
+#   4. Runtime parity with the service's pre-Bazel Dockerfile: every declared
+#      environment variable, compared as a complete entry, and the working
+#      directory.
+#   5. Both architectures are present in the index and each carries the same
+#      contract. Checking only the host tar proves nothing about the other half,
+#      and an index missing or mislabelling a platform pushes without complaint.
 #
 # Unlike the Go services' image_entrypoint_mode_test this does not assert an
 # exec bit: a jar is read by the JVM, never executed, so mode 0644 is correct.
+#
+# Parsed with tar, grep and sed rather than jq so the test stays hermetic.
+#
+# Usage:
+#   EXPECT_ENV_COUNT=n EXPECT_ENV_0=K=V ... \
+#     java_image_contract_test.sh <image.tar> <index-dir> <jar-path> <workdir>
 set -euo pipefail
 
+if [[ "$#" -lt 4 ]]; then
+  echo "usage: $0 <image.tar> <index dir> <jar path> <workdir>" >&2
+  exit 1
+fi
+
 image_tar="$1"
-tmp_dir="${TEST_TMPDIR:-/tmp}/nvct-image-contract-${RANDOM}-${RANDOM}"
+index_dir="$2"
+jar_abs="$3"
+workdir="$4"
+shift 4
+
+# Expectations arrive as EXPECT_ENV_0..N-1 rather than positional arguments:
+# sh_test args are shell-word-split, so a value containing spaces would be
+# truncated at its first space and this test would assert only a fragment of it.
+expected_env=()
+expect_count="${EXPECT_ENV_COUNT:-0}"
+i=0
+while [[ "${i}" -lt "${expect_count}" ]]; do
+  var="EXPECT_ENV_${i}"
+  expected_env+=("${!var}")
+  i=$((i + 1))
+done
+
+jar_path="${jar_abs#/}"
+
+tmp_dir="${TEST_TMPDIR:-/tmp}/java-image-contract-${RANDOM}-${RANDOM}"
 outer_dir="${tmp_dir}/outer"
 mkdir -p "${outer_dir}"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
 tar -xf "${image_tar}" -C "${outer_dir}"
 
-jar_path="usr/share/app.jar"
+expected_entrypoint="\"Entrypoint\":[\"/usr/bin/shelless_ulimit\",\"/usr/bin/java\",\"-jar\",\"${jar_abs}\"]"
 
 # ---------------------------------------------------------------------------
 # 1. the jar is installed at the path the entrypoint names
@@ -48,7 +82,7 @@ while IFS= read -r candidate; do
 done < <(find "${outer_dir}" -type f)
 
 if [[ "${jar_found}" != "true" ]]; then
-  echo "no image layer contains /${jar_path}" >&2
+  echo "no image layer contains ${jar_abs}" >&2
   find "${outer_dir}" -type f -print >&2
   exit 1
 fi
@@ -60,17 +94,29 @@ fi
 # this file and must not fail the test.
 #   file whiteout   : <dir>/.wh.<name>
 #   opaque whiteout : <dir>/.wh..wh..opq   (empties that directory)
-whiteout_re='^(\./)?usr/share/\.wh\.app\.jar$'
-whiteout_re+='|^(\./)?usr/\.wh\.share$'
-whiteout_re+='|^(\./)?\.wh\.usr$'
-whiteout_re+='|^(\./)?\.wh\.\.wh\.\.opq$'
-whiteout_re+='|^(\./)?usr/\.wh\.\.wh\.\.opq$'
-whiteout_re+='|^(\./)?usr/share/\.wh\.\.wh\.\.opq$'
+#
+# Derived from jar_path so this stays correct for any install location.
+jar_dir="${jar_path%/*}"
+jar_name="${jar_path##*/}"
+whiteout_re="^(\./)?${jar_dir}/\.wh\.${jar_name//./\\.}$"
+whiteout_re+="|^(\./)?\.wh\.\.wh\.\.opq$"
+ancestor=""
+IFS='/' read -r -a jar_parts <<< "${jar_dir}"
+for part in "${jar_parts[@]}"; do
+  if [[ -z "${ancestor}" ]]; then
+    whiteout_re+="|^(\./)?\.wh\.${part}$"
+    ancestor="${part}"
+  else
+    whiteout_re+="|^(\./)?${ancestor}/\.wh\.${part}$"
+    ancestor="${ancestor}/${part}"
+  fi
+  whiteout_re+="|^(\./)?${ancestor}/\.wh\.\.wh\.\.opq$"
+done
 
 while IFS= read -r candidate; do
   tar -tf "${candidate}" >/dev/null 2>&1 || continue
   if tar -tf "${candidate}" | grep -E "${whiteout_re}" >/dev/null; then
-    echo "a layer whites out /${jar_path} or one of its parent directories" >&2
+    echo "a layer whites out ${jar_abs} or one of its parent directories" >&2
     tar -tf "${candidate}" | grep -E "${whiteout_re}" >&2 || true
     exit 1
   fi
@@ -110,49 +156,45 @@ fi
 config_flat="$(tr -d ' \n' < "${config}")"
 config_raw="$(cat "${config}")"
 
-expected_entrypoint='"Entrypoint":["/usr/bin/shelless_ulimit","/usr/bin/java","-jar","/usr/share/app.jar"]'
-if ! printf '%s' "${config_flat}" | grep -F "${expected_entrypoint}" >/dev/null; then
-  echo "image entrypoint is not [/usr/bin/shelless_ulimit /usr/bin/java -jar /usr/share/app.jar]" >&2
-  printf '%s' "${config_flat}" | grep -o '"Entrypoint":[^]]*]' >&2 || true
-  exit 1
-fi
+# Assert one architecture's config. Used for the host tar and again for every
+# platform in the index, so the two can never drift apart.
+assert_config() {  # assert_config <label> <flattened> <raw>
+  local label="$1" flat="$2" raw="$3"
 
-# Match whole Env elements, quotes included, not substrings. Grepping for
-# MaxRAMPercentage=40.0 alone passes even if the other three JDK_JAVA_OPTIONS
-# values are dropped, and a bare ULIMIT_FLAG=1 would also be satisfied by a
-# differently named variable such as MY_ULIMIT_FLAG=1. The surrounding quotes
-# anchor each check to a complete entry.
-expected_jdk_opts='-XX:MaxRAMPercentage=40.0 -XX:+EnableDynamicAgentLoading -Dreactor.netty.pool.maxIdleTime=30000 -Dreactor.netty.pool.maxConnections=500'
-for expected in \
-  "\"ULIMIT_FLAG=1\"" \
-  "\"JDK_JAVA_OPTIONS=${expected_jdk_opts}\""; do
-  if ! printf '%s' "${config_raw}" | grep -F "${expected}" >/dev/null; then
-    echo "image config is missing expected runtime setting: ${expected}" >&2
-    printf '%s' "${config_flat}" | grep -o '"Env":\[[^]]*\]' >&2 || true
-    exit 1
+  if ! printf '%s' "${flat}" | grep -F "${expected_entrypoint}" >/dev/null; then
+    echo "${label}: entrypoint is not [/usr/bin/shelless_ulimit /usr/bin/java -jar ${jar_abs}]" >&2
+    printf '%s' "${flat}" | grep -o '"Entrypoint":[^]]*]' >&2 || true
+    return 1
   fi
-done
 
-if ! printf '%s' "${config_flat}" | grep -F '"WorkingDir":"/home/app"' >/dev/null; then
-  echo "image working directory is not /home/app" >&2
-  exit 1
-fi
+  # Match whole Env elements, quotes included, not substrings. Grepping for a
+  # fragment such as MaxRAMPercentage=40.0 passes even when the rest of
+  # JDK_JAVA_OPTIONS is dropped, and a bare ULIMIT_FLAG=1 would also be
+  # satisfied by a differently named variable like MY_ULIMIT_FLAG=1.
+  local entry
+  for entry in "${expected_env[@]}"; do
+    if ! printf '%s' "${raw}" | grep -F "\"${entry}\"" >/dev/null; then
+      echo "${label}: config is missing expected env entry: ${entry}" >&2
+      printf '%s' "${flat}" | grep -o '"Env":\[[^]]*\]' >&2 || true
+      return 1
+    fi
+  done
+
+  if ! printf '%s' "${flat}" | grep -F "\"WorkingDir\":\"${workdir}\"" >/dev/null; then
+    echo "${label}: working directory is not ${workdir}" >&2
+    printf '%s' "${flat}" | grep -o '"WorkingDir":"[^"]*"' >&2 || true
+    return 1
+  fi
+}
+
+assert_config "host image" "${config_flat}" "${config_raw}"
 
 # ---------------------------------------------------------------------------
 # 5. the image index carries both architectures, each with the same contract
 # ---------------------------------------------------------------------------
-# Everything above inspects the host-architecture tar. That proves nothing
-# about the arm64 half, and a multi-arch index whose second platform is absent
-# or misconfigured builds and pushes without complaint. Walk the OCI layout
-# directly: index.json -> manifest list -> per-platform manifest -> config.
-#
-# Parsed with grep and sed rather than jq to keep the test hermetic; the
-# structures read here are small and fixed-shape.
-index_dir="${2:-}"
-if [[ -z "${index_dir}" ]]; then
-  echo "usage: $0 <image.tar> <image_index dir>" >&2
-  exit 1
-fi
+# Everything above inspects the host-architecture tar, which says nothing about
+# the other half of a multi-arch index. Walk the OCI layout directly:
+# index.json -> manifest list -> per-platform manifest -> config.
 if [[ ! -f "${index_dir}/index.json" ]]; then
   echo "not an OCI layout (no index.json): ${index_dir}" >&2
   exit 1
@@ -162,7 +204,6 @@ blob_for() {  # blob_for <digest as sha256:hex>
   printf '%s/blobs/%s/%s' "${index_dir}" "${1%%:*}" "${1#*:}"
 }
 
-# index.json holds one descriptor pointing at the manifest list.
 top_digest="$(tr -d ' \n' < "${index_dir}/index.json" \
   | grep -o '"digest":"sha256:[0-9a-f]*"' | head -1 | cut -d'"' -f4)"
 if [[ -z "${top_digest}" ]]; then
@@ -178,7 +219,7 @@ fi
 list_flat="$(tr -d ' \n' < "${manifest_list}")"
 
 for arch in amd64 arm64; do
-  # Split the manifests array into one line per entry so a digest is only ever
+  # Split the manifests array into one entry per line so a digest is only ever
   # read from the same entry that declares the architecture.
   entry="$(printf '%s' "${list_flat}" \
     | sed 's/}, *{/}\n{/g' \
@@ -204,36 +245,17 @@ for arch in amd64 arm64; do
     exit 1
   fi
 
-  arch_cfg="$(tr -d ' \n' < "${cfg_blob}")"
+  arch_flat="$(tr -d ' \n' < "${cfg_blob}")"
   arch_raw="$(cat "${cfg_blob}")"
 
   # The config must declare the architecture it was filed under, otherwise the
   # index is mislabelled and runtimes pull the wrong image for their platform.
-  if ! printf '%s' "${arch_cfg}" | grep -F "\"architecture\":\"${arch}\"" >/dev/null; then
+  if ! printf '%s' "${arch_flat}" | grep -F "\"architecture\":\"${arch}\"" >/dev/null; then
     echo "${arch} entry points at a config declaring a different architecture" >&2
     exit 1
   fi
 
-  # Same runtime contract as the host-architecture checks above.
-  if ! printf '%s' "${arch_cfg}" | grep -F "${expected_entrypoint}" >/dev/null; then
-    echo "${arch} image has the wrong entrypoint" >&2
-    printf '%s' "${arch_cfg}" | grep -o '"Entrypoint":[^]]*]' >&2 || true
-    exit 1
-  fi
-  for expected in \
-    "\"ULIMIT_FLAG=1\"" \
-    "\"JDK_JAVA_OPTIONS=${expected_jdk_opts}\""; do
-    if ! printf '%s' "${arch_raw}" | grep -F "${expected}" >/dev/null; then
-      echo "${arch} image config is missing expected runtime setting: ${expected}" >&2
-      printf '%s' "${arch_cfg}" | grep -o '"Env":\[[^]]*\]' >&2 || true
-      exit 1
-    fi
-  done
-
-  if ! printf '%s' "${arch_cfg}" | grep -F '"WorkingDir":"/home/app"' >/dev/null; then
-    echo "${arch} image working directory is not /home/app" >&2
-    exit 1
-  fi
+  assert_config "${arch} image" "${arch_flat}" "${arch_raw}"
 
   echo "ok: ${arch} manifest present with the expected runtime contract"
 done

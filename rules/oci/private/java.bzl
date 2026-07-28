@@ -17,6 +17,7 @@
 
 load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//rules/oci/private:common.bzl", "create_oci_image")
 
 # NVIDIA distroless java, matching the distroless_go / distroless_cc bases the
@@ -156,6 +157,72 @@ java_oci_image = macro(
         "tags": attr.string_list(
             doc = "Tags for generated targets. 'manual' is always added.",
             configurable = False,
+        ),
+    },
+)
+
+def _java_image_contract_test_impl(name, visibility, image, jar_path, env, workdir, **kwargs):
+    sh_test(
+        name = name,
+        srcs = ["//rules/oci/private:java_image_contract_test.sh"],
+        args = [
+            "$(location {}.tar)".format(image),
+            "$(location {}_index)".format(image),
+            jar_path,
+            workdir,
+        ],
+        # Env expectations travel as environment variables, not args. sh_test
+        # args are shell-word-split, so a value containing spaces such as
+        # JDK_JAVA_OPTIONS would arrive truncated at its first space and the
+        # test would silently assert only the first fragment.
+        env = dict(
+            [("EXPECT_ENV_COUNT", str(len(env)))] +
+            [
+                ("EXPECT_ENV_{}".format(i), "{}={}".format(k, env[k]))
+                for i, k in enumerate(sorted(env.keys()))
+            ],
+        ),
+        data = [
+            image + ".tar",
+            image + "_index",
+        ],
+        visibility = visibility,
+        **kwargs
+    )
+
+java_image_contract_test = macro(
+    doc = """Assert a java_oci_image's runtime contract on every architecture.
+
+    Checks the jar is installed where the entrypoint names it and is not
+    whited out, that the entrypoint keeps the base's shelless_ulimit shim,
+    that every declared env entry is present as a complete entry, and that
+    the working directory matches. Runs against the host tar and against
+    each platform in the image index, so an index that is missing or
+    mislabels an architecture fails.
+
+    Pass the same `env`, `jar_path` and `workdir` given to java_oci_image.
+    """,
+    implementation = _java_image_contract_test_impl,
+    attrs = {
+        "image": attr.string(
+            configurable = False,
+            mandatory = True,
+            doc = "Label of the java_oci_image target, without a suffix.",
+        ),
+        "jar_path": attr.string(
+            configurable = False,
+            default = "/usr/share/app.jar",
+            doc = "Absolute path the jar is installed at.",
+        ),
+        "env": attr.string_dict(
+            configurable = False,
+            default = {},
+            doc = "Env entries that must be present, compared exactly.",
+        ),
+        "workdir": attr.string(
+            configurable = False,
+            default = "/home/app",
+            doc = "Expected working directory.",
         ),
     },
 )

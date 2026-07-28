@@ -1,7 +1,6 @@
 load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
-load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//rules/java:spring.bzl", "spring_boot_app")
-load("//rules/oci:defs.bzl", "java_oci_image")
+load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -103,20 +102,15 @@ java_oci_image(
     workdir = "/home/app",
 )
 
-# Runtime-contract guard for the image. Complements, and does not replace,
-# :tests above (the Java suite).
-#
-# sh_test is loaded explicitly: cloud-tasks builds in the root module on Bazel
-# 9, which no longer provides sh_test as a built-in global.
-sh_test(
+# Runtime-contract guard for the image, shared with every other Java service
+# so the assertions cannot drift apart between them.
+java_image_contract_test(
     name = "image_contract_test",
-    srcs = ["image_contract_test.sh"],
-    args = [
-        "$(location :nvct-service-oss-image.tar)",
-        "$(location :nvct-service-oss-image_index)",
-    ],
-    data = [
-        ":nvct-service-oss-image.tar",
-        ":nvct-service-oss-image_index",
-    ],
+    image = ":nvct-service-oss-image",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "-XX:MaxRAMPercentage=40.0 -XX:+EnableDynamicAgentLoading -Dreactor.netty.pool.maxIdleTime=30000 -Dreactor.netty.pool.maxConnections=500",
+    },
+    workdir = "/home/app",
 )
