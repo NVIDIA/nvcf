@@ -46,29 +46,25 @@ StatefulSet does not include a load-balancer ConfigMap checksum in its pod
 template. After a ConfigMap-only update, restart the StatefulSet so every
 replica loads the same configuration.
 
-## Match nvcf-cli routing methods
+## Distinguish router algorithms from nvcf-cli routing methods
 
-The LLM API Gateway gets the routing method from the function model
-specification in its request context and sends it to Stargate as
-`x-routing-method`. The current `nvcf-cli` accepts these
-`llmConfig.routingMethod` values:
+Algorithm availability is enforced at separate layers:
 
-- `round_robin`
-- `power_of_two`
-- `groq_multiregion`
-- `pulsar`
-- `random`
+| Layer | Input contract | `pulsar-multiregion` support |
+| --- | --- | --- |
+| `lb-config.json` | Canonical Stargate algorithm names | Supported as the default, a model algorithm, or a `request_algorithms` entry. |
+| Current `nvcf-cli` `llmConfig.routingMethod` | `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random` | `pulsar_multiregion` is not accepted. |
+| LLM API Gateway | Nonblank routing method from authenticated model metadata | Trimmed, then forwarded as `x-routing-method` without algorithm validation. |
+| Stargate `x-routing-method` | Case-insensitive algorithm name; multiword names may use hyphens or underscores | Normalized, then accepted only when it matches the effective algorithm or a model or top-level `request_algorithms` entry. Otherwise, Stargate returns HTTP `400`. |
 
-Stargate normalizes underscores to hyphens. A method that differs from the
-effective model or default algorithm must have a matching
-`request_algorithms` entry. For example, `groq_multiregion` requires the
-`groq-multiregion` entry when the effective configured algorithm is
-`power-of-two`.
+For example, when `power-of-two` is the effective algorithm,
+`groq_multiregion` requires a `groq-multiregion` entry in
+`request_algorithms`.
 
-Stargate also implements `pulsar-multiregion`, but the current `nvcf-cli`
-validator does not accept `pulsar_multiregion`. It can still be the static
-default or a model-specific algorithm. A request override requires a control
-plane client that permits that routing value.
+Stargate can use `pulsar-multiregion` as its default or a model algorithm when
+no request override is sent. Selecting it through function model metadata
+requires a control-plane API and client path that accepts
+`pulsar_multiregion`. The current `nvcf-cli` does not provide that path.
 
 ## Keep router headers trusted
 
