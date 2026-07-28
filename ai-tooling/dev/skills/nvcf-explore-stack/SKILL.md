@@ -6,7 +6,7 @@ description: >-
   namespaces, and `needs:` dependency chains. Reads
   deploy/stacks/self-managed/helmfile.d/*.yaml.gotmpl and
   deploy/stacks/nvcf-compute-plane/helmfile.d/*.yaml.gotmpl as the source of
-  truth for ordering and versions, with imports.yaml for upstream provenance.
+  truth for ordering and versions.
   Use when a user or developer asks "what deploys X", "what does X depend
   on", "what hooks run for X", "walk me through deployment order", "which
   subtree do I edit to change X", "what namespaces does the stack use", or
@@ -39,8 +39,7 @@ Use this skill long enough to answer the question, then hand off to the right ex
 
 ## Required inputs
 
-Read these from the monorepo root. Internal checkouts include `imports.yaml`;
-the public snapshot may omit it.
+Read these from the monorepo root.
 
 Authoritative (always read first when answering):
 
@@ -52,19 +51,10 @@ Authoritative (always read first when answering):
 - `deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl`
 - `deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl`
 
-Provenance (when asked which subtree is monorepo-native vs. upstream-owned and
-the file is present):
-
-- `imports.yaml`
-
 Chart-level (when the chart is checked into the monorepo):
 
 - `deploy/helm/<chart>/Chart.yaml`
 - `deploy/helm/<chart>/values.yaml`
-
-If workspace routing metadata is available and disagrees with the helmfile, the
-helmfile wins. Update stale routing metadata in the same change rather than
-guessing.
 
 ## Common questions
 
@@ -75,16 +65,16 @@ What does X depend on
 : Return the `needs:` chain for that release plus the stage gate it sits behind (control-plane stages 0 -> 1 -> 2 -> 3, then compute-plane). Include any profile, `condition:`, or component mode that gates whether X deploys at all.
 
 What hooks run for X
-: Read the checked-in chart under `deploy/helm/<chart>/` when available. Search its `templates/` directory for Helm hook annotations, weights, hook events (pre-install / post-install), images used, and purpose. Cite the chart-relative template file path. If the chart is consumed from OCI only and the local workspace has routing metadata, use the workspace metadata and cite it.
+: Read the checked-in chart under `deploy/helm/<chart>/` when available. Search its `templates/` directory for Helm hook annotations, weights, hook events (pre-install / post-install), images used, and purpose. Cite the chart-relative template file path. If the chart is not checked in, cite its Helmfile chart reference and state that local templates are unavailable.
 
 Walk me through the full deployment order
 : Summarize control-plane stages 0 through 3 from the self-managed gotmpl files. Stage 0 delegates to the shared observability Helmfile when `observability.profile` is enabled. Stage 3 installs State Metrics and the function autoscaler for `control` and `all`. Then summarize the compute-plane stage from `deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl` and `deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl`. Call out which releases run in parallel inside a stage and which are serialized by `needs:`.
 
 Which subtree do I edit to change X
-: Two answers, both are important. For chart wiring (Helm hooks, manifests, values, hook weights) point at `deploy/helm/<chart>/` if the chart is checked in, or note `oci-only` (the chart is consumed from the OCI registry and does not live in the monorepo). For runtime application logic, use the chart image repository, imports.yaml, and any available workspace routing metadata. `authoritative_source: native` means edits land here. `upstream` means edits also flow back to the upstream repo through the internal source-sync workflow.
+: Point at the Helmfile path for orchestration, `deploy/helm/<chart>/` for checked-in chart wiring, and the chart image repository under `src/`, `infra/`, or `migrations/` for runtime behavior. All stack sources are monorepo-native, so edits land in this repository.
 
 What namespaces does the stack use
-: Return the list from the helmfile (`namespace:` per release). If workspace routing metadata includes a destroy namespace list, include it as supplemental context and cite that source.
+: Return the list from the helmfile (`namespace:` per release).
 
 ## Subtree mapping
 
@@ -93,8 +83,8 @@ The stack lives in three layers across the monorepo:
 | Concern | Lives at |
 |---------|----------|
 | Helmfile orchestration (stage ordering, env wiring, secrets flow) | `deploy/stacks/self-managed/` |
-| Chart manifests, helm hooks, values | `deploy/helm/<chart>/` (when vendored) or OCI registry only |
-| Runtime application code, migrations | `src/`, `infra/`, `migrations/` (per `imports.yaml`) |
+| Chart manifests, helm hooks, values | `deploy/helm/<chart>/` when checked in; otherwise use the Helmfile chart reference |
+| Runtime application code, migrations | `src/`, `infra/`, `migrations/` |
 
 When a question crosses layers, answer by layer and tell the user the order to edit (chart wiring first if the deploy contract changes, image source if behavior changes).
 
