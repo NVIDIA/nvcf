@@ -141,9 +141,11 @@ observability:
 
 # Defaults consumed only for the control and all observability profiles.
 functionAutoscaler:
-  # The first chart release containing external envFrom support. The chart's
-  # appVersion pins the compatible autoscaler image.
+  # The first chart release containing external envFrom support.
   chartVersion: "0.2.0"
+  image:
+    # Keep the stack's image pin independent of the chart's release metadata.
+    tag: "1.18.3"
   region: local
   cassandra:
     contactPoints: cassandra.cassandra-system.svc.cluster.local

@@ -94,7 +94,7 @@ helm template function-autoscaler "$repo_dir/deploy/helm/function-autoscaler" \
 
 autoscaler_manifests="$work_dir/autoscaler-manifests.yaml"
 grep -q 'image: nvcr.io/YOUR_ORG/YOUR_TEAM/nvcf-function-autoscaler:1.18.3' "$autoscaler_manifests" ||
-  fail "autoscaler chart did not use its pinned appVersion"
+  fail "self-managed stack did not pin the autoscaler image"
 test "$(grep -c 'name: nvcf-observability-autoscaler' "$autoscaler_manifests")" = "1" ||
   fail "autoscaler chart did not render exactly one external observability envFrom"
 grep -q 'NVCF_API__DRY_RUN: "false"' "$autoscaler_manifests" ||
