@@ -2,12 +2,14 @@
 
 The LLM Request Router serves Prometheus metrics from
 `llm-request-router:9090/metrics` when
-`llmRequestRouter.metrics.enabled` is `true`.
+`llmRequestRouter.metrics.enabled` is `true`. The standalone request-router
+chart defaults this value to `false`.
 
 The self-managed stack maps
 `addons.llm.requestRouter.metrics.enabled` to this chart value. It defaults to
-`true`. The request-router chart passes `--metrics-port` and uses Stargate's
-default `stargate_` metric prefix and `stargate` trace service name.
+`true` when the LLM add-on is enabled. The request-router chart passes
+`--metrics-port` and uses Stargate's default `stargate_` metric prefix and
+`stargate` trace service name.
 
 ## Label Boundaries
 

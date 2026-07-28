@@ -218,7 +218,7 @@ selection. Pulsar ranking supplies that algorithm's affinity.
 | `max_queue_time_floor_ms` | unsigned integer | unset | Queue-SLO lower bound. Has an effect only when `max_queue_time_ceil_ms` is also set. |
 | `max_queue_time_ceil_ms` | unsigned integer | unset | Queue-SLO upper bound. Has an effect only when `max_queue_time_floor_ms` is also set. |
 | `ttft_bucket_size_ms` | unsigned integer | `20` | Maximum TTFT difference within one bucket. |
-| `next_bucket_unlock_factor` | number | `0.25` | Required waited fraction of the TTFT gap before the next bucket unlocks. |
+| `next_bucket_unlock_factor` | number | `0.25` | Fraction of the TTFT gap to wait before the next bucket unlocks. |
 | `n` | unsigned integer | `2` | Number of unlocked candidates sampled. `0` is normalized to `1`. |
 | `max_queued` | unsigned integer | `0` | Additional queued requests allowed above `max_engine_concurrency`. A reported concurrency of `0` disables this capacity check. |
 | `ignore_queue_time` | boolean | `false` | Removes queue delay from TTFT ranking. Queue-SLO filtering still uses the queue estimate. |
@@ -238,7 +238,7 @@ bounds, so set the floor less than or equal to the ceiling.
 | Field | Type | Default | Constraint and effect |
 | --- | --- | --- | --- |
 | `seed` | string | empty | Changes the rendezvous ranking. Keep it stable across replicas. |
-| `consider_kv_free_tokens` | boolean | `false` | Requires reported KV-cache values and skips candidates with fewer free tokens than the request input-token estimate. |
+| `consider_kv_free_tokens` | boolean | `false` | Requires KV-cache values to be reported and skips candidates with fewer free tokens than the request input-token estimate. |
 
 `pulsar-multiregion` supports both multiregion fields and
 `consider_kv_free_tokens`.

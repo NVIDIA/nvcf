@@ -63,7 +63,7 @@ Set `functionType` to `LLM` and define model routing metadata under `models[].ll
       "name": "dummy-model",
       "llmConfig": {
         "uris": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"],
-        "routingMethod": "round_robin",
+        "routingMethod": "power_of_two",
         "tokenRateLimit": "1000-S"
       }
     }
@@ -95,7 +95,7 @@ The same configuration can be provided with CLI flags:
   --inference-url "/" \
   --inference-port 8000 \
   --function-type LLM \
-  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=power_of_two,tokenRateLimit=1000-S"
 ```
 
 These per-model routing fields are mutable. Use `nvcf-cli function update --llm-model-update "name=<model>,routingMethod=<method>,tokenRateLimit=<limit>"` or JSON `modelUpdates` to change them without recreating the function version.
