@@ -1,5 +1,6 @@
 load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
 load("//rules/java:spring.bzl", "spring_boot_app")
+load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -56,4 +57,44 @@ nv_boot_library_test(
         "@nv_third_party_deps//:org_springframework_spring_web",
     ],
     timeout = "long",
+)
+
+# Multi-arch OCI image, the Bazel equivalent of this service's Dockerfile.
+# jar_path, env and workdir mirror that Dockerfile exactly. The entrypoint comes
+# from the shared macro, which keeps the base's shelless_ulimit shim that
+# oci_image would otherwise silently replace.
+java_oci_image(
+    name = "notary-service-oss-image",
+    jar = ":app",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "",
+        "SPRING_PROFILES_ACTIVE": "",
+        "AUTH_TOKEN_ISSUER": "",
+        "ASSERTION_ISSUER_URL": "",
+        "AUTH_TOKEN_SCOPE": "notary-sign",
+        "MAX_REQUEST_BODY_SIZE_BYTES": "4096",
+        "VAULT_SECRETS_JSON_PATH": "vault/vault-secrets.json",
+    },
+    workdir = "/home/app",
+)
+
+# The shared guard every Java service uses, so the runtime contract cannot drift
+# between services or between the architectures in the index.
+java_image_contract_test(
+    name = "image_contract_test",
+    image = ":notary-service-oss-image",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "",
+        "SPRING_PROFILES_ACTIVE": "",
+        "AUTH_TOKEN_ISSUER": "",
+        "ASSERTION_ISSUER_URL": "",
+        "AUTH_TOKEN_SCOPE": "notary-sign",
+        "MAX_REQUEST_BODY_SIZE_BYTES": "4096",
+        "VAULT_SECRETS_JSON_PATH": "vault/vault-secrets.json",
+    },
+    workdir = "/home/app",
 )
