@@ -19,8 +19,8 @@ deployments.
   `observability.profile`; do not expose parallel plane booleans.
 - Enabled profiles install shared components once by default. Fine-grained
   component modes are `install`, `existing`, and `disabled`.
-- Derive NVCA BYOO support from compute and all profiles. Keep the NVCA
-  collector disabled by default.
+- Derive the NVCA collector and `BYOObservability` feature gate from `compute`
+  and `all`. Preserve explicit compute-plane overrides.
 
 ## Key Files
 

@@ -30,6 +30,7 @@ test:
 		--set functionautoscaler.image.repository=test/nvcf-function-autoscaler
 	@tests/profile-defaults.sh
 	@../self-managed/tests/observability-autoscaler.sh
+	@../nvcf-compute-plane/tests/observability-profile.sh
 
 install:
 	@echo ">>> Installing observability stack"

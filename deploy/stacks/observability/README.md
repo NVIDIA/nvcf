@@ -25,6 +25,10 @@ self-managed stack defaults to `control`.
 Profiles derive the plane behavior internally. There are no
 `planes.control.enabled` or `planes.compute.enabled` values.
 
+The compute-plane consumer maps `compute` and `all` to
+`selfManaged.otelCollector.enabled: true` and the `BYOObservability` NVCA
+feature gate. Explicit collector and feature-gate values still win.
+
 ## Overrides
 
 Profiles are defaults, not restrictions. Monitor groups and individual targets
