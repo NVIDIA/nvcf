@@ -28,8 +28,8 @@ dcgm:
   port: dcgm-metrics
   labels: {}
 
-# Control-plane ServiceMonitors, owned by the obs stack. Each renders one
-# ServiceMonitor that picks up the observability-target label via commonLabels.
+# These plane gates are internal inputs derived from observability.profile by
+# the parent stack. They are not public user-facing switches.
 controlPlane:
   enabled: false
   interval: 30s
@@ -49,22 +49,38 @@ controlPlane:
       enabled: true
       selector:
         app.kubernetes.io/instance: grpc-proxy
-    - name: api
-      enabled: true
-      selector:
-        app.kubernetes.io/name: helm-nvcf-api
-    - name: sis
-      enabled: true
-      namespaces:
-        - sis
-      selector:
-        app.kubernetes.io/name: helm-nvcf-sis
     - name: llm-api-gateway
       enabled: true
       selector:
         app.kubernetes.io/instance: llm-api-gateway
-    # Off until the Invocation Service exporter is enabled.
     - name: invocation-service
-      enabled: false
+      enabled: true
       selector:
         app.kubernetes.io/instance: invocation-service
+
+computePlane:
+  enabled: false
+
+nvca:
+  enabled: true
+  namespaceSelector:
+    matchNames:
+      - nvca-system
+  interval: 30s
+  path: /metrics
+  port: nvca
+  selector:
+    app.kubernetes.io/name: nvca
+  labels: {}
+
+worker:
+  enabled: true
+  namespaceSelector:
+    matchExpressions:
+      - key: nvca.nvcf.nvidia.io/workload-instance-type
+        operator: Exists
+  interval: 30s
+  path: /metrics
+  port: metrics
+  selector: {}
+  labels: {}

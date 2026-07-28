@@ -15,25 +15,24 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
-{{- if and .Values.computePlane.enabled .Values.dcgm.enabled }}
+{{- if and .Values.computePlane.enabled .Values.worker.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: {{ include "nvcf-default-monitors.name" . }}-dcgm
-  namespace: {{ default .Release.Namespace .Values.dcgm.namespace }}
+  name: {{ include "nvcf-default-monitors.name" . }}-worker
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nvcf-default-monitors.labels" . | nindent 4 }}
-    {{- with .Values.dcgm.labels }}
+    {{- with .Values.worker.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
-  podMetricsEndpoints:
-    - interval: {{ .Values.dcgm.interval | quote }}
-      path: {{ .Values.dcgm.path | quote }}
-      port: {{ .Values.dcgm.port | quote }}
   namespaceSelector:
-    {{- toYaml .Values.dcgm.namespaceSelector | nindent 4 }}
+    {{- toYaml .Values.worker.namespaceSelector | nindent 4 }}
   selector:
-    matchLabels:
-      nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
+    matchLabels: {{ .Values.worker.selector | toJson }}
+  podMetricsEndpoints:
+    - interval: {{ .Values.worker.interval | quote }}
+      path: {{ .Values.worker.path | quote }}
+      port: {{ .Values.worker.port | quote }}
 {{- end }}

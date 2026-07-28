@@ -66,10 +66,15 @@ spec:
           {{- toYaml .Values.functionautoscaler.readinessProbe | nindent 10 }}
         resources:
           {{- toYaml .Values.functionautoscaler.resources | nindent 10 }}
-        {{- if .Values.functionautoscaler.env }}
+        {{- if or .Values.functionautoscaler.env .Values.functionautoscaler.envFrom }}
         envFrom:
+        {{- if .Values.functionautoscaler.env }}
         - configMapRef:
             name: {{ include "function-autoscaler.fullname" . }}-env
+        {{- end }}
+        {{- with .Values.functionautoscaler.envFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         {{- end }}
         {{- if or .Values.functionautoscaler.volumeMounts .Values.functionautoscaler.vault.enabled }}
         volumeMounts:

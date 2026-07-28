@@ -1,128 +1,202 @@
 # nvcf-observability-stack
 
-Reusable Helmfile stack scaffold for self-hosted NVCF observability. It is
-consumed by self-managed control-plane deployments and optional standalone
-compute-plane deployments.
-
-The stack can own:
-
-- Prometheus Operator CRDs required for `ServiceMonitor` and `PodMonitor`
-- OpenTelemetry Operator
-- Control-plane OpenTelemetry Collector with Target Allocator support
-- Read-only RBAC for monitor discovery and Kubernetes service discovery
-- VictoriaMetrics for the bundled local TSDB
-- Default NVCF monitor resources, starting with DCGM
-
-BYOO and NVCA collectors are separate optional features and default off.
-
-## Modes
-
-Set `observability.mode` per consuming stack.
-
-| Mode | Behavior |
-| --- | --- |
-| `install` | Install enabled shared observability infrastructure in this cluster. |
-| `existing` | Assume shared infrastructure already exists, but allow default monitors to be rendered against it. |
-| `disabled` | Render no observability runtime resources. Valid for compute-plane deployments that do not need NVCF-managed scrape coverage. |
-
-For a single-cluster self-managed deployment, the consuming control-plane stack
-should use `install` and the consuming compute-plane stack should use
-`existing`. For standalone compute-plane clusters, the compute-plane stack
-should use `install` only when NVCF-managed NVCA, DCGM, or worker metric
-scraping is required.
-
-## Component Gates
-
-Base defaults keep runtime resources disabled until a consuming stack wires the
-chart repository, mirrored images, release artifact path, and environment
-overlay.
-
-A single-cluster self-managed overlay should enable the control-plane path:
+Reusable Helmfile stack for self-hosted NVCF observability. A cluster installs
+this stack at most once and selects the targets with one value:
 
 ```yaml
 observability:
-  mode: install
-  namespace: monitoring
-
-prometheusOperatorCrds:
-  enabled: true
-
-opentelemetryOperator:
-  enabled: true
-
-controlPlaneCollector:
-  enabled: true
-
-victoriaMetrics:
-  enabled: true
-
-defaultMonitors:
-  enabled: true
-  dcgm:
-    enabled: true
+  profile: control
 ```
 
-`environments/local.yaml` disables runtime resources so the scaffold can render
-offline without a cluster or registry configuration.
+The stack can own:
 
-When `controlPlaneCollector.enabled` is true in `install` mode, the stack uses
-the OpenTelemetry Operator and Prometheus Operator CRDs configured by values.
-Enable both unless the deployment uses a customer-managed operator or CRD
-contract, because the collector is an `OpenTelemetryCollector` CR and the Target
-Allocator monitor path requires the monitor CRDs.
+- Prometheus Operator CRDs for `ServiceMonitor` and `PodMonitor`
+- OpenTelemetry Operator
+- One OpenTelemetry Collector with Target Allocator support
+- Read-only discovery RBAC
+- VictoriaMetrics
+- NVCF-owned default monitor resources
 
-The default namespace is `monitoring` so collector traffic matches NVCA's
-current DCGM metrics NetworkPolicy. If a consuming stack changes the namespace,
-it must also update the NVCA NetworkPolicy contract or provide an equivalent
-reachability rule.
+## Profiles
 
-For EKS/ADOT-style environments where another operator owns the
-OpenTelemetry CRDs, set:
+| Profile | Control targets | Compute targets | Result |
+| --- | --- | --- | --- |
+| `disabled` | No | No | Render no observability releases or resources. |
+| `control` | Yes | No | Install one stack for control-plane metrics and the autoscaler backend contract. |
+| `compute` | No | Yes | Install one stack for NVCA, DCGM, and worker metrics; resolve NVCA BYOO support on. |
+| `all` | Yes | Yes | Install the union once; do not duplicate shared components. |
+
+The packaged reusable stack defaults to `disabled`. Its self-managed
+control-plane example overlay defaults to `control`. A standalone compute-plane
+consumer should select `compute`. A colocated deployment should install this
+artifact once with `all`; it must not configure a second observability-stack
+release from the compute-plane consumer.
+
+The public configuration does not expose
+`planes.control.enabled` or `planes.compute.enabled`. Those values are derived
+internally from the profile.
+
+## Profile Defaults
+
+Every enabled profile installs these shared components by default:
+
+- Prometheus Operator CRDs
+- OpenTelemetry Operator
+- One OpenTelemetry Collector
+- Target Allocator
+- Discovery RBAC
+- One VictoriaMetrics instance
+
+The profile-specific defaults are:
+
+| Default | `disabled` | `control` | `compute` | `all` |
+| --- | --- | --- | --- | --- |
+| Control-plane monitors | Off | On | Off | On |
+| NVCA `ServiceMonitor` | Off | Off | On | On |
+| DCGM `PodMonitor` | Off | Off | On | On |
+| Worker `PodMonitor` | Off | Off | On | On |
+| BYOO support | Off | Off | On | On |
+| Autoscaler integration | Off | On | Off | On |
+| NVCA collector | Off | Off | Off | Off |
+
+Control-plane monitoring covers State Metric Service, Invocation Service, gRPC
+Proxy, and LLM API Gateway. Compute monitoring selects NVCA in `nvca-system`,
+DCGM pods that carry NVCA's DCGM metrics label, and pods exposing a `metrics`
+port in NVCA-managed workload namespaces.
+
+For `compute` and `all`, the resolved profile contract defaults BYOO support on.
+The NVCA installer should map that value to its existing `BYOObservability`
+feature gate. The feature gate enables the per-function BYOO collector path; it
+does not create a second shared collector. This stack does not deploy NVCA.
+
+Every enabled profile publishes its resolved consumer defaults in the
+`nvcf-observability-profile` ConfigMap in the contract namespace, `nvcf` by
+default. That contract lets separately packaged consumers use the profile
+result without reimplementing profile logic or installing this stack again.
+
+## Fine-Grained Overrides
+
+Profiles provide normal defaults. Advanced installations can override shared
+component ownership with `install`, `existing`, or `disabled`.
+
+The fully expanded ownership configuration below is equivalent to setting only
+`observability.profile: control`:
 
 ```yaml
-opentelemetryOperator:
-  enabled: false
+observability:
+  profile: control
+  components:
+    prometheusOperatorCrds:
+      mode: install
+    otelOperator:
+      mode: install
+    collector:
+      mode: install
+    targetAllocator:
+      mode: install
+    discoveryRbac:
+      mode: install
 
-prometheusOperatorCrds:
-  enabled: false
+metricsBackend:
+  mode: install
+  type: victoriaMetrics
 ```
 
-The control-plane collector can still be configured to remote-write to a
-customer-owned TSDB, and the autoscaler chart should read from that same TSDB.
-When the bundled VictoriaMetrics release is enabled, the collector remote-write
-endpoint must match the VictoriaMetrics namespace.
+For example, a deployment that supplies its own operator and metrics backend
+can override only those ownership decisions:
 
-## Default Monitors
+```yaml
+observability:
+  profile: control
+  components:
+    otelOperator:
+      mode: existing
 
-Application charts own stable metrics contracts: service names or labels, pod
-labels, port names, paths, and namespaces. This stack owns the default monitor
-resources that select those contracts.
+metricsBackend:
+  mode: existing
+  type: external
+  remoteWriteEndpoint: https://metrics.example.com/write
+  promqlEndpoint: https://metrics.example.com
+```
 
-The initial scaffold includes one concrete default monitor:
+Supported component paths are:
 
-- DCGM exporter pods selected by `nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"` on the `dcgm-metrics` named port
+- `observability.components.prometheusOperatorCrds.mode`
+- `observability.components.otelOperator.mode`
+- `observability.components.collector.mode`
+- `observability.components.targetAllocator.mode`
+- `observability.components.discoveryRbac.mode`
+- `metricsBackend.mode`
 
-Keep the DCGM monitor disabled until the consuming stack owns the NVCA chart
-contract that guarantees the injected DCGM metrics port keeps the
-`dcgm-metrics` name.
+`install` makes this stack the owner. `existing` skips installation and requires
+a separate installer preflight to verify a compatible external component.
+`disabled` does not install or use the component. Overrides that contradict
+required dependencies fail during Helmfile rendering. Component overrides
+cannot install resources under `profile: disabled`.
 
-Default monitors carry `nvcf.nvidia.com/observability-target: "true"` so the Target
-Allocator can select only NVCF-owned scrape targets by default.
+The bundled backend derives both endpoints from the VictoriaMetrics namespace:
 
-Add NVCA, State Metric Service, worker, or control-plane service monitors as
-concrete templates only after their chart-owned scrape contracts are stable.
+```text
+remote write: http://vmsingle.monitoring.svc.cluster.local:8428/api/v1/write
+PromQL:       http://vmsingle.monitoring.svc.cluster.local:8428
+```
 
-The control-plane collector cannot discover compute-plane-local scrape targets
-in a different Kubernetes cluster. Decoupled compute clusters need their own
-observability-stack instance, customer-owned observability, or no NVCF-managed
-DCGM/NVCA/worker scrape coverage.
+An external backend must provide both endpoints for `control` and `all`.
+
+## Autoscaler Contract
+
+The autoscaler is a control-plane consumer, not a second observability stack.
+It reads from the same `metricsBackend.promqlEndpoint` selected by the profile.
+For `control` and `all`, the stack publishes that resolved contract as
+`nvcf-observability-autoscaler` in the `nvcf` namespace:
+
+```yaml
+data:
+  TIMESERIES_DB__TIMESERIES_DB_URL: http://vmsingle.monitoring.svc.cluster.local:8428
+  TIMESERIES_DB__AUTH_MODE: none
+  TIMESERIES_DB__IGNORE_ENV: "true"
+```
+
+`autoscalerIntegration.namespace` sets the contract release namespace, and
+`autoscalerIntegration.configMapName` overrides the autoscaler ConfigMap name.
+For an external backend, `metricsBackend.authentication.mode` supports `none`,
+`token`, and `mtls`. Token mode also requires `authnEndpoint`; mTLS mode
+requires paths for the mounted client certificate and private key.
+
+The self-managed Helmfile deploys the function autoscaler for `control` and
+`all` and consumes this ConfigMap through the chart's external `envFrom`
+reference. It also supplies the Cassandra and NVCF API endpoints needed by the
+self-managed runtime. The autoscaler does not need another observability enable
+flag, backend mode, or duplicated VictoriaMetrics URL. The `compute` and
+`disabled` profiles do not deploy it.
+
+## Monitor Contracts
+
+Application charts own stable metrics endpoints, labels, named ports, paths,
+and namespaces. This stack owns the default monitor resources that select those
+contracts.
+
+Default monitors carry
+`nvcf.nvidia.com/observability-target: "true"` so the Target Allocator selects
+only NVCF-owned scrape targets.
+
+The default namespace is `monitoring`. If a deployment changes it, it must also
+provide NetworkPolicy reachability for the collector.
 
 ## Local Rendering
+
+The checked-in local environment is disabled by default:
 
 ```sh
 make template HELMFILE_ENV=local
 ```
 
-`environments/local.yaml` is an opt-in example. Replace the chart repository,
-image repository, and exporter endpoint with values for the target cluster
-before enabling runtime components.
+Change only `observability.profile` in the environment file to render a
+complete enabled profile. Replace the example chart repository and image
+repository before installing in a cluster.
+
+Run the Helmfile profile assertions and autoscaler chart render checks with:
+
+```sh
+make test
+```

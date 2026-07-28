@@ -140,3 +140,10 @@ functionautoscaler:
     # Read the secrets file rendered by the Vault Agent. Override this value
     # when mounting secrets manually.
     SECRETS_PATH: "/vault/secrets/secrets.json"
+
+  # Additional ConfigMaps or Secrets to load after the chart-owned env
+  # ConfigMap. This lets a stack provide resolved infrastructure contracts
+  # without duplicating them in this chart's values.
+  envFrom: []
+  # - configMapRef:
+  #     name: nvcf-observability-autoscaler

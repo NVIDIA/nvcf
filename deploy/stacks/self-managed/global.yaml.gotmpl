@@ -589,6 +589,44 @@ stateMetrics:
   serviceMonitor:
     enabled: false
 
+{{- $observabilityContract := dict
+      "profile" (dig "observability" "profile" "disabled" .Values)
+      "metricsBackend" (dig "metricsBackend" dict .Values)
+      "autoscalerIntegration" (dig "autoscalerIntegration" dict .Values) }}
+functionautoscaler:
+  namespace: nvcf
+  fullnameOverride: function-autoscaler
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-function-autoscaler
+    {{- with dig "functionAutoscaler" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
+  podAnnotations:
+    checksum/observability-contract: {{ toJson $observabilityContract | sha256sum | quote }}
+  env:
+    CONFIG: /etc/server/config/settings-local.yaml
+    SECRETS_PATH: /vault/secrets/secrets.json
+    REGION: {{ dig "functionAutoscaler" "region" "local" .Values | quote }}
+    CASSANDRA__CONTACT_POINTS: {{ dig "functionAutoscaler" "cassandra" "contactPoints" "cassandra.cassandra-system.svc.cluster.local" .Values | quote }}
+    CASSANDRA__IS_DEVELOPMENT: {{ dig "functionAutoscaler" "cassandra" "isDevelopment" false .Values | quote }}
+    NVCF_API__NVCF_API_GRPC_ADDRESS: {{ dig "functionAutoscaler" "nvcfApi" "grpcAddress" "http://api.nvcf.svc.cluster.local:9090" .Values | quote }}
+    NVCF_API__DISABLE_AUTH: {{ dig "functionAutoscaler" "nvcfApi" "disableAuth" true .Values | quote }}
+    NVCF_API__DRY_RUN: {{ dig "functionAutoscaler" "nvcfApi" "dryRun" false .Values | quote }}
+  envFrom:
+    - configMapRef:
+        name: {{ dig "autoscalerIntegration" "configMapName" "nvcf-observability-autoscaler" .Values }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+
 reval:
   fullnameOverride: reval
   {{- if .Values.global.imagePullSecrets }}

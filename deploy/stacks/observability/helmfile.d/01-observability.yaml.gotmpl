@@ -6,24 +6,119 @@ environments:
 
 ---
 
-{{- $mode := dig "observability" "mode" "disabled" .Values }}
-{{- if not (has $mode (list "install" "existing" "disabled")) }}
-{{- fail (printf "observability.mode must be install, existing, or disabled, got %q" $mode) }}
+{{- $profile := dig "observability" "profile" "disabled" .Values }}
+{{- if not (has $profile (list "disabled" "control" "compute" "all")) }}
+{{- fail (printf "observability.profile must be disabled, control, compute, or all, got %q" $profile) }}
 {{- end }}
-{{- $installMode := eq $mode "install" }}
-{{- $existingMode := eq $mode "existing" }}
+{{- $profileEnabled := ne $profile "disabled" }}
+{{- $controlEnabled := or (eq $profile "control") (eq $profile "all") }}
+{{- $computeEnabled := or (eq $profile "compute") (eq $profile "all") }}
+{{- $defaultComponentMode := ternary "install" "disabled" $profileEnabled }}
+{{- $prometheusOperatorCrdsMode := dig "observability" "components" "prometheusOperatorCrds" "mode" $defaultComponentMode .Values }}
+{{- $opentelemetryOperatorMode := dig "observability" "components" "otelOperator" "mode" $defaultComponentMode .Values }}
+{{- $collectorMode := dig "observability" "components" "collector" "mode" $defaultComponentMode .Values }}
+{{- $targetAllocatorMode := dig "observability" "components" "targetAllocator" "mode" $defaultComponentMode .Values }}
+{{- $discoveryRbacMode := dig "observability" "components" "discoveryRbac" "mode" $defaultComponentMode .Values }}
+{{- $metricsBackendMode := dig "metricsBackend" "mode" $defaultComponentMode .Values }}
+{{- $componentModes := dict
+      "observability.components.prometheusOperatorCrds.mode" $prometheusOperatorCrdsMode
+      "observability.components.otelOperator.mode" $opentelemetryOperatorMode
+      "observability.components.collector.mode" $collectorMode
+      "observability.components.targetAllocator.mode" $targetAllocatorMode
+      "observability.components.discoveryRbac.mode" $discoveryRbacMode
+      "metricsBackend.mode" $metricsBackendMode }}
+{{- range $name, $mode := $componentModes }}
+{{- if not (has $mode (list "install" "existing" "disabled")) }}
+{{- fail (printf "%s must be install, existing, or disabled, got %q" $name $mode) }}
+{{- end }}
+{{- if and (not $profileEnabled) (ne $mode "disabled") }}
+{{- fail (printf "%s cannot be %q when observability.profile=disabled" $name $mode) }}
+{{- end }}
+{{- end }}
+{{- if and (eq $collectorMode "install") (eq $opentelemetryOperatorMode "disabled") }}
+{{- fail "observability.components.otelOperator.mode cannot be disabled when the collector is installed; use existing for a customer-managed operator" }}
+{{- end }}
+{{- if and (eq $collectorMode "install") (eq $prometheusOperatorCrdsMode "disabled") (eq $targetAllocatorMode "install") }}
+{{- fail "observability.components.prometheusOperatorCrds.mode cannot be disabled when the collector installs the Target Allocator" }}
+{{- end }}
+{{- if and $profileEnabled (eq $prometheusOperatorCrdsMode "disabled") }}
+{{- fail "observability.components.prometheusOperatorCrds.mode cannot be disabled for an enabled profile because default monitors require the APIs; use existing for customer-managed CRDs" }}
+{{- end }}
+{{- if and (eq $collectorMode "install") (eq $metricsBackendMode "disabled") }}
+{{- fail "metricsBackend.mode cannot be disabled when the collector is installed; use existing for an external backend" }}
+{{- end }}
+{{- if and $controlEnabled (eq $metricsBackendMode "disabled") }}
+{{- fail "metricsBackend.mode cannot be disabled for control or all because the autoscaler requires a PromQL endpoint" }}
+{{- end }}
+{{- if and (eq $collectorMode "install") (eq $targetAllocatorMode "existing") }}
+{{- fail "observability.components.targetAllocator.mode=existing requires observability.components.collector.mode=existing; use install or disabled with a stack-owned collector" }}
+{{- end }}
+{{- if and (ne $collectorMode "install") (eq $targetAllocatorMode "install") }}
+{{- fail "observability.components.targetAllocator.mode=install requires observability.components.collector.mode=install" }}
+{{- end }}
+{{- if and (ne $collectorMode "install") (eq $discoveryRbacMode "install") }}
+{{- fail "observability.components.discoveryRbac.mode=install requires observability.components.collector.mode=install" }}
+{{- end }}
+{{- if and (eq $targetAllocatorMode "install") (eq $discoveryRbacMode "disabled") }}
+{{- fail "observability.components.discoveryRbac.mode cannot be disabled when the Target Allocator is installed; use existing for externally managed RBAC" }}
+{{- end }}
 {{- $observabilityNamespace := dig "observability" "namespace" "monitoring" .Values }}
-{{- $controlPlaneCollectorEnabled := and $installMode (dig "controlPlaneCollector" "enabled" false .Values) }}
-{{- $defaultMonitorsEnabled := and (or $installMode $existingMode) (dig "defaultMonitors" "enabled" false .Values) }}
-{{- $prometheusOperatorCrdsEnabled := and $installMode (dig "prometheusOperatorCrds" "enabled" false .Values) }}
-{{- $opentelemetryOperatorEnabled := and $installMode (dig "opentelemetryOperator" "enabled" false .Values) }}
-{{- $victoriaMetricsEnabled := and $installMode (dig "victoriaMetrics" "enabled" false .Values) }}
+{{- $prometheusOperatorCrdsEnabled := eq $prometheusOperatorCrdsMode "install" }}
+{{- $opentelemetryOperatorEnabled := eq $opentelemetryOperatorMode "install" }}
+{{- $collectorEnabled := eq $collectorMode "install" }}
+{{- $targetAllocatorEnabled := eq $targetAllocatorMode "install" }}
+{{- $discoveryRbacEnabled := eq $discoveryRbacMode "install" }}
+{{- $victoriaMetricsEnabled := eq $metricsBackendMode "install" }}
+{{- $defaultMonitorsEnabled := $profileEnabled }}
+{{- $autoscalerIntegrationEnabled := $controlEnabled }}
+{{- $contractNamespace := dig "autoscalerIntegration" "namespace" "nvcf" .Values }}
 {{- $victoriaMetricsNamespace := dig "victoriaMetrics" "namespace" $observabilityNamespace .Values }}
 {{- $bundledRemoteWriteEndpoint := printf "http://vmsingle.%s.svc.cluster.local:8428/api/v1/write" $victoriaMetricsNamespace }}
-{{- $configuredRemoteWriteEndpoint := dig "controlPlaneCollector" "config" "exporters" "prometheusremotewrite" "endpoint" "" .Values }}
-{{- if and $controlPlaneCollectorEnabled $victoriaMetricsEnabled (ne $configuredRemoteWriteEndpoint $bundledRemoteWriteEndpoint) }}
-{{- fail (printf "controlPlaneCollector.config.exporters.prometheusremotewrite.endpoint must be %q when victoriaMetrics.enabled=true, got %q" $bundledRemoteWriteEndpoint $configuredRemoteWriteEndpoint) }}
+{{- $bundledPromqlEndpoint := printf "http://vmsingle.%s.svc.cluster.local:8428" $victoriaMetricsNamespace }}
+{{- $metricsBackendType := dig "metricsBackend" "type" "victoriaMetrics" .Values }}
+{{- $metricsBackendAuthMode := dig "metricsBackend" "authentication" "mode" "none" .Values }}
+{{- if not (has $metricsBackendAuthMode (list "none" "token" "mtls")) }}
+{{- fail (printf "metricsBackend.authentication.mode must be none, token, or mtls, got %q" $metricsBackendAuthMode) }}
 {{- end }}
+{{- if and $victoriaMetricsEnabled (ne $metricsBackendType "victoriaMetrics") }}
+{{- fail (printf "metricsBackend.type must be victoriaMetrics when metricsBackend.mode=install, got %q" $metricsBackendType) }}
+{{- end }}
+{{- if and $victoriaMetricsEnabled (ne $metricsBackendAuthMode "none") }}
+{{- fail "metricsBackend.authentication.mode must be none when metricsBackend.mode=install" }}
+{{- end }}
+{{- if and (eq $metricsBackendMode "existing") (ne $metricsBackendType "external") }}
+{{- fail (printf "metricsBackend.type must be external when metricsBackend.mode=existing, got %q" $metricsBackendType) }}
+{{- end }}
+{{- $remoteWriteEndpoint := ternary $bundledRemoteWriteEndpoint (dig "metricsBackend" "remoteWriteEndpoint" "" .Values) $victoriaMetricsEnabled }}
+{{- $promqlEndpoint := ternary $bundledPromqlEndpoint (dig "metricsBackend" "promqlEndpoint" "" .Values) $victoriaMetricsEnabled }}
+{{- if and (eq $metricsBackendMode "existing") (empty $remoteWriteEndpoint) }}
+{{- fail "metricsBackend.remoteWriteEndpoint is required when metricsBackend.mode=existing" }}
+{{- end }}
+{{- if and $controlEnabled (eq $metricsBackendMode "existing") (empty $promqlEndpoint) }}
+{{- fail "metricsBackend.promqlEndpoint is required for control and all profiles when metricsBackend.mode=existing" }}
+{{- end }}
+{{- $metricsBackendAuthnEndpoint := dig "metricsBackend" "authentication" "authnEndpoint" "" .Values }}
+{{- $metricsBackendClientCertificatePath := dig "metricsBackend" "authentication" "clientCertificatePath" "" .Values }}
+{{- $metricsBackendClientPrivateKeyPath := dig "metricsBackend" "authentication" "clientPrivateKeyPath" "" .Values }}
+{{- if and $controlEnabled (eq $metricsBackendAuthMode "token") (empty $metricsBackendAuthnEndpoint) }}
+{{- fail "metricsBackend.authentication.authnEndpoint is required for token authentication" }}
+{{- end }}
+{{- if and $controlEnabled (eq $metricsBackendAuthMode "mtls") (or (empty $metricsBackendClientCertificatePath) (empty $metricsBackendClientPrivateKeyPath)) }}
+{{- fail "metricsBackend.authentication.clientCertificatePath and clientPrivateKeyPath are required for mtls authentication" }}
+{{- end }}
+{{- $collectorConfig := deepCopy (dig "collector" "config" dict .Values) }}
+{{- $collectorExporters := deepCopy (dig "exporters" dict $collectorConfig) }}
+{{- $prometheusRemoteWrite := deepCopy (dig "prometheusremotewrite" dict $collectorExporters) }}
+{{- $_ := set $prometheusRemoteWrite "endpoint" $remoteWriteEndpoint }}
+{{- $_ := set $collectorExporters "prometheusremotewrite" $prometheusRemoteWrite }}
+{{- $_ := set $collectorConfig "exporters" $collectorExporters }}
+{{- $defaultMonitors := deepCopy (dig "defaultMonitors" dict .Values) }}
+{{- $controlPlaneMonitors := deepCopy (dig "controlPlane" dict $defaultMonitors) }}
+{{- $_ := set $controlPlaneMonitors "enabled" $controlEnabled }}
+{{- $_ := set $defaultMonitors "controlPlane" $controlPlaneMonitors }}
+{{- $computePlaneMonitors := deepCopy (dig "computePlane" dict $defaultMonitors) }}
+{{- $_ := set $computePlaneMonitors "enabled" $computeEnabled }}
+{{- $_ := set $defaultMonitors "computePlane" $computePlaneMonitors }}
 
 repositories:
   - name: nvcf
@@ -96,10 +191,10 @@ releases:
       release-group: observability
   {{- end }}
 
-  {{- if $controlPlaneCollectorEnabled }}
-  - name: control-plane-collector
+  {{- if $collectorEnabled }}
+  - name: otel-collector
     chart: ../charts/nvcf-otel-collector
-    namespace: {{ dig "controlPlaneCollector" "namespace" $observabilityNamespace .Values }}
+    namespace: {{ dig "collector" "namespace" $observabilityNamespace .Values }}
     {{- if or $opentelemetryOperatorEnabled $prometheusOperatorCrdsEnabled $victoriaMetricsEnabled }}
     needs:
       {{- if $opentelemetryOperatorEnabled }}
@@ -113,18 +208,20 @@ releases:
       {{- end }}
     {{- end }}
     values:
-      - collectorName: {{ dig "controlPlaneCollector" "collectorName" "nvcf-control-plane" .Values | quote }}
-        image: {{ dig "controlPlaneCollector" "image" "" .Values | quote }}
+      - collectorName: {{ dig "collector" "collectorName" "nvcf-observability" .Values | quote }}
+        image: {{ dig "collector" "image" "" .Values | quote }}
         {{- if .Values.global.imagePullSecrets }}
         imagePullSecrets:
           {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
         {{- end }}
         targetAllocatorRbac:
-          create: {{ dig "controlPlaneCollector" "targetAllocatorRbac" "create" true .Values }}
+          create: {{ $discoveryRbacEnabled }}
         targetAllocator:
-          {{- toYaml (dig "controlPlaneCollector" "targetAllocator" dict .Values) | nindent 10 }}
+          {{- $targetAllocator := deepCopy (dig "collector" "targetAllocator" dict .Values) }}
+          {{- $_ := set $targetAllocator "enabled" $targetAllocatorEnabled }}
+          {{- toYaml $targetAllocator | nindent 10 }}
         config:
-          {{- toYaml (dig "controlPlaneCollector" "config" dict .Values) | nindent 10 }}
+          {{- toYaml $collectorConfig | nindent 10 }}
     labels:
       release-group: observability
   {{- end }}
@@ -138,7 +235,35 @@ releases:
       - {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}/prometheus-operator-crds
     {{- end }}
     values:
-      - {{- toYaml (dig "defaultMonitors" dict .Values) | nindent 8 }}
+      - {{- toYaml $defaultMonitors | nindent 8 }}
+    labels:
+      release-group: observability
+  {{- end }}
+
+  {{- if $profileEnabled }}
+  - name: observability-contract
+    chart: ../charts/nvcf-observability-contract
+    namespace: {{ $contractNamespace }}
+    {{- if $victoriaMetricsEnabled }}
+    needs:
+      - {{ $victoriaMetricsNamespace }}/victoria-metrics
+    {{- end }}
+    values:
+      - profile: {{ $profile | quote }}
+        controlTargetsEnabled: {{ $controlEnabled }}
+        computeTargetsEnabled: {{ $computeEnabled }}
+        byooSupportEnabled: {{ $computeEnabled }}
+        nvcaCollectorEnabled: false
+        autoscaler:
+          enabled: {{ $autoscalerIntegrationEnabled }}
+          namespace: {{ dig "autoscalerIntegration" "namespace" "nvcf" .Values | quote }}
+          configMapName: {{ dig "autoscalerIntegration" "configMapName" "nvcf-observability-autoscaler" .Values | quote }}
+          promqlEndpoint: {{ $promqlEndpoint | quote }}
+          authMode: {{ $metricsBackendAuthMode | quote }}
+          authnEndpoint: {{ $metricsBackendAuthnEndpoint | quote }}
+          clientCertificatePath: {{ $metricsBackendClientCertificatePath | quote }}
+          clientPrivateKeyPath: {{ $metricsBackendClientPrivateKeyPath | quote }}
+          ignoreEnv: {{ dig "autoscalerIntegration" "ignoreEnv" true .Values }}
     labels:
       release-group: observability
   {{- end }}
