@@ -74,6 +74,8 @@ done
 
 render_values compute "$work_dir/compute-overrides.yaml" \
   --state-values-set global.nvcaOperator.selfManaged.otelCollector.enabled=false \
+  --state-values-set-string global.nvcaOperator.selfManaged.otelCollector.imageRepository=registry.example.com/nvcf/collector \
+  --state-values-set-string global.nvcaOperator.selfManaged.otelCollector.imageTag=test-tag \
   --state-values-set-string 'global.nvcaOperator.selfManaged.featureGateValues[0]=-BYOObservability'
 
 test "$(collector_enabled "$work_dir/compute-overrides.yaml")" = "false" ||
@@ -84,6 +86,12 @@ fi
 grep -q '^[[:space:]]*- -BYOObservability$' \
   "$work_dir/compute-overrides.yaml" ||
   fail "explicit BYOObservability disable was not preserved"
+grep -Eq '^    imageRepository: "?registry\.example\.com/nvcf/collector"?$' \
+  "$work_dir/compute-overrides.yaml" ||
+  fail "explicit collector image repository was not preserved"
+grep -Eq '^    imageTag: "?test-tag"?$' \
+  "$work_dir/compute-overrides.yaml" ||
+  fail "explicit collector image tag was not preserved"
 
 render_values control "$work_dir/control-overrides.yaml" \
   --state-values-set global.nvcaOperator.selfManaged.otelCollector.enabled=true \
