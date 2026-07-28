@@ -19,10 +19,16 @@ stub_dir="$(mktemp -d)"
 trap 'rm -rf "${stub_dir}"' EXIT
 
 # Build a fake bazel that prints a fixed payload and exits with a fixed status.
+invocation_log="${stub_dir}/invocation"
+
 make_bazel() {  # make_bazel <exit-status> <stdout-payload>
     local status="$1" payload="$2" path="${stub_dir}/bazel"
     {
         echo '#!/usr/bin/env bash'
+        # Record the working directory and full argv so the tests can assert
+        # how gazelle was invoked, not only how its output was classified.
+        printf 'printf "cwd=%%s\\n" "$PWD" > %s\n' "${invocation_log}"
+        printf 'printf "%%s\\n" "$@" >> %s\n' "${invocation_log}"
         printf 'cat <<%s\n%s\n%s\n' "PAYLOAD_EOF" "${payload}" "PAYLOAD_EOF"
         echo "exit ${status}"
     } > "${path}"
@@ -44,7 +50,10 @@ expect() {  # expect <desc> <want-rc> [substring]
         printf 'FAIL %s: want exit %s, got %s\n%s\n' "${desc}" "${want}" "${rc}" "${out}"
         fail=1; return
     fi
-    if [ -n "${substr}" ] && ! printf '%s' "${out}" | grep -q -- "${substr}"; then
+    # -F so the needle is literal: "new_test.go" as a regex would also accept
+    # "newXtest.go". Herestring rather than a pipeline so grep exiting early
+    # cannot SIGPIPE the producer and trip pipefail on large output.
+    if [ -n "${substr}" ] && ! grep -Fq -- "${substr}" <<<"${out}"; then
         printf 'FAIL %s: output missing %q\n%s\n' "${desc}" "${substr}" "${out}"
         fail=1; return
     fi
@@ -85,6 +94,39 @@ expect "silent non-zero exit fails closed" 2 "without producing a diff"
 # And its mirror: a zero exit with no diff is genuinely clean, not a failure.
 run 0 ''
 expect "empty output with zero status is clean" 0 "up to date"
+
+# How gazelle is invoked is part of the contract. Without these, the suite
+# still passes if check-gazelle drops --mode=diff, renames the target, runs
+# from the wrong directory, or silently widens its scope.
+run 0 'no changes'
+inv="$(cat "${invocation_log}")"
+
+expect_inv() {  # expect_inv <desc> <needle>
+    if grep -Fq -- "$2" <<<"${inv}"; then
+        printf 'ok   %s\n' "$1"
+    else
+        printf 'FAIL %s: invocation missing %q\n%s\n' "$1" "$2" "${inv}"
+        fail=1
+    fi
+}
+
+expect_inv "runs the root gazelle target" "//:gazelle"
+expect_inv "asks for a diff, does not rewrite" "--mode=diff"
+expect_inv "runs from the repository root" "cwd=$(cd "$(dirname "${script}")/../.." && pwd)"
+for root in src/clis src/libraries/go src/compute-plane-services \
+            src/control-plane-services src/invocation-plane-services; do
+    expect_inv "scopes ${root}" "${root}"
+done
+
+# Scope is Go-only on purpose: Gazelle would reorder attributes in the Java
+# BUILD files, which is cosmetic churn in files the Java modules own. Assert
+# the exclusion so widening it is a deliberate edit, not an accident.
+if grep -Fq -- "src/libraries/java" <<<"${inv}"; then
+    printf 'FAIL java is in scope; it is deliberately excluded\n%s\n' "${inv}"
+    fail=1
+else
+    printf 'ok   leaves src/libraries/java out of scope\n'
+fi
 
 if [ "${fail}" -ne 0 ]; then
     echo "check-gazelle: FAILED" >&2
