@@ -58,7 +58,7 @@ func HandlerFor(service, ver, commit string) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if _, err := w.Write(body); err != nil {
-			zap.L().Error("failed to write build info response", zap.Error(err))
+			zap.L().Debug("failed to write build info response", zap.String("path", r.URL.Path), zap.Error(err))
 		}
 	})
 }

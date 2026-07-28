@@ -137,6 +137,7 @@ func TestHandlerForRejectsNonGET(t *testing.T) {
 			h.ServeHTTP(w, r)
 
 			assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+			assert.Equal(t, http.MethodGet, w.Header().Get("Allow"))
 			assert.Empty(t, w.Body.String())
 		})
 	}
