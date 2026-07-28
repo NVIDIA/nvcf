@@ -1,8 +1,8 @@
 # nvcf-observability-stack
 
 Reusable Helmfile stack scaffold for self-hosted NVCF observability. It is
-intended to be consumed by self-managed control-plane deployments and optional
-standalone compute-plane deployments once the distribution wiring lands.
+consumed by self-managed control-plane deployments and optional standalone
+compute-plane deployments.
 
 The stack can own:
 
