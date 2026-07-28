@@ -52,17 +52,6 @@ addons:
       metrics:
         serviceMonitor:
           enabled: false
-      loadBalancer:
-        config: |
-          {
-            "default": "power-of-two",
-            "request_algorithms": {
-              "power-of-two": "power-of-two",
-              "round-robin": "round-robin",
-              "random": "random",
-              "groq-multiregion": "groq-multiregion"
-            }
-          }
 
 agentConfig:
   mergeConfig: |
@@ -76,16 +65,9 @@ agentConfig:
 Use `replicaCount: 1` for local or single-node test clusters. Increase
 replica counts for shared or production environments.
 
-`addons.llm.requestRouter.loadBalancer.config` configures request-router
-algorithm selection. Function model specs use underscored `routingMethod`
-values such as `round_robin`, `power_of_two`, `groq_multiregion`, and
-`random`. The request router configuration uses hyphenated algorithm IDs such
-as `round-robin`, `power-of-two`, `groq-multiregion`, and `random`.
-
-When a function can use a non-default `routingMethod`, include the matching
-algorithm in `request_algorithms`. If the request router does not have a
-matching algorithm entry, invocation can fail with HTTP `400` before a backend
-is selected.
+The request router uses `power-of-two` when no load-balancer configuration is
+set. Before a function selects a different routing method, configure the
+effective model algorithm or a request override.
 
 If you mirror images to a registry that does not use the stack's default
 `global.image.registry` and `global.image.repository`, override the
@@ -106,9 +88,8 @@ Local development clusters commonly run the LLM API Gateway to NVCF API gRPC
 hop and the worker `pylon` sidecar to request-router QUIC tunnel without TLS.
 In that case, add both plaintext controls.
 
-The complete Helmfile example above includes these settings and the
-request-router load balancer config. If you already have an LLM block, include
-these plaintext-specific fields:
+The complete Helmfile example above includes these settings. If you already
+have an LLM block, include these plaintext-specific fields:
 
 ```yaml
 addons:
@@ -144,6 +125,7 @@ Production environments should use TLS-capable service configuration instead.
 Apply the updated control plane environment before creating LLM functions:
 
 ```bash
+cd path/to/nvcf-self-managed-stack
 make apply HELMFILE_ENV=<environment-name>
 ```
 
@@ -204,7 +186,8 @@ Useful logs:
 
 ```bash
 kubectl logs -n nvcf deploy/llm-api-gateway --tail=100
-kubectl logs -n nvcf statefulset/llm-request-router --tail=100
+kubectl logs -n nvcf statefulset/llm-request-router \
+  --all-pods=true --tail=100
 kubectl logs -n nvcf-backend <function-pod> -c llm-worker --tail=100
 ```
 

@@ -4,17 +4,18 @@ The LLM Request Router serves Prometheus metrics from
 `llm-request-router:9090/metrics` when
 `llmRequestRouter.metrics.enabled` is `true`.
 
-The self-managed stack maps `global.observability.metrics.enabled` to this chart
-value. The request-router chart passes `--metrics-port` and uses Stargate's
+The self-managed stack maps
+`addons.llm.requestRouter.metrics.enabled` to this chart value. It defaults to
+`true`. The request-router chart passes `--metrics-port` and uses Stargate's
 default `stargate_` metric prefix and `stargate` trace service name.
 
 ## Label Boundaries
 
 Use bounded labels only. Keep `routing_key`, `model`, `inference_server_id`,
-`status`, `result`, and `reason` to bounded service dimensions. Do not add
-request IDs, session IDs, function IDs, organization IDs, project IDs, raw URLs,
-raw prompts, authorization values, or other unbounded request fields as metric
-labels.
+`algorithm`, `selection`, `status`, `result`, and `reason` to bounded service
+dimensions. Do not add request IDs, session IDs, function IDs, organization
+IDs, project IDs, raw URLs, raw prompts, authorization values, or other
+unbounded request fields as metric labels.
 
 ## Metrics
 

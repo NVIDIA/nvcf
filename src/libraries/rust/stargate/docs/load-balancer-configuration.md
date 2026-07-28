@@ -66,8 +66,24 @@ Detailed objects support these common fields:
 | `algorithm` | algorithm name | required | Algorithm created for this object. |
 | `require_cache_affinity_key` | boolean | `false` | Reject the request with HTTP `400` when `x-cache-affinity-key` is absent or blank. |
 | `require_input_tokens` | boolean | `false` | Declares that the algorithm needs input tokens. The HTTP proxy already requires `x-input-tokens` for every inference request. |
-| `max_input_work_seconds` | number | unset | Reject with HTTP `503` when `(request input tokens + queued input tokens) / aggregate last mean input TPS` exceeds this value or valid capacity is unavailable. |
-| `request_algorithms` | object | `{}` | Model-specific request overrides. These replace the same algorithm from the top-level map and inherit other top-level entries. |
+| `max_input_work_seconds` | number | unset | Reject with HTTP `503` when `(request input tokens + queued input tokens) / aggregate last mean input TPS` across algorithm-eligible candidates exceeds this value or valid capacity is unavailable. |
+
+Stargate does not range-check `max_input_work_seconds`. Use a positive value
+for a useful upper bound. A nonpositive value can reject every request with
+input or queued work.
+
+Pulsar admission excludes candidates already attempted, candidates without
+valid input TPS, and candidates that fail enabled KV feasibility checks. The
+KV checks require request input tokens and candidate KV capacity statistics,
+and reject candidates without enough free KV tokens. Other algorithms exclude
+only candidates already attempted. For those algorithms, a candidate with
+invalid input TPS contributes queued work but no service rate.
+
+Detailed objects directly under `models` also support `request_algorithms`.
+These model-specific overrides replace the same algorithm from the top-level
+map and inherit other top-level entries. Do not nest `request_algorithms`
+inside an override entry. Stargate parses but discards that nested map when it
+constructs the router.
 
 Each `request_algorithms` key must match the algorithm in its value. For
 example, the key `pulsar` can map to `"pulsar"` or to a detailed object whose
@@ -111,7 +127,8 @@ When `cache_affinity_backend_selection_count` is enabled and the request has
 `x-cache-affinity-key`, a consistent hash ring first limits selection to a
 stable subset. Normal TTFT selection runs within that subset. The seed, routing
 key, model ID, affinity key, cluster ID, and virtual-node index contribute to
-the hash.
+the hash. If the subset has no usable candidate, selection falls back to the
+complete candidate set.
 
 Minimal configuration:
 
@@ -183,13 +200,21 @@ Minimal configuration:
 
 ## Algorithm fields
 
-`groq-multiregion` and `pulsar-multiregion` support these fields:
+`groq-multiregion` supports these cache-affinity fields:
 
 | Field | Type | Default | Constraint and effect |
 | --- | --- | --- | --- |
-| `seed` | string | empty | Changes affinity hashing. Keep it stable across replicas that should make the same choice. |
 | `cache_affinity_virtual_nodes` | unsigned integer | `150` | Virtual nodes per cluster. `0` is normalized to `1`. |
 | `cache_affinity_backend_selection_count` | unsigned integer | unset | Enables the affinity subset. `0` disables it. Values above the candidate count select all candidates. |
+
+These fields are accepted in `pulsar-multiregion` JSON but do not affect its
+selection. Pulsar ranking supplies that algorithm's affinity.
+
+`groq-multiregion` and `pulsar-multiregion` support these multiregion fields:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `seed` | string | empty | Changes Groq affinity hashing or Pulsar multiregion ranking. Keep it stable across replicas that should make the same choice. |
 | `max_queue_time_floor_ms` | unsigned integer | unset | Queue-SLO lower bound. Has an effect only when `max_queue_time_ceil_ms` is also set. |
 | `max_queue_time_ceil_ms` | unsigned integer | unset | Queue-SLO upper bound. Has an effect only when `max_queue_time_floor_ms` is also set. |
 | `ttft_bucket_size_ms` | unsigned integer | `20` | Maximum TTFT difference within one bucket. |
@@ -198,6 +223,10 @@ Minimal configuration:
 | `max_queued` | unsigned integer | `0` | Additional queued requests allowed above `max_engine_concurrency`. A reported concurrency of `0` disables this capacity check. |
 | `ignore_queue_time` | boolean | `false` | Removes queue delay from TTFT ranking. Queue-SLO filtering still uses the queue estimate. |
 | `ignore_input_processing_time` | boolean | `false` | Removes request prefill time from TTFT ranking. |
+
+Stargate does not range-check `next_bucket_unlock_factor`. Values from `0` to
+`1` unlock a later bucket between no wait and the full TTFT gap. Values outside
+that range are accepted and can cause immediate or longer waits.
 
 When both queue bounds are set, the allowed queue time interpolates from floor
 to ceiling based on elapsed request time divided by `x-request-slo-ms`. Without
@@ -250,70 +279,54 @@ underscores to hyphens. For example, `pulsar_multiregion` selects
 An absent header uses the configured model algorithm. A blank, invalid UTF-8,
 unknown, or known but unconfigured value returns HTTP `400`. A model-specific
 `request_algorithms` entry wins over the same top-level entry. The model's
-configured algorithm is always available as an override without a duplicate
-entry.
+configured algorithm is always available as an override without a
+`request_algorithms` entry.
 
 Treat routing headers as trusted internal metadata. A gateway should derive or
 validate them instead of forwarding public caller values.
 
-## Request headers
+## Load-balancer request headers
 
-The load balancers consume these proxy headers:
+These proxy headers affect load-balancer behavior:
 
 | Header | Requirement | Meaning |
 | --- | --- | --- |
-| `x-request-id` | required | Request identity forwarded to pylon. |
 | `x-model` | required | Exact model ID used for model configuration lookup. |
-| `x-input-tokens` | required unsigned integer | Input-token estimate used by TTFT, admission, and optional KV feasibility. |
 | `x-routing-key` | optional | Authenticated routing scope. It participates in affinity hashes. |
 | `x-routing-method` | optional | Preconfigured request algorithm. |
 | `x-cache-affinity-key` | optional or config-required | Opaque stable prefix or session identity. Blank means absent. |
-| `x-priority` | optional unsigned integer, default `0` | Chooses the nearest published queue estimate at or below this priority. |
-| `x-request-slo-ms` | optional unsigned integer | Request SLO used to interpolate queue bounds. |
-| `x-max-wait-ms` | optional unsigned integer | Wait budget for temporarily infeasible routing, capped at 60 seconds. |
-| `x-stargate-max-wait-ms` | optional unsigned integer | End-to-end internal retry budget. |
+| `x-input-tokens` | required `u64` | Input-token estimate used by TTFT, admission, and optional KV feasibility. |
+| `x-priority` | optional `u32`, default `0` | Chooses the nearest published queue estimate at or below this priority. |
+| `x-request-slo-ms` | optional `u64` | Request SLO used to interpolate queue bounds. |
+| `x-max-wait-ms` | optional `u64` | Wait budget for temporarily infeasible routing, capped at 60 seconds. |
 
-Invalid required or numeric headers return HTTP `400`.
-`x-routing-method` is consumed by Stargate and is not forwarded upstream.
+Invalid required or numeric values return HTTP `400`. `x-routing-method` is
+consumed by Stargate and is not forwarded upstream. See the
+[API gateway contract](api-gateway-contract.md) for the complete proxy header
+contract.
 
-## Fallback and retry
+## Fallback and proxy retry boundary
 
-Algorithm fallback and proxy retry are separate:
+Algorithm fallback is part of load-balancer selection:
 
 - Groq later-bucket fallback depends on elapsed request time.
 - Pulsar fallback walks the stable ranking after exclusions or optional KV
   filtering.
 - Pulsar multiregion fallback widens ranking bands and runs Groq selection
   within each band.
-- A retryable pylon `429` with reason `queue_estimate_mismatch` first tries
-  another backend in the same cluster.
-- Other explicitly retryable `429` and `503` responses exclude the selected
-  cluster and run load balancing again.
-- Retryable proxy errors can reconnect the same direct backend, then fail over
-  to another backend or cluster.
 
-Defaults allow two connect retries and two request retries. Response retries
-require an explicit pylon retry signal by default. The body must be completely
-replayable, fit the 64 MiB default replay buffer, and remain within
-`x-stargate-max-wait-ms` when that header is present.
+Proxy retries can exclude a backend or cluster and run selection again. See
+[Multi-backend cluster routing](multi-backend-clusters.md#retries) for
+exclusion behavior and the [API gateway contract](api-gateway-contract.md#retry-rules)
+for status, replay, and retry-budget rules.
 
 ## Metrics
 
-Use these Stargate metrics to validate selection and fallback:
-
-| Metric | Use |
-| --- | --- |
-| `stargate_routing_selections_total` | Compare primary and fallback selections by model and algorithm. |
-| `stargate_routing_kv_free_token_fallback_selections_total` | Find routes that skipped a higher-ranked candidate because of KV free-token eligibility. |
-| `stargate_proxy_attempts_total` | Count each backend attempt and result. |
-| `stargate_proxy_retries_total` | Count attempted retries by reason. |
-| `stargate_proxy_retry_exhausted_total` | Find requests that exhausted retry options. |
-| `stargate_admission_rejections_total` | Find input-work admission rejections. |
-| `stargate_proxy_duration_seconds` | Compare upstream time to first byte by backend. |
-| `stargate_active_inference_servers` | Confirm routable backend count for each routing target. |
-
-The prefix is configurable with `--metrics-prefix`. See the
-[metrics reference](reference/metrics.md) for labels and all component metrics.
+Stargate records algorithm and fallback choices, proxy attempts and retries,
+admission rejections, upstream latency, and active backend counts. The prefix
+is configurable with `--metrics-prefix`. See the
+[NVCF request-router metrics reference](../../../../../docs/user/metrics/llm-request-router/metrics.md)
+for metric names, labels, and descriptions.
 
 ## Validation checklist
 

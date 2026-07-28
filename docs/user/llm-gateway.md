@@ -81,6 +81,9 @@ Set `functionType` to `LLM` and define model routing metadata under `models[].ll
 
 `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
 
+For the matching request-router algorithm allowlist, see
+[LLM Request Router Load Balancing](./llm-request-router-load-balancing.md).
+
 `llmConfig.tokenRateLimit` applies a per-model token limit. Use one or more comma-separated limits in `<value>-<unit>` format, where `<value>` is a positive integer and `<unit>` is one of `S` (seconds), `M` (minutes), `H` (hours), `D` (days), or `W` (weeks). A single limit is one token budget over one time window, such as `1000-S`. A combined limit is multiple token budgets over distinct time windows, such as `1000-S,5000-M,100000-H,500000-D,1000000-W`; do not repeat a unit in the same value.
 
 The same configuration can be provided with CLI flags:
@@ -193,9 +196,6 @@ The gateway chooses the sticky routing key in this order:
 For Responses API follow-up calls, `previous_response_id` does not override the sticky routing key. Continue sending `prompt_cache_key`, `conversation.id`, or the returned `x-multi-turn-session-id` header when the next request needs the same backend affinity.
 
 Sticky routing only affects backend selection when the LLM request router is configured with a cache-affinity-aware routing method for the target model. Clients should only use `x-multi-turn-session-id`. The gateway derives and forwards the internal `x-cache-affinity-key`; clients should not send that header.
-
-For request-router algorithm allowlists, trusted headers, and rollout checks,
-see [LLM Request Router Load Balancing](./llm-request-router-load-balancing.md).
 
 ## Metrics
 

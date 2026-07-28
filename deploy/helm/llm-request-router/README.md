@@ -82,7 +82,7 @@ Important settings to review before deployment:
 - `llmRequestRouter.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)
 - `llmRequestRouter.certificate.*` to let cert-manager issue the Stargate QUIC server certificate
 - `llmRequestRouter.tls.*` to mount the issued TLS Secret and pass cert/key paths to Stargate
-- `llmRequestRouter.pki.*` to provision the OpenBao service-issuing PKI hierarchy that cert-manager mints the Certificate from. Opt-in via `pki.enabled=true`. Mirrors the SIS chart's `hook-lls-migrations.yaml` pattern: a Helm pre-install/pre-upgrade Job runs the `nvcf-openbao-migrations` image with `CORE_MIGRATIONS_ENABLED=false` + `ADDONS_LLM_ENABLED=true` so only the LLM addon executes. `pki.allowedDomains` (comma-separated DNS suffixes) is required when enabled and is the OpenBao PKI role's `allowed_domains` security constraint — typically `<customer-domain>,cluster.local`. Job-level fail-hard is handled by `restartPolicy: OnFailure` + `pki.backoffLimit` combined with the migrations image's `FAILED_MIGRATIONS` accumulator (image `>= 0.12.1`).
+- `llmRequestRouter.pki.*` to provision the OpenBao service-issuing PKI hierarchy that cert-manager mints the Certificate from. Opt-in via `pki.enabled=true`. Mirrors the SIS chart's `hook-lls-migrations.yaml` pattern: a Helm pre-install/pre-upgrade Job runs the `nvcf-openbao-migrations` image with `CORE_MIGRATIONS_ENABLED=false` + `ADDONS_LLM_ENABLED=true` so only the LLM addon executes. `pki.allowedDomains` (comma-separated DNS suffixes) is required when enabled and is the OpenBao PKI role's `allowed_domains` security constraint. Typically this is `<customer-domain>,cluster.local`. Job-level fail-hard is handled by `restartPolicy: OnFailure` + `pki.backoffLimit` combined with the migrations image's `FAILED_MIGRATIONS` accumulator (image `>= 0.12.1`).
 - `llmRequestRouter.vault.audience` for the projected ServiceAccount token audience used to authenticate to OpenBao
 - `llmRequestRouter.vault.noVaultAnnotations` to disable Vault Agent injection (useful for local testing without OpenBao)
 
@@ -102,28 +102,6 @@ See the
 for the JSON schema, algorithm behavior, and tuning fields. See
 [LLM Request Router Load Balancing](../../../docs/user/llm-request-router-load-balancing.md)
 for stack ownership, trusted headers, rollout checks, and troubleshooting.
-
-Example:
-
-```yaml
-llmRequestRouter:
-  loadBalancer:
-    config: |
-      {
-        "default": "power-of-two",
-        "models": {
-          "dummy-model": {
-            "algorithm": "groq-multiregion",
-            "seed": "local-sticky-v1",
-            "require_cache_affinity_key": true,
-            "cache_affinity_virtual_nodes": 64,
-            "cache_affinity_backend_selection_count": 1
-          }
-        }
-      }
-```
-
-`x-cache-affinity-key` is the router-facing sticky-cache header. It is an opaque stable key used by `groq-multiregion` and `pulsar`; Stargate does not derive it from request bodies.
 
 ## Local Render
 
