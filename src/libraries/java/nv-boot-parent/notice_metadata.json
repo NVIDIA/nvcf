@@ -737,7 +737,7 @@
       "name": "Log4j API to SLF4J Adapter",
       "url": "https://logging.apache.org/log4j/2.x/"
     },
-    "org.apache.tomcat.embed:tomcat-embed-el:11.0.22": {
+    "org.apache.tomcat.embed:tomcat-embed-el:11.0.24": {
       "licenses": [
         "Apache License, Version 2.0"
       ],

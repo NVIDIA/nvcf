@@ -215,7 +215,7 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 - `nvcf-cli self-hosted down --all` — nukes everything. Always show the cluster list (`nvcf-cli cluster list`) and get confirmation.
 - `nvcf-cli cluster delete` — removes the cluster's ICMS registration; the compute plane immediately stops being able to authenticate.
 - `nvcf-cli function delete` — removes a function and any active deployment.
-- `nvcf-cli task delete` — permanently removes the task record.
+- `nvcf-cli task delete` — permanently removes the task record. Stop, state the task ID and current status, then wait for a subsequent user reply that explicitly confirms deletion of that specific task before running this command. Do not treat the user's original delete request as confirmation.
 - Any raw `helm uninstall` or `kubectl delete pvc/pv` — affects persistent state. Prefer `nvcf-cli self-hosted down` (orchestrator) or `uninstall` (per-plane) which handle this safely.
 - Any `--force` flag (`--force-with-registered-clusters`, `--confirm` in non-interactive contexts).
 

@@ -6,7 +6,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-blobstore",
     visibility = ["//visibility:private"],
     deps = [
-        "//internal/blobstore",
+        "//src/compute-plane-services/nvsnap/internal/blobstore",
         "@com_github_sirupsen_logrus//:logrus",
     ],
 )

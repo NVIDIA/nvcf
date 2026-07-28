@@ -6,11 +6,6 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-import_roots=(
-  "src/libraries/java/nv-boot-parent"
-  "src/control-plane-services/cloud-tasks"
-)
-
 root_owned_files=(
   ".bazel_downloader_config"
   ".bazelignore"
@@ -24,8 +19,13 @@ root_owned_files=(
 )
 
 failed=false
+component_count=0
 
-for import_root in "${import_roots[@]}"; do
+while IFS= read -r descriptor; do
+  import_root="$(dirname "${descriptor#${repo_root}/}")"
+  component_count=$((component_count + 1))
+  echo "Checking Java import boundary: ${import_root}"
+
   for root_owned_file in "${root_owned_files[@]}"; do
     path="${repo_root}/${import_root}/${root_owned_file}"
     if [[ -e "${path}" ]]; then
@@ -42,15 +42,23 @@ for import_root in "${import_roots[@]}"; do
     find "${repo_root}/${import_root}" -type d \
       \( -name bazel-enablement -o -name bazel-migration \) -print
   )
-done
+done < <(
+  find "${repo_root}/src" -type f -name bazel-java-ci.json -print |
+    LC_ALL=C sort
+)
+
+if [[ "${component_count}" -eq 0 ]]; then
+  echo "ERROR: no Java component descriptors were found under src" >&2
+  exit 1
+fi
 
 if [[ "${failed}" == true ]]; then
   cat >&2 <<'EOF'
-nv-boot-parent and Cloud Tasks are packages in the root nvcf Bazel module.
-Keep Bazel root configuration and dependency locks at the repository root, and
-keep standalone migration records out of imported source trees.
+Imported Java components are packages in the root nvcf Bazel module. Keep
+Bazel root configuration and dependency locks at the repository root, and keep
+standalone migration records out of imported source trees.
 EOF
   exit 1
 fi
 
-echo "Java import boundaries: PASS"
+echo "Java import boundaries: PASS (${component_count} components checked)"
