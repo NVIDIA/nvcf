@@ -46,31 +46,57 @@ fi
 # Declared paths, by category.
 declared_all="$(mktemp)"; declared_ledger="$(mktemp)"
 declared_exception="$(mktemp)"; found="$(mktemp)"
-trap 'rm -f "${declared_all}" "${declared_ledger}" "${declared_exception}" "${found}"' EXIT
+trap 'rm -f "${declared_all}" "${declared_ledger}" "${declared_exception}" "${found}" "${found}.raw"' EXIT
 
+lineno=0
 while read -r category path _rest; do
+    lineno=$((lineno + 1))
     case "${category}" in
         ''|\#*) continue ;;
     esac
-    [ -n "${path}" ] || continue
+    # A row naming a category but no path is a malformed ledger, not an empty
+    # one. Skipping it would let a typo silently shrink the guard's coverage.
+    if [ -z "${path}" ]; then
+        echo "${ledger}:${lineno}: category '${category}' with no path" >&2
+        exit 2
+    fi
     case "${category}" in
         vendored|scaffolding) ;;
         ledger)    printf '%s\n' "${path}" >> "${declared_ledger}" ;;
         exception) printf '%s\n' "${path}" >> "${declared_exception}" ;;
         *)
-            echo "unknown category '${category}' for ${path} in ${ledger}" >&2
+            echo "${ledger}:${lineno}: unknown category '${category}' for ${path}" >&2
             exit 2
             ;;
     esac
     printf '%s\n' "${path}" >> "${declared_all}"
 done < "${ledger}"
 
+# One path, one category. Without this a repeated `ledger svc/a` inflates the
+# backlog count, and the same path classified both `ledger` and `exception`
+# inflates both while still passing, which would misreport how much of the
+# migration is actually outstanding.
+dupes="$(sort "${declared_all}" | uniq -d)"
+if [ -n "${dupes}" ]; then
+    {
+        echo "error: ${ledger#"${root}"/} classifies the same path more than once:"
+        printf '  %s\n' ${dupes}
+    } >&2
+    exit 2
+fi
+
 sort -u -o "${declared_all}" "${declared_all}"
 
 # Actual nested modules. The root module is the destination, not a nested one.
-( cd "${root}" && find . -name MODULE.bazel -not -path './MODULE.bazel' \
-    -not -path './.git/*' -printf '%h\n' 2>/dev/null || true ) \
-  | sed 's|^\./||' | sort -u > "${found}"
+# Discovery failures must terminate: an unreadable tree that yields a partial
+# inventory would quietly narrow what the guard can see, so `.git` is pruned
+# explicitly rather than suppressing find's errors.
+if ! ( cd "${root}" && find . -name .git -prune -o \
+        -name MODULE.bazel ! -path './MODULE.bazel' -printf '%h\n' ) > "${found}.raw"; then
+    echo "error: failed to enumerate nested modules under ${root}" >&2
+    exit 2
+fi
+sed 's|^\./||' "${found}.raw" | sort -u > "${found}"
 
 fail=0
 

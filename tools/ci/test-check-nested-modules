@@ -105,6 +105,44 @@ run "${t}" 'ledgar svc/a'
 expect "unknown category is an error" 2 "unknown category"
 rm -rf "${t}"
 
+# A category with no path is a malformed ledger, not an empty one. Skipping it
+# would silently narrow what the guard covers.
+t="$(make_tree svc/a)"
+run "${t}" 'ledger svc/a
+ledger'
+expect "category with no path is an error" 2 "with no path"
+rm -rf "${t}"
+
+# One path, one category. A repeat inflates the backlog count.
+t="$(make_tree svc/a)"
+run "${t}" 'ledger svc/a
+ledger svc/a'
+expect "duplicate path is an error" 2 "more than once"
+rm -rf "${t}"
+
+# The same path in two categories would inflate both counts while passing.
+t="$(make_tree svc/a)"
+run "${t}" 'ledger    svc/a
+exception svc/a'
+expect "conflicting categories are an error" 2 "more than once"
+rm -rf "${t}"
+
+# Discovery must fail loudly. A root that does not exist cannot yield a
+# trustworthy inventory, so it must not be reported as an empty one.
+empty_ledger="$(mktemp)"
+set +e
+out="$(bash "${script}" --root /nonexistent-root-xyz --ledger "${empty_ledger}" 2>&1)"; rc=$?
+set -e
+rm -f "${empty_ledger}"
+expect "unreadable root is an error" 2 "failed to enumerate"
+
+# A nested module inside .git must not be discovered (pruned, not suppressed).
+t="$(make_tree svc/a)"
+mkdir -p "${t}/.git/weird" && touch "${t}/.git/weird/MODULE.bazel"
+run "${t}" 'ledger svc/a'
+expect ".git contents are pruned" 0 "nested modules: 1 classified"
+rm -rf "${t}"
+
 # A missing ledger is a setup error, distinct from a policy violation.
 t="$(make_tree svc/a)"
 set +e
