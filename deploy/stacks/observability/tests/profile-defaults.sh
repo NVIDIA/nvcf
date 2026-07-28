@@ -73,6 +73,15 @@ render_compute_monitor_override() {
     template --output-dir "$output_dir" >/dev/null
 }
 
+service_monitor_template_count="$(
+  find "$stack_dir/charts/nvcf-default-monitors/templates" \
+    -maxdepth 1 -type f -name '*servicemonitor*.yaml' |
+    wc -l |
+    tr -d ' '
+)"
+test "$service_monitor_template_count" = "1" ||
+  fail "default monitors chart must use one generic ServiceMonitor template"
+
 enabled_releases="$(
   cat <<'EOF'
 default-monitors

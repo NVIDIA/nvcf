@@ -48,18 +48,17 @@ controlPlane:
 
 computePlane:
   enabled: false
-
-  nvca:
-    enabled: true
-    namespaceSelector:
-      matchNames:
+  interval: 30s
+  path: /metrics
+  services:
+    - name: nvca
+      enabled: true
+      namespaces:
         - nvca-system
-    interval: 30s
-    path: /metrics
-    port: nvca
-    selector:
-      app.kubernetes.io/name: nvca
-    labels: {}
+      port: nvca
+      selector:
+        app.kubernetes.io/name: nvca
+      labels: {}
 
   dcgm:
     enabled: true

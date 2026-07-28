@@ -102,7 +102,7 @@ defaultMonitors:
 These values control only monitor rendering. They do not change the selected
 plane contract, BYOO support, or autoscaler integration. The `disabled` profile
 still omits the entire observability release. Compute monitor overrides live
-under `defaultMonitors.computePlane.nvca`,
+under `defaultMonitors.computePlane.services` for ServiceMonitors,
 `defaultMonitors.computePlane.dcgm`, and
 `defaultMonitors.computePlane.worker`.
 
