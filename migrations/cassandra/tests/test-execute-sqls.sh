@@ -37,6 +37,26 @@ for keyspace_name in ${schema_inventory}; do
   done
 done
 
+ess_nvct_authorizations="${keyspaces}/ess_api/05_add_nvct_authorizations.up.sql"
+if [ ! -f "${ess_nvct_authorizations}" ]; then
+  fail "ess_api is missing the nvct-api authorization migration"
+else
+  ssa_registration=$(sed -n '/ssa_authorizations = ssa_authorizations + {/,/^  },$/p' "${ess_nvct_authorizations}")
+  notary_registration=$(sed -n '/notary_authorizations = notary_authorizations + {/,/^  }$/p' "${ess_nvct_authorizations}")
+
+  if ! printf '%s\n' "${ssa_registration}" | grep -F -q "'nvct-api': {" || \
+    ! printf '%s\n' "${ssa_registration}" | grep -F -q "type: 'SSA'"
+  then
+    fail "ess_api does not register nvct-api for SSA authentication"
+  fi
+
+  if ! printf '%s\n' "${notary_registration}" | grep -F -q "'nvct-api': {" || \
+    ! printf '%s\n' "${notary_registration}" | grep -F -q "type: 'NOTARY'"
+  then
+    fail "ess_api does not register nvct-api for notary authentication"
+  fi
+fi
+
 if grep -R -n -F 'envOrDefault "REPLICA_COUNT"' "${keyspaces}"; then
   fail "keyspace migrations contain templates unsupported by stock golang-migrate"
 fi
