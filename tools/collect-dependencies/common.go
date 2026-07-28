@@ -18,7 +18,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,6 +42,7 @@ const (
 	httpTimeoutShort   = 12 * time.Second
 	httpTimeoutDefault = 15 * time.Second
 	httpTimeoutLong    = 25 * time.Second
+	javaBazelTimeout   = 30 * time.Minute
 )
 
 var (
@@ -98,7 +98,6 @@ type dependencyScan struct {
 	Go     map[string]struct{}
 	Rust   map[string]struct{}
 	Python map[string]struct{}
-	Java   map[string]struct{}
 	Helm   map[string]struct{}
 }
 
@@ -107,12 +106,6 @@ type dependencyRow struct {
 	SortKey  string
 	Spec     string
 	License  string
-}
-
-type xmlNode struct {
-	XMLName  xml.Name  `xml:""`
-	Content  string    `xml:",chardata"`
-	Children []xmlNode `xml:",any"`
 }
 
 type helmDependency struct {
@@ -405,15 +398,6 @@ func asMap(v any) (map[string]any, bool) {
 func asSlice(v any) ([]any, bool) {
 	s, ok := v.([]any)
 	return s, ok
-}
-
-func childText(node xmlNode, local string) string {
-	for _, child := range node.Children {
-		if child.XMLName.Local == local {
-			return strings.TrimSpace(child.Content)
-		}
-	}
-	return ""
 }
 
 func runCommand(dir string, env map[string]string, timeout time.Duration, name string, args ...string) (string, string, error) {

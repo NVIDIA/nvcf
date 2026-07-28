@@ -229,6 +229,23 @@ Imported projects keep their own source-level CI, but the umbrella repo adds the
 
 This tool generates `dependencies.md`, the shared internal audit rollup across Go, Rust, Python, Java, and Helm.
 
+On the GitHub monorepo, where `imports.yaml` is intentionally absent, the
+collector scans the repository rather than silently collecting nothing. Java
+components are discovered through `src/**/bazel-java-ci.json`. Each registered
+component must expose
+`//<component-directory>:runtime_inventory.json`, and Java rows come from
+those Bazel-generated runtime inventories instead of project POM files.
+
+The root `MODULE.bazel` and `maven_install.json` still define and lock the
+complete shared Java dependency hub. The collector reports only dependencies
+reachable from component runtime targets, so unused hub entries and test-only
+tools do not become runtime audit entries. Shared runtime dependencies are
+deduplicated across components.
+
+`dependencies.md` is the repository-wide human review view. Per-component
+`NOTICE`, runtime inventory, and OSRB delta outputs remain the component-level
+compliance evidence. None of these outputs replaces legal review.
+
 Use it when:
 
 - imported trees or dependency manifests changed

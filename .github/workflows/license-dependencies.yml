@@ -62,5 +62,30 @@ jobs:
         with:
           python-version: '3.x'
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # The dependency collector builds each registered Java component's
+      # runtime inventory. Bazelisk honors the repository's .bazelversion.
+      - name: Install Bazelisk
+        run: |
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -fsSLo "${RUNNER_TEMP}/bin/bazel" \
+            https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64
+          echo "d9af1fa808c0529753c3befda75123236a711d971d3485a390507122148773a3  ${RUNNER_TEMP}/bin/bazel" \
+            | sha256sum --check --status
+          chmod +x "${RUNNER_TEMP}/bin/bazel"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Cache Bazel repository and disk caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel/*/install
+            ~/.cache/bazel/*/cache
+          key: dependency-docs-bazel-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'maven_install.json') }}
+
       - name: Run dependency docs freshness check
         run: ./tools/ci/check-dependency-docs
