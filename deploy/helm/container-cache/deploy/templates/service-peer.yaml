@@ -14,7 +14,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-Per-ordinal peer services for consistent-hash routing (prototype).
+Per-ordinal peer services for consistent-hash routing.
 Each service selects exactly one StatefulSet pod through the stable
 statefulset.kubernetes.io/pod-name label, giving every ordinal a stable
 DNS name without adding a headless service. The StatefulSet has no

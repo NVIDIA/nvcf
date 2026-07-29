@@ -136,7 +136,7 @@ proxyService:
   clusterIP: ""
 
 # Consistent-hash routing of proxy-cache requests across cache pods
-# (prototype). When enabled, each pod computes the owner pod for a request
+#. When enabled, each pod computes the owner pod for a request
 # as md5(routing key) mod replicaCount and relays requests it does not own
 # to the owner pod, so each blob is cached on exactly one pod instead of on
 # every pod that happens to receive it (R=1 dedup). The relay hop never
