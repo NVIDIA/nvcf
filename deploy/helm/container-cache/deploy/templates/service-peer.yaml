@@ -26,7 +26,8 @@ owner's nginx upstream fails fast and falls back to the backup ordinal.
 */}}
 {{- if (.Values.consistentHashRouting).enabled }}
 {{- $n := int .Values.replicaCount }}
-{{- $port := (.Values.consistentHashRouting).peerPort | default 14128 }}
+{{- /* ssl listener port; fixed to match the `listen` directives in the server blocks. */}}
+{{- $port := 14128 }}
 {{- range $i := until $n }}
 ---
 apiVersion: v1

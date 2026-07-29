@@ -260,6 +260,8 @@ spec:
               path: lua-gen-key.lua
             - key: lua-ssl.lua
               path: lua-ssl.lua
+            - key: cc-route.lua
+              path: cc-route.lua
         - name: nginx-default-config
           configMap:
             name: nvcf-default-config

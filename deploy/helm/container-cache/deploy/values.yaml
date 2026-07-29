@@ -135,8 +135,8 @@ proxyService:
   # Leave empty ("") to let Kubernetes assign one automatically.
   clusterIP: ""
 
-# Consistent-hash routing of proxy-cache requests across cache pods
-#. When enabled, each pod computes the owner pod for a request
+# Consistent-hash routing of proxy-cache requests across cache pods.
+# When enabled, each pod computes the owner pod for a request
 # as md5(routing key) mod replicaCount and relays requests it does not own
 # to the owner pod, so each blob is cached on exactly one pod instead of on
 # every pod that happens to receive it (R=1 dedup). The relay hop never
@@ -146,8 +146,6 @@ proxyService:
 # Disabled by default: behavior is identical to today.
 consistentHashRouting:
   enabled: false
-  # Port peers use to reach each other (the ssl proxy listener).
-  peerPort: 14128
 
 # Metrics configuration.
 metrics:
