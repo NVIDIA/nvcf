@@ -22,7 +22,11 @@ for f in "$TMP/off.yaml" "$TMP/off2.yaml"; do
   [ "$(count 'location @cc_relay' "$f")" = 0 ] || fail "@cc_relay leaked when disabled"
   [ "$(count 'upstream cc_owner_' "$f")" = 0 ] || fail "cc_owner upstream leaked when disabled"
   [ "$(count 'statefulset.kubernetes.io/pod-name' "$f")" = 0 ] || fail "peer Service leaked when disabled"
+  [ "$(count 'cc-route.lua' "$f")" = 0 ] || fail "cc-route.lua leaked into the ConfigMap/volume when disabled"
 done
+
+echo "1b. default render == explicit enabled=false render (disabled is a pure no-op)"
+diff "$TMP/off.yaml" "$TMP/off2.yaml" >/dev/null || fail "default and enabled=false renders differ"
 
 echo "2. enabled: @cc_relay is defined exactly once (deduped into proxy-common)"
 n="$(count 'location @cc_relay' "$TMP/on.yaml")"
@@ -40,9 +44,12 @@ echo "5. enabled: N peer Services + N owner upstreams on the listener port (1412
 [ "$(count 'statefulset.kubernetes.io/pod-name:' "$TMP/on.yaml")" = 3 ] || fail "expected 3 per-ordinal peer Services"
 [ "$(count 'upstream cc_owner_' "$TMP/on.yaml")" = 3 ] || fail "expected 3 cc_owner upstreams"
 [ "$(count 'peer-[0-9].*svc.cluster.local:14128 max_fails' "$TMP/on.yaml")" = 3 ] || fail "peer upstreams must target the ssl listener port 14128"
+[ "$(count 'targetPort: 14128' "$TMP/on.yaml")" = 3 ] || fail "each peer Service must expose targetPort 14128 (drift breaks every relay)"
+[ "$(count 'port: 14128' "$TMP/on.yaml")" = 3 ] || fail "each peer Service must expose port 14128"
 
-echo "6. enabled: routing keys on the full cache key; marker rejection + one-hop guard present"
+echo "6. enabled: routing key == proxy_cache_key; marker emitted AND inbound marker rejected"
 grep -q 'set $cc_hash_key "$request_method|$uri|$arg_versionId|$http_range"' "$TMP/on.yaml" || fail "routing key must equal the proxy_cache_key"
-grep -q 'X-NVCF-CC-Relayed' "$TMP/on.yaml" || fail "one-hop relay marker missing"
+grep -q 'proxy_set_header X-NVCF-CC-Relayed "1"' "$TMP/on.yaml" || fail "relay hop must emit the one-hop marker"
+grep -q 'ngx.req.get_headers()\["X-NVCF-CC-Relayed"\]' "$TMP/on.yaml" || fail "cc-route.lua must reject an inbound relay marker (serve locally, prevents relay loops)"
 
 echo "PASS: all consistent-hash routing render assertions hold"
