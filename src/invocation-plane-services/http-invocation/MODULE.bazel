@@ -103,18 +103,16 @@ crate.from_cargo(
 use_repo(crate, "nvcf_invocation_crates")
 
 # ============================================================================
-# Prebuilt protoc toolchain. crates/server/build.rs feeds proto files
-# through tonic-build/prost; we override its protoc with the one Bazel
-# fetches via toolchains_protoc so the build is hermetic instead of
-# relying on protoc_bin_vendored at runtime.
-# ============================================================================
-
-use_repo(protoc, "com_google_protobuf")
-
-# protobuf comes in transitively (toolchains_protoc + rules_oci both pull it),
-# but bzlmod requires an explicit bazel_dep + use_repo for the main module to
-# reference @protobuf//:protoc and @protobuf//:well_known_type_protos from the
+# Prebuilt protoc toolchain. crates/server/build.rs feeds proto files through
+# tonic-build/prost, and needs a real protoc rather than protoc_bin_vendored
+# at runtime. protobuf ships prebuilt protoc for every platform and registers
+# the toolchain itself, so the bazel_dep below is the whole configuration:
+# there is no separate protoc version to pin or keep in step.
+#
+# The explicit bazel_dep is still required because the main module references
+# @protobuf//:protoc and @protobuf//:well_known_type_protos directly from the
 # cargo_build_script in crates/server/BUILD.bazel.
+# ============================================================================
 bazel_dep(name = "protobuf", version = "29.1", repo_name = "protobuf")
 
 # ============================================================================
