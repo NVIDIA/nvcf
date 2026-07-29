@@ -43,6 +43,11 @@ module(
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_oci", version = "2.2.7")
 bazel_dep(name = "rules_pkg", version = "1.2.0")
+
+# sh_test stopped being a native global in Bazel 9; the image platform-coverage
+# test in rules/oci/private/common.bzl loads it from here. Matches the root
+# module's version.
+bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
 bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
 bazel_dep(name = "rules_python", version = "1.4.1")
