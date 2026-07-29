@@ -89,3 +89,28 @@ jobs:
 
       - name: Run dependency docs freshness check
         run: ./tools/ci/check-dependency-docs
+
+  dependency-audit:
+    name: dependency audit
+    needs: [check-license, check-dependency-licenses, check-dependency-docs]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check dependency audit result
+        env:
+          LICENSE_RESULT: ${{ needs.check-license.result }}
+          DEP_LICENSES_RESULT: ${{ needs.check-dependency-licenses.result }}
+          DEP_DOCS_RESULT: ${{ needs.check-dependency-docs.result }}
+        run: |
+          set -euo pipefail
+
+          echo "license headers, NOTICE, and MPL audit: ${LICENSE_RESULT}"
+          echo "dependency licenses: ${DEP_LICENSES_RESULT}"
+          echo "generated dependency docs: ${DEP_DOCS_RESULT}"
+
+          if [ "${LICENSE_RESULT}" != "success" ] || \
+             [ "${DEP_LICENSES_RESULT}" != "success" ] || \
+             [ "${DEP_DOCS_RESULT}" != "success" ]; then
+            echo "dependency audit did not complete successfully"
+            exit 1
+          fi
