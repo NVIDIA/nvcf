@@ -26,8 +26,18 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/utils/ptr"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
+)
+
+// AgentTokenSecretName / AgentTokenSecretKey locate the shared agent API
+// bearer token (GH #486). The chart creates this Secret only when auth is
+// enabled, so every reference to it is marked optional -- a pod admitted
+// before the operator turns auth on must still start.
+const (
+	AgentTokenSecretName = "nvsnap-agent-token"
+	AgentTokenSecretKey  = "token"
 )
 
 const (
@@ -104,6 +114,16 @@ func (m *Mutator) emitMountPrepInitContainer(
 			{Name: "NVSNAP_CAPTURE_NODE", Value: captureNode},
 			{Name: "NVSNAP_PREP_MOUNTS", Value: string(mountsJSON)},
 			{Name: "NVSNAP_PREP_DEADLINE", Value: MountPrepDeadline},
+			// Optional: the Secret only exists once the operator enables
+			// auth, so the reference is marked optional and the init
+			// container simply sends no header until then (GH #486).
+			{Name: "NVSNAP_AGENT_TOKEN", ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: AgentTokenSecretName},
+					Key:                  AgentTokenSecretKey,
+					Optional:             ptr.To(true),
+				},
+			}},
 		},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{

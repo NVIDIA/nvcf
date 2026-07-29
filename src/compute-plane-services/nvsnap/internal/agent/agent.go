@@ -454,6 +454,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	// configured, so an upgrade that has not been given one behaves exactly
 	// as before -- but say so loudly, since an agent silently serving an
 	// unauthenticated privileged API is the state this guards against.
+	// Present the token on our own peer calls too. Set unconditionally: an
+	// agent in permissive mode still has peers that may already require it.
+	SetOutboundToken(a.config.AuthToken)
+
 	if guard := tokenGuard(a.config.AuthMode, a.config.AuthToken, a.log); guard != nil {
 		router.Use(guard)
 		a.log.WithField("mode", a.config.AuthMode).Info("Agent API authentication enabled")

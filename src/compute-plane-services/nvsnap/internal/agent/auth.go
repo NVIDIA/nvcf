@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/metrics"
 	"github.com/sirupsen/logrus"
@@ -133,6 +134,43 @@ const (
 	authMissing = "missing"
 	authInvalid = "invalid"
 )
+
+// outboundToken is the token this agent presents when it calls a peer.
+//
+// Package-level and atomic because peerHTTPClient is constructed at import
+// time, long before flags are parsed, while the token only exists after
+// startup. The alternative -- threading a client through every cascade call
+// site -- would put the same header logic in a dozen places and leave the
+// next call site free to forget it.
+var outboundToken atomic.Pointer[string]
+
+// SetOutboundToken records the token used on agent-to-agent requests. Safe to
+// call before any request is issued; a nil/empty token sends no header, which
+// is what keeps a disabled deployment working unchanged.
+func SetOutboundToken(tok string) {
+	outboundToken.Store(&tok)
+}
+
+// authTransport adds the bearer token to every outbound request.
+//
+// Wrapping the transport rather than editing call sites means a peer endpoint
+// added later is authenticated without anyone remembering to do it -- the same
+// reasoning as pathVarGuard on the inbound side.
+type authTransport struct{ base http.RoundTripper }
+
+func (t *authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	tok := outboundToken.Load()
+	if tok != nil && *tok != "" && r.Header.Get(authHeader) == "" {
+		// RoundTrip must not modify the request it is given.
+		r = r.Clone(r.Context())
+		r.Header.Set(authHeader, "Bearer "+*tok)
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(r)
+}
 
 // checkToken compares the request's bearer token against the expected value in
 // constant time, so a caller cannot recover the token byte by byte from

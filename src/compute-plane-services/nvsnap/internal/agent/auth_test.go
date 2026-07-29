@@ -125,3 +125,60 @@ func TestParseAuthMode(t *testing.T) {
 		}
 	}
 }
+
+// recordingRT captures what authTransport handed to the base transport.
+type recordingRT struct{ got *http.Request }
+
+func (r *recordingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.got = req
+	return &http.Response{StatusCode: 200, Body: http.NoBody, Header: http.Header{}}, nil
+}
+
+func TestAuthTransportSignsOutbound(t *testing.T) {
+	t.Cleanup(func() { SetOutboundToken("") })
+
+	base := &recordingRT{}
+	c := &http.Client{Transport: &authTransport{base: base}}
+
+	// No token configured: no header, so a cluster running with auth off is
+	// byte-for-byte unchanged on the wire.
+	SetOutboundToken("")
+	req, _ := http.NewRequest(http.MethodGet, "http://peer/v1/checkpoints/x/manifest", http.NoBody)
+	if _, err := c.Do(req); err != nil {
+		t.Fatal(err)
+	}
+	if h := base.got.Header.Get(authHeader); h != "" {
+		t.Errorf("sent %q with no token configured", h)
+	}
+
+	SetOutboundToken("peer-token")
+	req, _ = http.NewRequest(http.MethodGet, "http://peer/v1/checkpoints/x/manifest", http.NoBody)
+	if _, err := c.Do(req); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := base.got.Header.Get(authHeader), "Bearer peer-token"; got != want {
+		t.Errorf("Authorization = %q, want %q", got, want)
+	}
+	// RoundTrip must not mutate the caller's request.
+	if h := req.Header.Get(authHeader); h != "" {
+		t.Errorf("caller's request was mutated: %q", h)
+	}
+}
+
+// The signed request must actually satisfy the guard. Testing the two halves
+// separately would not catch a format mismatch between them.
+func TestOutboundTokenSatisfiesGuard(t *testing.T) {
+	t.Cleanup(func() { SetOutboundToken("") })
+	const tok = "round-trip-token"
+	SetOutboundToken(tok)
+
+	base := &recordingRT{}
+	c := &http.Client{Transport: &authTransport{base: base}}
+	req, _ := http.NewRequest(http.MethodGet, "http://peer/v1/checkpoints/x/manifest", http.NoBody)
+	if _, err := c.Do(req); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkToken(base.got, tok); got != authOK {
+		t.Errorf("guard rejected our own signed request: %s", got)
+	}
+}

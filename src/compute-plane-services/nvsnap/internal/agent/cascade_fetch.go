@@ -95,7 +95,11 @@ const peerFetchTimeoutPerFile = 5 * time.Minute
 // All cascade-fetch call sites go through this client; downloadToFile
 // receives it as an explicit argument so tests can substitute.
 var peerHTTPClient = &http.Client{
-	Transport: &http.Transport{
+	// authTransport wraps the tuned transport rather than replacing it: every
+	// agent-to-agent request carries the bearer token (a no-op until one is
+	// configured) without any cascade call site knowing about auth. See
+	// auth.go and GH #486.
+	Transport: &authTransport{base: &http.Transport{
 		MaxIdleConns:        peerFetchConcurrency * 2,
 		MaxIdleConnsPerHost: peerFetchConcurrency * 2,
 		IdleConnTimeout:     90 * time.Second,
@@ -103,7 +107,7 @@ var peerHTTPClient = &http.Client{
 		// can reason about TCP stream count for the Cilium-multi-stream
 		// hypothesis. Re-enable explicitly if/when we switch to h2c.
 		ForceAttemptHTTP2: false,
-	},
+	}},
 }
 
 // EnsureLocal guarantees that /var/lib/nvsnap/checkpoints/<checkpointID>/

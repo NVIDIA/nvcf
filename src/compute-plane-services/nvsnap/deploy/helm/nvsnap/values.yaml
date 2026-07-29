@@ -183,6 +183,29 @@ agent:
 
   # Host paths the agent bind-mounts. Override if your nodes use
   # non-standard layouts (e.g. K3s on a single laptop).
+
+  # Authentication for the agent HTTP API (GH #486).
+  #
+  # The agent API restores and deletes checkpoints, serves any file inside a
+  # checkpoint, and exposes pprof, on a process running privileged with
+  # /var/lib and the containerd root bind-mounted. The DaemonSet binds it to
+  # every node's IP (hostNetwork + hostPort), and NetworkPolicy cannot fence a
+  # hostNetwork pod, so access control has to live in the request path.
+  #
+  # Rollout: enable with mode=permissive first. The agent then counts and logs
+  # unauthenticated callers via nvsnap_agent_auth_total{result="missing"} but
+  # still serves them, so nothing breaks while callers pick up the token.
+  # Switch to required once that series is flat at zero.
+  auth:
+    # Off by default so an upgrade does not lock out callers that have not
+    # been given the token yet. The agent logs a warning while it is off.
+    enabled: false
+    # permissive | required. Ignored when enabled=false.
+    mode: permissive
+    # Leave empty to have the chart generate one and preserve it across
+    # upgrades. Set explicitly to manage or rotate the credential yourself.
+    token: ""
+
   hostPaths:
     checkpoints: /var/lib/containerd/nvsnap-checkpoints
     containerdSock: /run/containerd/containerd.sock

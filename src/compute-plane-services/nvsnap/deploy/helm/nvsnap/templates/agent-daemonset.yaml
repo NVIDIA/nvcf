@@ -82,6 +82,12 @@ spec:
           image: {{ include "nvsnap.agent.image" . }}
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           args:
+            {{- if .Values.agent.auth.enabled }}
+            # permissive counts and logs unauthenticated callers but still
+            # serves them; required returns 401. Roll out on permissive until
+            # nvsnap_agent_auth_total{result="missing"} is zero.
+            - --auth-mode={{ .Values.agent.auth.mode }}
+            {{- end }}
             - --cuda-checkpoint-path=/criu-bundle/cuda-checkpoint
             - --criu-path=/criu-bundle/criu
             # Translate in-container --checkpoint-dir to the host path
@@ -168,6 +174,17 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+            {{- if .Values.agent.auth.enabled }}
+            # Shared bearer token for the agent API (GH #486). Env rather than
+            # a flag: flag values are visible in the pod spec and in `ps`.
+            # The agent uses it both to verify inbound requests and to sign
+            # its own peer calls.
+            - name: NVSNAP_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: nvsnap-agent-token
+                  key: token
+            {{- end }}
             {{- if .Values.server.enabled }}
             - name: NVSNAP_CATALOG_URL
               value: "http://nvsnap-server.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.service.port }}"
