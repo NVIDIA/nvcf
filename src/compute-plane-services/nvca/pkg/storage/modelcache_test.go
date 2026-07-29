@@ -653,11 +653,30 @@ func TestResolveCacheMountOptions(t *testing.T) {
 			want:       []string{"ro", "nouuid", "noatime"},
 		},
 		{
-			// Seeding happens at agent start-up, so a reconcile that finds no
-			// ConfigMap falls back rather than creating one.
-			name:        "missing configmap falls back to configured options",
+			// An unreadable ConfigMap is an error state, not a statement about the
+			// provisioner, so a volume is never created without the options its
+			// mount depends on.
+			name:        "missing configmap falls back to the built-in nvmesh defaults",
 			provisioner: NVMeshStorageClassProvisioner,
 			cmData:      nil,
+			configured:  []string{"noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			// The disabled-flag case: no configured options at all. Without the
+			// built-in fallback this produced a volume with no mount options.
+			name:        "missing configmap with no configured options still gets the defaults",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nil,
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			// A readable ConfigMap stays the source of truth: an operator who
+			// removes the entry is respected, no built-in override.
+			name:        "entry removed from a readable configmap is respected",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      map[string]string{"other.csi.driver": "ro"},
 			configured:  []string{"noatime"},
 			want:        []string{"noatime"},
 		},

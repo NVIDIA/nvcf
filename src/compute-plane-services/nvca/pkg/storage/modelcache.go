@@ -614,11 +614,19 @@ func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]stri
 		cmName = DefaultCacheMountOptionsConfigMapName
 	}
 	// The ConfigMap is created once at agent start-up by
-	// EnsureCacheMountOptionsConfigMap, so a miss here means it was removed or
-	// start-up could not create it.
+	// EnsureCacheMountOptionsConfigMap, so failing to read it is an error state
+	// rather than a statement about this provisioner. Fall back to the built-in
+	// defaults where they exist, otherwise a provisioner that needs specific
+	// options would silently get a volume without them.
 	cm := &corev1.ConfigMap{}
 	if err := r.Client.Get(ctx,
 		client.ObjectKey{Name: cmName, Namespace: ModelCacheInitNamespace}, cm); err != nil {
+		if defaults, ok := builtinProvisionerMountOptions(provisioner); ok {
+			log.Info("Cache mount option defaults unreadable, falling back to the built-in defaults",
+				"configmap", cmName, "namespace", ModelCacheInitNamespace,
+				"provisioner", provisioner, "reason", err.Error())
+			return defaults, true
+		}
 		log.V(1).Info("Could not read the cache mount option defaults, using configured mount options",
 			"configmap", cmName, "namespace", ModelCacheInitNamespace, "reason", err.Error())
 		return nil, false
@@ -629,6 +637,12 @@ func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]stri
 		return nil, false
 	}
 
+	return splitMountOptions(raw), true
+}
+
+// splitMountOptions parses a comma separated mount option list, dropping empty
+// entries and surrounding whitespace.
+func splitMountOptions(raw string) []string {
 	var options []string
 	for _, opt := range strings.Split(raw, ",") {
 		if opt = strings.TrimSpace(opt); opt != "" {
@@ -636,7 +650,23 @@ func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]stri
 		}
 	}
 
-	return options, true
+	return options
+}
+
+// builtinProvisionerMountOptions returns the mount options compiled into NVCA
+// for a provisioner whose requirements are known.
+//
+// These are a last resort, used only when the ConfigMap cannot be read at all.
+// A volume must never be created without options its mount depends on just
+// because start-up could not seed the ConfigMap or someone deleted it. When the
+// ConfigMap is readable it stays the source of truth, so an operator editing or
+// removing an entry is respected.
+func builtinProvisionerMountOptions(provisioner string) ([]string, bool) {
+	if provisioner != NVMeshStorageClassProvisioner {
+		return nil, false
+	}
+
+	return splitMountOptions(NVMeshCacheMountOptions), true
 }
 
 // modelCacheStorageClassName returns the storage class NVCA uses for model cache
