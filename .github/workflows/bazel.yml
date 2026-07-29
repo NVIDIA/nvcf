@@ -331,7 +331,12 @@ jobs:
   bazel:
     name: bazel (${{ matrix.subtree.id }})
     needs: detect
-    if: needs.detect.outputs.any == 'true'
+    # Guard on THIS lane's matrix, not the combined `any`. A change touching
+    # only docker-host subtrees leaves this matrix empty while `any` is still
+    # true; GitHub cannot create a job from an empty matrix vector and resolves
+    # it to `failure`, not `skipped`, which failed the required check on PRs
+    # that had nothing wrong with them. bazel-docker already guards this way.
+    if: needs.detect.outputs.matrix != '[]'
     runs-on: ubuntu-latest
     # Public EC2 Buildbarn cache (grpcs, bearer-token gated). The token is a
     # repo secret, so fork PRs (which never receive secrets) fall back to a
@@ -938,8 +943,14 @@ jobs:
             exit 0
           fi
 
-          if [ "${BAZEL_RESULT}" != "success" ]; then
-            echo "one or more Bazel matrix rows failed, were cancelled, or were skipped"
+          # `skipped` is legitimate here and means the build-container matrix was
+          # empty, i.e. every selected subtree runs in the docker-host lane. The
+          # job's `if` is tied to that matrix being non-empty, so skipped can
+          # only mean "nothing for this lane to do" -- it cannot hide a row that
+          # should have run. The BAZEL_ANY check above already catches the case
+          # where no subtree was selected at all.
+          if [ "${BAZEL_RESULT}" != "success" ] && [ "${BAZEL_RESULT}" != "skipped" ]; then
+            echo "one or more Bazel matrix rows failed or were cancelled"
             exit 1
           fi
 
