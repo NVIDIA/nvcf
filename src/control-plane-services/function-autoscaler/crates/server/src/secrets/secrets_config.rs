@@ -60,6 +60,10 @@ pub struct TracingCredentials {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct OAuth2ClientCredentials {
+    #[serde(default)]
     pub client_id: String,
+    #[serde(default)]
     pub client_secret: String,
+    #[serde(default)]
+    pub access_token: Option<String>,
 }
