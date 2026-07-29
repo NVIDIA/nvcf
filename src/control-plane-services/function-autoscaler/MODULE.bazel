@@ -127,13 +127,7 @@ use_repo(crate, "rs_autoscaler_crates")
 # fetches via toolchains_protoc so the build is hermetic instead of
 # relying on protoc_bin_vendored at runtime.
 # ============================================================================
-bazel_dep(name = "toolchains_protoc", version = "0.6.1")
 
-protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
-protoc.toolchain(
-    google_protobuf = "com_google_protobuf",
-    version = "v29.0",
-)
 
 bazel_dep(name = "protobuf", version = "29.1", repo_name = "protobuf")
 

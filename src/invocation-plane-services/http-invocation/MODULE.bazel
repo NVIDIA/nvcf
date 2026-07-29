@@ -108,13 +108,7 @@ use_repo(crate, "nvcf_invocation_crates")
 # fetches via toolchains_protoc so the build is hermetic instead of
 # relying on protoc_bin_vendored at runtime.
 # ============================================================================
-bazel_dep(name = "toolchains_protoc", version = "0.6.1")
 
-protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
-protoc.toolchain(
-    google_protobuf = "com_google_protobuf",
-    version = "v29.0",
-)
 use_repo(protoc, "com_google_protobuf")
 
 # protobuf comes in transitively (toolchains_protoc + rules_oci both pull it),

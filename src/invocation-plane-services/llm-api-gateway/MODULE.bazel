@@ -45,6 +45,10 @@ python.toolchain(
 # ============================================================================
 # Go.
 # ============================================================================
+# protobuf ships prebuilt protoc for every platform and registers the
+# toolchain itself, so protoc can never disagree with the protobuf module.
+# Nothing to pin here and nothing that can drift.
+bazel_dep(name = "protobuf", version = "33.4", repo_name = "com_google_protobuf")
 bazel_dep(name = "rules_go", version = "0.60.0")
 bazel_dep(name = "gazelle", version = "0.48.0")
 
@@ -65,13 +69,7 @@ go_deps.gazelle_override(
 
 # Prebuilt protoc toolchain. Required because grpc-gateway-v2, pulled in by the
 # shared NVCF Go library, declares a proto_library.
-bazel_dep(name = "toolchains_protoc", version = "0.6.1")
 
-protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
-protoc.toolchain(
-    google_protobuf = "com_google_protobuf",
-    version = "v29.0",
-)
 
 use_repo(
     go_deps,
