@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "agent.go",
         "blob_uploader.go",
+        "auth.go",
         "capture_cascade.go",
         "capture_peer.go",
         "cascade_fetch.go",
@@ -90,6 +91,7 @@ go_test(
         "l2_promote_async_test.go",
         "l2_writer_test.go",
         "nim_backend_test.go",
+        "auth_test.go",
         "pathsafe_test.go",
         "peer_fanout_test.go",
         "peer_load_test.go",

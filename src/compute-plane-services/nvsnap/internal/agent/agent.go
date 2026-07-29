@@ -67,6 +67,14 @@ type Config struct {
 	CRIUPath            string
 	NodeName            string
 	LogLevel            string
+
+	// AuthToken is the shared bearer token callers must present on the
+	// agent API. Sourced from a Secret rather than a flag so it does not
+	// land in the pod spec or in `ps` output. Empty disables the check.
+	AuthToken string
+	// AuthMode is disabled (default), permissive, or required. See auth.go
+	// for why the rollout needs a permissive state.
+	AuthMode AuthMode
 	UseNsenter          bool // Run CRIU/cuda-checkpoint in host mount namespace (for containerized agents)
 
 	// Prewarm enables agent-side page-cache prewarm of the rox-backed
@@ -441,6 +449,18 @@ func (a *Agent) Run(ctx context.Context) error {
 	// mount. Validate them in one place so a route added later is covered
 	// without remembering to. See pathVarGuard in pathsafe.go.
 	router.Use(pathVarGuard)
+
+	// Authenticate before anything else runs. Installed only when a token is
+	// configured, so an upgrade that has not been given one behaves exactly
+	// as before -- but say so loudly, since an agent silently serving an
+	// unauthenticated privileged API is the state this guards against.
+	if guard := tokenGuard(a.config.AuthMode, a.config.AuthToken, a.log); guard != nil {
+		router.Use(guard)
+		a.log.WithField("mode", a.config.AuthMode).Info("Agent API authentication enabled")
+	} else {
+		a.log.Warn("Agent API is UNAUTHENTICATED: set NVSNAP_AGENT_TOKEN and " +
+			"--auth-mode to require a bearer token (GH #486)")
+	}
 
 	// Metrics endpoint
 	router.Handle("/metrics", metrics.Handler()).Methods("GET")
