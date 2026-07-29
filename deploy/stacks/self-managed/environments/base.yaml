@@ -133,29 +133,31 @@ global:
       # global.observability.metrics.enabled
       enabled: false
 
-# Shared observability infrastructure. Self-managed control-plane installs keep
-# this on because the function autoscaler depends on a populated TSDB.
+# One profile installs and configures the shared observability stack for the
+# selected planes. Self-managed control-plane installs need no other
+# observability flags.
 observability:
-  mode: install
+  profile: control
 
-prometheusOperatorCrds:
-  # Disable this when the cluster already owns Prometheus Operator CRDs, such as
-  # through an existing kube-prometheus-stack install, to avoid CRD conflicts.
-  enabled: true
-
-opentelemetryOperator:
-  enabled: true
-
-controlPlaneCollector:
-  enabled: true
-
-victoriaMetrics:
-  enabled: true
-
-defaultMonitors:
-  enabled: true
-  controlPlane:
-    enabled: true
+# Defaults consumed only for the control and all observability profiles.
+functionAutoscaler:
+  chartVersion: "0.1.0"
+  image:
+    # Keep the stack's image pin independent of the chart's release metadata.
+    tag: "1.18.3"
+  region: local
+  cassandra:
+    contactPoints: cassandra.cassandra-system.svc.cluster.local
+    isDevelopment: false
+  nvcfApi:
+    grpcAddress: http://api.nvcf.svc.cluster.local:9090
+    # Self-managed NVCF currently uses its internal unauthenticated gRPC path.
+    disableAuth: true
+    dryRun: false
+  timeseriesDb:
+    # Self-hosted control-plane metrics do not require the hosted TSDB's
+    # environment label.
+    ignoreEnv: true
 
 accounts:
   limits:

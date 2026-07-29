@@ -10,11 +10,24 @@ global:
   imagePullSecrets: []
 
 observability:
-  mode: disabled
+  profile: disabled
   namespace: monitoring
 
+metricsBackend:
+  type: victoriaMetrics
+  # Used only with mode: existing. The bundled VictoriaMetrics endpoints are
+  # derived automatically when the selected profile installs the backend.
+  remoteWriteEndpoint: ""
+  promqlEndpoint: ""
+  authentication:
+    # Autoscaler PromQL authentication. Supported modes are none, token, and
+    # mtls. The bundled VictoriaMetrics backend always resolves to none.
+    mode: none
+    authnEndpoint: ""
+    clientCertificatePath: ""
+    clientPrivateKeyPath: ""
+
 prometheusOperatorCrds:
-  enabled: false
   version: "30.0.0"
   values:
     crds:
@@ -40,7 +53,6 @@ prometheusOperatorCrds:
         enabled: false
 
 opentelemetryOperator:
-  enabled: false
   version: "0.114.1"
   admissionWebhooks:
     certManager:
@@ -52,14 +64,10 @@ opentelemetryOperator:
       repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
       tag: "0.129.1"
 
-controlPlaneCollector:
-  enabled: false
-  collectorName: nvcf-control-plane
+collector:
+  collectorName: nvcf-observability
   image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.129.1
-  targetAllocatorRbac:
-    create: true
   targetAllocator:
-    enabled: true
     allocationStrategy: consistent-hashing
     prometheusCR:
       enabled: true
@@ -80,7 +88,8 @@ controlPlaneCollector:
       batch: {}
     exporters:
       prometheusremotewrite:
-        endpoint: http://vmsingle.monitoring.svc.cluster.local:8428/api/v1/write
+        # Filled from metricsBackend after profile defaults are resolved.
+        endpoint: ""
     service:
       pipelines:
         metrics:
@@ -92,7 +101,6 @@ controlPlaneCollector:
             - prometheusremotewrite
 
 victoriaMetrics:
-  enabled: false
   version: "0.38.0"
   server:
     retentionPeriod: "1"
@@ -108,23 +116,68 @@ victoriaMetrics:
         cpu: "1"
         memory: 1Gi
   serviceMonitor:
-    enabled: false
+    enabled: true
 
 defaultMonitors:
-  enabled: false
   commonLabels:
     nvcf.nvidia.com/observability-target: "true"
-  dcgm:
-    enabled: false
-    namespaceSelector:
-      any: true
+  controlPlane:
     interval: 30s
     path: /metrics
-    port: dcgm-metrics
-    labels: {}
-
-byooCollector:
-  enabled: false
-
-nvcaCollector:
-  enabled: false
+    port: metrics
+    namespaces:
+      - nvcf
+    services:
+      - name: state-metrics
+        enabled: true
+        selector:
+          app.kubernetes.io/instance: state-metrics
+          app.kubernetes.io/name: helm-nvcf-state-metrics
+      - name: invocation-service
+        enabled: true
+        selector:
+          app.kubernetes.io/instance: invocation-service
+      - name: grpc-proxy
+        enabled: true
+        selector:
+          app.kubernetes.io/instance: grpc-proxy
+      - name: llm-api-gateway
+        enabled: true
+        selector:
+          app.kubernetes.io/instance: llm-api-gateway
+  computePlane:
+    interval: 30s
+    path: /metrics
+    services:
+      - name: nvca
+        enabled: true
+        namespaces:
+          - nvca-system
+        port: nvca
+        selector:
+          app.kubernetes.io/name: nvca
+        labels: {}
+    dcgm:
+      enabled: true
+    namespaceSelector:
+      any: true
+    selector:
+      matchLabels:
+        nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
+      interval: 30s
+      path: /metrics
+      port: dcgm-metrics
+      labels: {}
+    worker:
+      enabled: true
+      namespace: ""
+      namespaceSelector:
+        any: true
+      selector:
+        matchExpressions:
+          - key: icms-request-id
+            operator: Exists
+      interval: 30s
+      path: /metrics
+      port: metrics
+      labels: {}

@@ -15,10 +15,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
-{{- if .Values.controlPlane.enabled }}
 {{- $top := . }}
-{{- $cp := .Values.controlPlane }}
-{{- range $svc := $cp.services }}
+{{- $groups := list
+      (dict "name" "controlPlane" "values" .Values.controlPlane)
+      (dict "name" "computePlane" "values" .Values.computePlane) }}
+{{- range $group := $groups }}
+{{- $groupName := get $group "name" }}
+{{- $groupValues := get $group "values" }}
+{{- if $groupValues.enabled }}
+{{- range $svc := $groupValues.services }}
 {{- if $svc.enabled }}
 ---
 apiVersion: monitoring.coreos.com/v1
@@ -34,14 +39,15 @@ metadata:
 spec:
   namespaceSelector:
     matchNames:
-      {{- toYaml (default $cp.namespaces $svc.namespaces) | nindent 6 }}
+      {{- toYaml (required (printf "%s service %q must set namespaces" $groupName $svc.name) (default $groupValues.namespaces $svc.namespaces)) | nindent 6 }}
   selector:
     matchLabels:
-      {{- toYaml (required (printf "controlPlane service %q must set a selector" $svc.name) $svc.selector) | nindent 6 }}
+      {{- toYaml (required (printf "%s service %q must set a selector" $groupName $svc.name) $svc.selector) | nindent 6 }}
   endpoints:
-    - port: {{ $svc.port | default $cp.port | quote }}
-      path: {{ $svc.path | default $cp.path | quote }}
-      interval: {{ $svc.interval | default $cp.interval | quote }}
+    - port: {{ $svc.port | default $groupValues.port | quote }}
+      path: {{ $svc.path | default $groupValues.path | quote }}
+      interval: {{ $svc.interval | default $groupValues.interval | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

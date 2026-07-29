@@ -6,6 +6,12 @@ environments:
 
 ---
 
+{{- $observabilityProfile := dig "observability" "profile" "disabled" .Values }}
+{{- if not (has $observabilityProfile (list "disabled" "control" "compute" "all")) }}
+{{- fail (printf "observability.profile must be disabled, control, compute, or all, got %q" $observabilityProfile) }}
+{{- end }}
+{{- $functionAutoscalerEnabled := or (eq $observabilityProfile "control") (eq $observabilityProfile "all") }}
+
 repositories:
   - name: nvcf
 {{- if dig "global" "helm" "sources" "url" "" .Values }}
@@ -38,6 +44,12 @@ templates:
       - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
     labels:
       release-group: observability
+  functionAutoscaler: &functionAutoscaler
+    chart: nvcf/helm-nvcf-function-autoscaler
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: observability
 
 releases:
 
@@ -50,3 +62,11 @@ releases:
       - template: service
     # When enabled, this service will export realtime function information that can be
     # scraped by a Prometheus ServiceMonitor
+
+  {{- if $functionAutoscalerEnabled }}
+  - name: function-autoscaler
+    version: {{ dig "functionAutoscaler" "chartVersion" "0.1.0" .Values | quote }}
+    namespace: nvcf
+    inherit:
+      - template: functionAutoscaler
+  {{- end }}
