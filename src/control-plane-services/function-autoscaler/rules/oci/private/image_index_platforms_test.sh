@@ -43,24 +43,43 @@ blob_for() {  # blob_for <digest as sha256:hex>
     printf '%s/blobs/%s/%s' "${index_dir}" "${1%%:*}" "${1#*:}"
 }
 
-top_digest="$(tr -d ' \n' < "${index_dir}/index.json" \
-    | grep -o '"digest":"sha256:[0-9a-f]*"' | head -1 | cut -d'"' -f4)"
-if [[ -z "${top_digest}" ]]; then
-    echo "index.json has no manifest descriptor" >&2
-    cat "${index_dir}/index.json" >&2
-    exit 1
-fi
+# Resolve the manifest list, tolerating either OCI layout shape.
+#
+# rules_oci currently writes index.json with a SINGLE descriptor pointing at a
+# nested image-index blob: oci/private/image_index.sh.tpl sets
+#   .manifests = [{"mediaType": "application/vnd.oci.image.index.v1+json", ...}]
+# so the platform descriptors live one level down. The OCI spec also permits
+# them inline in index.json, and other tooling emits that flatter form.
+#
+# Detect rather than assume. Hardcoding the nested walk would make this guard
+# quietly stop finding anything if the ruleset ever switched shapes: with no
+# architectures found it would report a missing platform, or worse, a future
+# edit "fixing" that could turn it into a pass. Presence of a platform
+# architecture in index.json is what distinguishes the two.
+index_flat="$(tr -d ' \n' < "${index_dir}/index.json")"
 
-manifest_list="$(blob_for "${top_digest}")"
-if [[ ! -f "${manifest_list}" ]]; then
-    echo "index.json points at a missing blob: ${top_digest}" >&2
-    exit 1
+if printf '%s' "${index_flat}" | grep -q '"architecture":"'; then
+    list_flat="${index_flat}"
+else
+    top_digest="$(printf '%s' "${index_flat}" \
+        | grep -o '"digest":"sha256:[0-9a-f]*"' | head -1 | cut -d'"' -f4)"
+    if [[ -z "${top_digest}" ]]; then
+        echo "index.json has neither inline platforms nor a manifest descriptor" >&2
+        cat "${index_dir}/index.json" >&2
+        exit 1
+    fi
+
+    manifest_list="$(blob_for "${top_digest}")"
+    if [[ ! -f "${manifest_list}" ]]; then
+        echo "index.json points at a missing blob: ${top_digest}" >&2
+        exit 1
+    fi
+    list_flat="$(tr -d ' \n' < "${manifest_list}")"
 fi
 
 # Split the manifests array into one entry per line so an architecture is only
 # ever read from the entry that declares it, and a digest is only ever read from
 # the same entry as its architecture.
-list_flat="$(tr -d ' \n' < "${manifest_list}")"
 entries="$(printf '%s' "${list_flat}" | sed 's/}, *{/}\n{/g')"
 
 found=()

@@ -46,6 +46,16 @@ make_layout() {  # make_layout <dir> <arch:config_arch>...
 
     local joined list_d
     joined="$(IFS=,; echo "${entries[*]}")"
+
+    if [[ "${FLAT_LAYOUT:-}" == "1" ]]; then
+        # Spec-permitted flat form: platform descriptors inline in index.json,
+        # no intermediate index blob.
+        printf '{"schemaVersion":2,"manifests":[%s]}' "${joined}" > "${dir}/index.json"
+        return
+    fi
+
+    # rules_oci's form: index.json holds one descriptor pointing at a nested
+    # image-index blob that carries the platform descriptors.
     list_d="$(digest_for list)"
     printf '{"schemaVersion":2,"manifests":[%s]}' "${joined}" > "${dir}/blobs/sha256/${list_d}"
     printf '{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"sha256:%s","size":1}]}' \
@@ -118,6 +128,26 @@ t="$(mktemp -d)"; make_layout "${t}" amd64:amd64 arm64:arm64
 rm -f "${t}/blobs/sha256/$(digest_for manifest-arm64)"
 run "${t}" amd64 arm64
 expect "dangling manifest blob fails" 1 "manifest blob is missing"
+rm -rf "${t}"
+
+# The cases above all use the nested layout rules_oci emits today. If the guard
+# only understood that shape, a switch to the spec's flat form would leave it
+# finding no architectures at all -- and the fixture above could never reveal
+# that, because it encodes the same assumption. Exercise the flat form too, so
+# the two are validated independently.
+t="$(mktemp -d)"; FLAT_LAYOUT=1 make_layout "${t}" amd64:amd64 arm64:arm64
+run "${t}" amd64 arm64
+expect "flat index: both arches pass" 0 "ok: arm64 manifest present"
+rm -rf "${t}"
+
+t="$(mktemp -d)"; FLAT_LAYOUT=1 make_layout "${t}" amd64:amd64
+run "${t}" amd64 arm64
+expect "flat index: missing arm64 fails" 1 "missing the arm64 manifest"
+rm -rf "${t}"
+
+t="$(mktemp -d)"; FLAT_LAYOUT=1 make_layout "${t}" amd64:amd64 arm64:amd64
+run "${t}" amd64 arm64
+expect "flat index: mislabelled config fails" 1 "different architecture"
 rm -rf "${t}"
 
 if [ "${fail}" -ne 0 ]; then
