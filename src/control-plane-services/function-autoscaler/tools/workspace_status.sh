@@ -23,12 +23,38 @@ if [ "$COMMIT" != "unknown" ] && [ -n "$(git status --porcelain 2>/dev/null)" ];
     DIRTY="-dirty"
 fi
 
-# CI overrides for VERSION (from git tag or MR sha) and BUILD_USER.
-# When unset, fall back to the values the legacy nvcf-cli Makefile computed.
+# Tag prefixes that identify a release of this service, most current first.
+# A monorepo release commit normally carries tags for several services and
+# Helm stacks at once, so an unfiltered `git describe --exact-match` can
+# return an unrelated tag and stamp it as this service's version. Match only
+# tags this service owns, and strip the prefix so the stamped value is a bare
+# semver rather than a full tag path.
+SERVICE_TAG_PREFIXES="src/control-plane-services/function-autoscaler/v nvcf-function-autoscaler-v"
+
+# Echoes the highest release version tagged on HEAD for this service, or
+# returns non-zero when HEAD carries no tag belonging to it.
+service_version_from_tags() {
+    local prefix candidate
+    for prefix in ${SERVICE_TAG_PREFIXES}; do
+        candidate=$(git tag --points-at HEAD 2>/dev/null \
+            | grep "^${prefix}" \
+            | sed "s|^${prefix}||" \
+            | sort -V \
+            | tail -n 1) || true
+        if [ -n "${candidate}" ]; then
+            printf '%s' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# CI sets NVCF_VERSION explicitly. Otherwise derive the version from a release
+# tag on HEAD, falling back to an MR-style identifier for ordinary dev builds.
 if [ -n "${NVCF_VERSION:-}" ]; then
     VERSION="${NVCF_VERSION}"
-elif TAG=$(git describe --tags --exact-match HEAD 2>/dev/null); then
-    VERSION="${TAG}"
+elif TAG_VERSION=$(service_version_from_tags); then
+    VERSION="${TAG_VERSION}"
 else
     VERSION="mr-${COMMIT}"
 fi
