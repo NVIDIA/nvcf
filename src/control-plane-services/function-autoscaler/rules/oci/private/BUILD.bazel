@@ -1,4 +1,24 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 package(default_visibility = ["//rules/oci:__subpackages__"])
+
+# Referenced by the platform-coverage test that create_oci_image generates for
+# every image, so it must be visible wherever an image is defined, not just
+# under //rules/oci.
+exports_files(
+    ["image_index_platforms_test.sh"],
+    visibility = ["//visibility:public"],
+)
+
+# Tests the guard itself against synthetic OCI layouts. The platform-coverage
+# test only runs against a real image index, which is always well-formed when
+# the build is healthy, so nothing there would notice the guard silently
+# passing on a broken index. This asserts it actually fails.
+sh_test(
+    name = "image_index_platforms_selftest",
+    srcs = ["test_image_index_platforms.sh"],
+    data = ["image_index_platforms_test.sh"],
+)

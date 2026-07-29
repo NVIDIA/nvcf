@@ -24,9 +24,8 @@ No AWS / S3 deps -- skips the aws-lc-sys crate_universe issue that
 invocation-service had to work around. openssl-sys is built against
 the system libssl via `crate.annotation` (see below); the `vendored`
 cargo feature is OFF because the OpenSSL source-tree build under the
-crate_universe sandbox fails to locate its own tarball. Trade-off:
-single-arch (linux/amd64) only until per-platform libssl paths are
-wired in.
+crate_universe sandbox fails to locate its own tarball. Per-platform
+libssl paths are wired in, so this builds linux/amd64 and linux/arm64.
 
 The umbrella nvcf/nvcf consumes this subtree under
 src/control-plane-services/function-autoscaler; this file is also picked up
@@ -44,6 +43,11 @@ module(
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_oci", version = "2.2.7")
 bazel_dep(name = "rules_pkg", version = "1.2.0")
+
+# sh_test stopped being a native global in Bazel 9; the image platform-coverage
+# test in rules/oci/private/common.bzl loads it from here. Matches the root
+# module's version.
+bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
 bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
 bazel_dep(name = "rules_python", version = "1.4.1")
@@ -111,11 +115,46 @@ crate.from_cargo(
 # machines need Homebrew openssl@3 -- if anyone hits this, point
 # OPENSSL_LIB_DIR/OPENSSL_INCLUDE_DIR at /opt/homebrew/opt/openssl@3
 # via user.bazelrc or a wrapper.
+# openssl-sys resolves its library paths from environment variables because
+# neither pkg-config nor env-based discovery works inside the Bazel sandbox.
+#
+# The target-prefixed forms matter for cross-compilation. openssl-sys checks
+# <TARGET>_OPENSSL_LIB_DIR before the unprefixed name, so without the aarch64
+# entries an arm64 build silently falls back to the x86_64 paths below and
+# links host libraries into an aarch64 artifact. That is what previously made
+# this service amd64-only:
+#
+#     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR unset
+#     OPENSSL_LIB_DIR = /usr/lib/x86_64-linux-gnu
+#
+# Vendoring is not an option here: openssl-src's bundled source tree is not
+# materialised in the crate_universe sandbox, so the build fails with
+# "openssl-src-.../openssl: No such file or directory" with or without a
+# build_script_data annotation. Hence explicit per-target system paths.
+#
+# Both architectures' libssl must exist in the build image. bazel-ci installs
+# libssl-dev and libssl-dev:arm64 for exactly this reason; a bump to that image
+# is required alongside this change.
+#
+# CFLAGS_aarch64_unknown_linux_gnu covers a second, subtler split. libssl-dev is
+# Multi-Arch: same, so its 142 arch-independent headers are shared at
+# /usr/include/openssl/ while opensslconf.h and configuration.h are per-arch
+# under /usr/include/<triplet>/openssl/. Host gcc searches its own triplet
+# directory implicitly, which is why amd64 never needed this; the zig toolchain
+# used for arm64 is hermetic and searches neither. OPENSSL_INCLUDE_DIR takes a
+# single directory and cannot express the pair, so the triplet path is added
+# through the cc crate's target-suffixed CFLAGS instead. Without it the build
+# fails on `#include <openssl/opensslconf.h>`.
 crate.annotation(
     build_script_env = {
-        "OPENSSL_LIB_DIR": "/usr/lib/x86_64-linux-gnu",
+        "AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR": "/usr/include",
+        "AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR": "/usr/lib/aarch64-linux-gnu",
+        "CFLAGS_aarch64_unknown_linux_gnu": "-I/usr/include/aarch64-linux-gnu",
         "OPENSSL_INCLUDE_DIR": "/usr/include",
+        "OPENSSL_LIB_DIR": "/usr/lib/x86_64-linux-gnu",
         "OPENSSL_NO_VENDOR": "1",
+        "X86_64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR": "/usr/include",
+        "X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR": "/usr/lib/x86_64-linux-gnu",
     },
     crate = "openssl-sys",
 )
@@ -152,12 +191,16 @@ oci.pull(
     image = "nvcr.io/nvidia/distroless/cc",
     platforms = [
         "linux/amd64",
-        "linux/arm64",
+        # arm64/v8, not arm64: nvcr.io/nvidia/distroless/cc publishes its
+        # aarch64 manifest under the v8 variant and rules_oci matches the
+        # platform string exactly, so "linux/arm64" fails the pull outright.
+        # http-invocation pins the same image and digest with arm64/v8.
+        "linux/arm64/v8",
     ],
 )
 use_repo(
     oci,
     "distroless_cc",
     "distroless_cc_linux_amd64",
-    "distroless_cc_linux_arm64",
+    "distroless_cc_linux_arm64_v8",
 )
