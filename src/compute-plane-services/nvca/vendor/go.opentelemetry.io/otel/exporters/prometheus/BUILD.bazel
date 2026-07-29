@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "prometheus",
+    srcs = [
+        "config.go",
+        "doc.go",
+        "errors.go",
+        "exporter.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/prometheus",
+    importpath = "go.opentelemetry.io/otel/exporters/prometheus",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/prometheus/client_golang/prometheus",
+        "//vendor/github.com/prometheus/client_model/go",
+        "//vendor/github.com/prometheus/otlptranslator",
+        "//vendor/go.opentelemetry.io/otel",
+        "//vendor/go.opentelemetry.io/otel/attribute",
+        "//vendor/go.opentelemetry.io/otel/exporters/prometheus/internal/counter",
+        "//vendor/go.opentelemetry.io/otel/exporters/prometheus/internal/observ",
+        "//vendor/go.opentelemetry.io/otel/internal/global",
+        "//vendor/go.opentelemetry.io/otel/sdk/metric",
+        "//vendor/go.opentelemetry.io/otel/sdk/metric/metricdata",
+        "//vendor/go.opentelemetry.io/otel/sdk/resource",
+        "//vendor/google.golang.org/protobuf/proto",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":prometheus",
+    visibility = ["//visibility:public"],
+)

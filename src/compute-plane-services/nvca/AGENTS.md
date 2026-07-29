@@ -396,6 +396,23 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 - `rate()` calculations give unexpected results if metrics appear mid-scrape
 - Dashboards show gaps instead of zeros
 
+### OTel client metrics (outbound dependencies)
+
+Outbound dependency clients are instrumented with OpenTelemetry metrics following
+the OpenTelemetry Semantic Conventions, separate from the client_golang metrics
+above. This path does not use the manual zero-init loops: instruments come from an
+OTel MeterProvider and are exported through the OTel to Prometheus bridge onto the
+same `/metrics` endpoint. It is gated by the `ClientMetrics` feature flag.
+
+- Pipeline: `internal/otel/meter.go`. Recording: `internal/metrics/clientmetrics/`.
+  Labels: the semconv helpers in `internal/metrics/semconv/`.
+- Instrumented today: ICMS, ReVal, FNDS, the OAuth token fetchers, and the queue
+  client.
+- Declare histogram buckets explicitly and keep label values bounded.
+
+See `internal/metrics/METRICS.md` for the metric list, the label vocabulary, and
+the recipe for adding a new dependency or a new transport type.
+
 ## Key Environment Variables
 
 Useful local test variables:
