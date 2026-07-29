@@ -634,6 +634,75 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 	}
 }
 
+// TestObservabilityDisabledFeatureFileWiresToSteps runs the render-only
+// observability-disabled feature against a fake runner. The fixture setup
+// mirrors the local Helmfile inputs while the feature asserts disabled profile
+// renders omit observability resources from both stacks.
+func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"rg --fixed-strings 'name: function-autoscaler' tests/bdd/out/observability-disabled":    {ExitCode: 1},
+		"rg --fixed-strings 'kind: OpenTelemetryCollector' tests/bdd/out/observability-disabled": {ExitCode: 1},
+		"rg --fixed-strings 'kind: ServiceMonitor' tests/bdd/out/observability-disabled":         {ExitCode: 1},
+		"rg --fixed-strings 'kind: PodMonitor' tests/bdd/out/observability-disabled":             {ExitCode: 1},
+		"rg --fixed-strings 'BYOObservability' tests/bdd/out/observability-disabled":             {ExitCode: 1},
+	}))
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	seedObservabilityDisabledRegistrationValuesFixture(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "observability-disabled.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "observability-disabled-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanThatContains(runs, "deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-observability-disabled") {
+		t.Fatal("control-plane Helmfile template command was never invoked")
+	}
+	if !commandRanThatContains(runs, "deploy/stacks/nvcf-compute-plane template CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-observability-disabled") {
+		t.Fatal("compute-plane Helmfile template command was never invoked")
+	}
+}
+
+func seedObservabilityDisabledRegistrationValuesFixture(t *testing.T, repoRoot string) {
+	t.Helper()
+	stackDir := filepath.Join(repoRoot, "deploy", "stacks", "self-managed")
+	if err := os.MkdirAll(stackDir, 0o755); err != nil {
+		t.Fatalf("mkdir self-managed stack dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stackDir, "Makefile.dist"), []byte("template:\n\t@true\n"), 0o644); err != nil {
+		t.Fatalf("write self-managed Makefile.dist: %v", err)
+	}
+	writeFixture(t, repoRoot, "ncp-local-register-values.yaml", `clusterID: 11111111-2222-3333-4444-555555555555
+clusterGroupID: aaaa-bbbb-cccc-dddd
+ncaID: nvcf-default
+region: us-west-1
+selfManaged:
+  identitySource: psat
+  icmsServiceURL: http://api.sis.svc.cluster.local:8080
+  revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+  natsURL: nats://nats.nats-system.svc.cluster.local:4222
+`)
+}
+
 // helmListAllNamespacesJSON returns canned helm-list output covering
 // every release the helmfile install scenario asserts.
 func helmListAllNamespacesJSON() string {
@@ -1108,6 +1177,15 @@ func TestSingleClusterHelmfileUpstreamImages(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "single-cluster-helmfile-upstream-images.feature")
+}
+
+// TestObservabilityDisabled is the live entry point for the render-only
+// disabled observability profile feature. Skipped under -short.
+func TestObservabilityDisabled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "observability-disabled.feature")
 }
 
 // TestMultiClusterHelmfile is the live entry point for the
