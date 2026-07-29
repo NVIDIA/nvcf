@@ -345,7 +345,7 @@ jobs:
       # Bazelisk then selects the root .bazelversion release. Update this tag
       # only after the corresponding internal image has been published and
       # mirrored.
-      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.13.0' }}
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.14.0' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
