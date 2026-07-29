@@ -21,13 +21,17 @@ import com.nvidia.boot.exceptions.UnauthorizedException;
 import io.grpc.Status;
 import io.grpc.Status.Code;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import io.micrometer.core.instrument.binder.grpc.ObservationGrpcServerInterceptor;
+import io.micrometer.observation.ObservationRegistry;
 import net.devh.boot.grpc.server.advice.GrpcAdvice;
 import net.devh.boot.grpc.server.advice.GrpcExceptionHandler;
+import net.devh.boot.grpc.server.interceptor.GrpcGlobalServerInterceptor;
 import net.devh.boot.grpc.server.security.authentication.BearerAuthenticationReader;
 import net.devh.boot.grpc.server.security.authentication.GrpcAuthenticationReader;
 import net.devh.boot.grpc.server.security.interceptors.DefaultAuthenticatingServerInterceptor;
 import net.devh.boot.grpc.server.security.interceptors.ExceptionTranslatingServerInterceptor;
 import net.devh.boot.grpc.server.serverfactory.GrpcServerConfigurer;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.access.AccessDeniedException;
@@ -38,6 +42,13 @@ import org.springframework.web.ErrorResponseException;
 @Configuration(proxyBeanMethods = false)
 @GrpcAdvice
 public class GrpcConfiguration {
+
+    @GrpcGlobalServerInterceptor
+    @ConditionalOnMissingBean(ObservationGrpcServerInterceptor.class)
+    public ObservationGrpcServerInterceptor observationGrpcServerInterceptor(
+            ObservationRegistry observationRegistry) {
+        return new ObservationGrpcServerInterceptor(observationRegistry);
+    }
 
     @Bean
     public GrpcAuthenticationReader authenticationReader() {

@@ -149,7 +149,7 @@ public class NotaryServiceResponseTransformer implements ResponseTransformerV2 {
         var assertion = new WorkerAccessAssertion(ncaId, taskId);
         return NotaryUtils.getJwt(subject,
                 jsonMapper.writeValueAsString(assertion),
-                new URL(issuer),
+                URI.create(issuer).toURL(),
                 Date.from(issuedAt));
     }
 
@@ -162,7 +162,7 @@ public class NotaryServiceResponseTransformer implements ResponseTransformerV2 {
         var assertion = new SecretPathsAssertion(namespace, secretPaths);
         return NotaryUtils.getJwt(notaryClientId,
                       jsonMapper.writeValueAsString(assertion),
-                      new URL(notaryBaseUrl));
+                      URI.create(notaryBaseUrl).toURL());
     }
 
     private static class NotaryUtils {
