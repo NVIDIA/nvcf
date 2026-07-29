@@ -9,13 +9,8 @@ load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oc
 load("//rules/oci:transition.bzl", "multi_arch")
 
 DEFAULT_BASE = "@distroless_cc"
-# linux_x86_64 only for now. linux_arm64 builds fail at openssl-sys's
-# build script because the crate.annotation in MODULE.bazel points at
-# /usr/lib/x86_64-linux-gnu/libssl.so; under the zig cc cross-compile
-# to aarch64 that path is wrong. Re-add linux_arm64 once we either
-# vendor libssl via http_archive + multi-arch crate.annotation, or
-# switch the scylla driver's TLS feature to rustls.
 DEFAULT_PLATFORMS = [
+    "//platforms:linux_arm64",
     "//platforms:linux_x86_64",
 ]
 
