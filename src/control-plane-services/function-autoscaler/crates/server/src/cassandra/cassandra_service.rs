@@ -25,7 +25,6 @@ use async_trait::async_trait;
 use base64::Engine;
 use chrono::Utc;
 use futures::TryStreamExt as _;
-use openssl::ssl::{SslContextBuilder, SslMethod, SslVerifyMode};
 use scylla::client::session::Session;
 use scylla::client::{
     execution_profile::ExecutionProfile, session_builder::SessionBuilder, Compression, PoolSize,
@@ -155,7 +154,9 @@ impl CassandraServiceManager {
         // Configure TLS only if SSL is enabled and certs are provided
         let tls_context = if self.config.ssl.enabled {
             if let Some(certs) = ssl_certs {
-                Some(Self::create_ssl_context(certs)?.build())
+                Some(scylla::client::session::TlsContext::Rustls023(
+                    Self::create_tls_config(certs)?,
+                ))
             } else {
                 return Err(anyhow::anyhow!(
                     "SSL is enabled but no certificates provided"
@@ -208,37 +209,105 @@ impl CassandraServiceManager {
             .map_err(|e| anyhow::anyhow!("Failed to build Cassandra session: {}", e))
     }
 
-    fn create_ssl_context(ssl_certs: &CassandraSslCertificates) -> Result<SslContextBuilder> {
-        use openssl::pkey::PKey;
-        use openssl::x509::X509;
+    /// Build the rustls client config used for Cassandra TLS.
+    ///
+    /// IMPORTANT, and unchanged from the previous OpenSSL implementation:
+    /// this does NOT verify the server certificate. The OpenSSL version
+    /// called `set_verify(SslVerifyMode::NONE)` after loading the CA, so the
+    /// CA was never actually used to validate the peer. rustls has no
+    /// equivalent switch, so reproducing that behaviour requires the explicit
+    /// verifier below.
+    ///
+    /// This is preserved deliberately rather than silently tightened: turning
+    /// verification on is a behavioural change that could drop every existing
+    /// Cassandra connection, and it belongs in its own reviewed change rather
+    /// than in a port whose purpose is unblocking arm64 builds.
+    fn create_tls_config(ssl_certs: &CassandraSslCertificates) -> Result<Arc<rustls::ClientConfig>> {
+        use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+        use rustls::{DigitallySignedStruct, Error as TlsError, SignatureScheme};
 
-        tracing::info!("Creating SSL context from memory");
+        tracing::info!("Creating Cassandra TLS config from memory");
 
-        // Decode certificates from base64
-        let tls_cert_content =
-            base64::engine::general_purpose::STANDARD.decode(&ssl_certs.tls_cert)?;
         let app_cert_content =
             base64::engine::general_purpose::STANDARD.decode(&ssl_certs.app_cert)?;
         let app_key_content =
             base64::engine::general_purpose::STANDARD.decode(&ssl_certs.app_key)?;
 
-        // Parse certificates and key
-        let ca_cert = X509::from_pem(&tls_cert_content)?;
-        let client_cert = X509::from_pem(&app_cert_content)?;
-        let private_key = PKey::private_key_from_pem(&app_key_content)?;
+        let client_certs: Vec<CertificateDer<'static>> =
+            rustls_pemfile::certs(&mut app_cert_content.as_slice())
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| anyhow::anyhow!("Failed to parse Cassandra client certificate: {e}"))?;
+        if client_certs.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Cassandra client certificate chain is empty"
+            ));
+        }
 
-        // Create SSL context
-        let mut context_builder = SslContextBuilder::new(SslMethod::tls())?;
+        let client_key: PrivateKeyDer<'static> =
+            rustls_pemfile::private_key(&mut app_key_content.as_slice())
+                .map_err(|e| anyhow::anyhow!("Failed to parse Cassandra client private key: {e}"))?
+                .ok_or_else(|| anyhow::anyhow!("Cassandra client private key is empty"))?;
 
-        // Add CA certificate to the certificate store
-        let cert_store = context_builder.cert_store_mut();
-        cert_store.add_cert(ca_cert)?;
+        /// Accepts any server certificate, matching SslVerifyMode::NONE.
+        #[derive(Debug)]
+        struct NoServerVerification(Arc<rustls::crypto::CryptoProvider>);
 
-        context_builder.set_certificate(&client_cert)?;
-        context_builder.set_private_key(&private_key)?;
-        context_builder.set_verify(SslVerifyMode::NONE);
+        impl ServerCertVerifier for NoServerVerification {
+            fn verify_server_cert(
+                &self,
+                _end_entity: &CertificateDer<'_>,
+                _intermediates: &[CertificateDer<'_>],
+                _server_name: &ServerName<'_>,
+                _ocsp: &[u8],
+                _now: UnixTime,
+            ) -> std::result::Result<ServerCertVerified, TlsError> {
+                Ok(ServerCertVerified::assertion())
+            }
 
-        Ok(context_builder)
+            fn verify_tls12_signature(
+                &self,
+                message: &[u8],
+                cert: &CertificateDer<'_>,
+                dss: &DigitallySignedStruct,
+            ) -> std::result::Result<HandshakeSignatureValid, TlsError> {
+                rustls::crypto::verify_tls12_signature(
+                    message,
+                    cert,
+                    dss,
+                    &self.0.signature_verification_algorithms,
+                )
+            }
+
+            fn verify_tls13_signature(
+                &self,
+                message: &[u8],
+                cert: &CertificateDer<'_>,
+                dss: &DigitallySignedStruct,
+            ) -> std::result::Result<HandshakeSignatureValid, TlsError> {
+                rustls::crypto::verify_tls13_signature(
+                    message,
+                    cert,
+                    dss,
+                    &self.0.signature_verification_algorithms,
+                )
+            }
+
+            fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+                self.0.signature_verification_algorithms.supported_schemes()
+            }
+        }
+
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .map_err(|e| anyhow::anyhow!("Failed to select TLS protocol versions: {e}"))?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoServerVerification(provider)))
+            .with_client_auth_cert(client_certs, client_key)
+            .map_err(|e| anyhow::anyhow!("Failed to install Cassandra client certificate: {e}"))?;
+
+        Ok(Arc::new(config))
     }
 
     #[tracing::instrument(skip(self))]

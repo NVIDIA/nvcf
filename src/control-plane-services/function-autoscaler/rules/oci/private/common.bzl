@@ -16,6 +16,7 @@ DEFAULT_BASE = "@distroless_cc"
 # vendor libssl via http_archive + multi-arch crate.annotation, or
 # switch the scylla driver's TLS feature to rustls.
 DEFAULT_PLATFORMS = [
+    "//platforms:linux_arm64",
     "//platforms:linux_x86_64",
 ]
 

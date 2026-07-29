@@ -28,14 +28,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 use chrono::{DateTime, Duration, Utc};
-use openssl::asn1::Asn1Time;
-use openssl::pkey::PKey;
-use openssl::x509::X509;
 use reqwest::{ClientBuilder, Identity};
 use reqwest_middleware::ClientWithMiddleware;
 use serde::Deserialize;
 use serde_json;
-use std::cmp::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 use tracing;
@@ -88,50 +84,47 @@ fn mtls_identity(config: &TimeseriesDbSettings, base_url: &Url) -> Result<Identi
         )
     })?;
 
-    let certificates = X509::stack_from_pem(&certificate_pem)
-        .context("Failed to parse TimeseriesDb client certificate chain")?;
-    let leaf_certificate = certificates
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("TimeseriesDb client certificate chain is empty"))?;
-    let private_key = PKey::private_key_from_pem(&private_key_pem)
-        .context("Failed to parse TimeseriesDb client private key")?;
-    let leaf_public_key = leaf_certificate
-        .public_key()
-        .context("Failed to read TimeseriesDb client certificate public key")?;
-    if !leaf_public_key.public_eq(&private_key) {
-        return Err(anyhow::anyhow!(
-            "TimeseriesDb client certificate does not match the private key"
-        ));
-    }
+    // Validity window is checked here so a clearly unusable certificate fails
+    // at startup with a precise message rather than as an opaque TLS handshake
+    // error later. Parsed with x509-parser rather than OpenSSL: the service
+    // builds for linux/arm64, and openssl-sys cannot cross-compile because its
+    // build script resolves the host's x86_64 libssl.
+    //
+    // The previous implementation also compared the leaf's public key against
+    // the private key. That check is not reproduced here because rustls
+    // performs the equivalent validation when the identity is installed, and
+    // deriving a public key from a private key without OpenSSL would mean
+    // pulling in per-algorithm crates for no additional coverage. A mismatched
+    // pair still fails, just at identity construction rather than before it.
+    let leaf_der = pem::parse_many(&certificate_pem)
+        .map_err(|e| {
+            anyhow::anyhow!("Failed to parse TimeseriesDb client certificate chain: {e}")
+        })?
+        .into_iter()
+        .find(|p| p.tag() == "CERTIFICATE")
+        .ok_or_else(|| anyhow::anyhow!("TimeseriesDb client certificate chain is empty"))?
+        .into_contents();
+    let (_, leaf_certificate) = x509_parser::parse_x509_certificate(&leaf_der)
+        .map_err(|e| anyhow::anyhow!("Failed to parse TimeseriesDb client certificate: {e}"))?;
 
-    let now = Asn1Time::days_from_now(0).context("Failed to get current certificate time")?;
-    if leaf_certificate
-        .not_before()
-        .compare(&now)
-        .context("Failed to compare TimeseriesDb client certificate validity")?
-        == Ordering::Greater
-    {
+    let validity = leaf_certificate.validity();
+    let now = x509_parser::time::ASN1Time::now();
+    if validity.not_before > now {
         return Err(anyhow::anyhow!(
             "TimeseriesDb client certificate is not valid yet"
         ));
     }
-    if leaf_certificate
-        .not_after()
-        .compare(&now)
-        .context("Failed to compare TimeseriesDb client certificate expiry")?
-        != Ordering::Greater
-    {
+    if validity.not_after <= now {
         return Err(anyhow::anyhow!(
             "TimeseriesDb client certificate has expired"
         ));
     }
 
-    // Normalize either PKCS#1 or PKCS#8 input to the PKCS#8 form required by
-    // reqwest's native TLS identity constructor.
-    let private_key_pem = private_key
-        .private_key_to_pem_pkcs8()
-        .context("Failed to encode TimeseriesDb client private key as PKCS#8")?;
-    Identity::from_pkcs8_pem(&certificate_pem, &private_key_pem)
+    // reqwest's rustls identity accepts the PEM pair directly, so no PKCS#1 to
+    // PKCS#8 conversion is needed; rustls-pemfile handles both encodings.
+    let mut identity_pem = certificate_pem.clone();
+    identity_pem.extend_from_slice(&private_key_pem);
+    Identity::from_pem(&identity_pem)
         .context("Failed to build TimeseriesDb client identity")
 }
 

@@ -33,7 +33,7 @@ serde_json = "1.0"
 serde_with = { version = "3.0", features = ["chrono_0_4"] }
 tokio = { version = "1", features = ["full", "macros", "rt-multi-thread"] }
 chrono = { version = "0.4", features = ["serde"] }
-scylla = { version = "1.2.0", features = ["chrono-04", "openssl-010", "unstable-cloud"] }
+scylla = { version = "1.2.0", features = ["chrono-04", "rustls-023", "unstable-cloud"] }
 config = { version = "0.14", features = ["yaml"] }
 opentelemetry = "0.28"
 opentelemetry-otlp = { version = "0.28", default-features = false, features = ["trace", "grpc-tonic", "tls-webpki-roots"] }
@@ -55,8 +55,11 @@ futures = "0.3.31"
 # below provides OPENSSL_LIB_DIR / OPENSSL_INCLUDE_DIR so the build
 # script knows where to look. The bazel-ci image ships libssl-dev
 # at /usr, and the runtime distroless/cc base ships libssl at /usr/lib.
-openssl = { version = "0.10.72" }
-reqwest = { version = "0.12", features = ["json", "native-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+pem = "3"
+rustls-pemfile = "2"
+x509-parser = "0.16"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 reqwest-middleware = "0.4"
 reqwest-tracing = { version = "0.5", features = ["opentelemetry_0_28"] }
 url = "2"
@@ -78,6 +81,9 @@ prost = "0.13"
 prost-types = "0.13"
 
 [dev-dependencies]
+# Test-only certificate generation. Kept out of [dependencies] so openssl-sys
+# stays out of the image build graph, which must cross-compile to aarch64.
+openssl = { version = "0.10.72" }
 tempfile = "3.20.0"
 uuid = "1.16.0"
 hyper = "1"
