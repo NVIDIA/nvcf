@@ -43,6 +43,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 	mscontroller "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
@@ -148,10 +149,16 @@ func startControllerManagerForAgent(
 		return fmt.Errorf("detect karta resource: %w", err)
 	}
 
-	hrHTTPClient := cmnhttp.NewRetryableClient(ctx,
+	revalHTTPOpts := []cmnhttp.Option{
 		cmnhttp.WithAppVersionUserAgent(types.AppName),
 		cmnhttp.WithRequestHeader(types.HeaderNVClusterID, a.ClusterID),
-	)
+	}
+	if a.ClientMetricsEnabled && a.clientMetricsRecorder != nil {
+		revalHTTPOpts = append(revalHTTPOpts, cmnhttp.WithTransportWrapper(func(inner http.RoundTripper) http.RoundTripper {
+			return clientmetrics.NewTransport(inner, a.clientMetricsRecorder, clientmetrics.PeerServiceReVal)
+		}))
+	}
+	hrHTTPClient := cmnhttp.NewRetryableClient(ctx, revalHTTPOpts...)
 	rvClient := mscontroller.NewReValClient(
 		a.HelmReValServiceURL,
 		tf,

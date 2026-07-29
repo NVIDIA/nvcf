@@ -30,6 +30,7 @@ go_library(
         "@com_github_hashicorp_go_retryablehttp//:go-retryablehttp",
         "@com_github_sirupsen_logrus//:logrus",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@io_opentelemetry_go_otel_metric//noop",
     ],
 )
 
@@ -39,6 +40,7 @@ go_test(
         "logger_test.go",
         "requestheaders_test.go",
         "retryclient_test.go",
+        "retryclient_transportwrapper_test.go",
     ],
     embed = [":http"],
     deps = [

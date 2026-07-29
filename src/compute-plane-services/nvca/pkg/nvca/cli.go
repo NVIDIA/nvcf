@@ -219,6 +219,7 @@ func newCobraCommand(
 				LowLatencyStreamingEnabled:          featureflag.LowLatencyStreaming.Enabled(),
 				PVCRebindEnabled:                    featureflag.PVCRebind.Enabled(),
 				MultiNodeWorkloadsEnabled:           featureflag.MultiNodeWorkloads.Enabled(),
+				ClientMetricsEnabled:                featureflag.ClientMetrics.Enabled(),
 				FeatureFlagFetcher:                  featureflag.DefaultFetcher,
 				ICMSRequestAckRetryTimeout:          cfg.Agent.ICMSRequestAckRetryTimeout,
 				NVCAOperatorVersion:                 cfg.Agent.OperatorVersion,

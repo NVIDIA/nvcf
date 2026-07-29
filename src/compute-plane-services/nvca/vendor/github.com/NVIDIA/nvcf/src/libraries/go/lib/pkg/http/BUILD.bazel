@@ -16,6 +16,7 @@ go_library(
         "//vendor/github.com/hashicorp/go-retryablehttp",
         "//vendor/github.com/sirupsen/logrus",
         "//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
+        "//vendor/go.opentelemetry.io/otel/metric/noop",
     ],
 )
 

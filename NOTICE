@@ -219,6 +219,7 @@ The following third-party licenses are included in this repository:
     src/compute-plane-services/nvca/vendor/github.com/prometheus/client_model/NOTICE
     src/compute-plane-services/nvca/vendor/github.com/prometheus/common/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/prometheus/common/NOTICE
+    src/compute-plane-services/nvca/vendor/github.com/prometheus/otlptranslator/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/prometheus/procfs/LICENSE
     src/compute-plane-services/nvca/vendor/github.com/prometheus/procfs/NOTICE
     src/compute-plane-services/nvca/vendor/github.com/run-ai/karta/LICENSE
@@ -251,9 +252,11 @@ The following third-party licenses are included in this repository:
     src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp/LICENSE
     src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/LICENSE
     src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc/LICENSE
+    src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/prometheus/LICENSE
     src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/LICENSE
     src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric/LICENSE
     src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/LICENSE
+    src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/LICENSE
     src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace/LICENSE
     src/compute-plane-services/nvca/vendor/go.opentelemetry.io/proto/otlp/LICENSE
     src/compute-plane-services/nvca/vendor/go.uber.org/mock/LICENSE
