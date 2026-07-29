@@ -93,7 +93,7 @@ func setupMetrics() {
 	go func() {
 		err := http.ListenAndServe("0.0.0.0:7776", mux)
 		if err != nil {
-
+			zap.L().Error("metrics server failed", zap.Error(err))
 		}
 	}()
 }
