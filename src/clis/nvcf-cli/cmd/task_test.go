@@ -19,9 +19,13 @@ package cmd
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,25 +84,31 @@ func TestTaskGetCommandFlagSurface(t *testing.T) {
 	assert.NotNil(t, taskGetCmd.Flags().Lookup("timeout"))
 }
 
-func TestNewTaskGetContext(t *testing.T) {
+func TestTaskResultsCommandFlagSurface(t *testing.T) {
+	assert.NotNil(t, taskResultsCmd.Flags().Lookup("limit"))
+	assert.NotNil(t, taskResultsCmd.Flags().Lookup("cursor"))
+	assert.NotNil(t, taskResultsCmd.Flags().Lookup("timeout"))
+}
+
+func TestNewTaskRequestContext(t *testing.T) {
 	t.Run("rejects negative timeout", func(t *testing.T) {
-		_, _, err := newTaskGetContext(-1)
+		_, _, err := newTaskRequestContext(-1)
 		require.Error(t, err)
 	})
 
 	t.Run("rejects timeout that overflows duration", func(t *testing.T) {
-		timeoutSeconds := int64(maxTaskGetTimeoutSeconds + 1)
+		timeoutSeconds := int64(maxTaskRequestTimeoutSeconds + 1)
 		if int64(int(timeoutSeconds)) != timeoutSeconds {
 			t.Skip("int cannot represent an overflowing time.Duration in seconds")
 		}
 
-		_, _, err := newTaskGetContext(int(timeoutSeconds))
+		_, _, err := newTaskRequestContext(int(timeoutSeconds))
 		require.Error(t, err)
 	})
 
 	t.Run("uses caller timeout", func(t *testing.T) {
 		start := time.Now()
-		ctx, cancel, err := newTaskGetContext(1)
+		ctx, cancel, err := newTaskRequestContext(1)
 		require.NoError(t, err)
 		defer cancel()
 
@@ -108,7 +118,7 @@ func TestNewTaskGetContext(t *testing.T) {
 	})
 
 	t.Run("keeps default timeout", func(t *testing.T) {
-		ctx, cancel, err := newTaskGetContext(0)
+		ctx, cancel, err := newTaskRequestContext(0)
 		require.NoError(t, err)
 		defer cancel()
 
@@ -117,6 +127,92 @@ func TestNewTaskGetContext(t *testing.T) {
 		assert.NoError(t, ctx.Err())
 		assert.NotEqual(t, context.Canceled, ctx.Err())
 	})
+}
+
+func TestTaskResultsTimeoutCancelsHTTPRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/v1/nvct/tasks/task-test/results", r.URL.Path)
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(3 * time.Second):
+				t.Error("task results request was not canceled")
+			}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	oldCfgFile := cfgFile
+	oldStateManager := configStateManager
+	oldStateManagerKey := configStateManagerKey
+	oldTaskResultsFlags := taskResultsPaginationFlags
+	t.Cleanup(func() {
+		cfgFile = oldCfgFile
+		configStateManager = oldStateManager
+		configStateManagerKey = oldStateManagerKey
+		taskResultsPaginationFlags = oldTaskResultsFlags
+		viper.Reset()
+	})
+
+	viper.Reset()
+	viper.Set("base_nvct_url", server.URL)
+	viper.Set("base_grpc_url", "localhost:50051")
+	viper.Set("api_key", "test-function-api-key")
+	viper.Set("nvct_api_key", "test-task-api-key")
+	cfgFile = filepath.Join(t.TempDir(), "workflow.yaml")
+	configStateManager = nil
+	configStateManagerKey = ""
+	taskResultsPaginationFlags.timeoutSeconds = 1
+
+	start := time.Now()
+	err := runTaskResults(taskResultsCmd, []string{"task-test"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 2*time.Second)
+}
+
+func TestTaskGetTimeoutCancelsHTTPRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/v1/nvct/tasks/task-test", r.URL.Path)
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(3 * time.Second):
+				t.Error("task get request was not canceled")
+			}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	oldCfgFile := cfgFile
+	oldStateManager := configStateManager
+	oldStateManagerKey := configStateManagerKey
+	oldTaskGetFlags := taskGetFlags
+	t.Cleanup(func() {
+		cfgFile = oldCfgFile
+		configStateManager = oldStateManager
+		configStateManagerKey = oldStateManagerKey
+		taskGetFlags = oldTaskGetFlags
+		viper.Reset()
+	})
+
+	viper.Reset()
+	viper.Set("base_nvct_url", server.URL)
+	viper.Set("base_grpc_url", "localhost:50051")
+	viper.Set("api_key", "test-function-api-key")
+	viper.Set("nvct_api_key", "test-task-api-key")
+	cfgFile = filepath.Join(t.TempDir(), "workflow.yaml")
+	configStateManager = nil
+	configStateManagerKey = ""
+	taskGetFlags.timeoutSeconds = 1
+
+	start := time.Now()
+	err := runTaskGet(taskGetCmd, []string{"task-test"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 2*time.Second)
 }
 
 // --- Helpers ----------------------------------------------------------------

@@ -44,7 +44,7 @@ Reference architectures combine multiple NVCF workload types in one workflow.
 
 | Sample | Description |
 |--------|-------------|
-| [Function and Task Pipeline](reference-architectures/function-task-pipeline/) | Client-orchestrated workflow that uses a long-running function for interactive stages and a task for run-to-completion work. |
+| [Model Artifact Inventory Pipeline](reference-architectures/function-task-pipeline/) | Client-orchestrated workflow that admits an artifact request, inventories mounted model and dataset files in a task, and returns result metadata to a function. |
 
 ## Building for Multiple Compute Architectures
 

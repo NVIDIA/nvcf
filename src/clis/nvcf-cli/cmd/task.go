@@ -318,8 +318,9 @@ var taskPaginationFlags struct {
 }
 
 var taskResultsPaginationFlags struct {
-	limit  int
-	cursor string
+	limit          int
+	cursor         string
+	timeoutSeconds int
 }
 
 var taskUpdateSecretsFlags struct {
@@ -397,6 +398,7 @@ func init() {
 	// task results flags
 	taskResultsCmd.Flags().IntVar(&taskResultsPaginationFlags.limit, "limit", 0, "Maximum number of results to return")
 	taskResultsCmd.Flags().StringVar(&taskResultsPaginationFlags.cursor, "cursor", "", "Pagination cursor returned by previous response")
+	taskResultsCmd.Flags().IntVar(&taskResultsPaginationFlags.timeoutSeconds, "timeout", 0, "Maximum request duration in seconds (default client timeout)")
 
 	// task update-secrets flags
 	taskUpdateSecretsCmd.Flags().StringVar(&taskUpdateSecretsFlags.inputFile, "input-file", "", "JSON file with { secrets: [{name, value}, ...] } payload")
@@ -439,10 +441,10 @@ func SetCurrentTask(taskID, taskName string) {
 	sm.SetTask(taskID, taskName)
 }
 
-const maxTaskGetTimeoutSeconds = math.MaxInt64 / int64(time.Second)
+const maxTaskRequestTimeoutSeconds = math.MaxInt64 / int64(time.Second)
 
-func newTaskGetContext(timeoutSeconds int) (context.Context, context.CancelFunc, error) {
-	if timeoutSeconds < 0 || int64(timeoutSeconds) > maxTaskGetTimeoutSeconds {
+func newTaskRequestContext(timeoutSeconds int) (context.Context, context.CancelFunc, error) {
+	if timeoutSeconds < 0 || int64(timeoutSeconds) > maxTaskRequestTimeoutSeconds {
 		return nil, nil, fmt.Errorf("timeout must be a non-negative integer")
 	}
 	if timeoutSeconds == 0 {
@@ -901,7 +903,7 @@ func runTaskGet(cmd *cobra.Command, args []string) error {
 	}
 	defer c.Close()
 
-	ctx, cancel, err := newTaskGetContext(taskGetFlags.timeoutSeconds)
+	ctx, cancel, err := newTaskRequestContext(taskGetFlags.timeoutSeconds)
 	if err != nil {
 		return err
 	}
@@ -1100,7 +1102,13 @@ func runTaskResults(cmd *cobra.Command, args []string) error {
 	}
 	defer c.Close()
 
-	resp, err := c.GetTaskResults(context.Background(), taskID, &client.PaginationOptions{
+	ctx, cancel, err := newTaskRequestContext(taskResultsPaginationFlags.timeoutSeconds)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	resp, err := c.GetTaskResults(ctx, taskID, &client.PaginationOptions{
 		Limit:  taskResultsPaginationFlags.limit,
 		Cursor: taskResultsPaginationFlags.cursor,
 	})

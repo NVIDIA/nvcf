@@ -98,6 +98,42 @@ func runTaskCreateWithResponse(t *testing.T, response string) (string, error) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/v1/nvct/tasks", r.URL.Path)
+		assert.Equal(t, "Bearer test-task-api-key", r.Header.Get("Authorization"))
+		var request client.CreateTaskRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		assert.Equal(t, "task-test", request.Name)
+		require.NotNil(t, request.GpuSpecification)
+		assert.Equal(t, "H100", request.GpuSpecification.GPU)
+		assert.Equal(t, "NCP.GPU.H100_8x", request.GpuSpecification.InstanceType)
+		assert.Equal(t, "ncp-local", request.GpuSpecification.Backend)
+		assert.Equal(t, "registry.example/task:test", request.ContainerImage)
+		assert.Equal(t, []client.ContainerEnvironmentEntry{{
+			Key:   "WORKFLOW_REQUEST_BASE64",
+			Value: "encoded-request",
+		}, {
+			Key:   "RESULTS_LOCATION",
+			Value: "test-org/test-model",
+		}}, request.ContainerEnvironment)
+		assert.Equal(t, []client.ArtifactDto{{
+			Name:    "model",
+			Version: "test",
+			URI:     "ngc://models/test",
+		}}, request.Models)
+		assert.Equal(t, []client.ArtifactDto{{
+			Name:    "dataset",
+			Version: "test",
+			URI:     "ngc://datasets/test",
+		}}, request.Resources)
+		assert.Equal(t, "UPLOAD", request.ResultHandlingStrategy)
+		assert.Equal(t, "test-org/test-model", request.ResultsLocation)
+		assert.Equal(t, "Inventory model and dataset artifacts", request.Description)
+		assert.Equal(t, "PT15M", request.MaxRuntimeDuration)
+		assert.Equal(t, "PT15M", request.MaxQueuedDuration)
+		assert.Equal(t, "PT1M", request.TerminationGracePeriodDuration)
+		assert.Equal(t, []client.SecretDto{{
+			Name:  "NGC_API_KEY",
+			Value: "nvapi-test",
+		}}, request.Secrets)
 		w.Header().Set("Content-Type", "application/json")
 		_, err := w.Write([]byte(response))
 		assert.NoError(t, err)
@@ -108,16 +144,30 @@ func runTaskCreateWithResponse(t *testing.T, response string) (string, error) {
 	t.Setenv("HOME", testDir)
 	inputFile := filepath.Join(testDir, "create-task.json")
 	require.NoError(t, os.WriteFile(inputFile, []byte(`{
-		"name": "task-test",
-		"gpuSpecification": {
-			"gpu": "H100",
-			"instanceType": "NCP.GPU.H100_8x"
-		},
-		"containerImage": "registry.example/task:test",
-		"resultHandlingStrategy": "NONE"
+		"secrets": [{"name": "NGC_API_KEY", "value": "nvapi-test"}]
 	}`), 0600))
 
 	oldTaskCreateFlags := taskCreateFlags
+	flagNames := []string{
+		"name",
+		"gpu",
+		"instance-type",
+		"backend",
+		"image",
+		"container-env",
+		"models",
+		"resources",
+		"description",
+		"max-runtime",
+		"max-queued",
+		"termination-grace",
+		"result-strategy",
+		"results-location",
+	}
+	oldChanged := make(map[string]bool, len(flagNames))
+	for _, name := range flagNames {
+		oldChanged[name] = taskCreateCmd.Flags().Lookup(name).Changed
+	}
 	oldCfgFile := cfgFile
 	oldStateManager := configStateManager
 	oldStateManagerKey := configStateManagerKey
@@ -126,6 +176,9 @@ func runTaskCreateWithResponse(t *testing.T, response string) (string, error) {
 		cfgFile = oldCfgFile
 		configStateManager = oldStateManager
 		configStateManagerKey = oldStateManagerKey
+		for name, changed := range oldChanged {
+			taskCreateCmd.Flags().Lookup(name).Changed = changed
+		}
 		jsonOutput = false
 		logging.SetJSONOutput(false)
 		viper.Reset()
@@ -134,11 +187,32 @@ func runTaskCreateWithResponse(t *testing.T, response string) (string, error) {
 	viper.Reset()
 	viper.Set("base_nvct_url", server.URL)
 	viper.Set("base_grpc_url", "localhost:50051")
+	viper.Set("api_key", "test-function-api-key")
 	viper.Set("nvct_api_key", "test-task-api-key")
 	cfgFile = filepath.Join(testDir, "workflow.yaml")
 	configStateManager = nil
 	configStateManagerKey = ""
 	taskCreateFlags.inputFile = inputFile
+	taskCreateFlags.name = "task-test"
+	taskCreateFlags.gpu = "H100"
+	taskCreateFlags.instanceType = "NCP.GPU.H100_8x"
+	taskCreateFlags.backend = "ncp-local"
+	taskCreateFlags.containerImage = "registry.example/task:test"
+	taskCreateFlags.containerEnvironment = []string{
+		"WORKFLOW_REQUEST_BASE64=encoded-request",
+		"RESULTS_LOCATION=test-org/test-model",
+	}
+	taskCreateFlags.description = "Inventory model and dataset artifacts"
+	taskCreateFlags.maxRuntimeDuration = "PT15M"
+	taskCreateFlags.maxQueuedDuration = "PT15M"
+	taskCreateFlags.terminationGracePeriodDuration = "PT1M"
+	taskCreateFlags.resultHandlingStrategy = "UPLOAD"
+	taskCreateFlags.resultsLocation = "test-org/test-model"
+	taskCreateFlags.models = []string{"model:test:ngc://models/test"}
+	taskCreateFlags.resources = []string{"dataset:test:ngc://datasets/test"}
+	for _, name := range flagNames {
+		taskCreateCmd.Flags().Lookup(name).Changed = true
+	}
 	jsonOutput = true
 	logging.SetJSONOutput(true)
 
@@ -211,4 +285,19 @@ func TestTaskCreateRejectsEmptyID(t *testing.T) {
 	assert.Contains(t, err.Error(), "did not include a task ID")
 	assert.Empty(t, output)
 	assert.False(t, HasCurrentTask())
+}
+
+func TestTaskCreatePreservesWorkflowPayload(t *testing.T) {
+	output, err := runTaskCreateWithResponse(t, `{
+		"task": {
+			"id": "task-test",
+			"name": "task-test",
+			"status": "QUEUED"
+		}
+	}`)
+	require.NoError(t, err)
+
+	var parsed client.TaskResponse
+	require.NoError(t, json.Unmarshal([]byte(output), &parsed))
+	assert.Equal(t, "task-test", parsed.Task.ID)
 }

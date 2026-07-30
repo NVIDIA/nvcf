@@ -1514,7 +1514,7 @@ The task key is saved as `NVCF_NVCT_API_KEY` and used automatically for all
 | `task delete [id]` | `DELETE /v1/nvct/tasks/{id}` | Falls back to saved task. |
 | `task cancel [id]` | `POST /v1/nvct/tasks/{id}/cancel` | Falls back to saved task. |
 | `task events [id]` | `GET /v1/nvct/tasks/{id}/events` | Paginated. |
-| `task results [id]` | `GET /v1/nvct/tasks/{id}/results` | Paginated. |
+| `task results [id]` | `GET /v1/nvct/tasks/{id}/results` | Paginated. Optional `--timeout`. |
 | `task update-secrets [id]` | `PUT /v1/nvct/secrets/tasks/{id}` | Replace user secrets. |
 
 ### **Quickstart**
@@ -1536,7 +1536,7 @@ nvcf-cli task create \
 nvcf-cli task list --status RUNNING
 nvcf-cli task get --timeout 30
 nvcf-cli task events
-nvcf-cli task results
+nvcf-cli task results --timeout 30
 
 # Rotate task secrets
 nvcf-cli task update-secrets --secrets NGC_API_KEY=nvapi-... HF_TOKEN=hf_...

@@ -24,10 +24,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"nvcf-cli/internal/client"
+	"nvcf-cli/internal/state"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -65,11 +67,29 @@ func captureStdout(t *testing.T, fn func()) string {
 // another.
 func configureAdminTest(t *testing.T, srvURL string) {
 	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("NVCF_API_KEY", "")
+
+	oldCfgFile := cfgFile
+	oldStateManager := configStateManager
+	oldStateManagerKey := configStateManagerKey
+	oldDefaultStateManager := state.DefaultStateManager
 	viper.Reset()
 	viper.Set("base_http_url", srvURL)
 	viper.Set("base_grpc_url", "localhost:50051")
 	viper.Set("token", "test-admin-token")
-	t.Cleanup(func() { viper.Reset() })
+	cfgFile = filepath.Join(home, "admin-test.yaml")
+	configStateManager = nil
+	configStateManagerKey = ""
+	state.DefaultStateManager = state.NewStateManager()
+	t.Cleanup(func() {
+		cfgFile = oldCfgFile
+		configStateManager = oldStateManager
+		configStateManagerKey = oldStateManagerKey
+		state.DefaultStateManager = oldDefaultStateManager
+		viper.Reset()
+	})
 }
 
 // withJSONOutput flips the package-level jsonOutput flag for the duration of
@@ -128,11 +148,9 @@ func TestRunAccountsList_JSON(t *testing.T) {
 }
 
 func TestRunAccountsList_NoToken_FailsFast(t *testing.T) {
-	viper.Reset()
-	viper.Set("base_http_url", "http://unused")
-	viper.Set("base_grpc_url", "localhost:50051")
+	configureAdminTest(t, "http://unused")
+	viper.Set("token", "")
 	viper.Set("api_key", "user-key-only")
-	t.Cleanup(func() { viper.Reset() })
 
 	err := runAccountsList(nil, nil)
 	require.Error(t, err)

@@ -4,10 +4,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
+umask 077
+
+# Keep the key available to this shell for the input-file pipeline without
+# forwarding it to any child process, including the default timestamp command.
+if [[ ${NGC_API_KEY+x} == x ]]; then
+    export -n NGC_API_KEY
+fi
 
 NVCF_CLI_BIN=${NVCF_CLI_BIN:-nvcf-cli}
 WORKFLOW_ID=${WORKFLOW_ID:-$(date -u +%Y%m%d%H%M%S)}
-WORKFLOW_MESSAGE=${WORKFLOW_MESSAGE:-function-task-pipeline}
 GPU=${GPU:-H100}
 INSTANCE_TYPE=${INSTANCE_TYPE:-NCP.GPU.H100_8x}
 BACKEND=${BACKEND:-ncp-local}
@@ -15,6 +21,7 @@ REGIONS=${REGIONS:-us-west-1}
 FUNCTION_DEPLOY_TIMEOUT_SECONDS=${FUNCTION_DEPLOY_TIMEOUT_SECONDS:-900}
 POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-10}
 TASK_TIMEOUT_SECONDS=${TASK_TIMEOUT_SECONDS:-900}
+RESULTS_TIMEOUT_SECONDS=${RESULTS_TIMEOUT_SECONDS:-120}
 CLEANUP_DELETE_ATTEMPTS=${CLEANUP_DELETE_ATTEMPTS:-6}
 CLEANUP_RETRY_INTERVAL_SECONDS=${CLEANUP_RETRY_INTERVAL_SECONDS:-5}
 KEEP_RESOURCES=${KEEP_RESOURCES:-false}
@@ -22,6 +29,7 @@ KEEP_RESOURCES=${KEEP_RESOURCES:-false}
 function_id=
 version_id=
 task_id=
+task_secret_file=
 function_created=false
 function_deployed=false
 task_terminal=false
@@ -67,6 +75,10 @@ cleanup() {
     local result=$?
     local cleanup_failed=false
     trap - EXIT
+
+    if [[ -n $task_secret_file ]]; then
+        rm -f -- "$task_secret_file"
+    fi
 
     if [[ $KEEP_RESOURCES == true ]]; then
         log "Keeping workflow resources"
@@ -125,6 +137,10 @@ trap 'exit 130' INT TERM
 require_env NVCF_CLI_CONFIG
 require_env FUNCTION_IMAGE
 require_env TASK_IMAGE
+require_env MODEL_ARTIFACT
+require_env DATASET_ARTIFACT
+require_env RESULTS_LOCATION
+require_env NGC_API_KEY
 
 if [[ ! -f $NVCF_CLI_CONFIG ]]; then
     fail "NVCF_CLI_CONFIG does not exist: ${NVCF_CLI_CONFIG}"
@@ -146,6 +162,9 @@ if [[ ! $FUNCTION_DEPLOY_TIMEOUT_SECONDS =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! $TASK_TIMEOUT_SECONDS =~ ^[1-9][0-9]*$ ]]; then
     fail "TASK_TIMEOUT_SECONDS must be a positive integer"
+fi
+if [[ ! $RESULTS_TIMEOUT_SECONDS =~ ^[1-9][0-9]*$ ]]; then
+    fail "RESULTS_TIMEOUT_SECONDS must be a positive integer"
 fi
 if [[ ! $CLEANUP_DELETE_ATTEMPTS =~ ^[1-9][0-9]*$ ]]; then
     fail "CLEANUP_DELETE_ATTEMPTS must be a positive integer"
@@ -191,8 +210,20 @@ cli function deploy create \
     --max-instances 1 \
     --timeout "$FUNCTION_DEPLOY_TIMEOUT_SECONDS" >&2
 
+workflow_request=$(jq -cn \
+    --arg workflowId "$WORKFLOW_ID" \
+    --arg modelArtifact "$MODEL_ARTIFACT" \
+    --arg datasetArtifact "$DATASET_ARTIFACT" \
+    '{
+        workflowId: $workflowId,
+        operation: "inventory-model-artifacts",
+        inputs: {
+            model: $modelArtifact,
+            dataset: $datasetArtifact
+        }
+    }')
 admission_body=$(jq -cn \
-    --arg message "$WORKFLOW_MESSAGE" \
+    --arg message "$workflow_request" \
     '{message: $message, repeats: 1}')
 
 log "Invoking the interactive admission stage"
@@ -202,23 +233,47 @@ admission_output=$(cli --json function invoke \
     --request-body "$admission_body" \
     --timeout 120 \
     --poll-duration 5)
+admission_payload=$(jq -cer \
+    --arg workflowId "$WORKFLOW_ID" \
+    '
+    (.response.result // .responseBody.result)
+    | select(type == "string")
+    | fromjson
+    | select(type == "object")
+    | select(.workflowId == $workflowId)
+    | select(.operation == "inventory-model-artifacts")
+    | select(.inputs.model | type == "string" and length > 0)
+    | select(.inputs.dataset | type == "string" and length > 0)
+' <<<"$admission_output")
+accepted_model_artifact=$(jq -er '.inputs.model' <<<"$admission_payload")
+accepted_dataset_artifact=$(jq -er '.inputs.dataset' <<<"$admission_payload")
+workflow_request_base64=$(jq -r @base64 <<<"$admission_payload")
+
+task_secret_file=$(mktemp)
+printf '%s' "$NGC_API_KEY" |
+    jq -Rs '{secrets: [{name: "NGC_API_KEY", value: .}]}' \
+    >"$task_secret_file"
 
 log "Submitting batch task ${task_name}"
 task_create_json=$(cli --json task create \
+    --input-file "$task_secret_file" \
     --name "$task_name" \
     --gpu "$GPU" \
     --instance-type "$INSTANCE_TYPE" \
     --backend "$BACKEND" \
     --image "$TASK_IMAGE" \
-    --container-env "NUM_OF_RESULTS=1" \
-    --container-env "DELAY_BETWEEN_RESULTS_IN_MINUTES=0" \
-    --container-env "FILE_SIZE_BYTES=8192" \
-    --container-env "INCLUDE_METADATA=true" \
-    --description "Batch stage for workflow ${WORKFLOW_ID}" \
+    --container-env "WORKFLOW_REQUEST_BASE64=${workflow_request_base64}" \
+    --container-env "RESULTS_LOCATION=${RESULTS_LOCATION}" \
+    --models "$accepted_model_artifact" \
+    --resources "$accepted_dataset_artifact" \
+    --description "Inventory model and dataset artifacts for workflow ${WORKFLOW_ID}" \
     --max-runtime PT15M \
     --max-queued PT15M \
     --termination-grace PT1M \
-    --result-strategy NONE)
+    --result-strategy UPLOAD \
+    --results-location "$RESULTS_LOCATION")
+rm -f -- "$task_secret_file"
+task_secret_file=
 task_id=$(jq -er \
     '.task.id | select(type == "string" and length > 0)' \
     <<<"$task_create_json")
@@ -271,7 +326,76 @@ while true; do
 done
 
 events_output=$(cli --json task events "$task_id")
-completion_message="Task ${task_id} completed for workflow ${WORKFLOW_ID}"
+results_deadline=$((SECONDS + RESULTS_TIMEOUT_SECONDS))
+result_summary=
+while true; do
+    remaining_seconds=$((results_deadline - SECONDS))
+    if ((remaining_seconds <= 0)); then
+        fail "Task ${task_id} results were not available within ${RESULTS_TIMEOUT_SECONDS} seconds"
+    fi
+
+    if results_output=$(cli --json task results \
+        --timeout "$remaining_seconds" \
+        "$task_id") &&
+        result_summary=$(jq -cer \
+            --arg taskId "$task_id" \
+            --arg workflowId "$WORKFLOW_ID" \
+            --arg resultsLocation "$RESULTS_LOCATION" \
+            'first(
+                .results[]?
+                | select(
+                    .taskId == $taskId and
+                    (.name | test(
+                        "^artifact-inventory_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                    )) and
+                    .metadata.status == "complete" and
+                    .metadata.workflowId == $workflowId and
+                    .metadata.resultsLocation == $resultsLocation and
+                    .metadata.reportPath == "report.json" and
+                    (
+                        .metadata.modelFileCount |
+                        type == "number" and . == floor and . > 0
+                    ) and
+                    (
+                        .metadata.datasetFileCount |
+                        type == "number" and . == floor and . > 0
+                    ) and
+                    (
+                        .metadata.totalBytes |
+                        type == "number" and . == floor and . >= 0
+                    ) and
+                    (
+                        .metadata.reportSha256 |
+                        type == "string" and
+                        test("^[0-9a-f]{64}$")
+                    )
+                )
+            )' \
+            <<<"$results_output"); then
+        break
+    fi
+
+    if ((SECONDS >= results_deadline)); then
+        fail "Task ${task_id} results were not available within ${RESULTS_TIMEOUT_SECONDS} seconds"
+    fi
+    remaining_seconds=$((results_deadline - SECONDS))
+    log "Waiting for artifact inventory result from task ${task_id}"
+    sleep_seconds=$POLL_INTERVAL_SECONDS
+    if ((sleep_seconds > remaining_seconds)); then
+        sleep_seconds=$remaining_seconds
+    fi
+    sleep "$sleep_seconds"
+done
+
+completion_message=$(jq -cn \
+    --arg workflowId "$WORKFLOW_ID" \
+    --arg taskId "$task_id" \
+    --argjson result "$result_summary" \
+    '{
+        workflowId: $workflowId,
+        taskId: $taskId,
+        inventoryResult: $result
+    }')
 completion_body=$(jq -cn \
     --arg message "$completion_message" \
     '{message: $message, repeats: 1}')
@@ -292,6 +416,7 @@ jq -n \
     --arg taskStatus "$task_status" \
     --argjson admission "$admission_output" \
     --argjson taskEvents "$events_output" \
+    --argjson taskResult "$result_summary" \
     --argjson completion "$completion_output" \
     '{
         workflowId: $workflowId,
@@ -304,6 +429,7 @@ jq -n \
         task: {
             id: $taskId,
             status: $taskStatus,
-            events: $taskEvents
+            events: $taskEvents,
+            result: $taskResult
         }
     }'
