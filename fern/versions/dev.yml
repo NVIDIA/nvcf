@@ -65,6 +65,8 @@ navigation:
         path: ../../docs/user/cluster-management/configuration.md
       - page: Multi-Tenancy
         path: ../../docs/user/cluster-management/multi-tenancy.md
+      - page: NVCF UI
+        path: ../../docs/user/cluster-management/nvcf-ui.md
       - page: KAI Scheduler
         path: ../../docs/user/cluster-management/kai-scheduler.md
       - section: Low Latency Streaming
