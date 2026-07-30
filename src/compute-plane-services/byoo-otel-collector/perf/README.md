@@ -63,6 +63,11 @@ GOWORK=off go run ./cmd/perf render --shape container --output yaml
 - `--namespace` (`byoo-perf`): namespace for rendered objects.
 - `--output` (`summary`): `summary`, `yaml`, or `json`.
 
+In `yaml`/`json` mode, stdout carries only the manifest (diagnostics go to
+stderr) so it can be piped to `kubectl` or a parser. `yaml` emits a
+multi-document stream (`---`-separated) and `json` emits an array, so
+`--shape both` stays a single valid document.
+
 `run` and `cleanup` are scaffolded and return a clear "not implemented" message.
 
 ## Execution profiles

@@ -22,10 +22,12 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
@@ -55,30 +57,38 @@ production by the shared icms-translate library.`,
 	return root
 }
 
+// renderConfig holds the resolved flags for the render command.
+type renderConfig struct {
+	shape          string
+	profile        string
+	collectorImage string
+	namespace      string
+	output         string
+}
+
 func newRenderCmd() *cobra.Command {
-	var (
-		shapeFlag      string
-		profileFlag    string
-		collectorImage string
-		namespace      string
-		output         string
-	)
+	var cfg renderConfig
 	cmd := &cobra.Command{
 		Use:   "render",
 		Short: "Render and validate the production workload shape (no cluster required)",
 		Long: `render translates a synthetic NVCF function launch spec through
 icms-translate, extracts the authentic BYOO collector, and validates its shape.
-It runs entirely locally: it does not connect to a cluster or use kubectl.`,
+It runs entirely locally: it does not connect to a cluster or use kubectl.
+
+In "yaml" and "json" output modes, only the rendered manifest is written to
+stdout (diagnostics go to stderr) so the output can be piped to kubectl or a
+parser. "yaml" emits a multi-document stream and "json" emits an array, so
+--shape both stays valid.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRender(shapeFlag, profileFlag, collectorImage, namespace, output)
+			return runRender(cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg)
 		},
 	}
-	cmd.Flags().StringVar(&shapeFlag, "shape", "both", `deployment shape: "container", "helm", or "both"`)
-	cmd.Flags().StringVar(&profileFlag, "profile", "dev", `execution profile: "dev" or "baseline"`)
-	cmd.Flags().StringVar(&collectorImage, "collector-image", spec.DefaultCollectorImage, "BYOO collector image reference")
-	cmd.Flags().StringVar(&namespace, "namespace", "byoo-perf", "namespace for rendered objects")
-	cmd.Flags().StringVar(&output, "output", "summary", `output format: "summary", "yaml", or "json"`)
+	cmd.Flags().StringVar(&cfg.shape, "shape", "both", `deployment shape: "container", "helm", or "both"`)
+	cmd.Flags().StringVar(&cfg.profile, "profile", "dev", `execution profile: "dev" or "baseline"`)
+	cmd.Flags().StringVar(&cfg.collectorImage, "collector-image", spec.DefaultCollectorImage, "BYOO collector image reference")
+	cmd.Flags().StringVar(&cfg.namespace, "namespace", "byoo-perf", "namespace for rendered objects")
+	cmd.Flags().StringVar(&cfg.output, "output", "summary", `output format: "summary", "yaml", or "json"`)
 	return cmd
 }
 
@@ -112,27 +122,36 @@ func newCleanupCmd() *cobra.Command {
 	return cmd
 }
 
-func runRender(shapeFlag, profileFlag, collectorImage, namespace, output string) error {
-	prof, err := profile.Lookup(profileFlag)
+func runRender(stdout, stderr io.Writer, cfg renderConfig) error {
+	switch cfg.output {
+	case "summary", "yaml", "json":
+	default:
+		return fmt.Errorf("unknown output %q (want \"summary\", \"yaml\", or \"json\")", cfg.output)
+	}
+
+	prof, err := profile.Lookup(cfg.profile)
 	if err != nil {
 		return err
 	}
-	shapes, err := shapesFromFlag(shapeFlag)
+	shapes, err := shapesFromFlag(cfg.shape)
 	if err != nil {
 		return err
 	}
 
 	opts := spec.DefaultOptions()
-	opts.Namespace = namespace
-	opts.CollectorImage = collectorImage
+	opts.Namespace = cfg.namespace
+	opts.CollectorImage = cfg.collectorImage
 
 	exp := validate.Expectations{
 		Image:     opts.CollectorImage,
 		Resources: common.GetDefaultContainerResourcesBYOO(),
 	}
 
-	fmt.Printf("profile=%s warmup=%s window=%s reps=%d\n\n", prof.Name, prof.Warmup, prof.MeasurementWindow, prof.Repetitions)
+	// Diagnostics go to stderr so stdout stays a clean machine-readable
+	// document in yaml/json modes.
+	fmt.Fprintf(stderr, "profile=%s warmup=%s window=%s reps=%d\n\n", prof.Name, prof.Warmup, prof.MeasurementWindow, prof.Repetitions)
 
+	results := make([]*render.Result, 0, len(shapes))
 	for _, shape := range shapes {
 		res, err := render.Render(shape, opts)
 		if err != nil {
@@ -141,31 +160,32 @@ func runRender(shapeFlag, profileFlag, collectorImage, namespace, output string)
 		if err := validate.Render(res, exp); err != nil {
 			return err
 		}
+		results = append(results, res)
+	}
 
-		switch output {
-		case "summary":
-			printSummary(res)
-		case "yaml", "json":
-			if err := printObjects(res, namespace, output); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("unknown output %q (want \"summary\", \"yaml\", or \"json\")", output)
+	switch cfg.output {
+	case "summary":
+		for _, res := range results {
+			printSummary(stdout, res)
 		}
+	case "yaml":
+		return printYAML(stdout, stderr, results, cfg.namespace)
+	case "json":
+		return printJSON(stdout, results, cfg.namespace)
 	}
 	return nil
 }
 
-func printSummary(res *render.Result) {
-	fmt.Printf("[%s] VALID\n", res.Shape)
-	fmt.Printf("  collector image : %s\n", res.Collector.Image)
-	fmt.Printf("  config version  : %s\n", res.OTelVersion)
-	fmt.Printf("  owner pod       : %s\n", res.OwnerPod)
+func printSummary(w io.Writer, res *render.Result) {
+	fmt.Fprintf(w, "[%s] VALID\n", res.Shape)
+	fmt.Fprintf(w, "  collector image : %s\n", res.Collector.Image)
+	fmt.Fprintf(w, "  config version  : %s\n", res.OTelVersion)
+	fmt.Fprintf(w, "  owner pod       : %s\n", res.OwnerPod)
 	if res.Service != nil {
-		fmt.Printf("  otlp service    : %s\n", res.Service.Name)
+		fmt.Fprintf(w, "  otlp service    : %s\n", res.Service.Name)
 	}
-	fmt.Printf("  ports           : %s\n", portSummary(res))
-	fmt.Printf("  objects         : %d translated\n\n", len(res.Objects))
+	fmt.Fprintf(w, "  ports           : %s\n", portSummary(res))
+	fmt.Fprintf(w, "  objects         : %d translated\n\n", len(res.Objects))
 }
 
 func portSummary(res *render.Result) string {
@@ -176,20 +196,40 @@ func portSummary(res *render.Result) string {
 	return strings.Join(parts, " ")
 }
 
-func printObjects(res *render.Result, namespace, format string) error {
-	pod := res.BenchPod(namespace)
-	out, err := yaml.Marshal(pod)
-	if err != nil {
-		return fmt.Errorf("marshal bench pod: %w", err)
-	}
-	if format == "json" {
-		out, err = yaml.YAMLToJSON(out)
+// printYAML writes the bench pods as a multi-document YAML stream so that
+// --shape both remains a valid manifest kubectl can apply. The per-shape
+// annotation is written to stderr as a comment, keeping stdout parseable.
+func printYAML(stdout, stderr io.Writer, results []*render.Result, namespace string) error {
+	for i, res := range results {
+		out, err := yaml.Marshal(res.BenchPod(namespace))
 		if err != nil {
-			return fmt.Errorf("convert to json: %w", err)
+			return fmt.Errorf("marshal bench pod: %w", err)
 		}
+		fmt.Fprintf(stderr, "# shape=%s benchmark workload (authentic collector + emptyDir stand-ins)\n", res.Shape)
+		if i > 0 {
+			fmt.Fprintln(stdout, "---")
+		}
+		fmt.Fprintf(stdout, "%s", out)
 	}
-	fmt.Printf("# shape=%s benchmark workload (authentic collector + emptyDir stand-ins)\n", res.Shape)
-	fmt.Printf("%s\n", out)
+	return nil
+}
+
+// printJSON writes the bench pods as a JSON array so that multiple shapes emit
+// a single valid JSON document.
+func printJSON(stdout io.Writer, results []*render.Result, namespace string) error {
+	pods := make([]*corev1.Pod, 0, len(results))
+	for _, res := range results {
+		pods = append(pods, res.BenchPod(namespace))
+	}
+	y, err := yaml.Marshal(pods)
+	if err != nil {
+		return fmt.Errorf("marshal bench pods: %w", err)
+	}
+	j, err := yaml.YAMLToJSON(y)
+	if err != nil {
+		return fmt.Errorf("convert to json: %w", err)
+	}
+	fmt.Fprintf(stdout, "%s\n", j)
 	return nil
 }
 
