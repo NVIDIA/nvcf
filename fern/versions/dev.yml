@@ -37,8 +37,6 @@ navigation:
         path: ../../docs/user/helmfile-installation.md
       - page: gRPC Invocation Enablement
         path: ../../docs/user/grpc-invocation-enablement.md
-      - page: NVCF UI
-        path: ../../docs/user/nvcf-ui.md
 
   - section: GPU Cluster Setup
     skip-slug: true
@@ -53,6 +51,8 @@ navigation:
   - section: Configuration
     skip-slug: true
     contents:
+      - page: NVCF UI
+        path: ../../docs/user/nvcf-ui.md
       - page: Optional Enhancements
         path: ../../docs/user/optional-enhancements.md
       - page: LLM Function Enablement
