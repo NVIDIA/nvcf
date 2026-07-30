@@ -6,6 +6,23 @@ environments:
 
 ---
 
+{{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
+{{- $pkiEnabled := dig "addons" "llm" "pki" "enabled" false .Values }}
+{{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
+{{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+{{- $manageSetting := dig "addons" "llm" "pki" "clusterIssuer" "enabled" "__default__" .Values }}
+{{- $manageIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+{{- if ne (toString $manageSetting) "__default__" }}
+{{- $manageIssuer = eq (toString $manageSetting) "true" }}
+{{- end }}
+{{- $managedIssuer := and $llmEnabled $pkiEnabled $manageIssuer }}
+{{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
+{{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
+{{- end }}
+{{- if and $managedIssuer (not (dig "openbao" "enabled" true .Values)) }}
+{{- fail "openbao.enabled must be true when addons.llm.pki.clusterIssuer management is enabled" }}
+{{- end }}
+
 repositories:
   - name: nvcf
 {{- if dig "global" "helm" "sources" "url" "" .Values }}
@@ -63,6 +80,34 @@ releases:
     <<: *dependency # Inherits base values from the dependency template
     needs:
       - nats-system/nats
+
+{{- if $managedIssuer }}
+  - name: nvcf-pki
+    chart: nvcf/helm-nvcf-pki
+    version: 0.1.0
+    namespace: cert-manager
+    values:
+      - clusterIssuer:
+          enabled: true
+          name: {{ $issuerName | quote }}
+          server: "http://openbao-server.vault-system.svc.cluster.local:8200"
+          path: "services/all/pki/nvcf-service-issuing/sign/nvcf-service-server"
+          auth:
+            mountPath: "/v1/auth/jwt"
+            role: "cert-manager"
+            serviceAccount:
+              name: "cert-manager"
+              audience: "http://openbao-server.vault-system.svc.cluster.local:8200"
+    wait: true
+    waitForJobs: true
+    labels:
+      release-group: dependencies
+    needs:
+      - vault-system/openbao-server
+{{- if dig "certManager" "enabled" true .Values }}
+      - cert-manager/cert-manager
+{{- end }}
+{{- end }}
 
   - name: cassandra
     version: 0.17.0
