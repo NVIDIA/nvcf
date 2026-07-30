@@ -142,17 +142,14 @@ observability:
 # Defaults consumed only for the control and all observability profiles.
 functionAutoscaler:
   chartVersion: "0.1.0"
-  image:
-    # Keep the stack's image pin independent of the chart's release metadata.
-    tag: "1.18.3"
   region: local
   cassandra:
     contactPoints: cassandra.cassandra-system.svc.cluster.local
     isDevelopment: false
   nvcfApi:
     grpcAddress: http://api.nvcf.svc.cluster.local:9090
-    # Self-managed NVCF currently uses its internal unauthenticated gRPC path.
-    disableAuth: true
+    # Self-managed auth uses the OpenBao-rendered bearer token.
+    disableAuth: false
     dryRun: false
   timeseriesDb:
     # Self-hosted control-plane metrics do not require the hosted TSDB's
