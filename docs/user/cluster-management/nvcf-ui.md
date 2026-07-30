@@ -18,16 +18,26 @@ ReferenceGrant that forward requests from `nvcf-ui.<domain>` to that Service.
 
 ## Enable the gateway route
 
-In your Helmfile environment values file (for example
-`environments/<environment-name>.yaml`), set:
+The `nvcfUi` route is not wired through the standard environment file. Enable it
+by adding a values override to the `ingress` release in
+`helmfile.d/02-core.yaml.gotmpl`:
 
 ```yaml
-ingress:
-  gatewayApi:
-    routes:
-      nvcfUi:
-        enabled: true
+- name: ingress
+  chart: nvcf/nvcf-gateway-routes
+  ...
+  values:
+    - ../global.yaml.gotmpl
+    - nvcfGatewayRoutes:
+        routes:
+          nvcfUi:
+            enabled: true
 ```
+
+<Note>
+When adding `values` to a release that already uses `../global.yaml.gotmpl`,
+you must keep that entry in the list. YAML merge replaces lists entirely.
+</Note>
 
 Then sync the ingress release to apply:
 
@@ -40,7 +50,7 @@ The UI is available at `http://nvcf-ui.<domain>` after the HTTPRoute is ready.
 ## Verify
 
 ```bash
-kubectl get httproute nvcf-ui -n envoy-gateway
+kubectl get httproute nvcf-ui -A
 ```
 
 The route should show `Accepted` status and the hostname `nvcf-ui.<domain>`.
