@@ -141,9 +141,15 @@ openbao:
     webhook:
       {{- $webhook := deepCopy . }}
       {{- $matchExpressions := dig "namespaceSelector" "matchExpressions" list $webhook }}
-      {{- if and $nvcfUiEnabled $matchExpressions }}
-      {{- $expr := index $matchExpressions 0 }}
-      {{- $_ := set $expr "values" (append (dig "values" list $expr) "nvcf-ui") }}
+      {{- if $nvcfUiEnabled }}
+      {{- range $expr := $matchExpressions }}
+      {{- if and (eq (dig "key" "" $expr) "kubernetes.io/metadata.name") (eq (dig "operator" "" $expr) "In") }}
+      {{- $values := dig "values" list $expr }}
+      {{- if not (has "nvcf-ui" $values) }}
+      {{- $_ := set $expr "values" (append $values "nvcf-ui") }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
       {{- end }}
       {{- toYaml $webhook | nindent 6 }}
     {{- end }}

@@ -206,7 +206,9 @@ openbao:
       failurePolicy: Ignore
       # The selector is omitted by default, so the webhook applies to all namespaces.
       # Uncomment this block to restrict it to the selected NVCF namespaces.
-      # nvcf-ui is appended when the addon is enabled.
+      # When the addon is enabled, nvcf-ui is appended to a
+      # kubernetes.io/metadata.name In expression. Other selector shapes
+      # must match the nvcf-ui namespace without template mutation.
       # namespaceSelector:
       #   matchExpressions:
       #     - key: kubernetes.io/metadata.name
