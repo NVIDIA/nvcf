@@ -75,5 +75,12 @@ cc_binary(
     ],
     linkshared = True,
     linkstatic = True,
+    # Linux-only. The sources interpose io_uring, seccomp and CUDA, and the
+    # link recipe above depends on versioned glibc symbols and ld.bfd. None of
+    # that exists on macOS, so a `bazel build //...` there died here before
+    # reaching anything else. Marking it incompatible makes Bazel skip the
+    # target on other platforms instead of failing the whole invocation, which
+    # is what lets a repository-wide scan run to completion off Linux.
+    target_compatible_with = ["@platforms//os:linux"],
     visibility = ["//visibility:public"],
 )

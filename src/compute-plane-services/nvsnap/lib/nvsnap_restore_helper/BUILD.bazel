@@ -15,5 +15,9 @@ cc_binary(
         "-Wextra",
     ],
     linkopts = ["-static"],
+    # Linux-only. The source itself is portable, but `-static` is not: macOS
+    # ships no static libc and its linker rejects the flag outright, so this
+    # fails off Linux despite looking cross-platform.
+    target_compatible_with = ["@platforms//os:linux"],
     visibility = ["//visibility:public"],
 )
