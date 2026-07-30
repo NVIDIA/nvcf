@@ -1270,7 +1270,7 @@ cluster identity values that the operator chart consumes.
 Use `KUBECONFIG_FILE` for multi-cluster installs. It makes both registration and
 Helmfile target the GPU cluster instead of the control-plane cluster.
 For a complete Amazon EKS example, see the
-[CSP End-to-End Example](https://docs.nvidia.com/nvcf/v0.6.0/csp-end-to-end-example).
+[CSP End-to-End Example](./csp-end-to-end-example-installation.md).
 
 The compute-plane Makefile runs `nvcf-cli init` before `cluster register`. Point
 `NVCF_CLI_CONFIG` at a CLI config that can reach the control-plane gateway.

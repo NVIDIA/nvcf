@@ -74,7 +74,7 @@ for expected in \
   'CASSANDRA__CONTACT_POINTS: cassandra.cassandra-system.svc.cluster.local' \
   'CASSANDRA__IS_DEVELOPMENT: "false"' \
   'NVCF_API__NVCF_API_GRPC_ADDRESS: http://api.nvcf.svc.cluster.local:9090' \
-  'NVCF_API__DISABLE_AUTH: "true"' \
+  'NVCF_API__DISABLE_AUTH: "false"' \
   'NVCF_API__DRY_RUN: "false"' \
   'TIMESERIES_DB__TIMESERIES_DB_URL: http://vmsingle.monitoring.svc.cluster.local:8428' \
   'TIMESERIES_DB__AUTH_MODE: none' \
@@ -89,7 +89,7 @@ helm template function-autoscaler "$repo_dir/deploy/helm/function-autoscaler" \
   >"$work_dir/autoscaler-manifests.yaml"
 
 autoscaler_manifests="$work_dir/autoscaler-manifests.yaml"
-grep -q 'image: nvcr.io/YOUR_ORG/YOUR_TEAM/nvcf-function-autoscaler:1.18.3' "$autoscaler_manifests" ||
+grep -q 'image: nvcr.io/YOUR_ORG/YOUR_TEAM/nvcf-function-autoscaler:1.18.11' "$autoscaler_manifests" ||
   fail "self-managed stack did not pin the autoscaler image"
 test "$(grep -c '^kind: ConfigMap$' "$autoscaler_manifests")" = "2" ||
   fail "autoscaler chart did not render only its env and Vault template ConfigMaps"

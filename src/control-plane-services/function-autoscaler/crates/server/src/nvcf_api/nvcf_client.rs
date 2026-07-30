@@ -66,6 +66,7 @@ fn parse_function_status(status: &str) -> Option<FunctionStatus> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NvcfApiSettings {
     /// Base URL for the OAuth2 client API used for authentication
+    #[serde(default)]
     pub oauth2_token_api_address: String,
     /// Space-delimited OAuth2 scopes requested for NVCF API gRPC calls
     #[serde(default = "default_oauth2_token_scope")]
@@ -755,6 +756,19 @@ mod tests {
         assert!(!settings
             .oauth2_token_scope
             .contains("autoscaler:fetch_config"));
+    }
+
+    #[test]
+    fn test_nvcf_api_settings_deserialization_defaults_token_api_address_when_missing() {
+        let settings: NvcfApiSettings = serde_json::from_value(json!({
+            "nvcf_api_grpc_address": "https://grpc.example.test",
+            "disable_auth": false,
+            "dry_run": false
+        }))
+        .unwrap();
+
+        assert_eq!(settings.oauth2_token_api_address, "");
+        assert_eq!(settings.oauth2_token_scope, default_oauth2_token_scope());
     }
 
     #[test]

@@ -97,6 +97,9 @@ functionautoscaler:
     - name: probe
       containerPort: 8181
       protocol: TCP
+    - name: metrics
+      containerPort: 41338
+      protocol: TCP
 
   # Stable service DNS. Override for multiple releases in one namespace.
   service:
@@ -109,6 +112,10 @@ functionautoscaler:
       - name: probe
         port: 8181
         targetPort: probe
+        protocol: TCP
+      - name: metrics
+        port: 41338
+        targetPort: metrics
         protocol: TCP
 
   # Additional volumes on the output Deployment definition.
