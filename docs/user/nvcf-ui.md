@@ -6,7 +6,9 @@ your cluster.
 
 The NVCF UI addon runs as a Service named `nvcf-ui` in the `nvcf-ui` namespace
 on port 8300. When enabled, the gateway-routes chart creates an HTTPRoute and a
-ReferenceGrant that forward requests from `nvcf-ui.<domain>` to that Service.
+ReferenceGrant that forward requests from `nvcf-ui.<domain>` to that Service,
+where `<domain>` is the Gateway load balancer address or custom DNS name set as
+`global.domain` in your environment file.
 
 ## Prerequisites
 
@@ -43,7 +45,7 @@ Then sync the ingress release to apply:
 HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress sync
 ```
 
-The UI is available at `http://nvcf-ui.<domain>` after the HTTPRoute is ready.
+The UI is available at `http://nvcf-ui.<domain>` (substituting your `global.domain` value) after the HTTPRoute is ready.
 
 ## Verify
 
@@ -51,4 +53,4 @@ The UI is available at `http://nvcf-ui.<domain>` after the HTTPRoute is ready.
 kubectl get httproute -A --field-selector=metadata.name=nvcf-ui
 ```
 
-The route should show `Accepted` status and the hostname `nvcf-ui.<domain>`.
+The route should show `Accepted` status and the hostname `nvcf-ui.<domain>` (your `global.domain` value).
