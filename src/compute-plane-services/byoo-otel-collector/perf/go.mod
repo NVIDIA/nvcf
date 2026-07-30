@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0
+	github.com/spf13/cobra v1.10.2
 	k8s.io/api v0.34.2
 	k8s.io/apimachinery v0.34.2
 	sigs.k8s.io/yaml v1.6.0
@@ -19,11 +20,13 @@ require (
 	github.com/google/go-containerregistry v0.21.5 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	golang.org/x/net v0.55.0 // indirect

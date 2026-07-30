@@ -40,6 +40,13 @@ GOWORK=off go test ./...
 
 ## Usage
 
+`render` runs entirely locally: it translates the workload in-process and prints
+a summary or manifest. It does **not** connect to a cluster or shell out to
+`kubectl`. The YAML/JSON it prints is a standard Pod manifest (including
+`apiVersion`/`kind`) that you can hand to `kubectl apply -f` yourself once
+deployment support lands. Deploying and driving load against a cluster is the
+job of the `run` command in a later milestone.
+
 ```bash
 # Render and validate both shapes (no cluster required).
 GOWORK=off go run ./cmd/perf render --shape both

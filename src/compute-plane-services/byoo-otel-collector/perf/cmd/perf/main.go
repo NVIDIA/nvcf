@@ -21,11 +21,11 @@ limitations under the License.
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
@@ -37,72 +37,94 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
-	}
-
-	var err error
-	switch os.Args[1] {
-	case "render":
-		err = cmdRender(os.Args[2:])
-	case "run":
-		err = cmdRun(os.Args[2:])
-	case "cleanup":
-		err = cmdCleanup(os.Args[2:])
-	case "-h", "--help", "help":
-		usage()
-		return
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", os.Args[1])
-		usage()
-		os.Exit(2)
-	}
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	if err := newRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `perf - BYOO OpenTelemetry collector performance test suite
-
-Usage:
-  perf <command> [flags]
-
-Commands:
-  render    Render the production workload shape via icms-translate and validate it (no cluster required).
-  run       Deploy, drive load, and measure (not yet implemented; see S4+).
-  cleanup   Remove test resources (not yet implemented; see S5+).
-
-Run "perf <command> -h" for command flags.
-`)
+func newRootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "perf",
+		Short: "BYOO OpenTelemetry collector performance test suite",
+		Long: `perf renders, validates, and (in later milestones) runs performance tests
+for the BYOO OpenTelemetry collector using the same workload shape produced in
+production by the shared icms-translate library.`,
+		SilenceUsage: true,
+	}
+	root.AddCommand(newRenderCmd(), newRunCmd(), newCleanupCmd())
+	return root
 }
 
-func cmdRender(args []string) error {
-	fs := flag.NewFlagSet("render", flag.ContinueOnError)
-	shapeFlag := fs.String("shape", "both", `deployment shape: "container", "helm", or "both"`)
-	profileFlag := fs.String("profile", "dev", `execution profile: "dev" or "baseline"`)
-	collectorImage := fs.String("collector-image", spec.DefaultCollectorImage, "BYOO collector image reference")
-	namespace := fs.String("namespace", "byoo-perf", "namespace for rendered objects")
-	output := fs.String("output", "summary", `output format: "summary", "yaml", or "json"`)
-	if err := fs.Parse(args); err != nil {
-		return err
+func newRenderCmd() *cobra.Command {
+	var (
+		shapeFlag      string
+		profileFlag    string
+		collectorImage string
+		namespace      string
+		output         string
+	)
+	cmd := &cobra.Command{
+		Use:   "render",
+		Short: "Render and validate the production workload shape (no cluster required)",
+		Long: `render translates a synthetic NVCF function launch spec through
+icms-translate, extracts the authentic BYOO collector, and validates its shape.
+It runs entirely locally: it does not connect to a cluster or use kubectl.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRender(shapeFlag, profileFlag, collectorImage, namespace, output)
+		},
 	}
+	cmd.Flags().StringVar(&shapeFlag, "shape", "both", `deployment shape: "container", "helm", or "both"`)
+	cmd.Flags().StringVar(&profileFlag, "profile", "dev", `execution profile: "dev" or "baseline"`)
+	cmd.Flags().StringVar(&collectorImage, "collector-image", spec.DefaultCollectorImage, "BYOO collector image reference")
+	cmd.Flags().StringVar(&namespace, "namespace", "byoo-perf", "namespace for rendered objects")
+	cmd.Flags().StringVar(&output, "output", "summary", `output format: "summary", "yaml", or "json"`)
+	return cmd
+}
 
-	prof, err := profile.Lookup(*profileFlag)
+func newRunCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Deploy, drive load, and measure (not yet implemented; see S4+)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("`run` is not implemented yet; it lands with the deployment/load milestones (S4-S9)")
+		},
+	}
+	cmd.Flags().String("shape", "both", `deployment shape: "container", "helm", or "both"`)
+	cmd.Flags().String("profile", "dev", `execution profile: "dev" or "baseline"`)
+	cmd.Flags().String("mode", "k3d", `deployment mode: "k3d" or "remote"`)
+	cmd.Flags().Bool("retain", false, "retain test resources for debugging instead of cleaning up")
+	return cmd
+}
+
+func newCleanupCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Remove test resources (not yet implemented; see S5+)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("`cleanup` is not implemented yet; it lands with the deployment milestone (S5)")
+		},
+	}
+	cmd.Flags().String("mode", "k3d", `deployment mode: "k3d" or "remote"`)
+	cmd.Flags().String("namespace", "byoo-perf", "namespace to clean up")
+	return cmd
+}
+
+func runRender(shapeFlag, profileFlag, collectorImage, namespace, output string) error {
+	prof, err := profile.Lookup(profileFlag)
 	if err != nil {
 		return err
 	}
-	shapes, err := shapesFromFlag(*shapeFlag)
+	shapes, err := shapesFromFlag(shapeFlag)
 	if err != nil {
 		return err
 	}
 
 	opts := spec.DefaultOptions()
-	opts.Namespace = *namespace
-	opts.CollectorImage = *collectorImage
+	opts.Namespace = namespace
+	opts.CollectorImage = collectorImage
 
 	exp := validate.Expectations{
 		Image:     opts.CollectorImage,
@@ -120,15 +142,15 @@ func cmdRender(args []string) error {
 			return err
 		}
 
-		switch *output {
+		switch output {
 		case "summary":
 			printSummary(res)
 		case "yaml", "json":
-			if err := printObjects(res, *namespace, *output); err != nil {
+			if err := printObjects(res, namespace, output); err != nil {
 				return err
 			}
 		default:
-			return fmt.Errorf("unknown output %q (want \"summary\", \"yaml\", or \"json\")", *output)
+			return fmt.Errorf("unknown output %q (want \"summary\", \"yaml\", or \"json\")", output)
 		}
 	}
 	return nil
@@ -169,28 +191,6 @@ func printObjects(res *render.Result, namespace, format string) error {
 	fmt.Printf("# shape=%s benchmark workload (authentic collector + emptyDir stand-ins)\n", res.Shape)
 	fmt.Printf("%s\n", out)
 	return nil
-}
-
-func cmdRun(args []string) error {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	_ = fs.String("shape", "both", `deployment shape: "container", "helm", or "both"`)
-	_ = fs.String("profile", "dev", `execution profile: "dev" or "baseline"`)
-	_ = fs.String("mode", "k3d", `deployment mode: "k3d" or "remote"`)
-	_ = fs.Bool("retain", false, "retain test resources for debugging instead of cleaning up")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	return fmt.Errorf("`run` is not implemented yet; it lands with the deployment/load milestones (S4-S9)")
-}
-
-func cmdCleanup(args []string) error {
-	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
-	_ = fs.String("mode", "k3d", `deployment mode: "k3d" or "remote"`)
-	_ = fs.String("namespace", "byoo-perf", "namespace to clean up")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	return fmt.Errorf("`cleanup` is not implemented yet; it lands with the deployment milestone (S5)")
 }
 
 func shapesFromFlag(s string) ([]spec.Shape, error) {

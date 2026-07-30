@@ -83,6 +83,9 @@ func Render(shape spec.Shape, o spec.Options) (*Result, error) {
 		case *corev1.Pod:
 			for i := range t.Spec.Containers {
 				if t.Spec.Containers[i].Name == CollectorContainerName {
+					if found {
+						return nil, fmt.Errorf("found multiple %q containers in translated %s workload", CollectorContainerName, shape)
+					}
 					res.Collector = *t.Spec.Containers[i].DeepCopy()
 					res.OwnerPod = t.Name
 					found = true
@@ -128,7 +131,12 @@ func (r *Result) HasContainer(name string) bool {
 // ESS) are intentionally omitted since they cannot run on k3d and are not what
 // the suite measures. Full deployment orchestration is added in S5/S6.
 func (r *Result) BenchPod(namespace string) *corev1.Pod {
-	pod := &corev1.Pod{}
+	pod := &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
+		},
+	}
 	pod.Name = r.Options.ObjectNameBase + "-collector"
 	pod.Namespace = namespace
 	pod.Labels = map[string]string{
