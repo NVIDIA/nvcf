@@ -200,6 +200,15 @@ pub fn init_metrics(settings: &MetricsSettings) -> anyhow::Result<()> {
     for name in HISTOGRAMS {
         register_histogram(name);
     }
+
+    // Pre-init the 499 series so it reports 0 before the first disconnect.
+    counter!(
+        FUNCTION_INVOCATION_ERROR.name,
+        "http_status_code" => "499",
+        "function_id" => "",
+    )
+    .increment(0);
+
     let collector = metrics_process::Collector::default();
     collector.describe();
     tokio::spawn(async move {
