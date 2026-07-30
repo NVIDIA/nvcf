@@ -462,6 +462,82 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 }
 
+// TestObservabilityControlFeatureFileWiresToSteps runs the live-install
+// observability-control feature against a fake runner. It checks the
+// single-cluster Helmfile path renders and verifies the profile-selected
+// shared releases and monitor resources through explicit local context calls.
+func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
+			ExitCode: 0,
+			Stdout:   observabilityControlHelmListJSON(),
+		},
+		"kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o yaml": {
+			ExitCode: 0,
+			Stdout:   "spec:\n  targetAllocator:\n    enabled: true\n",
+		},
+		"kubectl get servicemonitor nvcf-default-monitors-nvca -n monitoring --context k3d-ncp-local": {
+			ExitCode: 1,
+		},
+		"kubectl get podmonitor nvcf-default-monitors-dcgm -n monitoring --context k3d-ncp-local": {
+			ExitCode: 1,
+		},
+		"kubectl get podmonitor nvcf-default-monitors-worker -n monitoring --context k3d-ncp-local": {
+			ExitCode: 1,
+		},
+	}))
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	seedObservabilityControlMakefile(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "observability-control.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "observability-control-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "install HELMFILE_ENV=local-bdd-observability-control") {
+		t.Fatal("control-profile Helmfile install command was never invoked")
+	}
+}
+
+func observabilityControlHelmListJSON() string {
+	return `[
+{"name":"prometheus-operator-crds","namespace":"monitoring","status":"deployed"},
+{"name":"opentelemetry-operator","namespace":"monitoring","status":"deployed"},
+{"name":"victoria-metrics","namespace":"monitoring","status":"deployed"},
+{"name":"otel-collector","namespace":"monitoring","status":"deployed"},
+{"name":"default-monitors","namespace":"monitoring","status":"deployed"}
+]`
+}
+
+func seedObservabilityControlMakefile(t *testing.T, repoRoot string) {
+	t.Helper()
+	path := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "Makefile.dist")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir self-managed stack: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("install:\n\t@true\n"), 0o644); err != nil {
+		t.Fatalf("write self-managed Makefile.dist: %v", err)
+	}
+}
+
 // TestMultiClusterHelmfileFeatureFileWiresToSteps runs
 // multi-cluster-helmfile.feature against a fake runner. The same
 // fixture seeds and canned helm-list outputs cover the scenarios;
@@ -1099,6 +1175,15 @@ func TestSingleClusterHelmfile(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "single-cluster-helmfile.feature")
+}
+
+// TestObservabilityControl is the live entry point for the control
+// observability profile feature. Skipped under -short.
+func TestObservabilityControl(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "observability-control.feature")
 }
 
 // TestSingleClusterHelmfileUpstreamImages is the live entry point for the
