@@ -15,9 +15,6 @@ Feature: Render local Helmfile stacks with observability disabled
       """
       bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
       """
-    # The public stack ships Makefile.dist. Copy it for this render-only run so
-    # the ledger restores the untracked development Makefile state afterward.
-    And I copy the file "deploy/stacks/self-managed/Makefile.dist" to "deploy/stacks/self-managed/Makefile"
     And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-disabled.yaml"
     And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-disabled.yaml" with keys:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -32,16 +29,17 @@ Feature: Render local Helmfile stacks with observability disabled
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | disabled                             |
-    # The Make target checks registration/ while the Helmfile reads out/.
-    # Rendering does not contact ICMS, so seed both handoff paths from a stable
-    # local fixture and let the ledger restore them after the scenario.
+    # The Make target validates registration/, but the NVCA Helmfile reads the
+    # handoff from the stack's fixed out/ path even when OUTPUT_DIR is
+    # overridden. Rendering does not contact ICMS, so seed both ledger-restored
+    # inputs from one stable fixture.
     And I copy the file "tests/bdd/fixtures/ncp-local-register-values.yaml" to "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml"
     And I copy the file "tests/bdd/fixtures/ncp-local-register-values.yaml" to "deploy/stacks/nvcf-compute-plane/out/ncp-local-register-values.yaml"
 
   Scenario: Disabled profile renders no observability resources
     When I run command:
       """
-      make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-observability-disabled OUTPUT_DIR=${REPO_ROOT}/tests/bdd/out/observability-disabled/control-plane
+      make -C deploy/stacks/self-managed -f Makefile.dist template HELMFILE_ENV=local-bdd-observability-disabled OUTPUT_DIR=${REPO_ROOT}/tests/bdd/out/observability-disabled/control-plane
       """
     Then the command exit code should be 0
 

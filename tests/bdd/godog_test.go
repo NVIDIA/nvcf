@@ -642,7 +642,6 @@ func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
-	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"rg --fixed-strings 'name: function-autoscaler' tests/bdd/out/observability-disabled":    {ExitCode: 1},
 		"rg --fixed-strings 'kind: OpenTelemetryCollector' tests/bdd/out/observability-disabled": {ExitCode: 1},
@@ -650,6 +649,7 @@ func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
 		"rg --fixed-strings 'kind: PodMonitor' tests/bdd/out/observability-disabled":             {ExitCode: 1},
 		"rg --fixed-strings 'BYOObservability' tests/bdd/out/observability-disabled":             {ExitCode: 1},
 	}))
+	t.Setenv("REPO_ROOT", suite.Config.RepoRoot)
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
@@ -674,7 +674,7 @@ func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
 	}
 	runs := suite.Runner.(*fakeRunner).runs
-	if !commandRanThatContains(runs, "deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-observability-disabled") {
+	if !commandRanThatContains(runs, "deploy/stacks/self-managed -f Makefile.dist template HELMFILE_ENV=local-bdd-observability-disabled") {
 		t.Fatal("control-plane Helmfile template command was never invoked")
 	}
 	if !commandRanThatContains(runs, "deploy/stacks/nvcf-compute-plane template CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-observability-disabled") {
@@ -684,23 +684,12 @@ func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
 
 func seedObservabilityDisabledRegistrationValuesFixture(t *testing.T, repoRoot string) {
 	t.Helper()
-	stackDir := filepath.Join(repoRoot, "deploy", "stacks", "self-managed")
-	if err := os.MkdirAll(stackDir, 0o755); err != nil {
-		t.Fatalf("mkdir self-managed stack dir: %v", err)
+	fixturePath := filepath.Join("fixtures", "ncp-local-register-values.yaml")
+	body, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read registration fixture %s: %v", fixturePath, err)
 	}
-	if err := os.WriteFile(filepath.Join(stackDir, "Makefile.dist"), []byte("template:\n\t@true\n"), 0o644); err != nil {
-		t.Fatalf("write self-managed Makefile.dist: %v", err)
-	}
-	writeFixture(t, repoRoot, "ncp-local-register-values.yaml", `clusterID: 11111111-2222-3333-4444-555555555555
-clusterGroupID: aaaa-bbbb-cccc-dddd
-ncaID: nvcf-default
-region: us-west-1
-selfManaged:
-  identitySource: psat
-  icmsServiceURL: http://api.sis.svc.cluster.local:8080
-  revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
-  natsURL: nats://nats.nats-system.svc.cluster.local:4222
-`)
+	writeFixture(t, repoRoot, "ncp-local-register-values.yaml", string(body))
 }
 
 // helmListAllNamespacesJSON returns canned helm-list output covering
