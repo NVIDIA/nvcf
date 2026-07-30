@@ -347,7 +347,16 @@ jobs:
     # was queueing, not work. cpu16 is also 4x the cores of the hosted runner,
     # so it shortens the critical path as well as the wait, which matters
     # because the row is a Bazel build that parallelises well.
-    runs-on: linux-amd64-cpu16
+    # NVIDIA policy blocks `pull_request` events on self-hosted runners, since a
+    # fork's pull request could otherwise execute untrusted code inside the
+    # network: the job is accepted and then killed at setup with "Workflows
+    # triggered by pull_request events are not allowed to run on self-hosted
+    # runners". Pull requests therefore stay on GitHub-hosted capacity.
+    #
+    # merge_group and push run trusted, already-reviewed code, and the merge
+    # queue is where the starvation actually hurt: twelve rows waited 26 to 31
+    # minutes for a runner against a slowest row of ~650s.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'linux-amd64-cpu16' }}
     # Public EC2 Buildbarn cache (grpcs, bearer-token gated). The token is a
     # repo secret, so fork PRs (which never receive secrets) fall back to a
     # cacheless build automatically. The CA cert is a repo variable (public).
