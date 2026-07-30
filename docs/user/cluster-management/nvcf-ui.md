@@ -50,7 +50,7 @@ The UI is available at `http://nvcf-ui.<domain>` after the HTTPRoute is ready.
 ## Verify
 
 ```bash
-kubectl get httproute nvcf-ui -A
+kubectl get httproute -A --field-selector=metadata.name=nvcf-ui
 ```
 
 The route should show `Accepted` status and the hostname `nvcf-ui.<domain>`.
