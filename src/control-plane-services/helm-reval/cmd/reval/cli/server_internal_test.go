@@ -125,13 +125,16 @@ func TestServeManagementRoutes_Info(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	// x_defs are not injected under `go test`, so fields fall back to defaults.
-	// Assert the schema is wired, not the build-time service name.
+	// x_defs are not injected under `go test`; resolve() falls back to "unknown"
+	// for any empty field, so all three values are guaranteed non-empty.
 	var info map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
 	assert.Contains(t, info, "service")
 	assert.Contains(t, info, "version")
 	assert.Contains(t, info, "commit")
+	for _, field := range []string{"service", "version", "commit"} {
+		assert.NotEmpty(t, info[field], field+" must be populated")
+	}
 }
 
 func TestServeManagementRoutes_Info_RejectsNonGET(t *testing.T) {
