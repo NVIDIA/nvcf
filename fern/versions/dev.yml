@@ -41,6 +41,8 @@ navigation:
         path: ../../docs/user/helmfile-installation.md
       - page: gRPC Invocation Enablement
         path: ../../docs/user/grpc-invocation-enablement.md
+      - page: CSP End-to-End Example
+        path: ../../docs/user/csp-end-to-end-example-installation.md
 
   - section: GPU Cluster Setup
     skip-slug: true
