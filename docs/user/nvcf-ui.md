@@ -1,5 +1,3 @@
-(enabling-nvcf-ui)=
-
 # Enabling NVCF UI
 
 The NVCF UI is an optional web interface for managing NVCF deployments. It is
