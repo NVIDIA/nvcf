@@ -56,16 +56,16 @@ releases:
       - template: service
 
   - name: api
-    version: 1.23.10
+    version: 1.23.9
     namespace: nvcf
     inherit:
       - template: service
     needs:
       # not needed to start, but needed for bootstrapping account which is done with a script in the api helm chart
       - ess/ess-api
-                      
+
   - name: nvct-api
-    version: 1.4.4
+    version: 1.4.3
     namespace: nvcf
     inherit:
       - template: service
