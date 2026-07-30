@@ -68,6 +68,7 @@ func scanTree(root string, langs map[string]bool) (dependencyScan, error) {
 		Go:     map[string]struct{}{},
 		Rust:   map[string]struct{}{},
 		Python: map[string]struct{}{},
+		Node:   map[string]struct{}{},
 		Helm:   map[string]struct{}{},
 	}
 	if st, err := os.Stat(root); err != nil || !st.IsDir() {
@@ -99,6 +100,10 @@ func scanTree(root string, langs map[string]bool) (dependencyScan, error) {
 		case langs["python"] && name == "Pipfile":
 			for dep := range parsePipfile(path) {
 				out.Python[dep] = struct{}{}
+			}
+		case langs["node"] && name == "pnpm-lock.yaml":
+			for dep := range parsePNPMLock(path) {
+				out.Node[dep] = struct{}{}
 			}
 		}
 		return nil
