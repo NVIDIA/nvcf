@@ -17,41 +17,35 @@
 
 package com.nvidia.boot.registries.service.registry.client.ngc;
 
-import tools.jackson.databind.PropertyNamingStrategies;
-import tools.jackson.databind.annotation.JsonNaming;
 import java.net.URI;
-import lombok.Data;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.service.annotation.GetExchange;
 import org.springframework.web.service.annotation.HttpExchange;
 
-public interface NgcContainerRegistryStub {
+/**
+ * Unauthenticated probes used to obtain a {@code WWW-Authenticate} challenge from the registry.
+ *
+ * <p>These return {@link ResponseEntity} so that a 401 and its headers reach the caller. They
+ * must be backed by a WebClient that lets 401 through - every other call in the flow stays on a
+ * client that converts 401 into an exception.
+ */
+interface NgcChallengeProbeStub {
 
     /**
-     * Exchanges a credential for a bearer token at the realm a challenge advertised. The URL is
-     * absolute because the realm may point at a different origin than the registry.
+     * Pings the registry base endpoint (OCI distribution spec {@code end-1}) to trigger a
+     * challenge when no image reference is available.
      */
     @GetExchange
-    NgcRegistryAuthResponse fetchToken(
-            URI tokenUrl,
-            @RequestHeader(HttpHeaders.AUTHORIZATION) String basic);
+    ResponseEntity<Void> probeBaseEndpoint(URI url);
 
     /**
-     * Checks a manifest with HEAD: existence and pullability are signaled by the status alone,
-     * so the body a GET would carry is never needed.
+     * Probes a manifest with HEAD to trigger its challenge. A non-401 answer means the manifest
+     * is accessible without credentials - the probe then doubles as the existence check.
      */
     @HttpExchange(method = "HEAD")
-    void validateManifest(
+    ResponseEntity<Void> probeManifest(
             URI url,
-            @RequestHeader(HttpHeaders.AUTHORIZATION) String bearer,
             @RequestHeader(HttpHeaders.ACCEPT) String imageMediaTypes);
-
-    @Data
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    class NgcRegistryAuthResponse {
-
-        private int expiresIn;
-        private String token;
-    }
 }
