@@ -14,7 +14,7 @@ ReferenceGrant that forward requests from `nvcf-ui.<domain>` to that Service.
 
 - The `nvcf-ui` addon must be deployed in the `nvcf-ui` namespace before
   enabling the gateway route.
-- Gateway API ingress must be configured. See [Gateway Routing](../gateway-routing.md).
+- Gateway API ingress must be configured. See [Gateway Routing](./gateway-routing.md).
 
 ## Enable the gateway route
 
