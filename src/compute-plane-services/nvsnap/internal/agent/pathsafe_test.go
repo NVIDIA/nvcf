@@ -159,17 +159,34 @@ func TestPathVarGuardRejectsTraversal(t *testing.T) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
 	}))
-	for _, id := range []string{"..", "../../etc", "a/b", ""} {
+	// Every guarded variable, not just "id": dropping the check on hash or
+	// pod-uid is exactly the regression this test exists to catch, and
+	// testing one key would let the other two rot.
+	for _, key := range []string{"id", "hash", "pod-uid"} {
+		for _, bad := range []string{"..", "../../etc", "a/b", "", "/abs", ".hidden"} {
+			reached = false
+			w := httptest.NewRecorder()
+			req := mux.SetURLVars(
+				httptest.NewRequest(http.MethodGet, "/v1/checkpoints/x/manifest", http.NoBody),
+				map[string]string{key: bad})
+			guarded.ServeHTTP(w, req)
+			if reached {
+				t.Errorf("%s=%q: handler ran; guard did not reject it", key, bad)
+			}
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("%s=%q: status %d, want 400", key, bad, w.Code)
+			}
+		}
+		// ...and a legitimate value for the same key must still pass, or a
+		// guard that rejects everything would look like a pass above.
 		reached = false
 		w := httptest.NewRecorder()
-		req := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/v1/checkpoints/x/manifest", http.NoBody),
-			map[string]string{"id": id})
+		req := mux.SetURLVars(
+			httptest.NewRequest(http.MethodGet, "/v1/checkpoints/x/manifest", http.NoBody),
+			map[string]string{key: "a1b2c3d4__20260724-120000"})
 		guarded.ServeHTTP(w, req)
-		if reached {
-			t.Errorf("id=%q: handler ran; guard did not reject it", id)
-		}
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("id=%q: status %d, want 400", id, w.Code)
+		if !reached || w.Code != http.StatusOK {
+			t.Errorf("%s: legitimate value rejected: reached=%v status=%d", key, reached, w.Code)
 		}
 	}
 
