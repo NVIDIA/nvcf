@@ -242,6 +242,21 @@
       "path": "src/compute-plane-services/worker-task",
       "service_name": "nvcf-worker-task",
       "legacy_tag_prefix": "nvcf-worker-task-v"
+    },
+    {
+      "id": "cloud-tasks",
+      "path": "src/control-plane-services/cloud-tasks",
+      "service_name": "nvcf-cloud-tasks"
+    },
+    {
+      "id": "notary",
+      "path": "src/control-plane-services/notary",
+      "service_name": "nvcf-notary"
+    },
+    {
+      "id": "api-keys",
+      "path": "src/control-plane-services/api-keys",
+      "service_name": "nvcf-api-keys"
     }
   ]
 }
