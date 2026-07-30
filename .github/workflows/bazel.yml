@@ -357,7 +357,26 @@ jobs:
     # it to `failure`, not `skipped`, which failed the required check on PRs
     # that had nothing wrong with them. bazel-docker already guards this way.
     if: needs.detect.outputs.matrix != '[]'
-    runs-on: ubuntu-latest
+    # NVIDIA self-hosted runners (nv-cpu-general), not GitHub-hosted. Access is
+    # granted per repository in nv-gha-runners/enterprise-runner-configuration
+    # and expires, so it must be renewed there.
+    #
+    # This is a capacity change, not a tuning one. On GitHub-hosted runners a
+    # merge-queue entry saw twelve rows start immediately and the rest wait 26
+    # to 31 minutes for a runner, against a slowest row of ~650s: the wall clock
+    # was queueing, not work. cpu16 is also 4x the cores of the hosted runner,
+    # so it shortens the critical path as well as the wait, which matters
+    # because the row is a Bazel build that parallelises well.
+    # NVIDIA policy blocks `pull_request` events on self-hosted runners, since a
+    # fork's pull request could otherwise execute untrusted code inside the
+    # network: the job is accepted and then killed at setup with "Workflows
+    # triggered by pull_request events are not allowed to run on self-hosted
+    # runners". Pull requests therefore stay on GitHub-hosted capacity.
+    #
+    # merge_group and push run trusted, already-reviewed code, and the merge
+    # queue is where the starvation actually hurt: twelve rows waited 26 to 31
+    # minutes for a runner against a slowest row of ~650s.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'linux-amd64-cpu16' }}
     # Public EC2 Buildbarn cache (grpcs, bearer-token gated). The token is a
     # repo secret, so fork PRs (which never receive secrets) fall back to a
     # cacheless build automatically. The CA cert is a repo variable (public).
