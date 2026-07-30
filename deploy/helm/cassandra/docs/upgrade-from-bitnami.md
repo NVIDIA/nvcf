@@ -24,9 +24,11 @@ surfaced, each with evidence:
    `StatefulSet.apps "cassandra" is invalid: spec: Forbidden: updates to
    statefulset spec for fields other than 'replicas', 'ordinals', 'template',
    'updateStrategy', 'persistentVolumeClaimRetentionPolicy' and
-   'minReadySeconds' are forbidden`. The volumeClaimTemplate and serviceName
-   differ, and those fields are immutable. The StatefulSet must be recreated,
-   not updated in place.
+   'minReadySeconds' are forbidden`. The new chart intentionally removes the
+   existing `app.kubernetes.io/name` and `app.kubernetes.io/instance` labels
+   from `volumeClaimTemplates.metadata.labels`. Kubernetes treats the entire
+   volume claim template as immutable, so the StatefulSet must be recreated
+   instead of updated in place.
 
 2. Data-layout nesting. Bitnami stored data nested under the mount:
    `<pvc>/data/{data,commitlog,hints,saved_caches}` with
@@ -58,13 +60,11 @@ fields you may change on an existing StatefulSet are `replicas`, `ordinals`,
 `minReadySeconds`. Everything else is immutable, including `selector`,
 `serviceName`, `podManagementPolicy`, and `volumeClaimTemplates`.
 
-The old and new StatefulSets share the name `cassandra` but differ in several of
-those frozen fields:
-- `serviceName`: the Bitnami headless service name vs the in-house
-  `cassandra-headless`.
-- `selector.matchLabels`: the Bitnami labels vs the in-house
-  `cassandra.selectorLabels`.
-- `volumeClaimTemplates`: name, size, storageClass, and labels differ.
+The old and new StatefulSets share the name, selector, service name,
+`podManagementPolicy`, and volume claim template specification. The only
+immutable-field difference is in `volumeClaimTemplates.metadata.labels`. The
+new chart intentionally removes the existing `app.kubernetes.io/name` and
+`app.kubernetes.io/instance` labels.
 
 So `helm upgrade` applies the new chart onto the existing `cassandra`
 StatefulSet, and the API server rejects it with the Forbidden error above. You
