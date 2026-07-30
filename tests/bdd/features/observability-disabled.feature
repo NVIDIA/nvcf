@@ -39,7 +39,7 @@ Feature: Render local Helmfile stacks with observability disabled
   Scenario: Disabled profile renders no observability resources
     When I run command:
       """
-      make -C deploy/stacks/self-managed -f Makefile.dist template HELMFILE_ENV=local-bdd-observability-disabled OUTPUT_DIR=${REPO_ROOT}/tests/bdd/out/observability-disabled/control-plane
+      make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-observability-disabled OUTPUT_DIR=${REPO_ROOT}/tests/bdd/out/observability-disabled/control-plane
       """
     Then the command exit code should be 0
 

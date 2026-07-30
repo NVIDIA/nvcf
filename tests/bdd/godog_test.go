@@ -674,7 +674,7 @@ func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
 	}
 	runs := suite.Runner.(*fakeRunner).runs
-	if !commandRanThatContains(runs, "deploy/stacks/self-managed -f Makefile.dist template HELMFILE_ENV=local-bdd-observability-disabled") {
+	if !commandRanThatContains(runs, "deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-observability-disabled") {
 		t.Fatal("control-plane Helmfile template command was never invoked")
 	}
 	if !commandRanThatContains(runs, "deploy/stacks/nvcf-compute-plane template CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-observability-disabled") {
