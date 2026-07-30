@@ -1,6 +1,6 @@
 # collect-dependencies
 
-This guide is for using and developing `go run ./tools/collect-dependencies`.
+This guide is for using and developing `go run -C ./tools/collect-dependencies .`.
 
 For broader compliance context, review workflow, and how `dependencies.md` fits with `NOTICE` and source headers, see [`../../license-compliance.md`](../../license-compliance.md).
 
@@ -10,28 +10,30 @@ From the repo root, use Go, Java 25, and Bazelisk. The `bazel` command must
 resolve to Bazelisk so `.bazelversion` selects the repository's Bazel version.
 
 ```bash
-go run ./tools/collect-dependencies
+go run -C ./tools/collect-dependencies .
 
 # One language only (faster). This rewrites `dependencies.md` with just
 # that slice, so run the full command before committing the shared rollup.
-go run ./tools/collect-dependencies --language go
-go run ./tools/collect-dependencies -l rust
-go run ./tools/collect-dependencies -l python
-go run ./tools/collect-dependencies -l java
-go run ./tools/collect-dependencies -l helm
+go run -C ./tools/collect-dependencies . --language go
+go run -C ./tools/collect-dependencies . -l rust
+go run -C ./tools/collect-dependencies . -l python
+go run -C ./tools/collect-dependencies . -l node
+go run -C ./tools/collect-dependencies . -l java
+go run -C ./tools/collect-dependencies . -l helm
 ```
 
 ## Outputs
 
 - [`../../dependencies.md`](../../dependencies.md): Repository-wide internal
-  audit rollup for Go modules, Rust crates, Python packages, Java runtime
-  coordinates, and Helm chart dependencies. Entries are deduplicated and
+  audit rollup for Go modules, Rust crates, Python packages, Node.js packages
+  from pnpm lockfiles, Java runtime coordinates, and Helm chart dependencies.
+  Entries are deduplicated and
   grouped by normalized license expression. Each bullet keeps a language tag,
   and MPL groups keep the explicit version (`MPL-1.0`, `MPL-1.1`,
   `MPL-2.0`) in the heading.
 
-Regenerate when dependency manifests, Java BUILD targets, or the shared Java
-dependency graph change.
+Regenerate when dependency manifests, pnpm lockfiles, Java BUILD targets, or
+the shared Java dependency graph change.
 
 ## Discovery model
 
@@ -107,6 +109,15 @@ Without `cargo` on `PATH`, metadata is skipped. With `COLLECT_DEPS_NO_CRATES_IO=
 
 With PyPI disabled, Python rows state that network lookup was skipped.
 
+### Node.js (pnpm)
+
+| What | External / toolchain behavior | Disable |
+|------|------------------------------|---------|
+| `pnpm-lock.yaml` | Local only. Reads resolved package keys from the `packages` section. Workspace links and local files are skipped. | - |
+| npm registry | `GET https://registry.npmjs.org/{package}/{version}` for each package version. Reads the version metadata `license` field. | `COLLECT_DEPS_NO_NPM=1` |
+
+With npm registry lookup disabled, Node.js rows state that network lookup was skipped.
+
 ### Java (Bazel)
 
 | What | External / toolchain behavior | Disable |
@@ -136,10 +147,10 @@ License text comes from checked-in `vendor/` (via `vendor/modules.txt`). To crea
 
 ```bash
 # Only modules that do not already have vendor/modules.txt
-COLLECT_DEPS_GO_VENDOR=missing go run ./tools/collect-dependencies
+COLLECT_DEPS_GO_VENDOR=missing go run -C ./tools/collect-dependencies .
 
 # Every discovered go.mod directory (slow; rewrites vendor/)
-COLLECT_DEPS_GO_VENDOR=1 go run ./tools/collect-dependencies
+COLLECT_DEPS_GO_VENDOR=1 go run -C ./tools/collect-dependencies .
 ```
 
 This writes under Go module trees. Choose in Git whether to commit `vendor/`,
@@ -154,6 +165,7 @@ many upstreams already do.
 | Go | `vendor/…`, `go list … all`, `go mod download`, GitHub `/license` | Order, hosts, and flags: [External APIs and network calls](#external-apis-and-network-calls). Module-cache `LICENSE` often matches [pkg.go.dev](https://pkg.go.dev) for public modules. |
 | Rust | `cargo metadata`, then crates.io | Workspace roots from `cargo locate-project --workspace`. Match `-` and `_` in names. Graph must resolve (`--locked` when `Cargo.lock` exists). crates.io may omit or combine licenses. Git-only or path crates may be missing on crates.io. |
 | Python | PyPI JSON (`license_expression`, `license`, classifiers) | Skip unpinned or non-PyPI specs (`@ git`, local paths). Older projects may lack metadata. |
+| Node.js | `pnpm-lock.yaml`, then npm registry package-version metadata | The pnpm lockfile is the resolved source of truth. Workspace links and local files are excluded. Private or unavailable packages may remain unresolved. |
 | Java | Bazel-generated component runtime inventories | Results cover dependencies reachable from registered component runtime roots. Test-only tools and unused artifacts in the shared hub are intentionally excluded. Missing license metadata remains unresolved and must be reviewed at the component inventory source. |
 | Helm | `helm show chart`, then GitHub `/license` for `home` or `sources` repo URLs | License fields are not standardized in `Chart.yaml`. Some charts expose `annotations.licenses` or Artifact Hub annotations, others do not. The GitHub fallback reflects the chart source repo license, which is often correct but not guaranteed to be a chart-package specific declaration. Public NGC or other non-GitHub sources may stay blank. |
 
