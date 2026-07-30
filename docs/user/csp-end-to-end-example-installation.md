@@ -14,8 +14,8 @@ annotations on the Gateway, the `storageClass` name, and the `kubectl` context
 names. Substitute the equivalents for GKE, AKS, or on-prem.
 
 For a deeper reference on each release and on values, see
-[Helmfile Installation](./helmfile-installation.md). For pulling and mirroring
-the bundles and images, see [Image Mirroring](./image-mirroring.md).
+[Helmfile Installation](../helmfile-installation). For pulling and mirroring
+the bundles and images, see [Image Mirroring](../image-mirroring).
 
 <Info>
 This guide assumes you have already downloaded and extracted the control-plane
@@ -73,13 +73,13 @@ them. Each cluster needs:
 - A default-capable `StorageClass` with dynamic provisioning. On EKS this is
   `gp3`, backed by the EBS CSI driver. Substitute your provider's class name.
 - The compute (GPU) cluster needs a GPU operator (real or the fake GPU operator
-  for non-GPU validation). See [Fake GPU Operator](./fake-gpu-operator.md).
+  for non-GPU validation). See [Fake GPU Operator](../fake-gpu-operator).
 - The compute cluster needs the
   [SMB CSI driver](https://github.com/kubernetes-csi/csi-driver-smb)
   (`smb.csi.k8s.io`). NVCA uses it for shared model cache storage that function
   worker pods mount. Install and verify the driver before registering the GPU
   cluster. See the
-  [Self-Managed Clusters prerequisites](./cluster-management/self-managed.md#prerequisites)
+  [Self-Managed Clusters prerequisites](../self-managed-clusters#prerequisites)
   for the installation command.
 
 Both clusters must be reachable through `kubectl` contexts:
@@ -131,7 +131,7 @@ printf '%s' "${NGC_API_KEY}" | helm registry login nvcr.io --username '$oauthtok
 ## Step 1: Install the Gateway and capture the load balancer address
 
 Install the Gateway on the control-plane cluster by following the
-[Gateway quickstart](./gateway-routing.md#gateway-quickstart). It installs the
+[Gateway quickstart](../gateway-routing#gateway-quickstart). It installs the
 Gateway API CRDs, the Envoy Gateway controller, the `GatewayClass`, and the
 `nvcf-gateway` Gateway, and exports `GATEWAY_ADDR`. Run it against
 `${CONTROL_PLANE_CONTEXT}`.
@@ -636,4 +636,4 @@ are correct.
   wrong context active. Switch to the compute context and re-run
   `make register-cluster`.
 
-See [Troubleshooting](./troubleshooting.md) for more.
+See [Troubleshooting](../troubleshooting) for more.
