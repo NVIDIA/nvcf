@@ -61,7 +61,7 @@ fields you may change on an existing StatefulSet are `replicas`, `ordinals`,
 `serviceName`, `podManagementPolicy`, and `volumeClaimTemplates`.
 
 The old and new StatefulSets share the name, selector, service name,
-`podManagementPolicy`, and volume claim template specification. The only
+`podManagementPolicy`, and the `volumeClaimTemplates.spec` fields. The only
 immutable-field difference is in `volumeClaimTemplates.metadata.labels`. The
 new chart intentionally removes the existing `app.kubernetes.io/name` and
 `app.kubernetes.io/instance` labels.
