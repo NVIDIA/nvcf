@@ -146,19 +146,32 @@ def parse_pins(path: str, text: str) -> list[dict]:
     return pins
 
 
+# A stalled registry or proxy would otherwise block a call forever and hang the
+# whole scheduled sweep until the CI job timeout kills it, losing every result.
+INSPECT_TIMEOUT_SECONDS = 60
+
+
 def fetch_manifest(ref: str, tries: int = 3):
     """Return (manifest, None) or (None, error). Retries transient failures.
 
-    Only an explicit "not found" from the registry is authoritative; a timeout
-    is not evidence that an image is gone.
+    Only an explicit "not found" from the registry is authoritative; neither a
+    timeout nor a network error is evidence that an image is gone, so those are
+    retried and then reported as an unresolved check rather than a dead pin.
     """
     err = ""
     for attempt in range(tries):
-        proc = subprocess.run(
-            [SKOPEO, "inspect", "--raw", f"docker://{ref}"],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            proc = subprocess.run(
+                [SKOPEO, "inspect", "--raw", f"docker://{ref}"],
+                capture_output=True,
+                text=True,
+                timeout=INSPECT_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            err = f"timed out after {INSPECT_TIMEOUT_SECONDS}s"
+            if attempt < tries - 1:
+                time.sleep(2)
+            continue
         if proc.returncode == 0:
             try:
                 return json.loads(proc.stdout), None
