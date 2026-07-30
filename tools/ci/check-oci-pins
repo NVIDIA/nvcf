@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fail if any oci.pull digest pinned in a MODULE.bazel no longer resolves.
+#
+# Why this exists: the root module pinned a gcr.io/distroless/static digest that
+# upstream had garbage-collected. `bazel build //...` therefore failed at
+# analysis on any checkout without a warm Bazel repository cache, while CI
+# stayed green because it restores that cache. A dead pin looked healthy for as
+# long as the cache survived, and the Actions cache is over quota and evicting
+# continuously, so the failure was one eviction away from reaching main. It also
+# blocked an external Black Duck scan for days with an error that read like a
+# network problem.
+#
+# Digests are supposed to be immutable, but the tags behind them are not:
+# registries garbage-collect untagged manifests, so a pin can rot without anyone
+# editing it. That makes this a scheduled check, not a per-change one.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${root}"
+
+: "${SKOPEO:=skopeo}"
+if ! command -v "${SKOPEO}" >/dev/null 2>&1; then
+    echo "error: ${SKOPEO} not found; cannot verify pins" >&2
+    exit 2
+fi
+
+# Strip a :tag from the final path component before appending @digest. A
+# reference carrying both a tag and a digest is invalid and skopeo rejects it,
+# which reads as "dead" and produces false positives. That mistake was made
+# twice while investigating this, hence both the helper and its test.
+strip_tag() {
+    local ref="$1" head last
+    last="${ref##*/}"
+    head="${ref%"${last}"}"
+    printf '%s%s' "${head}" "${last%%:*}"
+}
+
+# Retry before declaring a pin dead: a registry timeout is not a missing image.
+# Only "manifest unknown" / "not found" is treated as authoritative.
+resolves() {
+    local ref="$1" out i
+    for i in 1 2 3; do
+        if out="$("${SKOPEO}" inspect --raw "docker://${ref}" 2>&1)"; then
+            return 0
+        fi
+        case "${out}" in
+            *"manifest unknown"*|*"not found"*|*"not known"*) return 1 ;;
+        esac
+        sleep 2
+    done
+    echo "  (giving up after retries: ${out})" >&2
+    return 1
+}
+
+if [ "${1:-}" = "--self-test" ]; then
+    fail=0
+    check() {
+        local got; got="$(strip_tag "$1")"
+        if [ "${got}" != "$2" ]; then
+            printf 'FAIL strip_tag %s: got %s want %s\n' "$1" "${got}" "$2" >&2
+            fail=1
+        else
+            printf 'ok   strip_tag %s -> %s\n' "$1" "${got}"
+        fi
+    }
+    check "nvcr.io/nvidia/distroless/go:v4.0.8" "nvcr.io/nvidia/distroless/go"
+    check "nvcr.io/nvidia/distroless/go"        "nvcr.io/nvidia/distroless/go"
+    check "gcr.io/distroless/static"            "gcr.io/distroless/static"
+    check "docker.io/library/ubuntu:24.04"      "docker.io/library/ubuntu"
+    # A registry port must not be mistaken for a tag.
+    check "registry.example.com:5000/img:1.2"   "registry.example.com:5000/img"
+    check "registry.example.com:5000/img"       "registry.example.com:5000/img"
+    [ "${fail}" -eq 0 ] || { echo "check-oci-pins: self-test FAILED" >&2; exit 1; }
+    echo "check-oci-pins: self-test passed"
+    exit 0
+fi
+
+mapfile -t pins < <(
+    git ls-files '*MODULE.bazel' | while read -r f; do
+        python3 - "$f" <<'PY'
+import re,sys
+f=sys.argv[1]
+for m in re.finditer(r'oci\.pull\((.*?)\n\)', open(f).read(), re.S):
+    b=m.group(1)
+    img=re.search(r'image\s*=\s*"([^"]+)"', b)
+    dig=re.search(r'digest\s*=\s*"(sha256:[0-9a-f]+)"', b)
+    if img and dig:
+        print(f"{f}\t{img.group(1)}\t{dig.group(1)}")
+PY
+    done | sort -u
+)
+
+if [ "${#pins[@]}" -eq 0 ]; then
+    echo "error: found no oci.pull pins to check; the parser is probably broken" >&2
+    exit 2
+fi
+
+status=0
+checked=0
+for entry in "${pins[@]}"; do
+    file="${entry%%$'\t'*}"
+    rest="${entry#*$'\t'}"
+    image="${rest%%$'\t'*}"
+    digest="${rest#*$'\t'}"
+    ref="$(strip_tag "${image}")@${digest}"
+    checked=$((checked + 1))
+    if resolves "${ref}"; then
+        printf 'ok   %-46s %s\n' "${image}" "${file}"
+    else
+        printf 'DEAD %-46s %s\n' "${image}" "${file}" >&2
+        printf '     %s\n' "${digest}" >&2
+        status=1
+    fi
+done
+
+if [ "${status}" -ne 0 ]; then
+    cat >&2 <<'MSG'
+
+error: one or more pinned base image digests no longer resolve.
+
+A dead pin does not fail CI while the Bazel repository cache is warm, but it
+fails every cold checkout, including external scanners. Repin to a current
+digest:
+
+    skopeo inspect --raw docker://<image>:<tag> | sha256sum
+
+MSG
+    exit 1
+fi
+
+echo "checked ${checked} pinned base image(s); all resolve"

@@ -143,9 +143,14 @@ oci.pull(
 
 # nvsnap base images. nvsnap runs on GPU hosts and is amd64-only, so these are
 # scoped to linux/amd64 and its image targets are single-arch.
+#
+# Repinned 2026-07-30. The previous digest was garbage-collected upstream and
+# gcr.io answers it with "manifest unknown", so any checkout without a warm
+# repository cache fails to analyse //... . CI did not notice because it
+# restores that cache, which made a dead pin look healthy.
 oci.pull(
     name = "distroless_static",
-    digest = "sha256:dd7614b5a12bc4d617b223c588b4e0c833402b8f526c11e612b324a956cd2640",
+    digest = "sha256:9197324ba51d9cd071af8505989365c006adf9d6d2067eada25aef00abbb5278",
     image = "gcr.io/distroless/static",
     platforms = ["linux/amd64"],
 )
