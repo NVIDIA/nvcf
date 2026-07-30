@@ -62,23 +62,23 @@
     </properties>
 
     <scm>
-        <url>https://gitlab-master.nvidia.com/nvcf/nvcf-libraries/java/nv-boot-parent</url>
+        <url>https://github.com/NVIDIA/nvcf</url>
     </scm>
 
     <repositories>
-        <!-- Internal Maven2 Mirror -->
-        <repository>
-            <id>nv-central</id>
-            <url>https://urm.nvidia.com/artifactory/maven</url>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </repository>
-        <!-- GCS Maven2 Mirror as our URM mirror is causing 429s -->
+        <!-- GCS Maven Central mirror -->
         <repository>
             <id>google-maven-central</id>
             <name>GCS Maven Central mirror</name>
             <url>https://maven-central.storage-download.googleapis.com/maven2</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+        <!-- Maven Central -->
+        <repository>
+            <id>maven-central</id>
+            <url>https://repo.maven.apache.org/maven2</url>
             <snapshots>
                 <enabled>false</enabled>
             </snapshots>
@@ -86,15 +86,7 @@
     </repositories>
 
     <pluginRepositories>
-        <!-- Internal Maven2 Mirror -->
-        <pluginRepository>
-            <id>nv-central</id>
-            <url>https://urm.nvidia.com/artifactory/maven</url>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </pluginRepository>
-        <!-- GCS Maven2 Mirror as our URM mirror is causing 429s -->
+        <!-- GCS Maven Central mirror -->
         <pluginRepository>
             <id>google-maven-central</id>
             <name>GCS Maven Central mirror</name>
@@ -103,19 +95,15 @@
                 <enabled>false</enabled>
             </snapshots>
         </pluginRepository>
+        <!-- Maven Central -->
+        <pluginRepository>
+            <id>maven-central</id>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </pluginRepository>
     </pluginRepositories>
-
-    <distributionManagement>
-        <!-- Publish jars to URM for time being. -->
-        <repository>
-            <id>nvcf</id>
-            <url>https://urm.nvidia.com/artifactory/sw-nvcf-maven</url>
-        </repository>
-        <snapshotRepository>
-            <id>nvcf</id>
-            <url>https://urm.nvidia.com/artifactory/sw-nvcf-maven</url>
-        </snapshotRepository>
-    </distributionManagement>
 
     <modules>
         <module>nv-boot-bom</module>

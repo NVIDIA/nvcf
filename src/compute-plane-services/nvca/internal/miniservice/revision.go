@@ -40,7 +40,7 @@ const (
 	revisionConfigMapPrefix = "miniservice-revision-v"
 	revisionLabel           = "nvca.nvcf.nvidia.io/revision"
 	managedByLabel          = "app.kubernetes.io/managed-by"
-	managedByValue          = "miniservice-controller"
+	managedByValue          = controllerName
 
 	revisionDataKeyValues     = "values"
 	revisionDataKeyRenderHash = "renderHash"

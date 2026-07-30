@@ -82,6 +82,26 @@ RUN mkdir -p /criu-bundle/lib /criu-bundle/plugins && \
     patchelf --set-interpreter /criu-bundle/lib/ld-linux-x86-64.so.2 \
              --set-rpath /criu-bundle/lib /criu-bundle/criu
 
+# Make the bundle fully self-contained via per-library RPATH. DT_RUNPATH on
+# the criu binary is NOT inherited by its libraries' own dependencies, so a
+# transitive dep (e.g. libnftables -> libmnl) would not resolve from the bundle
+# without an external LD_LIBRARY_PATH=/criu-bundle/lib. That env var is then
+# inherited by every child criu spawns -- including cuda-checkpoint, which must
+# use the *target container's* glibc; on a newer-glibc image it aborts with
+# "GLIBC_2.xx not found". Setting RPATH=$ORIGIN on each bundled library lets the
+# loader find siblings in the same dir, so criu runs with no LD_LIBRARY_PATH at
+# all and nothing leaks into cuda-checkpoint. Plugins live one dir over.
+RUN set -e; \
+    for so in /criu-bundle/lib/*.so*; do \
+        [ -f "$so" ] || continue; \
+        case "$so" in */ld-linux*) continue;; esac; \
+        patchelf --set-rpath '$ORIGIN' "$so"; \
+    done; \
+    for so in /criu-bundle/plugins/*.so; do \
+        [ -f "$so" ] || continue; \
+        patchelf --set-rpath '$ORIGIN/../lib' "$so"; \
+    done
+
 # Create CRIU wrapper for portable execution
 RUN echo '#!/bin/bash' > /criu-bundle/criu-wrapper && \
     echo 'DIR="$(dirname "$(readlink -f "$0")")"' >> /criu-bundle/criu-wrapper && \

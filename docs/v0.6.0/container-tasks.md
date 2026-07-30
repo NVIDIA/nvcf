@@ -100,7 +100,7 @@ Secrets are passed to the container as environment variables. Provide them via
 Secret values are stored encrypted and are not returned by default in task
 detail responses.
 
-To replace secrets on a running task:
+To update secrets on a running task:
 
 ```bash
 nvcf-cli task update-secrets --secrets NEW_KEY=new-value

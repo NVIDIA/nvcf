@@ -35,7 +35,7 @@ type processorMetrics struct {
 func newProcessorMetrics(meter metric.Meter) (processorMetrics, error) {
 	oversizeRecords, err := meter.Int64Counter(
 		"otelcol_processor_logchunk_oversize_records_total",
-		metric.WithDescription("Number of log records whose bodies exceed the configured chunking limit."),
+		metric.WithDescription("Number of log records whose bodies and attributes exceed the configured chunking limit."),
 		metric.WithUnit("{records}"),
 	)
 	if err != nil {
@@ -53,7 +53,7 @@ func newProcessorMetrics(meter metric.Meter) (processorMetrics, error) {
 
 	originalBytes, err := meter.Int64Counter(
 		"otelcol_processor_logchunk_original_bytes_total",
-		metric.WithDescription("Bytes observed in oversized original log bodies."),
+		metric.WithDescription("Bytes observed in oversized original log body and attribute payloads."),
 		metric.WithUnit("By"),
 	)
 	if err != nil {
@@ -62,7 +62,7 @@ func newProcessorMetrics(meter metric.Meter) (processorMetrics, error) {
 
 	outputBytes, err := meter.Int64Counter(
 		"otelcol_processor_logchunk_output_bytes_total",
-		metric.WithDescription("Bytes emitted across chunked log bodies."),
+		metric.WithDescription("Bytes emitted across chunked log body and attribute payloads."),
 		metric.WithUnit("By"),
 	)
 	if err != nil {

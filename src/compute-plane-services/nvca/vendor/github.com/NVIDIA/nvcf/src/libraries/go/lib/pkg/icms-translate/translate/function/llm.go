@@ -161,6 +161,13 @@ func newLLMRouterClientContainer(
 				Name:      "llm",
 				MountPath: llmDirMountPath,
 			},
+			// config-data backs SHARED_CONFIG_DIR, shared with the credential
+			// manager. Mount it so the nvcf client does not fail creating
+			// ConfigDirPath at startup.
+			{
+				Name:      "config-data",
+				MountPath: ConfigDirPath,
+			},
 		},
 	}
 
@@ -225,6 +232,12 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 			{
 				Name:      "llm",
 				MountPath: llmDirMountPath,
+			},
+			// config-data backs SHARED_CONFIG_DIR. The credential manager
+			// creates and caches the worker token here, so it must be mounted.
+			{
+				Name:      "config-data",
+				MountPath: ConfigDirPath,
 			},
 		},
 	}

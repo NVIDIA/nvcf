@@ -250,9 +250,13 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(dctx, "nsenter", args...)
+	// No LD_LIBRARY_PATH: the bundle's libraries carry RPATH=$ORIGIN (see
+	// Dockerfile.base), so criu resolves its whole dependency graph from
+	// /criu-bundle/lib on its own. Setting LD_LIBRARY_PATH here would be
+	// inherited by cuda-checkpoint, forcing it onto the bundle's glibc instead
+	// of the target container's -- which aborts it on newer-glibc images.
 	cmd.Env = []string{
 		"PATH=" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin",
-		"LD_LIBRARY_PATH=" + v2BinDirInContainer + "/lib",
 		"HOME=/root",
 	}
 	out, runErr := cmd.CombinedOutput()

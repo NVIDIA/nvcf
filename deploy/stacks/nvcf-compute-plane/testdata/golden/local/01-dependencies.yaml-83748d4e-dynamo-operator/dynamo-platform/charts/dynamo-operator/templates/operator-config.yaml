@@ -1,0 +1,58 @@
+---
+# Source: dynamo-platform/charts/dynamo-operator/templates/operator-config.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dynamo-operator-config
+  labels:
+    helm.sh/chart: dynamo-operator-1.2.1
+    app.kubernetes.io/name: dynamo-operator
+    app.kubernetes.io/instance: dynamo-operator
+    app.kubernetes.io/version: "1.2.1"
+    app.kubernetes.io/managed-by: Helm
+data:
+  config.yaml: |
+    apiVersion: operator.config.dynamo.nvidia.com/v1alpha1
+    kind: OperatorConfiguration
+    server:
+      metrics:
+        bindAddress: "0.0.0.0"
+        secure: true
+      webhook:
+        certProvisionMode: "auto"
+        secretName: "webhook-server-cert"
+        serviceName: dynamo-operator-webhook-service
+    leaderElection:
+      enabled: true
+      id: "dynamo.nvidia.com"
+      namespace: "kube-system"
+    orchestrators:
+      kaiScheduler:
+        enabled: false
+      grove:
+        enabled: true
+        terminationDelay: "4h"
+    infrastructure:
+      natsAddress: "nats://dynamo-operator-nats.dynamo-system.svc.cluster.local:4222"
+    rbac:
+      plannerClusterRoleName: dynamo-operator-planner
+      dgdrProfilingClusterRoleName: dynamo-operator-dgdr-profiling
+      eppClusterRoleName: dynamo-operator-epp
+    mpi:
+      sshSecretName: "mpi-run-ssh-secret"
+      sshSecretNamespace: "dynamo-system"

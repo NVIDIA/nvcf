@@ -137,8 +137,49 @@ agent:
 		}
 		require.NoError(t, err)
 		require.NotNil(t, gotOpts)
-		require.NotNil(t, gotOpts.Config.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
-		assert.Equal(t, nvcaconfig.DefaultBYOOLogExporterBatchMaxSizeBytes, *gotOpts.Config.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
+		assert.False(t, gotOpts.Config.Agent.BYOOLogChunking.Enabled)
+		assert.Zero(t, gotOpts.Config.Agent.BYOOLogChunking.MaxPayloadBytes)
+	})
+
+	t.Run("enabled BYOO log chunking config preserves collector default handoff", func(t *testing.T) {
+		a, block := newMockCLIAgent()
+		var gotOpts *AgentOptions
+		cmd := newCobraCommand(
+			func(ctx context.Context, opts *AgentOptions) (cliAgent, error) {
+				gotOpts = opts
+				return a, nil
+			},
+			setFlag,
+			initLogger,
+		)
+
+		cfgFilePath := filepath.Join(t.TempDir(), "config.yaml")
+		err := os.WriteFile(cfgFilePath, []byte(`
+agent:
+  icmsURL: https://test.example.com
+  byooLogChunking:
+    enabled: true
+`), 0600)
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		errCh := make(chan error)
+		go func() {
+			cmd.SetArgs([]string{"--config=" + cfgFilePath})
+			errCh <- cmd.ExecuteContext(ctx)
+		}()
+
+		select {
+		case <-block:
+			cancel()
+			err = <-errCh
+		case err = <-errCh:
+			cancel()
+		}
+		require.NoError(t, err)
+		require.NotNil(t, gotOpts)
+		assert.True(t, gotOpts.Config.Agent.BYOOLogChunking.Enabled)
+		assert.Zero(t, gotOpts.Config.Agent.BYOOLogChunking.MaxPayloadBytes)
 	})
 
 	t.Run("configured control plane endpoints populate agent options", func(t *testing.T) {

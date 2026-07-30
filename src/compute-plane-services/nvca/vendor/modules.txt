@@ -32,7 +32,7 @@ github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/i
 github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/resource
 github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/resource/v1beta1
 github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/listers/resource/v1beta1
-# github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260601212822-4e2f12a33aba => ../../libraries/go/lib
+# github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260722095202-f5e2792f5630 => ../../libraries/go/lib
 ## explicit; go 1.25.0
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core

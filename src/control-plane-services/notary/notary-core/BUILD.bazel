@@ -1,0 +1,118 @@
+load("@rules_java//java:defs.bzl", "java_library")
+load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+
+package(default_visibility = ["//visibility:public"])
+
+NOTARY_CORE_SRCS = glob(["src/main/java/**/*.java"])
+
+NOTARY_CORE_TEST_SRCS = glob(["src/test/java/**/*.java"])
+
+NOTARY_CORE_TEST_RESOURCES = glob(["src/test/resources/**"])
+
+NOTARY_CORE_DEPS = [
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions:nv_boot_starter_exceptions",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-jwt:nv_boot_starter_jwt",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-observability:nv_boot_starter_observability",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties:nv_boot_starter_reloadable_properties",
+    "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",
+    "@nv_third_party_deps//:com_nimbusds_nimbus_jose_jwt",
+    "@nv_third_party_deps//:io_micrometer_micrometer_observation",
+    "@nv_third_party_deps//:io_micrometer_micrometer_registry_prometheus",
+    "@nv_third_party_deps//:io_swagger_core_v3_swagger_annotations_jakarta",
+    "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
+    ":provided_compile_deps",
+    "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+    "@nv_third_party_deps//:org_apache_commons_commons_collections4",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_hibernate_validator_hibernate_validator",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springdoc_springdoc_openapi_starter_webmvc_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_actuator",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_aspectj",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_security",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_security_oauth2_resource_server",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_validation",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_starter_bootstrap",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_config",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_core",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_core",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_jose",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_resource_server",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_web",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:org_springframework_spring_webmvc",
+]
+
+java_library(
+    name = "provided_compile_deps",
+    exports = ["@nv_third_party_deps//:jakarta_servlet_jakarta_servlet_api"],
+    neverlink = True,
+    visibility = ["//visibility:private"],
+)
+
+nv_boot_library(
+    name = "notary_core",
+    srcs = NOTARY_CORE_SRCS,
+    deps = NOTARY_CORE_DEPS,
+)
+
+NOTARY_CORE_TEST_DEPS = [
+    ":notary_core",
+    "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-observability:nv_boot_starter_observability",
+    "@nv_third_party_deps//:com_nimbusds_nimbus_jose_jwt",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
+]
+
+NOTARY_CORE_DIRECT_TEST_DEPS = [
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions:nv_boot_starter_exceptions",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-jwt:nv_boot_starter_jwt",
+    "@nv_third_party_deps//:jakarta_servlet_jakarta_servlet_api",
+    "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_core",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_oauth2_jose",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+]
+
+nv_boot_library(
+    name = "notary_core_test_fixtures",
+    srcs = NOTARY_CORE_TEST_SRCS,
+    deps = NOTARY_CORE_TEST_DEPS + NOTARY_CORE_DIRECT_TEST_DEPS + [
+        "@nv_third_party_deps//:org_assertj_assertj_core",
+        "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_api",
+        "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_params",
+        "@nv_third_party_deps//:org_mockito_mockito_core",
+        "@nv_third_party_deps//:org_mockito_mockito_junit_jupiter",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_test_autoconfigure",
+        "@nv_third_party_deps//:org_springframework_spring_test",
+    ],
+    resource_strip_prefix = "src/control-plane-services/notary/notary-core/src/test/resources",
+    resources = NOTARY_CORE_TEST_RESOURCES,
+)
+
+nv_boot_library_test(
+    name = "tests",
+    coverage_library = ":notary_core",
+    srcs = NOTARY_CORE_TEST_SRCS,
+    deps = NOTARY_CORE_TEST_DEPS + NOTARY_CORE_DIRECT_TEST_DEPS,
+    resource_strip_prefix = "src/control-plane-services/notary/notary-core/src/test/resources",
+    resources = NOTARY_CORE_TEST_RESOURCES,
+    timeout = "long",
+)

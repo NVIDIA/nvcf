@@ -1,13 +1,5 @@
 # NVCF LLM Request Router Helm Chart
 
-> [!IMPORTANT]
-> Active development of the helm-nvcf-llm-request-router chart has moved to
-> the NVCF umbrella monorepo. This repository is retained as
-> historical source context only; new commits, issues, and merge
-> requests should target the umbrella.
->
-> Public mirror: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/llm-request-router
-
 This repository contains the Helm chart for deploying the NVCF LLM Request Router (Stargate) on Kubernetes.
 
 ## Overview
@@ -82,7 +74,7 @@ Important settings to review before deployment:
 - `llmRequestRouter.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)
 - `llmRequestRouter.certificate.*` to let cert-manager issue the Stargate QUIC server certificate
 - `llmRequestRouter.tls.*` to mount the issued TLS Secret and pass cert/key paths to Stargate
-- `llmRequestRouter.pki.*` to provision the OpenBao service-issuing PKI hierarchy that cert-manager mints the Certificate from. Opt-in via `pki.enabled=true`. Mirrors the SIS chart's `hook-lls-migrations.yaml` pattern: a Helm pre-install/pre-upgrade Job runs the `nvcf-openbao-migrations` image with `CORE_MIGRATIONS_ENABLED=false` + `ADDONS_LLM_ENABLED=true` so only the LLM addon executes. `pki.allowedDomains` (comma-separated DNS suffixes) is required when enabled and is the OpenBao PKI role's `allowed_domains` security constraint — typically `<customer-domain>,cluster.local`. Job-level fail-hard is handled by `restartPolicy: OnFailure` + `pki.backoffLimit` combined with the migrations image's `FAILED_MIGRATIONS` accumulator (image `>= 0.12.1`).
+- `llmRequestRouter.pki.*` to provision the OpenBao service-issuing PKI hierarchy that cert-manager mints the Certificate from. Opt-in via `pki.enabled=true`. Mirrors the SIS chart's `hook-lls-migrations.yaml` pattern: a Helm pre-install/pre-upgrade Job runs the `nvcf-openbao-migrations` image with `CORE_MIGRATIONS_ENABLED=false` + `ADDONS_LLM_ENABLED=true` so only the LLM addon executes. `pki.allowedDomains` (comma-separated DNS suffixes) is required when enabled and is the OpenBao PKI role's `allowed_domains` security constraint. Typically this is `<customer-domain>,cluster.local`. Job-level fail-hard is handled by `restartPolicy: OnFailure` + `pki.backoffLimit` combined with the migrations image's `FAILED_MIGRATIONS` accumulator (image `>= 0.12.1`).
 - `llmRequestRouter.vault.audience` for the projected ServiceAccount token audience used to authenticate to OpenBao
 - `llmRequestRouter.vault.noVaultAnnotations` to disable Vault Agent injection (useful for local testing without OpenBao)
 
@@ -97,35 +89,11 @@ The chart can pass a Stargate load-balancer config in either of two ways:
 
 `config` takes precedence over `configPath` when both are set. If neither value is set, Stargate uses its built-in default algorithm, `power-of-two`.
 
-Example:
-
-```yaml
-llmRequestRouter:
-  loadBalancer:
-    config: |
-      {
-        "default": "power-of-two",
-        "models": {
-          "dummy-model": {
-            "algorithm": "groq-multiregion",
-            "seed": "local-sticky-v1",
-            "require_cache_affinity_key": true,
-            "cache_affinity_virtual_nodes": 64,
-            "cache_affinity_backend_selection_count": 1
-          }
-        }
-      }
-```
-
-Supported routing algorithms:
-
-- `power-of-two`, the default; samples two candidates and picks the one with more input-TPS headroom.
-- `groq-multiregion`; estimates time-to-first-token from RTT and queue/input-token work, and can use `x-cache-affinity-key` for a stable per-key backend subset.
-- `round-robin`; cycles through candidates sequentially.
-- `random`; picks a candidate uniformly.
-- `pulsar`; uses weighted rendezvous hashing and KV-cache feasibility gates. PULSAR requires suitable backend KV metrics for full behavior, so use it intentionally rather than as the default local E2E route.
-
-`x-cache-affinity-key` is the router-facing sticky-cache header. It is an opaque stable key used by `groq-multiregion` and `pulsar`; Stargate does not derive it from request bodies.
+See the
+[Stargate load balancer configuration](../../../src/libraries/rust/stargate/docs/load-balancer-configuration.md)
+for the JSON schema, algorithm behavior, and tuning fields. See
+[LLM Request Router Load Balancing](../../../docs/user/llm-request-router-load-balancing.md)
+for stack ownership, trusted headers, rollout checks, and troubleshooting.
 
 ## Local Render
 

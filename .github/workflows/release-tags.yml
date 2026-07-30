@@ -20,9 +20,10 @@ on:
         type: choice
         options:
           - branch-cut
+          - self-managed-branch-cut
           - auto
       service:
-        description: Optional service id or service_name for operation=auto. Branch-cut always cuts nvca.
+        description: Optional service id or service_name for operation=auto. Branch-cut operations select a fixed service.
         required: false
         type: string
 
@@ -108,6 +109,34 @@ jobs:
           fi
           if [ -z "${NVCF_GITHUB_RELEASE_SERVICE}" ]; then
             echo "ERROR: service is required when operation=branch-cut." >&2
+            exit 1
+          fi
+          ./tools/ci/github-release branch-cut --service "${NVCF_GITHUB_RELEASE_SERVICE}"
+
+  self-managed-release-branch-cut:
+    name: self-managed stack release branch cut
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'self-managed-branch-cut'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+
+      - name: Cut release branch
+        env:
+          NVCF_GITHUB_RELEASE_SERVICE: nvcf-self-managed-stack
+          NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
+            echo "ERROR: set secret NV_GITHUB_TOKEN before cutting a GitHub release branch." >&2
+            echo "The default GITHUB_TOKEN cannot trigger CI for the generated VERSION bump PR." >&2
             exit 1
           fi
           ./tools/ci/github-release branch-cut --service "${NVCF_GITHUB_RELEASE_SERVICE}"

@@ -30,6 +30,58 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestSelfManagedOpenBaoWebhookDefaultsToIgnore(t *testing.T) {
+	const baseConfigPath = "../../deploy/stacks/self-managed/environments/base.yaml"
+
+	var config struct {
+		OpenBao struct {
+			Injector struct {
+				Webhook map[string]any `yaml:"webhook"`
+			} `yaml:"injector"`
+		} `yaml:"openbao"`
+	}
+
+	baseConfig, err := os.ReadFile(baseConfigPath)
+	if err != nil {
+		t.Fatalf("read self-managed base config: %v", err)
+	}
+	if err := yaml.Unmarshal(baseConfig, &config); err != nil {
+		t.Fatalf("parse self-managed base config: %v", err)
+	}
+
+	webhook := config.OpenBao.Injector.Webhook
+	if got, want := webhook["failurePolicy"], "Ignore"; got != want {
+		t.Fatalf("openbao injector failurePolicy = %q, want %q", got, want)
+	}
+	if selector, exists := webhook["namespaceSelector"]; exists {
+		t.Fatalf("openbao injector namespaceSelector = %#v, want it omitted", selector)
+	}
+}
+
+func TestSelfManagedOpenBaoUIAppendRequiresCompatibleNamespaceExpression(t *testing.T) {
+	const templatePath = "../../deploy/stacks/self-managed/global.yaml.gotmpl"
+
+	templateBytes, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("read self-managed values template: %v", err)
+	}
+	templateBody := string(templateBytes)
+
+	for _, want := range []string{
+		`range $expr := $matchExpressions`,
+		`eq (dig "key" "" $expr) "kubernetes.io/metadata.name"`,
+		`eq (dig "operator" "" $expr) "In"`,
+		`not (has "nvcf-ui" $values)`,
+	} {
+		if !strings.Contains(templateBody, want) {
+			t.Errorf("self-managed values template missing OpenBao selector guard %q", want)
+		}
+	}
+	if strings.Contains(templateBody, `index $matchExpressions 0`) {
+		t.Error("self-managed values template assumes the first OpenBao selector expression accepts namespace values")
+	}
+}
+
 // TestNVCFCLINonlocalFixtureMatchesCLITemplate asserts every top-level
 // key in tests/bdd/fixtures/nvcf-cli-nonlocal.yaml.template is also
 // declared (active or commented documentation) in the canonical CLI

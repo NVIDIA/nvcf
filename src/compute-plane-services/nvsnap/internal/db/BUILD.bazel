@@ -15,7 +15,7 @@ go_library(
         "retention.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = ["@org_modernc_sqlite//:sqlite"],
 )
 
@@ -23,6 +23,7 @@ go_test(
     name = "db_test",
     srcs = [
         "db_test.go",
+        "dedup_hash_test.go",
         "dedupe_test.go",
         "lookup_test.go",
         "peers_test.go",

@@ -17,381 +17,361 @@ package main
 
 import (
 	"encoding/json"
-	"encoding/xml"
+	"errors"
 	"fmt"
-	"net/url"
+	"io/fs"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 )
 
-func parsePOMDirectDependencies(path string) map[string]struct{} {
-	out := map[string]struct{}{}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return out
-	}
-	var root xmlNode
-	if err := xml.Unmarshal(raw, &root); err != nil {
-		return out
-	}
-	if root.XMLName.Local != "project" {
-		return out
-	}
+const javaDescriptorName = "bazel-java-ci.json"
 
-	props := map[string]string{}
-	var depsNode *xmlNode
-	for i := range root.Children {
-		child := &root.Children[i]
-		switch child.XMLName.Local {
-		case "properties":
-			for _, p := range child.Children {
-				if t := strings.TrimSpace(p.Content); t != "" && p.XMLName.Local != "" {
-					props[p.XMLName.Local] = t
-				}
-			}
-		case "dependencies":
-			depsNode = child
-		}
-	}
-	if depsNode == nil {
-		return out
-	}
-
-	for _, dep := range depsNode.Children {
-		if dep.XMLName.Local != "dependency" {
-			continue
-		}
-		groupID := childText(dep, "groupId")
-		artifactID := childText(dep, "artifactId")
-		version := childText(dep, "version")
-		scope := childText(dep, "scope")
-		optional := strings.ToLower(childText(dep, "optional")) == "true" || childText(dep, "optional") == "1"
-		if groupID == "" || artifactID == "" || strings.ToLower(scope) == "test" || optional {
-			continue
-		}
-		version = expandMavenProperties(version, props, 0)
-		if version != "" {
-			out[groupID+":"+artifactID+":"+version] = struct{}{}
-		} else {
-			out[groupID+":"+artifactID] = struct{}{}
-		}
-	}
-	return out
+type javaComponent struct {
+	ID            string
+	Path          string
+	InventoryPath string
+	Target        string
 }
 
-func expandMavenProperties(value string, props map[string]string, depth int) string {
-	if value == "" || depth > 10 {
-		return value
-	}
-	re := regexp.MustCompile(`\$\{([^}]+)\}`)
-	m := re.FindStringSubmatch(value)
-	if len(m) != 2 {
-		return value
-	}
-	key := strings.TrimSpace(m[1])
-	if replacement, ok := props[key]; ok {
-		return expandMavenProperties(strings.Replace(value, m[0], replacement, 1), props, depth+1)
-	}
-	return value
+type javaRuntimeInventory struct {
+	Dependencies []javaRuntimeDependency `json:"dependencies"`
 }
 
-func mavenCoordKey(line string) string {
-	g, a, _ := splitMavenCoordinate(line)
-	if g == "" || a == "" {
-		return strings.ToLower(line)
-	}
-	return strings.ToLower(g + ":" + a)
+type javaRuntimeDependency struct {
+	Coordinate string   `json:"coordinate"`
+	Licenses   []string `json:"licenses"`
+	Name       string   `json:"name"`
+	URL        string   `json:"url"`
 }
 
-func splitMavenCoordinate(line string) (string, string, string) {
-	parts := strings.SplitN(line, ":", 3)
-	switch len(parts) {
-	case 3:
-		return parts[0], parts[1], parts[2]
-	case 2:
-		return parts[0], parts[1], ""
-	default:
-		return "", "", ""
-	}
+type mergedJavaDependency struct {
+	Coordinate string
+	Licenses   map[string]struct{}
+	Names      map[string]struct{}
+	URLs       map[string]struct{}
 }
 
-func isNVIDIAMavenGroupID(groupID string) bool {
-	groupID = strings.TrimSpace(groupID)
-	return groupID == "com.nvidia" || strings.HasPrefix(groupID, "com.nvidia.")
-}
-
-func mavenCentralPOMURL(groupID, artifactID, version string) string {
-	return fmt.Sprintf("https://repo1.maven.org/maven2/%s/%s/%s/%s-%s.pom", strings.ReplaceAll(groupID, ".", "/"), artifactID, version, artifactID, version)
-}
-
-func licensesFromPOMRoot(root xmlNode) string {
-	names := map[string]struct{}{}
-	var ordered []string
-	var walk func(xmlNode)
-	walk = func(node xmlNode) {
-		if node.XMLName.Local == "licenses" {
-			for _, lic := range node.Children {
-				if lic.XMLName.Local != "license" {
-					continue
-				}
-				name := childText(lic, "name")
-				if name != "" {
-					if _, ok := names[name]; !ok {
-						names[name] = struct{}{}
-						ordered = append(ordered, name)
-					}
-				}
-			}
-		}
-		for _, child := range node.Children {
-			walk(child)
-		}
-	}
-	walk(root)
-	return strings.Join(ordered, " / ")
-}
-
-func parentCoordsFromPOMRoot(root xmlNode) (string, string, string) {
-	for _, child := range root.Children {
-		if child.XMLName.Local != "parent" {
-			continue
-		}
-		return childText(child, "groupId"), childText(child, "artifactId"), childText(child, "version")
-	}
-	return "", "", ""
-}
-
-func fetchMavenPOMBytes(pomURL string) []byte {
-	for attempt := 0; attempt < 2; attempt++ {
-		mavenHTTPThrottle()
-		body, status, err := httpGetBytesWithStatus(pomURL, httpTimeoutDefault, map[string]string{"User-Agent": cratesIOUserAgent})
+func discoverJavaComponents(root string) ([]javaComponent, error) {
+	srcRoot := filepath.Join(root, "src")
+	if st, err := os.Stat(srcRoot); err != nil || !st.IsDir() {
 		if err == nil {
-			return body
+			err = fmt.Errorf("not a directory")
 		}
-		if status == 404 {
+		return nil, fmt.Errorf("discover Java components under %s: %w", srcRoot, err)
+	}
+
+	var components []javaComponent
+	ids := map[string]string{}
+	err := walkImportRoot(srcRoot, func(path string, d fs.DirEntry) error {
+		if d.IsDir() || d.Name() != javaDescriptorName {
 			return nil
 		}
-		if attempt == 0 {
-			time.Sleep(750 * time.Millisecond)
+		component, err := parseJavaComponentDescriptor(root, path)
+		if err != nil {
+			return err
 		}
+		if previous, ok := ids[component.ID]; ok {
+			return fmt.Errorf(
+				"duplicate Java component id %q in %s and %s",
+				component.ID,
+				previous,
+				path,
+			)
+		}
+		ids[component.ID] = path
+		components = append(components, component)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	sort.Slice(components, func(i, j int) bool {
+		return components[i].Path < components[j].Path
+	})
+	if len(components) == 0 {
+		return nil, fmt.Errorf(
+			"no %s descriptors found under %s; Java dependency collection cannot continue",
+			javaDescriptorName,
+			srcRoot,
+		)
+	}
+	return components, nil
 }
 
-func mavenCentralLicenseFromPOMURL(pomURL string, pomCache map[string]*string, visiting map[string]struct{}, maxParentDepth int) string {
-	if cached, ok := pomCache[pomURL]; ok {
-		if cached == nil {
-			return ""
-		}
-		return *cached
+func parseJavaComponentDescriptor(root, descriptorPath string) (javaComponent, error) {
+	raw, err := os.ReadFile(descriptorPath)
+	if err != nil {
+		return javaComponent{}, fmt.Errorf("read Java descriptor %s: %w", descriptorPath, err)
 	}
-	if maxParentDepth < 0 {
-		return ""
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return javaComponent{}, fmt.Errorf("parse Java descriptor %s: %w", descriptorPath, err)
 	}
-	if _, ok := visiting[pomURL]; ok {
-		return ""
-	}
-	visiting[pomURL] = struct{}{}
-	defer delete(visiting, pomURL)
 
-	raw := fetchMavenPOMBytes(pomURL)
-	if len(raw) == 0 {
-		pomCache[pomURL] = nil
-		return ""
+	id, err := requiredDescriptorString(document, "id")
+	if err != nil {
+		return javaComponent{}, fmt.Errorf("%s: %w", descriptorPath, err)
 	}
-	var root xmlNode
-	if err := xml.Unmarshal(raw, &root); err != nil {
-		pomCache[pomURL] = nil
-		return ""
+	if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`).MatchString(id) {
+		return javaComponent{}, fmt.Errorf(
+			"%s: id must contain lowercase letters, digits, or hyphens, got %q",
+			descriptorPath,
+			id,
+		)
 	}
-	lic := licensesFromPOMRoot(root)
-	if lic == "" {
-		pg, pa, pv := parentCoordsFromPOMRoot(root)
-		if pg != "" && pa != "" && pv != "" {
-			lic = mavenCentralLicenseFromPOMURL(mavenCentralPOMURL(pg, pa, pv), pomCache, visiting, maxParentDepth-1)
+	componentKind, err := requiredDescriptorString(document, "component_kind")
+	if err != nil {
+		return javaComponent{}, fmt.Errorf("%s: %w", descriptorPath, err)
+	}
+	if componentKind != "java-framework" && componentKind != "java-service" {
+		return javaComponent{}, fmt.Errorf(
+			"%s: component_kind must be java-framework or java-service, got %q",
+			descriptorPath,
+			componentKind,
+		)
+	}
+	ciLane, err := requiredDescriptorString(document, "ci_lane")
+	if err != nil {
+		return javaComponent{}, fmt.Errorf("%s: %w", descriptorPath, err)
+	}
+	if ciLane != "build-container" && ciLane != "docker-host" {
+		return javaComponent{}, fmt.Errorf(
+			"%s: ci_lane must be build-container or docker-host, got %q",
+			descriptorPath,
+			ciLane,
+		)
+	}
+	if rawTestsSkip, ok := document["tests_skip"]; !ok {
+		return javaComponent{}, fmt.Errorf("%s: missing required field tests_skip", descriptorPath)
+	} else {
+		var testsSkip bool
+		if err := json.Unmarshal(rawTestsSkip, &testsSkip); err != nil {
+			return javaComponent{}, fmt.Errorf("%s: tests_skip must be boolean", descriptorPath)
 		}
 	}
-	if lic == "" {
-		pomCache[pomURL] = nil
-		return ""
+
+	componentDir := filepath.Dir(descriptorPath)
+	relativePath, err := filepath.Rel(root, componentDir)
+	if err != nil {
+		return javaComponent{}, fmt.Errorf("resolve Java component path for %s: %w", descriptorPath, err)
 	}
-	licCopy := lic
-	pomCache[pomURL] = &licCopy
-	return lic
+	relativePath = filepath.ToSlash(relativePath)
+	if relativePath == "." || strings.HasPrefix(relativePath, "../") {
+		return javaComponent{}, fmt.Errorf(
+			"Java descriptor %s is outside repository root %s",
+			descriptorPath,
+			root,
+		)
+	}
+	return javaComponent{
+		ID:            id,
+		Path:          relativePath,
+		InventoryPath: filepath.FromSlash(relativePath + "/runtime_inventory.json"),
+		Target:        "//" + relativePath + ":runtime_inventory.json",
+	}, nil
 }
 
-func mavenSearchLatestVersion(groupID, artifactID string, cache map[string]*string) string {
-	key := groupID + ":" + artifactID
-	if cached, ok := cache[key]; ok {
-		if cached == nil {
-			return ""
-		}
-		return *cached
+func requiredDescriptorString(document map[string]json.RawMessage, field string) (string, error) {
+	raw, ok := document[field]
+	if !ok {
+		return "", fmt.Errorf("missing required field %s", field)
 	}
-	metadataURL := fmt.Sprintf("https://repo1.maven.org/maven2/%s/%s/maven-metadata.xml", strings.ReplaceAll(groupID, ".", "/"), artifactID)
-	for attempt := 0; attempt < 2; attempt++ {
-		mavenHTTPThrottle()
-		body, _, err := httpGetBytesWithStatus(metadataURL, httpTimeoutDefault, map[string]string{"User-Agent": cratesIOUserAgent})
-		if err == nil {
-			var root xmlNode
-			if xml.Unmarshal(body, &root) == nil {
-				for _, child := range root.Children {
-					if child.XMLName.Local != "versioning" {
-						continue
-					}
-					release := childText(child, "release")
-					latest := childText(child, "latest")
-					out := firstNonEmpty(release, latest)
-					if out != "" {
-						outCopy := out
-						cache[key] = &outCopy
-						return out
-					}
-				}
-			}
-		}
-		if attempt == 0 {
-			time.Sleep(750 * time.Millisecond)
-		}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("%s must be a non-empty string", field)
 	}
-	query := fmt.Sprintf(`g:"%s" AND a:"%s"`, groupID, artifactID)
-	searchURL := "https://search.maven.org/solrsearch/select?" + url.Values{
-		"q":    []string{query},
-		"rows": []string{"1"},
-		"wt":   []string{"json"},
-	}.Encode()
-	for attempt := 0; attempt < 2; attempt++ {
-		mavenHTTPThrottle()
-		body, _, err := httpGetStringWithStatus(searchURL, httpTimeoutDefault, map[string]string{"User-Agent": cratesIOUserAgent})
-		if err == nil {
-			var data map[string]any
-			if json.Unmarshal([]byte(body), &data) == nil {
-				if response, ok := asMap(data["response"]); ok {
-					if docs, ok := asSlice(response["docs"]); ok && len(docs) > 0 {
-						if first, ok := asMap(docs[0]); ok {
-							if ver, _ := first["latestVersion"].(string); strings.TrimSpace(ver) != "" {
-								out := strings.TrimSpace(ver)
-								outCopy := out
-								cache[key] = &outCopy
-								return out
-							}
-						}
-					}
-				}
-			}
-		}
-		if attempt == 0 {
-			time.Sleep(750 * time.Millisecond)
-		}
-	}
-	cache[key] = nil
-	return ""
+	return strings.TrimSpace(value), nil
 }
 
-func mavenCentralLicenseForCoordinate(line string, searchCache, pomCache map[string]*string) string {
-	g, a, v := splitMavenCoordinate(line)
-	if g == "" || a == "" {
-		return ""
+func collectJavaInventoryDependencies(root string) (map[string]mergedJavaDependency, int, error) {
+	components, err := discoverJavaComponents(root)
+	if err != nil {
+		return nil, 0, err
 	}
-	if v == "" {
-		v = mavenSearchLatestVersion(g, a, searchCache)
-		if v == "" {
-			return ""
+	bazelBin, err := materializeJavaInventories(root, components)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	dependencies := map[string]mergedJavaDependency{}
+	for _, component := range components {
+		inventoryPath := filepath.Join(bazelBin, component.InventoryPath)
+		inventory, err := readJavaRuntimeInventory(inventoryPath)
+		if err != nil {
+			return nil, 0, fmt.Errorf(
+				"read Java runtime inventory for component %s from %s: %w",
+				component.ID,
+				inventoryPath,
+				err,
+			)
+		}
+		for _, dependency := range inventory.Dependencies {
+			mergeJavaDependency(dependencies, dependency)
 		}
 	}
-	return mavenCentralLicenseFromPOMURL(mavenCentralPOMURL(g, a, v), pomCache, map[string]struct{}{}, 12)
+	return dependencies, len(components), nil
 }
 
-func groupJavaCoordinates(lines []string) (map[string][]string, []string) {
-	groups := map[string]map[string]struct{}{}
-	var unparsed []string
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		if !strings.Contains(line, ":") {
-			unparsed = append(unparsed, raw)
-			continue
-		}
-		g, a, _ := splitMavenCoordinate(line)
-		if g == "" || a == "" {
-			unparsed = append(unparsed, raw)
-			continue
-		}
-		key := mavenCoordKey(line)
-		if _, ok := groups[key]; !ok {
-			groups[key] = map[string]struct{}{}
-		}
-		groups[key][line] = struct{}{}
+func materializeJavaInventories(root string, components []javaComponent) (string, error) {
+	if override := strings.TrimSpace(os.Getenv("COLLECT_DEPS_JAVA_INVENTORY_ROOT")); override != "" {
+		return override, nil
 	}
-	return sortedGroupMap(groups), unparsed
+
+	bazel := strings.TrimSpace(os.Getenv("COLLECT_DEPS_BAZEL"))
+	if bazel == "" {
+		bazel = "bazel"
+	}
+	startupArgs := javaBazelStartupArgs()
+	targets := make([]string, 0, len(components))
+	for _, component := range components {
+		targets = append(targets, component.Target)
+	}
+	buildArgs := append(append([]string{}, startupArgs...), "build")
+	buildArgs = append(buildArgs, targets...)
+	fmt.Fprintf(
+		os.Stderr,
+		"collect-dependencies: building %d Java runtime inventories with Bazel\n",
+		len(targets),
+	)
+	stdout, stderr, err := runCommand(root, nil, javaBazelTimeout, bazel, buildArgs...)
+	if err != nil {
+		var execErr *exec.Error
+		if errors.As(err, &execErr) {
+			return "", fmt.Errorf(
+				"build Java runtime inventories: %q is not available; install Bazelisk as bazel",
+				bazel,
+			)
+		}
+		return "", fmt.Errorf(
+			"build Java runtime inventories with %s: %w\n%s",
+			bazel,
+			err,
+			commandFailureOutput(stdout, stderr),
+		)
+	}
+
+	infoArgs := append(append([]string{}, startupArgs...), "info", "bazel-bin")
+	stdout, stderr, err = runCommand(root, nil, javaBazelTimeout, bazel, infoArgs...)
+	if err != nil {
+		return "", fmt.Errorf(
+			"locate bazel-bin with %s: %w\n%s",
+			bazel,
+			err,
+			commandFailureOutput(stdout, stderr),
+		)
+	}
+	bazelBin := strings.TrimSpace(stdout)
+	if bazelBin == "" {
+		return "", fmt.Errorf("%s info bazel-bin returned an empty path", bazel)
+	}
+	return bazelBin, nil
 }
 
-func mavenHTTPThrottle() {
-	raw := strings.TrimSpace(os.Getenv("COLLECT_DEPS_MAVEN_THROTTLE_SEC"))
-	if raw == "" {
-		raw = "0.05"
+func javaBazelStartupArgs() []string {
+	outputRoot := strings.TrimSpace(os.Getenv("BAZEL_OUTPUT_USER_ROOT"))
+	if outputRoot == "" {
+		return nil
 	}
-	sec, err := strconv.ParseFloat(raw, 64)
-	if err != nil || sec <= 0 {
-		return
-	}
-	time.Sleep(time.Duration(sec * float64(time.Second)))
+	return []string{"--output_user_root=" + outputRoot}
 }
 
-func buildJavaRows(allJava map[string]struct{}, useMavenCentral bool, searchCache, pomCache map[string]*string) ([]dependencyRow, int) {
-	groups, unparsed := groupJavaCoordinates(sortedKeys(allJava))
-	rows := []dependencyRow{}
-	for _, norm := range sortedMapKeys(groups) {
-		originals := groups[norm]
-		spec := ""
-		if len(originals) == 1 {
-			spec = "`" + originals[0] + "`"
-		} else {
-			inner := make([]string, 0, len(originals))
-			for _, original := range originals {
-				inner = append(inner, "`"+original+"`")
-			}
-			spec = fmt.Sprintf("`%s` (%s)", norm, strings.Join(inner, ", "))
+func commandFailureOutput(stdout, stderr string) string {
+	message := strings.TrimSpace(stderr)
+	if message == "" {
+		message = strings.TrimSpace(stdout)
+	}
+	if len(message) > 4000 {
+		message = message[len(message)-4000:]
+	}
+	return message
+}
+
+func readJavaRuntimeInventory(path string) (javaRuntimeInventory, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return javaRuntimeInventory{}, err
+	}
+	var inventory javaRuntimeInventory
+	if err := json.Unmarshal(raw, &inventory); err != nil {
+		return javaRuntimeInventory{}, fmt.Errorf("parse JSON: %w", err)
+	}
+	if inventory.Dependencies == nil {
+		return javaRuntimeInventory{}, fmt.Errorf("missing dependencies array")
+	}
+	for i, dependency := range inventory.Dependencies {
+		if strings.TrimSpace(dependency.Coordinate) == "" {
+			return javaRuntimeInventory{}, fmt.Errorf("dependency %d has an empty coordinate", i)
 		}
-		licLine := originals[0]
-		for _, original := range originals {
-			if _, _, version := splitMavenCoordinate(original); version != "" {
-				licLine = original
-				break
-			}
+	}
+	return inventory, nil
+}
+
+func mergeJavaDependency(
+	dependencies map[string]mergedJavaDependency,
+	dependency javaRuntimeDependency,
+) {
+	coordinate := strings.TrimSpace(dependency.Coordinate)
+	merged, ok := dependencies[coordinate]
+	if !ok {
+		merged = mergedJavaDependency{
+			Coordinate: coordinate,
+			Licenses:   map[string]struct{}{},
+			Names:      map[string]struct{}{},
+			URLs:       map[string]struct{}{},
 		}
-		groupID, _, _ := splitMavenCoordinate(licLine)
-		lic := "_(Maven Central lookup disabled)_"
-		if useMavenCentral {
-			if isNVIDIAMavenGroupID(groupID) {
-				lic = "_(NVIDIA `com.nvidia.*` artifact; license not resolved via Maven Central)_"
-			} else if resolved := mavenCentralLicenseForCoordinate(licLine, searchCache, pomCache); resolved != "" {
-				lic = resolved
-			} else {
-				lic = "_(third-party: expected `<licenses>` from Maven Central POM - missing, 404, or network; fix or see tools/collect-dependencies/README.md)_"
-			}
+	}
+	for _, license := range dependency.Licenses {
+		if license = strings.TrimSpace(license); license != "" {
+			merged.Licenses[license] = struct{}{}
+		}
+	}
+	if name := strings.TrimSpace(dependency.Name); name != "" {
+		merged.Names[name] = struct{}{}
+	}
+	if rawURL := strings.TrimSpace(dependency.URL); rawURL != "" {
+		merged.URLs[rawURL] = struct{}{}
+	}
+	dependencies[coordinate] = merged
+}
+
+func buildJavaInventoryRows(
+	dependencies map[string]mergedJavaDependency,
+) []dependencyRow {
+	rows := make([]dependencyRow, 0, len(dependencies))
+	for _, coordinate := range sortedMapKeys(dependencies) {
+		dependency := dependencies[coordinate]
+		licenses := sortedKeys(dependency.Licenses)
+		license := "_(runtime inventory has no license metadata)_"
+		if len(licenses) > 0 {
+			license = strings.Join(licenses, " / ")
 		}
 		rows = append(rows, dependencyRow{
 			Language: "Java",
-			SortKey:  norm,
-			Spec:     spec,
-			License:  lic,
+			SortKey:  strings.ToLower(coordinate),
+			Spec:     javaDependencySpec(dependency),
+			License:  license,
 		})
 	}
-	sort.Strings(unparsed)
-	for _, line := range unparsed {
-		rows = append(rows, dependencyRow{
-			Language: "Java",
-			SortKey:  line,
-			Spec:     "`" + line + "`",
-			License:  "_(could not parse Maven coordinates)_",
-		})
+	return rows
+}
+
+func javaDependencySpec(dependency mergedJavaDependency) string {
+	spec := "`" + dependency.Coordinate + "`"
+	names := sortedKeys(dependency.Names)
+	urls := sortedKeys(dependency.URLs)
+	details := []string{}
+	if len(names) > 0 {
+		details = append(details, strings.Join(names, " / "))
 	}
-	return rows, len(groups) + len(unparsed)
+	if len(urls) > 0 {
+		details = append(details, strings.Join(urls, " / "))
+	}
+	if len(details) > 0 {
+		spec += " (" + strings.Join(details, "; ") + ")"
+	}
+	return spec
 }

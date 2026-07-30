@@ -1,0 +1,36 @@
+---
+# Source: helm-nvca-operator/templates/gpu-profiling-config-configmap.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# nvca-gpu-profiling-config: NVCF function IDs to profile, plus an optional label override
+# for the Nsight Operator. Created at deploy/upgrade from .Values.agent.gpuProfiling.* and
+# mirrored by the operator into the agent namespace. Empty functionIds profiles nothing;
+# empty labelKey/labelValue use the defaults (nvidia-nsight-profile=enabled).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvca-gpu-profiling-config
+  namespace: nvca-operator
+  labels:
+    helm.sh/chart: helm-nvca-operator-1.14.0
+    app.kubernetes.io/name: nvca-operator
+    app.kubernetes.io/instance: nvca-operator
+    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/managed-by: Helm
+data:
+  functionIds: ""
+  labelKey: ""
+  labelValue: ""

@@ -50,13 +50,12 @@ try-import %workspace%/tools/bazel/internal.bazelrc
 # the caller cannot reach.
 #   - GitHub mirror CI: the bazel workflow sets --remote_cache to the public
 #     EC2 Buildbarn (with a bearer token and CA cert) and controls upload per
-#     trigger (read-only on PRs, read-write on main). The internal nvcfbarn
-#     cache below is unreachable from GitHub-hosted runners.
+#     trigger (read-only on PRs, read-write on main).
 #   - Internal GitLab CI / on-VPN devs: opt in with --config=remote (read-only)
-#     or --config=remote-write (read+write) to the internal nvcfbarn cache
-#     defined below, e.g. `bazel build --config=remote-write //...` or a
-#     persistent `build --config=remote` in ~/.bazelrc.user (try-imported at
-#     the bottom of this file).
+#     or --config=remote-write (read+write) and supply the cache endpoint with
+#     --remote_cache, e.g. `bazel build --config=remote-write //...` or a
+#     persistent `build --config=remote` plus `--remote_cache=...` in
+#     ~/.bazelrc.user (try-imported at the bottom of this file).
 
 # Required for toolchains_protoc to register a prebuilt protoc instead
 # of falling back to the C++ protoc baked into @@protobuf+. Default
@@ -68,14 +67,29 @@ common --incompatible_enable_proto_toolchain_resolution
 build --workspace_status_command=./tools/workspace_status.sh
 build --nostamp
 
-# Java: build and run against a hermetic remotejdk 21 regardless of the host
-# JDK, so Java service builds are reproducible on any developer machine and in
-# CI. Language version 21 is the current Spring Boot 3.x baseline.
+# Java baseline: Java 25 for the whole monorepo (nv-boot-parent and the Java
+# control-plane services). local_jdk is the approved runtime. The pinned
+# bazel-ci image supplies Temurin 25 through JAVA_HOME; the bare
+# Docker-integration lane supplies it through actions/setup-java. The Java
+# build and test jobs prove that both environments satisfy this contract.
+# Full javac (header compilation off) is required because Lombok-generated APIs
+# in the imported projects are not compatible with Bazel's Turbine header
+# compiler.
 build --java_language_version=25
-build --java_runtime_version=remotejdk_25
 build --tool_java_language_version=25
-build --tool_java_runtime_version=remotejdk_25
+build --java_runtime_version=local_jdk
+build --tool_java_runtime_version=local_jdk
 build --java_header_compilation=false
+
+# rules_spring 2.6.3 (cloud-tasks Spring Boot packaging) still uses bare Java
+# rules/providers in its own BUILD and .bzl files; Bazel 9 requires these
+# symbols to be autoloaded for that external repo.
+common --incompatible_autoload_externally=+@rules_java
+
+# Downloader rewrites for repository-rule downloads (e.g. rules that hardcode
+# repo1.maven.org). Coursier maven.install still uses the repositories declared
+# in MODULE.bazel. Public, credentials-free mappings only.
+common --downloader_config=.bazel_downloader_config
 
 test --test_output=errors
 # Bazel's sandbox strips HOME, but a lot of Go code (cobra/viper config,
@@ -112,12 +126,12 @@ build:ci --stamp
 #                          BAZEL_REMOTE_FLAGS=--config=remote-write
 #                          when the cache probe succeeds.
 #
-# The endpoint below is the team read-only cache. CI writes through to it on
-# every default-branch and MR build, so its hit rate climbs as commits land.
-# If you are on VPN and see slow / wedging cold builds, your in-flight RPCs
-# may be losing the VPN race; either run locally (--remote_cache=) or point at
-# a closer cache via ~/.bazelrc.user (see try-import at the top of this file).
-build:remote --remote_cache=grpc://nvcfbarn.nvidia.com:8980
+# This profile carries the read-only cache policy and tuning flags only; the
+# caller supplies the endpoint (and credentials) via --remote_cache. CI points
+# it at the public EC2 Buildbarn and writes through on every default-branch and
+# MR build, so its hit rate climbs as commits land. Devs can point at a closer
+# cache via ~/.bazelrc.user (see try-import at the top of this file), or run
+# fully local with --remote_cache= to disable the cache for a build.
 build:remote --remote_upload_local_results=false
 
 # zstd compression for cache blobs. Cuts upload bandwidth ~5-10x for

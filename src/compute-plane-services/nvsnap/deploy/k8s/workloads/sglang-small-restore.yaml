@@ -72,7 +72,7 @@ spec:
 
   # Copy CRIU bundle, intercept library, and debug tools from agent image
     - name: get-criu
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.21
+      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.26
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "-c"]
       args:

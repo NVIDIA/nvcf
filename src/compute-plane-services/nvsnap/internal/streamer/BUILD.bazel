@@ -8,7 +8,7 @@ go_library(
         "streamer.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/streamer",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
         "@com_github_pierrec_lz4_v4//:lz4",
         "@com_github_sirupsen_logrus//:logrus",

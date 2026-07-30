@@ -4,9 +4,9 @@ Container-based functions require building and pushing a Cloud Functions compati
 
 ## Resources
 
-- Example containers can be found [in the examples repository](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples).
+- Example containers can be found [in the examples directory](https://github.com/NVIDIA/nvcf/tree/main/examples).
 
-- The repository also contains [helper functions](https://github.com/NVIDIA/nv-cloud-function-helpers/blob/main/helper_library/nv_cloud_function_helpers/nvcf_container/helpers.py) that are useful when authoring your container, including:
+- The repository also contains [helper functions](https://github.com/NVIDIA/nvcf/blob/main/src/libraries/python/nv-cloud-function-helpers/nv_cloud_function_helpers/nvcf_container/helpers.py) that are useful when authoring your container, including:
 
   - Helpers that parse Cloud Functions-specific parameters on invocation
   - Helpers that can be used to instrument your container with Cloud Functions compatible logs
@@ -43,7 +43,7 @@ Cloud Functions also expects the following directories in the container to remai
 
 ## Composing a FastAPI Container
 
-It's possible to use any container with Cloud Functions as long as it implements a server with the above endpoints. The below is an example of a FastAPI-based container compatible with Cloud Functions. Clone the [FastAPI echo example](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/function_samples/fastapi_echo_sample).
+It's possible to use any container with Cloud Functions as long as it implements a server with the above endpoints. The below is an example of a FastAPI-based container compatible with Cloud Functions. Clone the [FastAPI echo example](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/fastapi-echo-sample).
 
 ### Create the "requirements.txt" File
 
@@ -289,7 +289,7 @@ Create the function via the NVCF API. In this example, we defined the inference 
 
 ### Additional Examples
 
-See more examples of containers that are Cloud Functions compatible [in the function samples directory](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/function_samples/).
+See more examples of containers that are Cloud Functions compatible [in the function samples directory](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/).
 
 ## Creating gRPC-based Functions
 
@@ -300,7 +300,7 @@ Cloud Functions supports function invocation via gRPC. During function creation,
 - The function container must implement a gRPC port, endpoint and health check. The health check is expected to be served by the gRPC inference port, there is no need to define a separate health endpoint path.
 
   - See [gRPC health checking](https://grpc.io/docs/guides/health-checking/).
-  - See an [example container](https://github.com/NVIDIA/nv-cloud-function-helpers/blob/main/examples/function_samples/grpc_echo_sample/grpc_echo_server.py) with a gRPC server that is Cloud Functions compatible.
+  - See an [example container](https://github.com/NVIDIA/nvcf/blob/main/examples/function-samples/grpc-echo-sample/grpc_echo_server.py) with a gRPC server that is Cloud Functions compatible.
 
 ### gRPC Function Creation via API
 
@@ -321,4 +321,4 @@ When creating the gRPC function, set the `inferenceUrl` field to `/grpc`:
 
 ### gRPC Function Invocation
 
-gRPC function invocation uses the same `Authorization: Bearer $NVCF_TOKEN` header as HTTP invocation, passed as gRPC metadata. See the [gRPC invocation examples](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples) for details on how to authenticate and invoke your gRPC function.
+gRPC function invocation uses the same `Authorization: Bearer $NVCF_TOKEN` header as HTTP invocation, passed as gRPC metadata. See the [gRPC invocation examples](https://github.com/NVIDIA/nvcf/tree/main/examples) for details on how to authenticate and invoke your gRPC function.

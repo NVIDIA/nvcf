@@ -26,16 +26,20 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-func TestAddBYOOEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) {
+func TestAddBYOOOTelCollectorEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) {
 	envs := []corev1.EnvVar{
-		{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
-		{Name: nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
+		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
+		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
 	}
 	expectedEnv := []corev1.EnvVar{
-		{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
-		{Name: nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
+		{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
+		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
 	}
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{
@@ -43,7 +47,7 @@ func TestAddBYOOEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) 
 				{
 					Name: common.ByooOTelCollectorPodNameBase,
 					Env: []corev1.EnvVar{
-						{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "1000000"},
+						{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "1000000"},
 					},
 				},
 				{Name: "inference"},
@@ -51,7 +55,7 @@ func TestAddBYOOEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) 
 		},
 	}
 
-	AddBYOOEnvVarsToPodSpec(&pod.Spec, envs)
+	AddBYOOOTelCollectorEnvVarsToPodSpec(&pod.Spec, envs)
 
 	assert.Equal(t, expectedEnv, pod.Spec.Containers[0].Env)
 	assert.Empty(t, pod.Spec.Containers[1].Env)

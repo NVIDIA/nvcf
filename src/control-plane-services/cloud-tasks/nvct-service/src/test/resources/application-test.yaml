@@ -1,0 +1,222 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring.main.allow-bean-definition-overriding: true
+
+# Faster JVM exit after integration tests (avoids Surefire fork exit timeout when many
+# @SpringBootTest contexts shut down gRPC + Tomcat + file watchers sequentially).
+server:
+  shutdown: immediate
+
+grpc:
+  server:
+    port: 0  # Random port to avoid BindException when running multiple integration tests
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 5s
+  cassandra:
+    contact-points: 127.0.0.1
+    keyspace-name: nvct
+    request:
+      timeout: 30s
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9092
+
+management:
+  tracing:
+    export:
+      enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: https://dummy:8282
+
+logging:
+  level:
+    com.nvidia: DEBUG
+    com.nvidia.nvct.configuration: INFO
+    com.nvidia.nvct.util: INFO
+    org.springframework.web.client.RestTemplate: INFO
+    org.springframework.web.HttpLogging: INFO
+    org.springframework.web: DEBUG
+    org.springframework.data.cassandra.core.cql.CqlTemplate: INFO
+
+nvct:
+  fqdn: http://localhost:${server.port}
+  global-fqdn-grpc: http://localhost:9090
+  sidecars:
+    hostname: fake.registry.test
+  aws:
+    region: us-east-1
+  ess:
+    base-url: http://localhost:9098
+  notary:
+    audiences:
+      ess: dummy-ess-audience
+      nvct: dummy-nvct-audience
+    base-url: http://localhost:9097
+  nvcf:
+    base-url: http://localhost:9119
+  reval:
+    base-url: http://localhost:9099
+  icms:
+    base-url: http://localhost:9096
+    allocator:
+      enabled: true
+  api-keys:
+    base-url: http://localhost:9093
+  rate-limiters:
+    account-rate-limiter:
+      allowed-invocations-per-second: 200
+    task-rate-limiter:
+      allowed-invocations-per-second: 200
+  scheduled-routines:
+    enabled: true
+    lock-consistency: QUORUM
+    clean-terminal-tasks-routine:
+      enabled: false
+    monitor-launched-tasks-routine:
+      enabled: false
+    monitor-queued-tasks-routine:
+      enabled: false
+    monitor-worker-heartbeat-routine:
+      enabled: false
+  registries:
+    recognized:
+      container:
+        docker:
+          name: "Docker Hub Registry"
+          hostname: http://localhost-docker:9101
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost:9102
+            group-scope: pull
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "http://localhost-ngc:9100"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+        ecr:
+          name: "AWS ECR Private Registry"
+          hostname: http://localhost-ecr:9103
+          call-timeout: PT10S
+        ecr-public:
+          name: "AWS ECR Public Registry"
+          hostname: http://localhost-ecr-public:9104
+          call-timeout: PT10S
+        volcengine:
+          name: "Volcano Engine Registry"
+          hostname: http://localhost-volcengine:9105
+          call-timeout: PT10S
+        acr:
+          name: "Azure Container Registry"
+          hostname: http://localhost-acr:9106
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost-acr:9107
+        harbor:
+          name: "Harbor Registry"
+          hostname: http://localhost-harbor:9108
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost:9109
+        artifactory:
+          name: "Artifactory Registry"
+          hostname: http://localhost-artifactory:9110
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost-artifactory:9111
+        custom-1:
+          name: "Custom Registry Test 1"
+          hostname: "custom-registry-test-1.com"
+      helm:
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "http://localhost-ngc:9094"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+          oauth2:
+            base-url: "http://localhost:9095"
+            group-scope: ngc-stg
+        docker:
+          name: "Docker Hub Registry"
+          hostname: http://localhost-docker:9101
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost:9102
+            group-scope: pull
+        ecr:
+          name: "AWS ECR Private Registry"
+          hostname: http://localhost-ecr:9103
+          call-timeout: PT10S
+        ecr-public:
+          name: "AWS ECR Public Registry"
+          hostname: http://localhost-ecr-public:9104
+          call-timeout: PT10S
+        volcengine:
+          name: "Volcano Engine Registry"
+          hostname: http://localhost-volcengine:9105
+          call-timeout: PT10S
+        acr:
+          name: "Azure Container Registry"
+          hostname: http://localhost-acr:9106
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost-acr:9107
+        harbor:
+          name: "Harbor Registry"
+          hostname: http://localhost-harbor:9108
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost:9109
+        artifactory:
+          name: "JFrog Artifactory"
+          hostname: http://localhost-artifactory:9110
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost-artifactory:9111
+        custom-1:
+          name: "Custom Registry Test 1"
+          hostname: "custom-registry-test-1.com"
+      model:
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "http://localhost-ngc:9094"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+          oauth2:
+            base-url: "http://localhost:9095"
+            group-scope: ngc-stg
+      resource:
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "http://localhost-ngc:9094"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+          oauth2:
+            base-url: "http://localhost:9095"
+            group-scope: ngc-stg

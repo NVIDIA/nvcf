@@ -81,13 +81,29 @@ GOMODCACHE="$${GOMODCACHE:-/tmp/byoo-otelcol-gomodcache}"
 GOPATH="$${GOPATH:-/tmp/byoo-otelcol-gopath}"
 GOCACHE="$${GOCACHE:-/tmp/byoo-otelcol-gocache}"
 HOME="$${HOME:-$$(mktemp -d -t byoo-otelcol-home.XXXXXX)}"
-# Cap parallelism. Each linker pass of the otelcol module
-# holds ~6 GB RSS, so even with tags=["exclusive"] limiting
-# Bazel-side concurrency, the Go toolchain's internal worker
-# pool can still OOM a standard CI runner. Two workers is a
-# reasonable floor for build throughput on modern Go.
-GOMAXPROCS="$${GOMAXPROCS:-2}"
-export GOMODCACHE GOPATH GOCACHE HOME GOMAXPROCS
+# Parallelism. Peak RSS of a collector build is set by the `go build`
+# driver holding export data for the whole 250+ module graph and by the
+# final link. Neither scales with how many compile actions run at once,
+# so the previous -p 1 cap traded a lot of wall time for no memory
+# headroom. Measured cold (warm module cache, otelcol v0.157.0):
+#
+#   -p 1   490s   5.69 GB peak RSS
+#   -p 2   211s   6.09 GB
+#   -p 4    97s   6.08 GB
+#   -p 8    58s   5.27 GB
+#
+# What actually protects a 16 GB runner is never running two collector
+# builds at once, which CI enforces Bazel-side with --jobs=1 (see
+# .github/workflows/bazel.yml); Bazel has no per-action memory throttle
+# for genrules. Both knobs stay overridable via env for hosts that need
+# a smaller footprint.
+BYOO_NPROC="$$(nproc 2>/dev/null || echo 2)"
+# Cap at 8: past that, `go build` is link-bound on this module and the
+# extra workers only add memory pressure on large dev machines.
+if [ "$$BYOO_NPROC" -gt 8 ]; then BYOO_NPROC=8; fi
+GOMAXPROCS="$${GOMAXPROCS:-$$BYOO_NPROC}"
+GO_BUILD_P="$${GO_BUILD_P:-$$BYOO_NPROC}"
+export GOMODCACHE GOPATH GOCACHE HOME GOMAXPROCS GO_BUILD_P
 mkdir -p "$$GOMODCACHE" "$$GOPATH" "$$GOCACHE"
 WORK_DIR=$$(dirname $$(realpath $(location go.mod)))
 ABS_OUT="$$(pwd)/$@"
@@ -99,21 +115,24 @@ cd "$$WORK_DIR"
 # exit status 128". The collector binary does not need embedded VCS info.
 _CMD_GO_BUILD_AMD64 = """\
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \\
-    "$$GO_BIN" build -trimpath -buildvcs=false -o "$$ABS_OUT" .
+    "$$GO_BIN" build -p "$$GO_BUILD_P" -trimpath -buildvcs=false -o "$$ABS_OUT" .
 """
 
 _CMD_GO_BUILD_ARM64 = """\
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \\
-    "$$GO_BIN" build -trimpath -buildvcs=false -o "$$ABS_OUT" .
+    "$$GO_BIN" build -p "$$GO_BUILD_P" -trimpath -buildvcs=false -o "$$ABS_OUT" .
 """
 
 genrule(
     name = "otelcol-contrib-bin",
+    # **/*.go rather than listing each package: the previous glob covered
+    # root-level files plus logchunkprocessor only, so a new subpackage would
+    # have been silently excluded from the action key and its edits would not
+    # have invalidated the build. The resolved file set is unchanged today.
     srcs = glob([
-        "*.go",
+        "**/*.go",
         "go.mod",
         "go.sum",
-        "logchunkprocessor/**/*.go",
     ]),
     outs = ["otelcol-contrib"],
     # GO_BIN can be overridden via env when the host installs go at a
@@ -125,15 +144,38 @@ genrule(
         "@platforms//cpu:aarch64": _CMD_GO_BUILD_ARM64,
         "//conditions:default": _CMD_GO_BUILD_AMD64,
     }),
-    local = True,
     tags = [
-        # "exclusive" forces Bazel to run this genrule alone, so the
-        # multi_arch transition does not invoke two collector builds
-        # in parallel and double-peak the runner's memory. The Go
-        # toolchain's internal worker pool is bounded separately via
-        # GOMAXPROCS in the cmd above.
-        "exclusive",
         "manual",
+        # no-sandbox: the action shells out to the host `go`, which is not
+        #   a declared input, so it cannot execute inside Bazel's sandbox.
+        # no-remote-exec: for the same reason it can never be dispatched to
+        #   a remote worker; it has to run where `go` is installed.
+        #
+        # Deliberately NOT `local = True`. Bazel's `local` tag is the union
+        # of no-sandbox + no-remote-exec + no-cache, and that last component
+        # is what made every CI run recompile the collector from scratch:
+        # the result was never written to or read from the remote cache, so
+        # a warm cache bought nothing. The GHA bazel matrix logged
+        # "383 processes: 317 remote cache hit, 59 internal, 3 local" with
+        # those 3 local actions -- this genrule in its three configurations
+        # -- accounting for ~18 of the row's ~20 minutes. Keeping the first
+        # two execution requirements and dropping no-cache preserves
+        # identical execution semantics (unsandboxed, on the local machine)
+        # while letting an unchanged collector resolve to a cache hit.
+        #
+        # Cache-key safety. Two things are not covered by the declared
+        # inputs, and both are handled:
+        #   - Target architecture: the select() above puts GOOS/GOARCH
+        #     literally in the command line, and the command line is part of
+        #     the action key, so an amd64 result can never be served for an
+        #     arm64 request.
+        #   - Host toolchain: `go` itself is not an input. CI binds it to
+        #     the key out-of-band with
+        #     --action_env=BYOO_GO_TOOLCHAIN="$(go version)" (see
+        #     .github/workflows/bazel.yml), so bumping Go in the bazel-ci
+        #     image invalidates the entry rather than silently serving a
+        #     binary built by the previous compiler.
+        "no-remote-exec",
         "no-sandbox",
     ],
     visibility = ["//visibility:public"],

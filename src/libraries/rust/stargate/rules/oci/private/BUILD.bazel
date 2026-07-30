@@ -1,0 +1,4 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+package(default_visibility = ["//rules/oci:__subpackages__"])

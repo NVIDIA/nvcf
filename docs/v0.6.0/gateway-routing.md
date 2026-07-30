@@ -365,7 +365,6 @@ When you deploy the control plane via helmfile, the `nvcf-gateway-routes` chart 
 
 - `HTTPRoutes` for API Keys, NVCF API, and Invocation services
 - Optional LLM invocation HTTPRoute when the `llmInvocation` route is enabled
-- Optional Vanity Gateway HTTPRoute only when the stack package includes the addon and the `vanityGateway` route is enabled
 - `TCPRoute` for gRPC
 - Optional `TCPRoute` for split or multi-cluster gRPC invocation when the
   `grpcWorker` route is enabled
@@ -382,7 +381,6 @@ These routes attach to the Gateway you prepared in [Gateway quickstart](./gatewa
 | NVCF API | `api.<domain>` | 80 | Function management (create, deploy, delete) |
 | Invocation | `invocation.<domain>`, `*.invocation.<domain>` | 80 | Function invocation (wildcard for dynamic routing) |
 | LLM Invocation | `llm.invocation.<domain>` | 80 | OpenAI-compatible LLM invocation routes such as `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings` |
-| Vanity Gateway | `vanity.<domain>` | 80 | Optional vanity host/path routing to `vanity-gateway.nvcf:8080`, only in stack packages that include the addon |
 | gRPC | N/A (TCP routing, no hostname matching) | 10081 | gRPC function invocations |
 | gRPC worker callback | N/A (TCP routing, no hostname matching) | 10086 | HTTP/1 CONNECT callback from workers to grpc-proxy when the beta `grpcWorker` route is enabled |
 | NATS | N/A (TCP routing, no hostname matching) | 4222 | NVCA messaging when the NATS route is enabled |
@@ -403,31 +401,6 @@ For local and multi-cluster invocation-path diagrams, see
 [Generic HTTP Function Invocation](./generic-http-function-invocation.md),
 [gRPC Function Invocation](./grpc-function-invocation.md), and
 [LLM Gateway](./llm-gateway.md).
-
-### Vanity Gateway (Optional)
-
-Vanity Gateway is disabled by default. It is available only in stack packages
-that include the Vanity Gateway addon. If your extracted stack package does not
-contain a `vanity-gateway` release and `vanityGateway` route values, skip this
-section until you use a stack package that includes them.
-
-Enable it only when you need a customer-facing hostname or mapping layer in
-front of the standard NVCF service routes. In Helmfile-based stack packages that
-include the addon, set:
-
-```yaml
-addons:
-  vanityGateway:
-    enabled: true
-    mappingConfig: {}
-```
-
-By default, the route host is `vanity.<domain>` and the backend is
-`vanity-gateway.nvcf:8080`. Use `addons.vanityGateway.mappingConfig` for the
-host and path mappings required by your deployment. If you need custom vanity
-hostnames instead of `vanity.<domain>`, configure the route hostname overrides
-supported by your stack package, then create matching DNS records for those
-hosts.
 
 ### How Routing Works
 
@@ -469,11 +442,7 @@ kubectl get httproute -A -o jsonpath='{range .items[*]}{.metadata.name}: {.spec.
 # api-keys: api-keys.a1b2c3d4.us-west-2.elb.amazonaws.com
 # nvcf-api: api.a1b2c3d4.us-west-2.elb.amazonaws.com
 # invocation-service: *.invocation.a1b2c3d4.us-west-2.elb.amazonaws.com invocation.a1b2c3d4.us-west-2.elb.amazonaws.com
-# vanity-gateway: vanity.a1b2c3d4.us-west-2.elb.amazonaws.com  # only when enabled and present in the stack package
 ```
-
-If Vanity Gateway is disabled or your stack package does not include the addon,
-the `vanity-gateway` HTTPRoute is not expected.
 
 ### Verify TCPRoutes
 
@@ -497,9 +466,6 @@ kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-
 # Test HTTP endpoints with Host header
 curl -H "Host: api-keys.$GATEWAY_ADDR" http://$GATEWAY_ADDR/health
 curl -H "Host: api.$GATEWAY_ADDR" http://$GATEWAY_ADDR/health
-
-# Optional Vanity Gateway route, only if the addon is present and enabled
-curl -H "Host: vanity.$GATEWAY_ADDR" http://$GATEWAY_ADDR/health
 
 # Test gRPC endpoint (requires grpcurl)
 grpcurl -plaintext $GATEWAY_ADDR:10081 grpc.health.v1.Health/Check

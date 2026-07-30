@@ -69,6 +69,7 @@ rules:
       - pods
       - configmaps
       - namespaces
+      - secrets
     verbs:
       - get
       - list

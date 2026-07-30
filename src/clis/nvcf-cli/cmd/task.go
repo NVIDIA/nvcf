@@ -54,7 +54,7 @@ Available subcommands:
   cancel          Cancel a queued or running task
   events          Stream lifecycle events for a task
   results         List results emitted by a task
-  update-secrets  Replace user secrets associated with a task
+  update-secrets  Update user secrets associated with a task
 
 Examples:
   # Launch a task from a JSON spec
@@ -176,12 +176,14 @@ var taskResultsCmd = &cobra.Command{
 
 var taskUpdateSecretsCmd = &cobra.Command{
 	Use:          "update-secrets [taskId]",
-	Short:        "Replace user secrets for a task",
+	Short:        "Update user secrets for a task",
 	SilenceUsage: true,
-	Long: `Replace user secrets associated with a task.
+	Long: `Update user secrets associated with a task.
 
-Provide secrets via --secrets KEY=value pairs or via --input-file pointing to a
-JSON file shaped like { "secrets": [{"name": "...", "value": "..."}] }.`,
+Secrets are merged: supplied secrets are added or updated by name, and existing
+secrets not included in the request are preserved. Provide secrets via
+--secrets KEY=value pairs or via --input-file pointing to a JSON file shaped
+like { "secrets": [{"name": "...", "value": "..."}] }.`,
 	Args: cobra.RangeArgs(0, 1),
 	RunE: runTaskUpdateSecrets,
 }

@@ -1,7 +1,7 @@
 .PHONY: test docker-build docker-run update-examples update-config-template validate-config
 
 DOCKER_TAG := $(shell whoami)-dev
-OTEL_BUILDER_VERSION ?= v0.153.0
+OTEL_BUILDER_VERSION ?= v0.157.0
 
 test:
 	find . -name go.mod -execdir go test -v ./... \;

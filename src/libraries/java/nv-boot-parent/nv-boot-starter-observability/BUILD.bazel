@@ -1,5 +1,5 @@
 load("@rules_java//java:defs.bzl", "java_library")
-load("//src/libraries/java/nv-boot-parent/tools/bazel:java.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
+load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
 
 OBSERVABILITY_REQUIRED_DEPS = [
     "@nv_third_party_deps//:ch_qos_logback_logback_classic",
@@ -10,6 +10,7 @@ OBSERVABILITY_REQUIRED_DEPS = [
     "@nv_third_party_deps//:io_micrometer_micrometer_tracing",
     "@nv_third_party_deps//:io_micrometer_micrometer_tracing_bridge_otel",
     "@nv_third_party_deps//:io_opentelemetry_opentelemetry_api",
+    "@nv_third_party_deps//:io_opentelemetry_opentelemetry_exporter_otlp",
     "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_common",
     "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_trace",
     "@nv_third_party_deps//:io_opentelemetry_semconv_opentelemetry_semconv",

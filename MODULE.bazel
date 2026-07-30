@@ -37,9 +37,19 @@ bazel_dep(name = "rules_shell", version = "0.8.0")
 # ============================================================================
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_oci", version = "2.2.7")
+
+# rules_cc backs nvsnap's lib/nvsnap_intercept and lib/nvsnap_restore_helper.
+# Transitively available via rules_oci; declared explicitly so those BUILD files
+# load @rules_cc//cc:defs.bzl against a pinned version.
+bazel_dep(name = "rules_cc", version = "0.2.14")
 bazel_dep(name = "rules_pkg", version = "1.2.0")
 bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
-bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
+
+bazel_dep(
+    name = "hermetic_cc_toolchain",
+    version = "4.1.0",
+    dev_dependency = True,
+)
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
@@ -84,7 +94,10 @@ bazel_dep(name = "rules_go", version = "0.60.0")
 bazel_dep(name = "gazelle", version = "0.48.0")
 
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-go_sdk.download(version = "1.25.0")
+# The Go toolchain version is declared once, in tools/go-toolchain/go.mod, and
+# derived here. Do not put a literal version in this file: it drifted from CI's
+# setup-go and from the bazel-ci image while each was maintained separately.
+go_sdk.from_file(go_mod = "//tools/go-toolchain:go.mod")
 
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_work = "//:go.work.bazel")
@@ -92,17 +105,26 @@ go_deps.from_file(go_work = "//:go.work.bazel")
 # use_repo entries below are auto-managed by `bazel mod tidy`. Re-run after
 # adding new imports in nvcf-cli, src/libraries/go/lib, or
 # src/libraries/go/worker.
-use_repo(go_deps, "cat_dario_mergo", "com_github_aws_aws_sdk_go_v2", "com_github_aws_aws_sdk_go_v2_config", "com_github_aws_aws_sdk_go_v2_credentials", "com_github_aws_smithy_go", "com_github_awslabs_amazon_ecr_credential_helper_ecr_login", "com_github_carlmjohnson_versioninfo", "com_github_cenkalti_backoff_v4", "com_github_charmbracelet_bubbles", "com_github_charmbracelet_bubbletea", "com_github_charmbracelet_lipgloss", "com_github_dustin_go_humanize", "com_github_felixge_httpsnoop", "com_github_fsnotify_fsnotify", "com_github_go_co_op_gocron", "com_github_go_jose_go_jose_v4", "com_github_go_kit_kit", "com_github_go_viper_mapstructure_v2", "com_github_goccy_go_json", "com_github_golang_jwt_jwt_v5", "com_github_google_go_containerregistry", "com_github_google_shlex", "com_github_google_uuid", "com_github_gorilla_mux", "com_github_grpc_ecosystem_go_grpc_middleware", "com_github_grpc_ecosystem_grpc_gateway_v2", "com_github_hashicorp_go_cleanhttp", "com_github_hashicorp_go_retryablehttp", "com_github_hellofresh_health_go_v5", "com_github_jarcoal_httpmock", "com_github_kimmachinegun_automemlimit", "com_github_klauspost_compress", "com_github_madappgang_httplog", "com_github_madappgang_httplog_zap", "com_github_masterminds_semver_v3", "com_github_mattn_go_isatty", "com_github_mitchellh_go_homedir", "com_github_muesli_termenv", "com_github_nats_io_nats_go", "com_github_nats_io_nats_server_v2", "com_github_nats_io_nkeys", "com_github_nvidia_nvcf_src_libraries_go_lib", "com_github_oklog_oklog", "com_github_openzipkin_zipkin_go", "com_github_prometheus_client_golang", "com_github_prometheus_client_model", "com_github_quic_go_quic_go", "com_github_samber_lo", "com_github_senseyeio_duration", "com_github_sirupsen_logrus", "com_github_spf13_cobra", "com_github_spf13_pflag", "com_github_spf13_viper", "com_github_stretchr_testify", "com_github_urfave_cli_v2", "com_github_valyala_bytebufferpool", "com_github_volcengine_volcengine_go_sdk", "in_gopkg_yaml_v3", "in_yaml_go_yaml_v3", "io_k8s_api", "io_k8s_apiextensions_apiserver", "io_k8s_apimachinery", "io_k8s_client_go", "io_k8s_sigs_yaml", "io_opentelemetry_go_contrib_instrumentation_github_com_gorilla_mux_otelmux", "io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc", "io_opentelemetry_go_contrib_instrumentation_host", "io_opentelemetry_go_contrib_instrumentation_net_http_httptrace_otelhttptrace", "io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp", "io_opentelemetry_go_otel", "io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracegrpc", "io_opentelemetry_go_otel_exporters_prometheus", "io_opentelemetry_go_otel_sdk", "io_opentelemetry_go_otel_sdk_metric", "io_opentelemetry_go_otel_trace", "io_opentelemetry_go_proto_otlp", "land_oras_oras_go_v2", "org_golang_google_genproto_googleapis_rpc", "org_golang_google_grpc", "org_golang_google_grpc_cmd_protoc_gen_go_grpc", "org_golang_google_protobuf", "org_golang_x_net", "org_golang_x_oauth2", "org_golang_x_sync", "org_golang_x_term", "org_uber_go_automaxprocs", "org_uber_go_zap")
+use_repo(go_deps, "cat_dario_mergo", "com_github_aws_aws_sdk_go_v2", "com_github_aws_aws_sdk_go_v2_config", "com_github_aws_aws_sdk_go_v2_credentials", "com_github_aws_smithy_go", "com_github_awslabs_amazon_ecr_credential_helper_ecr_login", "com_github_balajinvda_go_criu_v8", "com_github_carlmjohnson_versioninfo", "com_github_cenkalti_backoff_v4", "com_github_charmbracelet_bubbles", "com_github_charmbracelet_bubbletea", "com_github_charmbracelet_lipgloss", "com_github_containerd_containerd", "com_github_dustin_go_humanize", "com_github_felixge_httpsnoop", "com_github_fsnotify_fsnotify", "com_github_go_co_op_gocron", "com_github_go_jose_go_jose_v4", "com_github_go_kit_kit", "com_github_go_viper_mapstructure_v2", "com_github_goccy_go_json", "com_github_golang_jwt_jwt_v5", "com_github_google_go_containerregistry", "com_github_google_shlex", "com_github_google_uuid", "com_github_gorilla_mux", "com_github_gorilla_websocket", "com_github_grpc_ecosystem_go_grpc_middleware", "com_github_grpc_ecosystem_grpc_gateway_v2", "com_github_hashicorp_go_cleanhttp", "com_github_hashicorp_go_retryablehttp", "com_github_hellofresh_health_go_v5", "com_github_jarcoal_httpmock", "com_github_kimmachinegun_automemlimit", "com_github_klauspost_compress", "com_github_madappgang_httplog", "com_github_madappgang_httplog_zap", "com_github_masterminds_semver_v3", "com_github_mattn_go_isatty", "com_github_mitchellh_go_homedir", "com_github_muesli_termenv", "com_github_nats_io_nats_go", "com_github_nats_io_nats_server_v2", "com_github_nats_io_nkeys", "com_github_nvidia_nvcf_src_libraries_go_lib", "com_github_oklog_oklog", "com_github_opencontainers_runtime_spec", "com_github_openzipkin_zipkin_go", "com_github_pierrec_lz4_v4", "com_github_prometheus_client_golang", "com_github_prometheus_client_model", "com_github_quic_go_quic_go", "com_github_samber_lo", "com_github_senseyeio_duration", "com_github_sirupsen_logrus", "com_github_spf13_cobra", "com_github_spf13_pflag", "com_github_spf13_viper", "com_github_stretchr_testify", "com_github_urfave_cli_v2", "com_github_valyala_bytebufferpool", "com_github_vishvananda_netlink", "com_github_vishvananda_netns", "com_github_volcengine_volcengine_go_sdk", "com_google_cloud_go_storage", "in_gopkg_yaml_v3", "in_yaml_go_yaml_v3", "io_k8s_api", "io_k8s_apiextensions_apiserver", "io_k8s_apimachinery", "io_k8s_client_go", "io_k8s_cri_api", "io_k8s_sigs_yaml", "io_opentelemetry_go_contrib_instrumentation_github_com_gorilla_mux_otelmux", "io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc", "io_opentelemetry_go_contrib_instrumentation_host", "io_opentelemetry_go_contrib_instrumentation_net_http_httptrace_otelhttptrace", "io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp", "io_opentelemetry_go_otel", "io_opentelemetry_go_otel_exporters_otlp_otlptrace", "io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracegrpc", "io_opentelemetry_go_otel_exporters_prometheus", "io_opentelemetry_go_otel_sdk", "io_opentelemetry_go_otel_sdk_metric", "io_opentelemetry_go_otel_trace", "io_opentelemetry_go_proto_otlp", "land_oras_oras_go_v2", "org_golang_google_api", "org_golang_google_genproto_googleapis_rpc", "org_golang_google_grpc", "org_golang_google_grpc_cmd_protoc_gen_go_grpc", "org_golang_google_protobuf", "org_golang_x_net", "org_golang_x_oauth2", "org_golang_x_sync", "org_golang_x_sys", "org_golang_x_term", "org_modernc_sqlite", "org_uber_go_automaxprocs", "org_uber_go_zap")
 
 # ============================================================================
 # C++ cross-compilation (multi-arch container builds).
 # Only register the cross toolchain; native arch uses host gcc.
 # ============================================================================
-zig = use_extension("@hermetic_cc_toolchain//toolchain:ext.bzl", "toolchains")
+# The upstream extension only creates zig_sdk for the root module, which makes
+# its use_repo declaration invalid when nvcf is consumed as a dependency. This
+# root-owned adapter keeps the cross toolchain active here and drops the entire
+# usage for external consumers.
+zig = use_extension(
+    "//tools/bazel:root_zig.bzl",
+    "root_zig",
+    dev_dependency = True,
+)
 use_repo(zig, "zig_sdk")
 
 register_toolchains(
     "@zig_sdk//toolchain:linux_arm64_gnu.2.38",
+    dev_dependency = True,
 )
 
 # ============================================================================
@@ -118,8 +140,35 @@ oci.pull(
         "linux/amd64",
     ],
 )
+
+# nvsnap base images. nvsnap runs on GPU hosts and is amd64-only, so these are
+# scoped to linux/amd64 and its image targets are single-arch.
+oci.pull(
+    name = "distroless_static",
+    digest = "sha256:dd7614b5a12bc4d617b223c588b4e0c833402b8f526c11e612b324a956cd2640",
+    image = "gcr.io/distroless/static",
+    platforms = ["linux/amd64"],
+)
+oci.pull(
+    name = "ubuntu_22_04",
+    digest = "sha256:0e5e4a57c2499249aafc3b40fcd541e9a456aab7296681a3994d631587203f97",
+    image = "docker.io/library/ubuntu",
+    platforms = ["linux/amd64"],
+)
+oci.pull(
+    name = "alpine_3_20",
+    digest = "sha256:beefdbd8a1da6d2915566fde36db9db0b524eb737fc57cd1367effd16dc0d06d",
+    image = "docker.io/library/alpine",
+    platforms = ["linux/amd64"],
+)
 use_repo(
     oci,
+    "alpine_3_20",
+    "alpine_3_20_linux_amd64",
+    "distroless_static",
+    "distroless_static_linux_amd64",
+    "ubuntu_22_04",
+    "ubuntu_22_04_linux_amd64",
     "ubuntu_noble",
     "ubuntu_noble_linux_amd64",
     "ubuntu_noble_linux_arm64_v8",
@@ -137,8 +186,26 @@ oci.pull(
     ],
     tag = "21-jre",
 )
+
+# NVIDIA distroless java: the base for Java service images, matching the
+# distroless_go / distroless_cc bases the Go and Rust services use and the base
+# the pre-Bazel nvct-service Dockerfile used (25-jdk-v4.0.8). Publicly
+# pullable, multi-arch. Pinned by digest like the other distroless bases.
+# JDK 25 matches --java_language_version=25 above.
+oci.pull(
+    name = "distroless_java",
+    digest = "sha256:cc9dbc2560e39f6e0a67cd85421370e46fd818b1660800b507b82819a79ea21f",
+    image = "nvcr.io/nvidia/distroless/java",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
 use_repo(
     oci,
+    "distroless_java",
+    "distroless_java_linux_amd64",
+    "distroless_java_linux_arm64_v8",
     "temurin_jre",
     "temurin_jre_linux_amd64",
     "temurin_jre_linux_arm64_v8",
@@ -148,20 +215,95 @@ use_repo(
 # Java / JVM
 #
 # Foundation for Spring Boot (and plain Java) services: Maven dependency
-# resolution via rules_jvm_external, JUnit 5 test support via contrib_rules_jvm,
-# and the nvcf_spring_boot_image macro in //rules/java. A new Java service wires
-# in by adding its Maven coordinates to maven.install below (re-pin with
-# `bazel run @maven//:pin`) and calling the macro from its BUILD.bazel.
+# resolution via rules_jvm_external and JUnit 5 test support via
+# contrib_rules_jvm. A new root-workspace Java target wires in by adding its
+# Maven coordinates to maven.install below and re-pinning with
+# `bazel run @nv_third_party_deps//:pin`.
 #
 # The pinned lock file (//:maven_install.json) makes resolution reproducible and
 # lets `bazel mod` run offline. Repositories intentionally lists only Maven
 # Central so the foundation builds anywhere, including the public GitHub mirror.
-# Internal services that depend on nv-boot add the internal Artifactory virtual
-# repo here; see rules/java/README.md.
+# Onboarded Java components use this root module and dependency hub. Their
+# Maven POMs remain independent coexistence paths.
 # ============================================================================
 bazel_dep(name = "rules_java", version = "9.3.0")
 bazel_dep(name = "rules_jvm_external", version = "7.0")
 bazel_dep(name = "contrib_rules_jvm", version = "0.33.0")
+
+# Spring Boot executable-jar packaging for the Java control-plane services
+# (consumed by //rules/java:spring.bzl). Folded in from the cloud-tasks import.
+bazel_dep(name = "rules_spring", version = "2.6.3")
+
+# gRPC-Java codegen. rules_proto_grpc_java drives the protoc-gen-grpc-java
+# plugin (fetched as native binaries below) to generate Java gRPC stubs for
+# Java services that expose or consume gRPC. protobuf/com_google_protobuf and
+# rules_java are already declared above.
+bazel_dep(name = "rules_proto_grpc", version = "5.8.0")
+bazel_dep(name = "rules_proto_grpc_java", version = "5.8.0")
+
+# The gRPC generator is a native executable, not a Java dependency. Keep it
+# outside the shared Maven hub so fetch_sources applies only to Java artifacts.
+GRPC_VERSION = "1.63.0"
+
+http_file = use_repo_rule(
+    "@bazel_tools//tools/build_defs/repo:http.bzl",
+    "http_file",
+)
+
+http_file(
+    name = "grpc_java_plugin_linux_aarch_64",
+    downloaded_file_path = "protoc-gen-grpc-java.exe",
+    executable = True,
+    sha256 = "471427565ad82b3caac5e19dba2d15fb75b81042503ea32357630312d1f074b4",
+    urls = [
+        "https://maven-central.storage-download.googleapis.com/maven2/io/grpc/protoc-gen-grpc-java/%s/protoc-gen-grpc-java-%s-linux-aarch_64.exe" % (GRPC_VERSION, GRPC_VERSION),
+        "https://repo.maven.apache.org/maven2/io/grpc/protoc-gen-grpc-java/%s/protoc-gen-grpc-java-%s-linux-aarch_64.exe" % (GRPC_VERSION, GRPC_VERSION),
+    ],
+)
+
+http_file(
+    name = "grpc_java_plugin_linux_x86_64",
+    downloaded_file_path = "protoc-gen-grpc-java.exe",
+    executable = True,
+    sha256 = "0e3e8db80ba1fbddeed97ea3220b52cfaa95764ff8bf00716df7322883ce47e8",
+    urls = [
+        "https://maven-central.storage-download.googleapis.com/maven2/io/grpc/protoc-gen-grpc-java/%s/protoc-gen-grpc-java-%s-linux-x86_64.exe" % (GRPC_VERSION, GRPC_VERSION),
+        "https://repo.maven.apache.org/maven2/io/grpc/protoc-gen-grpc-java/%s/protoc-gen-grpc-java-%s-linux-x86_64.exe" % (GRPC_VERSION, GRPC_VERSION),
+    ],
+)
+
+http_file(
+    name = "grpc_java_plugin_osx_aarch_64",
+    downloaded_file_path = "protoc-gen-grpc-java.exe",
+    executable = True,
+    sha256 = "28290117a2ee9ea60f50f94273ab139dc2b3be4b8f2a557bef7e6efefee5b363",
+    urls = [
+        "https://maven-central.storage-download.googleapis.com/maven2/io/grpc/protoc-gen-grpc-java/%s/protoc-gen-grpc-java-%s-osx-aarch_64.exe" % (GRPC_VERSION, GRPC_VERSION),
+        "https://repo.maven.apache.org/maven2/io/grpc/protoc-gen-grpc-java/%s/protoc-gen-grpc-java-%s-osx-aarch_64.exe" % (GRPC_VERSION, GRPC_VERSION),
+    ],
+)
+
+http_file(
+    name = "grpc_java_plugin_osx_x86_64",
+    downloaded_file_path = "protoc-gen-grpc-java.exe",
+    executable = True,
+    sha256 = "28290117a2ee9ea60f50f94273ab139dc2b3be4b8f2a557bef7e6efefee5b363",
+    urls = [
+        "https://maven-central.storage-download.googleapis.com/maven2/io/grpc/protoc-gen-grpc-java/%s/protoc-gen-grpc-java-%s-osx-x86_64.exe" % (GRPC_VERSION, GRPC_VERSION),
+        "https://repo.maven.apache.org/maven2/io/grpc/protoc-gen-grpc-java/%s/protoc-gen-grpc-java-%s-osx-x86_64.exe" % (GRPC_VERSION, GRPC_VERSION),
+    ],
+)
+
+http_file(
+    name = "grpc_java_plugin_windows_x86_64",
+    downloaded_file_path = "protoc-gen-grpc-java.exe",
+    executable = True,
+    sha256 = "c3e9aaefd825a6ea9a252e153e0998d7ef36a7b27c2156867a98c71edf9c18a1",
+    urls = [
+        "https://maven-central.storage-download.googleapis.com/maven2/io/grpc/protoc-gen-grpc-java/%s/protoc-gen-grpc-java-%s-windows-x86_64.exe" % (GRPC_VERSION, GRPC_VERSION),
+        "https://repo.maven.apache.org/maven2/io/grpc/protoc-gen-grpc-java/%s/protoc-gen-grpc-java-%s-windows-x86_64.exe" % (GRPC_VERSION, GRPC_VERSION),
+    ],
+)
 
 maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
 maven.install(
@@ -173,7 +315,10 @@ maven.install(
         "at.yawk.lz4:lz4-java:1.10.3",
         "com.github.ben-manes.caffeine:guava",
         "com.github.java-json-tools:json-patch:1.13",
+        "com.jayway.jsonpath:json-path",
         "commons-codec:commons-codec",
+        # nv-boot-parent overrides the Spring Boot BOM's lower version.
+        "commons-logging:commons-logging:1.4.0",
         "io.cloudevents:cloudevents-core:4.1.1",
         "io.cloudevents:cloudevents-json-jackson:4.1.1",
         "io.micrometer:micrometer-tracing-bridge-otel",
@@ -182,7 +327,16 @@ maven.install(
         "io.opentelemetry:opentelemetry-sdk-testing",
         "jakarta.servlet:jakarta.servlet-api",
         "org.apache.cassandra:java-driver-metrics-micrometer",
+        "org.apache.commons:commons-collections4:4.5.0",
         "org.apache.commons:commons-lang3:3.20.0",
+        "org.apache.commons:commons-pool2",
+        # CVE override: Spring Boot 4.0.7 manages Tomcat 11.0.22. Bazel does
+        # not read Maven's tomcat.version property, so keep the shipped Tomcat
+        # family aligned here until Spring Boot manages the fixed version.
+        "org.apache.tomcat.embed:tomcat-embed-core:11.0.24",
+        "org.apache.tomcat.embed:tomcat-embed-el:11.0.24",
+        "org.apache.tomcat.embed:tomcat-embed-websocket:11.0.24",
+        "org.apache.tomcat:tomcat-annotations-api:11.0.24",
         "org.bouncycastle:bcprov-jdk18on:1.84",
         "org.jacoco:org.jacoco.agent:jar:runtime:0.8.14",
         "org.jacoco:org.jacoco.cli:0.8.14",
@@ -194,6 +348,8 @@ maven.install(
         "org.springdoc:springdoc-openapi-starter-webmvc-api:3.0.3",
         "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry",
         "org.springframework.boot:spring-boot-restclient",
+        # Spring Boot's Maven repackage goal injects this into executable jars.
+        "org.springframework.boot:spring-boot-jarmode-tools",
         "org.springframework.boot:spring-boot-starter",
         "org.springframework.boot:spring-boot-starter-actuator",
         "org.springframework.boot:spring-boot-starter-actuator-test",
@@ -218,12 +374,52 @@ maven.install(
         "org.wiremock:wiremock-standalone:3.13.2",
         "software.amazon.awssdk:regions:2.40.1",
         "tools.jackson.module:jackson-module-blackbird",
-        # examples/java-spring-boot-service (versions from the Spring Boot BOM).
+        # General Java test/web roots (versions from the Spring Boot BOM).
         "org.springframework.boot:spring-boot-starter-web",
         "org.junit.jupiter:junit-jupiter-api",
         "org.junit.jupiter:junit-jupiter-engine",
         "org.junit.platform:junit-platform-launcher",
         "org.junit.platform:junit-platform-reporting",
+        # Cloud Tasks service closure. Version-less coordinates are managed by
+        # the BOMs above (spring-boot 4.0.7 / spring-cloud 2025.1.2 /
+        # testcontainers 2.0.5 / shedlock 7.7.0). Explicit versions match the
+        # validated Cloud Tasks baseline; io.grpc pins track GRPC_VERSION.
+        "com.bucket4j:bucket4j_jdk17-core:8.19.0",
+        "com.github.ben-manes.caffeine:caffeine",
+        "com.google.protobuf:protobuf-java:4.33.4",
+        "com.google.protobuf:protobuf-java-util:4.33.4",
+        "io.grpc:grpc-api:%s" % GRPC_VERSION,
+        "io.grpc:grpc-protobuf:%s" % GRPC_VERSION,
+        "io.grpc:grpc-stub:%s" % GRPC_VERSION,
+        "io.micrometer:micrometer-registry-prometheus",
+        "io.projectreactor.netty:reactor-netty-core",
+        "io.projectreactor.netty:reactor-netty-http",
+        "javax.annotation:javax.annotation-api:1.3.2",
+        "net.devh:grpc-server-spring-boot-starter:3.1.0.RELEASE",
+        "net.javacrumbs.shedlock:shedlock-provider-cassandra",
+        "net.javacrumbs.shedlock:shedlock-spring",
+        "org.assertj:assertj-core",
+        "org.awaitility:awaitility",
+        "org.junit.jupiter:junit-jupiter-params",
+        "org.mockito:mockito-core",
+        "org.mockito:mockito-junit-jupiter",
+        "org.ow2.asm:asm:9.9",
+        "org.ow2.asm:asm-commons:9.9",
+        "org.ow2.asm:asm-tree:9.9",
+        "org.springframework:spring-context-support",
+        "org.springframework:spring-webflux",
+        "org.springframework.boot:spring-boot-actuator",
+        "org.springframework.boot:spring-boot-loader",
+        "org.springframework.boot:spring-boot-micrometer-metrics",
+        "org.springframework.boot:spring-boot-micrometer-tracing",
+        "org.springframework.boot:spring-boot-opentelemetry",
+        "org.springframework.boot:spring-boot-starter-aspectj",
+        "org.springframework.boot:spring-boot-starter-security",
+        "org.springframework.boot:spring-boot-starter-webmvc",
+        "org.springframework.cloud:spring-cloud-starter-kubernetes-client-config",
+        "org.springframework.retry:spring-retry",
+        "org.testcontainers:testcontainers",
+        "org.testcontainers:testcontainers-localstack",
     ],
     boms = [
         "net.javacrumbs.shedlock:shedlock-bom:7.7.0",
@@ -231,9 +427,16 @@ maven.install(
         "org.springframework.cloud:spring-cloud-dependencies:2025.1.2",
         "org.testcontainers:testcontainers-bom:2.0.5",
     ],
+    # Spring Framework 7 embeds the AOP Alliance API in spring-aop. Maven's
+    # executable jar therefore omits the legacy standalone jar; excluding it
+    # here avoids duplicate org.aopalliance classes in Bazel applications.
+    excluded_artifacts = ["aopalliance:aopalliance"],
     fail_on_missing_checksum = True,
     fetch_sources = True,
-    known_contributing_modules = ["protobuf"],
+    known_contributing_modules = [
+        "protobuf",
+        "rules_proto_grpc_java",
+    ],
     lock_file = "//:maven_install.json",
     repositories = [
         # Public Central mirrors only. This is the public GitHub mirror; its

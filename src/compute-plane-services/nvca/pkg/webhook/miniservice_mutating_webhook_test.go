@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
@@ -32,6 +33,7 @@ import (
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
@@ -40,6 +42,7 @@ import (
 	nvcfdra "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/dra"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures/sharedcluster"
 	cmnnvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
@@ -547,13 +550,25 @@ func TestMiniserviceOperatorWebhook_PodSpecCreateThenUpdate_IsIdempotentOrderPre
 					{
 						MatchExpressions: []corev1.NodeSelectorRequirement{
 							{Key: "baz", Operator: corev1.NodeSelectorOpIn, Values: []string{"buf"}},
+							{
+								Key:      "nvca.nvcf.nvidia.io/instance-type",
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{"ON-PREM.GPU.A100"},
+							},
 						},
 					},
 					{
-						MatchExpressions: []corev1.NodeSelectorRequirement{{
-							Key:      nvcfdra.GPUCliqueNodeLabel,
-							Operator: corev1.NodeSelectorOpExists,
-						}},
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{
+								Key:      nvcfdra.GPUCliqueNodeLabel,
+								Operator: corev1.NodeSelectorOpExists,
+							},
+							{
+								Key:      "nvca.nvcf.nvidia.io/instance-type",
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{"ON-PREM.GPU.A100"},
+							},
+						},
 					},
 				},
 			},
@@ -1012,6 +1027,188 @@ func TestMiniserviceMutatePodSpec_ServiceAccountName(t *testing.T) {
 	}
 }
 
+func TestMiniserviceMutatePodSpec_NodeAffinityWithPodAffinityWebhook(t *testing.T) {
+	const (
+		instanceTypeKey   = "nvca.nvcf.nvidia.io/instance-type"
+		instanceTypeValue = "ON-PREM.GPU.A100"
+	)
+
+	meta := nvcatypes.MiniserviceMetadata{
+		NodeAffinityKey:   instanceTypeKey,
+		NodeAffinityValue: instanceTypeValue,
+	}
+	sharedClusterOn := &atomic.Bool{}
+	sharedClusterOn.Store(true)
+	podWebhook := &podAffinityWebhook{PodAffinityOptions: PodAffinityOptions{
+		SharedClusterOn:       sharedClusterOn,
+		UniformInstanceLabels: true,
+	}}
+	presetInstanceTypeAffinity := func() *corev1.Affinity {
+		return &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+						MatchExpressions: []corev1.NodeSelectorRequirement{{
+							Key:      instanceTypeKey,
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{"ON-PREM.GPU.H100"},
+						}},
+					}},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name              string
+		podSpec           corev1.PodSpec
+		miniserviceFirst  bool
+		wantInstanceType  bool
+		wantCPUPreference bool
+	}{
+		{
+			name: "GPU pod, miniservice webhook first",
+			podSpec: corev1.PodSpec{Containers: []corev1.Container{{
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+					corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+				}},
+			}}},
+			miniserviceFirst: true,
+			wantInstanceType: true,
+		},
+		{
+			name: "GPU pod, pod affinity webhook first",
+			podSpec: corev1.PodSpec{Containers: []corev1.Container{{
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+					corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+				}},
+			}}},
+			wantInstanceType: true,
+		},
+		{
+			name: "GPU pod with preset instance type affinity, miniservice webhook first",
+			podSpec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+						corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+					}},
+				}},
+				Affinity: presetInstanceTypeAffinity(),
+			},
+			miniserviceFirst: true,
+			wantInstanceType: true,
+		},
+		{
+			name: "GPU pod with preset instance type affinity, pod affinity webhook first",
+			podSpec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+						corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+					}},
+				}},
+				Affinity: presetInstanceTypeAffinity(),
+			},
+			wantInstanceType: true,
+		},
+		{
+			name:              "CPU pod, miniservice webhook first",
+			podSpec:           corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+			miniserviceFirst:  true,
+			wantCPUPreference: true,
+		},
+		{
+			name:              "CPU pod, pod affinity webhook first",
+			podSpec:           corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+			wantCPUPreference: true,
+		},
+		{
+			name: "CPU pod with preset instance type affinity, miniservice webhook first",
+			podSpec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "app"}},
+				Affinity:   presetInstanceTypeAffinity(),
+			},
+			miniserviceFirst:  true,
+			wantCPUPreference: true,
+		},
+		{
+			name: "CPU pod with preset instance type affinity, pod affinity webhook first",
+			podSpec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "app"}},
+				Affinity:   presetInstanceTypeAffinity(),
+			},
+			wantCPUPreference: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wh := &miniserviceMutatingWebhook{fff: &featureflagmock.Fetcher{
+				EnabledFFs: []*featureflag.FeatureFlag{featureflag.HelmAllowCPUNodes},
+			}}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "workload", Namespace: testNamespace},
+				Spec:       *tt.podSpec.DeepCopy(),
+			}
+
+			applyWebhooks := func() {
+				if tt.miniserviceFirst {
+					wh.mutatePodSpec(&pod.Spec, meta)
+					require.NoError(t, podWebhook.Default(t.Context(), pod))
+				} else {
+					require.NoError(t, podWebhook.Default(t.Context(), pod))
+					wh.mutatePodSpec(&pod.Spec, meta)
+				}
+			}
+
+			applyWebhooks()
+			afterFirstPass := pod.Spec.DeepCopy()
+			applyWebhooks()
+			assert.Equal(t, afterFirstPass, &pod.Spec, "webhook mutations must be idempotent")
+
+			require.NotNil(t, pod.Spec.Affinity)
+			require.NotNil(t, pod.Spec.Affinity.NodeAffinity)
+			required := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+			require.NotNil(t, required)
+			require.Len(t, required.NodeSelectorTerms, 1)
+
+			var instanceTypeRequirements, sharedClusterRequirements int
+			for _, expr := range required.NodeSelectorTerms[0].MatchExpressions {
+				switch expr.Key {
+				case instanceTypeKey:
+					instanceTypeRequirements++
+					assert.Equal(t, corev1.NodeSelectorOpIn, expr.Operator)
+					assert.Equal(t, []string{instanceTypeValue}, expr.Values)
+				case sharedcluster.ScheduleLabelKey:
+					sharedClusterRequirements++
+					assert.Equal(t, corev1.NodeSelectorOpIn, expr.Operator)
+					assert.Equal(t, []string{"true"}, expr.Values)
+				}
+			}
+			if tt.wantInstanceType {
+				assert.Equal(t, 1, instanceTypeRequirements)
+			} else {
+				assert.Zero(t, instanceTypeRequirements)
+			}
+			assert.Equal(t, 1, sharedClusterRequirements)
+
+			var cpuPreferences int
+			for _, term := range pod.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
+				for _, expr := range term.Preference.MatchExpressions {
+					if term.Weight == 100 && expr.Key == instanceTypeKey &&
+						expr.Operator == corev1.NodeSelectorOpDoesNotExist {
+						cpuPreferences++
+					}
+				}
+			}
+			if tt.wantCPUPreference {
+				assert.Equal(t, 1, cpuPreferences)
+			} else {
+				assert.Zero(t, cpuPreferences)
+			}
+		})
+	}
+}
+
 // ─── mutatePodSpec BYOObservability tests ─────────────────────────────────────
 
 func TestMiniserviceMutatePodSpec_BYOObservability(t *testing.T) {
@@ -1192,9 +1389,11 @@ func TestMiniserviceMutatePodSpec_BYOOOTelCollectorEnvVarsOnlyCollector(t *testi
 			{Name: "SHARED_ENV", Value: "shared"},
 		},
 		OTelCollectorEnvVars: []corev1.EnvVar{
-			{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "983040"},
-			{Name: nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv, Value: "1000000"},
+			{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
+			{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
+			{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 			{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
+			{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
 		},
 	}
 	ps := corev1.PodSpec{
@@ -1204,7 +1403,7 @@ func TestMiniserviceMutatePodSpec_BYOOOTelCollectorEnvVarsOnlyCollector(t *testi
 			{
 				Name: common.ByooOTelCollectorPodNameBase,
 				Env: []corev1.EnvVar{
-					{Name: nvcaconfig.BYOOLogChunkMaxBodyBytesEnv, Value: "1000000"},
+					{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "1000000"},
 				},
 			},
 		},
@@ -1219,13 +1418,21 @@ func TestMiniserviceMutatePodSpec_BYOOOTelCollectorEnvVarsOnlyCollector(t *testi
 	assert.Equal(t, "shared", initByName["SHARED_ENV"])
 	assert.Equal(t, "shared", appByName["SHARED_ENV"])
 	assert.Equal(t, "shared", collectorByName["SHARED_ENV"])
-	assert.NotContains(t, initByName, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
-	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkMaxBodyBytesEnv)
+	assert.NotContains(t, initByName, nvcaconfig.BYOOLogChunkingEnabledEnv)
+	assert.NotContains(t, initByName, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
+	assert.NotContains(t, initByName, nvcaconfig.BYOODebugModeEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkingEnabledEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
 	assert.NotContains(t, initByName, nvcaconfig.BYOOMetricSubsetEnabledEnv)
 	assert.NotContains(t, appByName, nvcaconfig.BYOOMetricSubsetEnabledEnv)
-	assert.Equal(t, "983040", collectorByName[nvcaconfig.BYOOLogChunkMaxBodyBytesEnv])
-	assert.Equal(t, "1000000", collectorByName[nvcaconfig.BYOOLogExporterBatchMaxSizeBytesEnv])
+	assert.NotContains(t, initByName, nvcaconfig.BYOOOTelCollectorConfigEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOOTelCollectorConfigEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOODebugModeEnv)
+	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOOLogChunkingEnabledEnv])
+	assert.Equal(t, "983040", collectorByName[nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv])
+	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOODebugModeEnv])
 	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOOMetricSubsetEnabledEnv])
+	assert.Equal(t, "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19", collectorByName[nvcaconfig.BYOOOTelCollectorConfigEnv])
 }
 
 func envNames(envs []corev1.EnvVar) []string {

@@ -10,11 +10,11 @@ LLM function pods.
 | --- | --- | --- | --- |
 | LLM API Gateway | `llm-api-gateway:9464/metrics` | `llm-api-gateway` | `llm_api_gateway_` |
 | Rate limit sync worker | `:9464/metrics` when deployed with `METRICS_PORT=9464` | `llm-api-gateway-rate-limit-sync-worker` | `llm_api_gateway_` |
-| LLM Request Router | `llm-request-router:9090/metrics` | `llm-request-router` | `llm_request_router_` |
+| LLM Request Router | `llm-request-router:9090/metrics` | `stargate` | `stargate_` |
 | Stargate client sidecar | `:9089/metrics` by default | `stargate-client` | `stargate_client_` |
 
-The request-router chart passes `--metrics-prefix=llm_request_router_`.
-Upstream Stargate still defaults to `stargate_` when run outside the NVCF chart.
+The request-router chart passes `--metrics-port` and uses Stargate's default
+metric prefix and trace service name.
 
 ## LLM API Gateway
 
@@ -50,16 +50,19 @@ synchronizer and Pub/Sub metrics under the worker service name.
 
 | Metric | Labels |
 | --- | --- |
-| `llm_request_router_requests_total` | `routing_key`, `model`, `inference_server_id`, `status` |
-| `llm_request_router_proxy_attempts_total` | `routing_key`, `model`, `inference_server_id`, `result` |
-| `llm_request_router_proxy_retries_total` | `routing_key`, `model`, `reason` |
-| `llm_request_router_proxy_retry_exhausted_total` | `routing_key`, `model`, `reason` |
-| `llm_request_router_quic_connection_evictions_total` | `inference_server_id`, `reason` |
-| `llm_request_router_quic_hot_path_reconnect_total` | `inference_server_id`, `result` |
-| `llm_request_router_proxy_replay_buffer_bytes` | `model` |
-| `llm_request_router_proxy_duration_seconds` | `routing_key`, `model`, `inference_server_id` |
-| `llm_request_router_routing_duration_seconds` | `routing_key`, `model` |
-| `llm_request_router_active_inference_servers` | `routing_key`, `model` |
+| `stargate_requests_total` | `routing_key`, `model`, `inference_server_id`, `status` |
+| `stargate_proxy_attempts_total` | `routing_key`, `model`, `inference_server_id`, `result` |
+| `stargate_proxy_retries_total` | `routing_key`, `model`, `reason` |
+| `stargate_routing_selections_total` | `routing_key`, `model`, `algorithm`, `selection` |
+| `stargate_routing_kv_free_token_fallback_selections_total` | `routing_key`, `model`, `algorithm` |
+| `stargate_proxy_retry_exhausted_total` | `routing_key`, `model`, `reason` |
+| `stargate_admission_rejections_total` | `routing_key`, `model`, `reason` |
+| `stargate_quic_connection_evictions_total` | `inference_server_id`, `reason` |
+| `stargate_quic_hot_path_reconnect_total` | `inference_server_id`, `result` |
+| `stargate_proxy_replay_buffer_bytes` | `model` |
+| `stargate_proxy_duration_seconds` | `routing_key`, `model`, `inference_server_id` |
+| `stargate_routing_duration_seconds` | `routing_key`, `model` |
+| `stargate_active_inference_servers` | `routing_key`, `model` |
 
 ## Stargate Client Sidecar
 

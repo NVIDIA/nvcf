@@ -274,7 +274,7 @@ Or use the `--debug` flag or `NVCF_DEBUG=true` environment variable per-command.
 ```
 
 <Note>
-For immediate testing, you can use `load_tester_supreme` from `nvcf-onprem` (see [self-hosted-artifact-manifest](./manifest.md)), which supports the `{"message": "hello world"}` request body above. For more function samples, see the [nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers) repository and [function-creation](./function-creation.md) for function creation documentation.
+For immediate testing, you can use `load_tester_supreme` from `nvcf-onprem` (see [self-hosted-artifact-manifest](./manifest.md)), which supports the `{"message": "hello world"}` request body above. For more function samples, see the [NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples) repository and [function-creation](./function-creation.md) for function creation documentation.
 
 </Note>
 

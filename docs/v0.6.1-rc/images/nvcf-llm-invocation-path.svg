@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="460" viewBox="0 0 1280 460" role="img" aria-labelledby="title desc">
+  <title id="title">NVCF LLM invocation path</title>
+  <desc id="desc">Client traffic flows through an optional Vanity or custom edge, the public LLM/HTTP invocation endpoint, LLM API Gateway, LLM Request Router, the LLM worker sidecar, and the customer inference container.</desc>
+  <defs>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --svg-bg: #f7f9f7;
+        --svg-panel: #ffffff;
+        --svg-panel-muted: #eef3ef;
+        --svg-border: #c8d0d6;
+        --svg-text: #1f2520;
+        --svg-muted: #53605a;
+        --svg-line: #53605a;
+        --nvidia-green: #76b900;
+        --svg-blue: #1565c0;
+        --svg-red: #c62828;
+        --svg-amber: #f9a825;
+        --svg-icon-on-accent: #ffffff;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --svg-bg: #101512;
+          --svg-panel: #18201b;
+          --svg-panel-muted: #202a24;
+          --svg-border: #50605a;
+          --svg-text: #f3f7f2;
+          --svg-muted: #b9c8b7;
+          --svg-line: #cbd8c9;
+          --nvidia-green: #8bd80f;
+          --svg-blue: #6eb6ff;
+          --svg-red: #ff8a80;
+          --svg-amber: #ffd166;
+        }
+      }
+
+      .bg { fill: var(--svg-bg); }
+      .panel { fill: var(--svg-panel); stroke: var(--svg-border); stroke-width: 2; }
+      .panel-muted { fill: var(--svg-panel-muted); stroke: var(--svg-border); stroke-width: 2; }
+      .optional { fill: var(--svg-panel); stroke: var(--svg-amber); stroke-width: 2; stroke-dasharray: 8 6; }
+      .service { fill: var(--svg-panel); stroke: var(--nvidia-green); stroke-width: 3; }
+      .compute { fill: var(--svg-panel-muted); stroke: var(--svg-blue); stroke-width: 2; }
+      .title { fill: var(--svg-text); font: 700 26px Arial, sans-serif; }
+      .label { fill: var(--svg-text); font: 700 17px Arial, sans-serif; }
+      .small { fill: var(--svg-muted); font: 14px Arial, sans-serif; }
+      .line { stroke: var(--svg-line); stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .line-muted { stroke: var(--svg-muted); stroke-width: 2; fill: none; stroke-dasharray: 7 5; marker-end: url(#arrow-muted); }
+      .line-green-muted { stroke: var(--nvidia-green); stroke-width: 2; fill: none; stroke-dasharray: 7 5; marker-end: url(#arrow-green); }
+      .arrowhead { fill: var(--svg-line); }
+      .arrowhead-muted { fill: var(--svg-muted); }
+      .arrowhead-green { fill: var(--nvidia-green); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead-muted" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead-green" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="460" rx="0" />
+  <text class="title" x="48" y="48">LLM Invocation Path</text>
+  <text class="small" x="48" y="78">OpenAI-compatible traffic is handled by the LLM-specific invocation path.</text>
+
+  <rect class="panel" x="40" y="155" width="140" height="88" rx="8" />
+  <text class="label" x="110" y="192" text-anchor="middle">Client</text>
+  <text class="small" x="110" y="218" text-anchor="middle">OpenAI API</text>
+
+  <rect class="optional" x="220" y="155" width="168" height="88" rx="8" />
+  <text class="label" x="304" y="185" text-anchor="middle">Optional Vanity</text>
+  <text class="small" x="304" y="211" text-anchor="middle">or custom edge</text>
+  <text class="small" x="304" y="232" text-anchor="middle">front door</text>
+
+  <rect class="panel-muted" x="428" y="155" width="188" height="88" rx="8" />
+  <text class="label" x="522" y="185" text-anchor="middle">Public LLM/HTTP</text>
+  <text class="small" x="522" y="211" text-anchor="middle">invocation endpoint</text>
+  <text class="small" x="522" y="232" text-anchor="middle">llm.invocation.&lt;domain&gt;</text>
+
+  <rect class="service" x="656" y="145" width="196" height="108" rx="8" />
+  <text class="label" x="754" y="177" text-anchor="middle">LLM API Gateway</text>
+  <text class="small" x="754" y="204" text-anchor="middle">auth, model routing</text>
+  <text class="small" x="754" y="226" text-anchor="middle">request validation</text>
+
+  <rect class="service" x="900" y="155" width="190" height="88" rx="8" />
+  <text class="label" x="995" y="185" text-anchor="middle">LLM Request</text>
+  <text class="label" x="995" y="207" text-anchor="middle">Router</text>
+  <text class="small" x="995" y="232" text-anchor="middle">backend selection</text>
+
+  <rect class="compute" x="735" y="320" width="224" height="88" rx="8" />
+  <text class="label" x="847" y="351" text-anchor="middle">LLM Worker Gateway</text>
+  <text class="small" x="847" y="377" text-anchor="middle">pylon sidecar</text>
+
+  <rect class="compute" x="1010" y="320" width="218" height="88" rx="8" />
+  <text class="label" x="1119" y="351" text-anchor="middle">Customer Inference</text>
+  <text class="label" x="1119" y="373" text-anchor="middle">Container</text>
+  <text class="small" x="1119" y="398" text-anchor="middle">/v1/... model routes</text>
+
+  <rect class="panel-muted" x="520" y="320" width="168" height="88" rx="8" />
+  <text class="label" x="604" y="351" text-anchor="middle">NVCF API</text>
+  <text class="small" x="604" y="377" text-anchor="middle">LLM auth policy</text>
+
+  <line class="line" x1="180" y1="199" x2="220" y2="199" />
+  <line class="line" x1="388" y1="199" x2="428" y2="199" />
+  <line class="line" x1="616" y1="199" x2="656" y2="199" />
+  <line class="line" x1="852" y1="199" x2="900" y2="199" />
+  <path class="line" d="M 995 243 L 995 280 L 847 280 L 847 320" />
+  <line class="line" x1="959" y1="364" x2="1010" y2="364" />
+  <path class="line-green-muted" d="M 730 253 L 690 292 L 646 320" />
+</svg>

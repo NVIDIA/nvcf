@@ -366,6 +366,7 @@ When you deploy the control plane via helmfile, the `nvcf-gateway-routes` chart 
 - `HTTPRoutes` for API Keys, NVCF API, and Invocation services
 - Optional LLM invocation HTTPRoute when the `llmInvocation` route is enabled
 - Optional Vanity Gateway HTTPRoute only when the stack package includes the addon and the `vanityGateway` route is enabled
+- Optional NVCF UI HTTPRoute only when the stack package includes the addon and the `nvcfUi` route is enabled
 - `TCPRoute` for gRPC
 - Optional `TCPRoute` for split or multi-cluster gRPC invocation when the
   `grpcWorker` route is enabled
@@ -383,6 +384,7 @@ These routes attach to the Gateway you prepared in [Gateway quickstart](./gatewa
 | Invocation | `invocation.<domain>`, `*.invocation.<domain>` | 80 | Function invocation (wildcard for dynamic routing) |
 | LLM Invocation | `llm.invocation.<domain>` | 80 | OpenAI-compatible LLM invocation routes such as `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings` |
 | Vanity Gateway | `vanity.<domain>` | 80 | Optional vanity host/path routing to `vanity-gateway.nvcf:8080`, only in stack packages that include the addon |
+| NVCF UI | `nvcf-ui.<domain>` | 80 | Optional nvcf-ui host/path routing to `nvcf-ui.nvcf-ui:8300`, only in stack packages that include the addon |
 | gRPC | N/A (TCP routing, no hostname matching) | 10081 | gRPC function invocations |
 | gRPC worker callback | N/A (TCP routing, no hostname matching) | 10086 | HTTP/1 CONNECT callback from workers to grpc-proxy when the beta `grpcWorker` route is enabled |
 | NATS | N/A (TCP routing, no hostname matching) | 4222 | NVCA messaging when the NATS route is enabled |
@@ -428,6 +430,33 @@ host and path mappings required by your deployment. If you need custom vanity
 hostnames instead of `vanity.<domain>`, configure the route hostname overrides
 supported by your stack package, then create matching DNS records for those
 hosts.
+
+### NVCF UI (Optional)
+
+NVCF UI is optional and disabled by default. It is available only in
+stack packages that include the NVCF UI addon. If your extracted stack
+package does not contain a `nvcf-ui` release and `nvcfUi` route
+values, skip this section until you use a stack package that includes them.
+
+Enable it only when you need a customer-facing NVCF admin-panel UI.
+
+<Warning>
+The NVCF UI admin panel is currently unauthenticated. Do not expose it to the
+public internet. Restrict access to a trusted network, VPN, or an
+authenticating proxy in front of the `nvcf-ui` route.
+</Warning>
+
+In stack packages that include the addon, set the value shape in your
+environment file:
+
+```yaml
+addons:
+  nvcfUi:
+    enabled: true
+```
+
+By default, the route host is `nvcf-ui.<domain>` and the backend is
+`nvcf-ui.nvcf-ui:8300`.
 
 ### How Routing Works
 

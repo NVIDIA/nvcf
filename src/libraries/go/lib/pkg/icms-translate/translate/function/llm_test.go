@@ -272,9 +272,11 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 			instanceID: "inst-vol",
 			isHelm:     false,
 			validate: func(t *testing.T, c corev1.Container) {
-				require.Len(t, c.VolumeMounts, 1)
+				require.Len(t, c.VolumeMounts, 2)
 				assert.Equal(t, "llm", c.VolumeMounts[0].Name)
 				assert.Equal(t, "/var/run/llm", c.VolumeMounts[0].MountPath)
+				assert.Equal(t, "config-data", c.VolumeMounts[1].Name)
+				assert.Equal(t, ConfigDirPath, c.VolumeMounts[1].MountPath)
 			},
 		},
 		{
@@ -394,9 +396,11 @@ func TestNewLLMCredentialManagerContainer(t *testing.T) {
 			allEnvSet: map[string]string{},
 			tcfg:      TranslateConfig{},
 			validate: func(t *testing.T, c corev1.Container) {
-				require.Len(t, c.VolumeMounts, 1)
+				require.Len(t, c.VolumeMounts, 2)
 				assert.Equal(t, "llm", c.VolumeMounts[0].Name)
 				assert.Equal(t, "/var/run/llm", c.VolumeMounts[0].MountPath)
+				assert.Equal(t, "config-data", c.VolumeMounts[1].Name)
+				assert.Equal(t, ConfigDirPath, c.VolumeMounts[1].MountPath)
 			},
 		},
 	}

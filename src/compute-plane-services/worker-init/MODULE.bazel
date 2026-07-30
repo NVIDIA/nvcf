@@ -72,7 +72,6 @@ go_deps.gazelle_override(
     directives = ["gazelle:proto disable_global"],
     path = "github.com/NVIDIA/nvcf/src/libraries/go/lib",
 )
-
 go_deps.gazelle_override(
     build_file_generation = "clean",
     directives = ["gazelle:proto disable_global"],
@@ -98,20 +97,29 @@ use_repo(
     "com_github_samber_lo",
     "com_github_spf13_cobra",
     "com_github_spf13_pflag",
+    "com_github_stretchr_testify",
     "com_github_testcontainers_testcontainers_go",
     "com_github_testcontainers_testcontainers_go_modules_localstack",
     "io_opentelemetry_go_otel",
     "io_opentelemetry_go_otel_trace",
+    "org_golang_google_grpc",
+    "org_golang_google_protobuf",
     "org_golang_x_sync",
     "org_uber_go_zap",
 )
 
 # ============================================================================
-# Prebuilt protoc. Bazel 9 ships with protobuf >= 33.4 which bundles
-# prebuilt protoc binaries. toolchains_protoc is archived and no longer
-# needed. Just enable the flag to use prebuilt protoc instead of
-# compiling from source.
+# Prebuilt protoc toolchain. Keep this aligned with the umbrella module so
+# standalone worker-init image tests do not compile protoc from source.
 # ============================================================================
+bazel_dep(name = "toolchains_protoc", version = "0.6.1")
+bazel_dep(name = "protobuf", version = "33.4", repo_name = "com_google_protobuf")
+
+protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
+protoc.toolchain(
+    google_protobuf = "com_google_protobuf",
+    version = "v33.0",
+)
 
 # ============================================================================
 # C++ cross-compilation (multi-arch container builds).

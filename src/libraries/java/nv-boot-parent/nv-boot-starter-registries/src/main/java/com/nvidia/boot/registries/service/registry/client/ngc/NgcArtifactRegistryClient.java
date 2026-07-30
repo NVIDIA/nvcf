@@ -64,8 +64,7 @@ public class NgcArtifactRegistryClient {
             "Null response from getting token from registry %s";
     private static final int PAGE_SIZE = 100;
     private static final long OAUTH_TTL_IN_SECONDS = 900;  // 15 minutes
-    // The Regex is inspired from NGC helm service implementation
-    // https://gitlab-master.nvidia.com/ngc/cloud/helmchart-registry/-/blob/main/internal/proxy/helm_registry_proxy.go?ref_type=heads#L75
+    // The Regex is inspired from the NGC helm service implementation.
     private static final String NGC_HELM_CHART_VERSION_URL_REGEX =
             "^(?:/api)?/(?<namespace>[^/]+(?:/[^/]+)?)/charts/(?<chartName>[a-zA-Z0-9-_]+)-(?<version>v?\\d+(\\.\\d+){0,2}([-+][\\w.+-]+)?)\\.tgz(?:\\.prov)?$";
     private static final Pattern HELM_CHART_VERSION_URL_REGEX_PATTERN =

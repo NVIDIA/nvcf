@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# SGLang gemma-4-31B-it (fp8, single GPU) - criu-v2 checkpoint/restore.
+# The good single-GPU SGLang model from the NVCA/PDF benchmark, run through
+# the criu-v2 in-namespace CRIU engine (setsid source + dumb placeholder
+# restore, no injection stack). Non-Riva backend, so the standard CRIU +
+# cuda-checkpoint path (no guardrail bypass needed). HF-gated model: the
+# hf-token secret supplies the download credential.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gemma-sglang
+  namespace: nvsnap-system
+  labels:
+    app: gemma-sglang
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/demo-name: "SGLang gemma-4-31B"
+    nvsnap.io/desc: "google/gemma-4-31B-it on SGLang, fp8, single GPU"
+    nvsnap.io/model: "google/gemma-4-31B-it"
+    nvsnap.io/port: "30000"
+    nvsnap.io/gpus: "1"
+    nvsnap.io/path: "criu"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+  containers:
+    - name: sglang
+      image: lmsysorg/sglang:v0.5.15.post1-cu129
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          ulimit -c unlimited
+          # criu-v2 convention: workload in its own session via setsid; stdio to
+          # a rootfs file; bash stays pid1 to reap orphans. See vllm-small.
+          nohup setsid python3 -m sglang.launch_server \
+            --model-path google/gemma-4-31B-it \
+            --host 0.0.0.0 \
+            --port 30000 \
+            --tp-size 1 \
+            --mem-fraction-static 0.85 \
+            --quantization fp8 > /sglang.out 2>&1 < /dev/null &
+          tail -F /sglang.out &
+          while true; do sleep 30; done
+      env:
+        - { name: LD_LIBRARY_PATH, value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PYTHONFAULTHANDLER, value: "1" }
+        - { name: PYTHONUNBUFFERED,   value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,     value: "3" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+        - { name: HF_HUB_DISABLE_XET,        value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - { name: USE_LIBUV,                 value: "0" }
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+      ports:
+        - containerPort: 30000
+          name: http
+      readinessProbe:
+        httpGet: { path: /health, port: 30000 }
+        initialDelaySeconds: 60
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 80
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+  restartPolicy: Never

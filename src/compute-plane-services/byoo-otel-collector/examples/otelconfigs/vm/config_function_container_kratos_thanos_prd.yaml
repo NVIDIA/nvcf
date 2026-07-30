@@ -136,7 +136,7 @@ receivers:
             - targets:
                 - worker-0.default.svc.cluster.local:8010
 exporters:
-  prometheusremotewrite/KRATOS_THANOS-kratos-thanos-nvcf-metrics:
+  prometheus_remote_write/KRATOS_THANOS-kratos-thanos-nvcf-metrics:
     endpoint: https://receivers.thanos.example.com/api/v1/receive
     tls:
       cert_file: /etc/byoo-otel-collector/secrets/kratos-thanos-nvcf-clientCert
@@ -279,7 +279,7 @@ service:
         - otlp
         - prometheus
       exporters:
-        - prometheusremotewrite/KRATOS_THANOS-kratos-thanos-nvcf-metrics
+        - prometheus_remote_write/KRATOS_THANOS-kratos-thanos-nvcf-metrics
       processors:
         - memory_limiter
         - filter/metrics

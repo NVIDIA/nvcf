@@ -147,11 +147,6 @@ exporters:
   splunk_hec/SPLUNK-splunk-prd-logs:
     endpoint: endpoint
     sending_queue:
-      batch:
-        flush_timeout: 200ms
-        max_size: 1000000
-        min_size: 1000000
-        sizer: bytes
       enabled: true
       num_consumers: 10
       queue_size: 1000

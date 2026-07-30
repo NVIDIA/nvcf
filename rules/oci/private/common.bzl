@@ -35,7 +35,9 @@ def create_oci_image(
         entrypoint,
         visibility,
         registry = None,
-        tags = None):
+        tags = None,
+        env = None,
+        workdir = None):
     """Creates OCI image targets with platform transitions and tarball output.
 
     Generates:
@@ -44,6 +46,9 @@ def create_oci_image(
       - {name}_load: Local docker load target
       - {name}.tar: Tarball filegroup
       - {name}_push: Push to registry (if registry is set)
+
+    env and workdir are optional and default to leaving the base image's
+    values untouched, so existing callers are unaffected.
     """
     all_tags = ["manual"] + (tags or [])
 
@@ -53,6 +58,8 @@ def create_oci_image(
         base = base,
         tars = tars + COMMON_LAYERS,
         entrypoint = entrypoint,
+        env = env,
+        workdir = workdir,
         visibility = ["//visibility:private"],
         tags = all_tags,
     )

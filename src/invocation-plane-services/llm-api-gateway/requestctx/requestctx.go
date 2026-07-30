@@ -35,4 +35,8 @@ type RequestContext struct {
 	SessionID        string
 	SessionSource    string
 	CacheAffinityKey string
+	// Priority is the caller priority resolved by NVCF API at auth time, or nil
+	// when no priority config applies. Lower value is higher priority, 0 is
+	// highest. Forwarded to Stargate as the X-Priority header when set.
+	Priority *uint32
 }

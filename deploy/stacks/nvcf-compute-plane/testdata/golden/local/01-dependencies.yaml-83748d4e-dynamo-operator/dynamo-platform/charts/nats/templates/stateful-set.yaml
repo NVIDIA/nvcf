@@ -1,0 +1,124 @@
+---
+# Source: dynamo-platform/charts/nats/templates/stateful-set.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app.kubernetes.io/component: nats
+    app.kubernetes.io/instance: dynamo-operator
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: nats
+    app.kubernetes.io/version: 2.11.1
+    helm.sh/chart: nats-1.3.2
+  name: dynamo-operator-nats
+spec:
+  podManagementPolicy: Parallel
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: nats
+      app.kubernetes.io/instance: dynamo-operator
+      app.kubernetes.io/name: nats
+  serviceName: dynamo-operator-nats-headless
+  template:
+    metadata:
+      annotations:
+        checksum/config: a4acc3d68f5beb9eb29d5135c07064b56b34934b63080407eb42dca35407a38e
+        sidecar.istio.io/inject: "false"
+      labels:
+        app.kubernetes.io/component: nats
+        app.kubernetes.io/instance: dynamo-operator
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: nats
+        app.kubernetes.io/version: 2.11.1
+        helm.sh/chart: nats-1.3.2
+    spec:
+      affinity: {}
+      containers:
+      - args:
+        - --config
+        - /etc/nats-config/nats.conf
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: SERVER_NAME
+          value: $(POD_NAME)
+        image: nats:2.10.21-alpine
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - nats-server
+              - -sl=ldm=/var/run/nats/nats.pid
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz?js-enabled-only=true
+            port: monitor
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          successThreshold: 1
+          timeoutSeconds: 5
+        name: nats
+        ports:
+        - containerPort: 4222
+          name: nats
+        - containerPort: 8222
+          name: monitor
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz?js-server-only=true
+            port: monitor
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        startupProbe:
+          failureThreshold: 90
+          httpGet:
+            path: /healthz
+            port: monitor
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        volumeMounts:
+        - mountPath: /etc/nats-config
+          name: config
+        - mountPath: /var/run/nats
+          name: pid
+        - mountPath: /data
+          name: dynamo-operator-nats-js
+      - args:
+        - -pid
+        - /var/run/nats/nats.pid
+        - -config
+        - /etc/nats-config/nats.conf
+        image: natsio/nats-server-config-reloader:0.16.0
+        name: reloader
+        volumeMounts:
+        - mountPath: /var/run/nats
+          name: pid
+        - mountPath: /etc/nats-config
+          name: config
+      enableServiceLinks: false
+      shareProcessNamespace: true
+      tolerations: []
+      volumes:
+      - configMap:
+          name: dynamo-operator-nats-config
+        name: config
+      - emptyDir: {}
+        name: pid
+  volumeClaimTemplates:
+  - metadata:
+      name: dynamo-operator-nats-js
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi

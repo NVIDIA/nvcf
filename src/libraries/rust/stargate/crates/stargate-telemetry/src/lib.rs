@@ -56,6 +56,12 @@ pub fn init_telemetry(
         let mut exporter_builder = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
             .with_endpoint(endpoint.trim().to_string());
+        // Load CA roots (webpki set is embedded) so https collectors don't fail
+        // with UnknownIssuer on the distroless image.
+        if endpoint.trim().starts_with("https://") {
+            exporter_builder = exporter_builder
+                .with_tls_config(tonic::transport::ClientTlsConfig::new().with_enabled_roots());
+        }
         if let Some(token) = access_token
             .map(str::trim)
             .filter(|token| !token.is_empty())

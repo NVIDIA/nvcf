@@ -9,7 +9,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap",
     visibility = ["//visibility:private"],
     deps = [
-        "//internal/podtimings",
+        "//src/compute-plane-services/nvsnap/internal/podtimings",
         "@com_github_spf13_cobra//:cobra",
         "@io_k8s_api//core/v1:core",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",

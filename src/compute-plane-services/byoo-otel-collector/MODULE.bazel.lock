@@ -260,7 +260,7 @@
     "@@rules_oci+//oci:extensions.bzl%oci": {
       "general": {
         "bzlTransitiveDigest": "YCU8mhtDKo60hur+x5htbIQXAEDkvywpRHJyp5T9hwg=",
-        "usagesDigest": "zVlHgiCx54WX98s+HQwuqun/9mV6oDRt5v0Vzc4qmrs=",
+        "usagesDigest": "aIFs4gM2Y2o8ZzE/UgnkLch5KWIodAP3J21iWkdlvr0=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -268,13 +268,11 @@
           "distroless_go_linux_amd64": {
             "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
             "attributes": {
-              "www_authenticate_challenges": {
-                "urm.nvidia.com": "Bearer realm=\"https://urm.nvidia.com/artifactory/api/docker/null/v2/token\",service=\"urm.nvidia.com\",scope=\"repository:{repository}:pull\""
-              },
+              "www_authenticate_challenges": {},
               "scheme": "https",
-              "registry": "urm.nvidia.com",
-              "repository": "sw-gpu-ucs-hardened-docker/distroless/go",
-              "identifier": "sha256:6be4473eca4e8a5fdf8d7103a4d35708f5538bb5f7a58f0d12a257bdf362334f",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/go",
+              "identifier": "sha256:2ae1c3f90de1735fefb2a951977b7e78aa1c691f345d58c87b0d6bb7eff4f4d5",
               "platform": "linux/amd64",
               "target_name": "distroless_go_linux_amd64",
               "bazel_tags": []
@@ -283,13 +281,11 @@
           "distroless_go_linux_arm64_v8": {
             "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
             "attributes": {
-              "www_authenticate_challenges": {
-                "urm.nvidia.com": "Bearer realm=\"https://urm.nvidia.com/artifactory/api/docker/null/v2/token\",service=\"urm.nvidia.com\",scope=\"repository:{repository}:pull\""
-              },
+              "www_authenticate_challenges": {},
               "scheme": "https",
-              "registry": "urm.nvidia.com",
-              "repository": "sw-gpu-ucs-hardened-docker/distroless/go",
-              "identifier": "sha256:6be4473eca4e8a5fdf8d7103a4d35708f5538bb5f7a58f0d12a257bdf362334f",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/go",
+              "identifier": "sha256:2ae1c3f90de1735fefb2a951977b7e78aa1c691f345d58c87b0d6bb7eff4f4d5",
               "platform": "linux/arm64/v8",
               "target_name": "distroless_go_linux_arm64_v8",
               "bazel_tags": []
@@ -299,13 +295,11 @@
             "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_alias",
             "attributes": {
               "target_name": "distroless_go",
-              "www_authenticate_challenges": {
-                "urm.nvidia.com": "Bearer realm=\"https://urm.nvidia.com/artifactory/api/docker/null/v2/token\",service=\"urm.nvidia.com\",scope=\"repository:{repository}:pull\""
-              },
+              "www_authenticate_challenges": {},
               "scheme": "https",
-              "registry": "urm.nvidia.com",
-              "repository": "sw-gpu-ucs-hardened-docker/distroless/go",
-              "identifier": "sha256:6be4473eca4e8a5fdf8d7103a4d35708f5538bb5f7a58f0d12a257bdf362334f",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/go",
+              "identifier": "sha256:2ae1c3f90de1735fefb2a951977b7e78aa1c691f345d58c87b0d6bb7eff4f4d5",
               "platforms": {
                 "@@platforms//cpu:x86_64": "@distroless_go_linux_amd64",
                 "@@platforms//cpu:arm64": "@distroless_go_linux_arm64_v8"

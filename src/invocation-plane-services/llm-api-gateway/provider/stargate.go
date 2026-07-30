@@ -59,6 +59,7 @@ const (
 	headerRoutingMethod      = "X-Routing-Method"
 	headerModel              = "X-Model"
 	headerCacheAffinityKey   = "X-Cache-Affinity-Key"
+	headerPriority           = "X-Priority"
 	headerInputTokens        = "X-Input-Tokens"
 	headerTokenEstimate      = "X-Token-Estimate"
 
@@ -297,6 +298,9 @@ func (p *StargateProvider) newOutboundRequest(
 	if reqCtx.CacheAffinityKey != "" {
 		req.Header.Set(headerCacheAffinityKey, reqCtx.CacheAffinityKey)
 	}
+	if reqCtx.Priority != nil {
+		req.Header.Set(headerPriority, strconv.FormatUint(uint64(*reqCtx.Priority), 10))
+	}
 	if bearerToken := reqCtx.BearerToken; bearerToken != "" {
 		req.Header.Set(headerAuthorization, "Bearer "+bearerToken)
 	}
@@ -349,6 +353,10 @@ func (p *StargateProvider) Proxy(
 	if request.Header != nil {
 		outbound.Header = request.Header.Clone()
 	}
+	// X-Priority is gateway-owned: a client-supplied value cloned from the
+	// inbound request must never reach Stargate, even when no priority
+	// resolves for this request.
+	outbound.Header.Del(headerPriority)
 
 	if reqCtx != nil {
 		if reqCtx.RequestID != "" {
@@ -365,6 +373,9 @@ func (p *StargateProvider) Proxy(
 		}
 		if reqCtx.CacheAffinityKey != "" {
 			outbound.Header.Set(headerCacheAffinityKey, reqCtx.CacheAffinityKey)
+		}
+		if reqCtx.Priority != nil {
+			outbound.Header.Set(headerPriority, strconv.FormatUint(uint64(*reqCtx.Priority), 10))
 		}
 		if reqCtx.Model != "" {
 			outbound.Header.Set(headerModel, reqCtx.Model)

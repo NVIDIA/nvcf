@@ -262,7 +262,16 @@ func (c *GRPCClient) AuthorizeInvocation(
 		AuthContext:  authContext,
 		RateLimitKey: deriveRateLimitKey(authContext),
 		ModelSpecs:   modelSpecsFromProto(resp.GetModelSpecs()),
+		Priority:     priorityFromProto(resp),
 	}, nil
+}
+
+func priorityFromProto(resp *llmgatewaypb.AuthLlmInvokeResponse) *uint32 {
+	if resp == nil || resp.Priority == nil {
+		return nil
+	}
+	value := resp.GetPriority()
+	return &value
 }
 
 func modelSpecsFromProto(specs map[string]*llmgatewaypb.AuthLlmInvokeResponse_ModelSpec) map[string]ModelSpec {

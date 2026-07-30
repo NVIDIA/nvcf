@@ -72,13 +72,20 @@ impl ClientCredentialsProvider {
         let credentials = crate::read_secret_file(&self.credentials_path).await?;
         let (client_id, client_secret) = parse_client_credentials(&credentials)?;
 
+        // Send the client credentials via HTTP Basic auth (client_secret_basic),
+        // matching the SSA token endpoint and the Go services' oauth2 client. Each
+        // value is form-urlencoded first per RFC 6749 §2.3.1 (reqwest only base64s
+        // the raw `id:secret`), so reserved characters in a rotated secret survive.
+        // The form body carries only grant_type and scope.
         let response = self
             .http
             .post(&self.token_url)
+            .basic_auth(
+                form_encode(client_id.as_str()),
+                Some(form_encode(client_secret.as_str())),
+            )
             .form(&[
                 ("grant_type", "client_credentials"),
-                ("client_id", client_id.as_str()),
-                ("client_secret", client_secret.as_str()),
                 ("scope", self.scope.as_str()),
             ])
             .send()
@@ -91,6 +98,29 @@ impl ClientCredentialsProvider {
         *cache = Some(CachedToken(access_token.clone(), expires_at));
         Ok(access_token)
     }
+}
+
+/// Form-urlencodes an OAuth credential the same way Go's `url.QueryEscape` does,
+/// as required for `client_secret_basic` (RFC 6749 §2.3.1). Keeps the unreserved
+/// set (`A-Za-z0-9-_.~`), maps space to `+`, and percent-encodes everything else
+/// with uppercase hex. Base64 secret characters (`+` `/` `=`) therefore survive.
+fn form_encode(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(value.len());
+    for &b in value.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            b' ' => out.push('+'),
+            _ => {
+                out.push('%');
+                out.push(HEX[(b >> 4) as usize] as char);
+                out.push(HEX[(b & 0x0f) as usize] as char);
+            }
+        }
+    }
+    out
 }
 
 async fn parse_token_response(response: reqwest::Response) -> anyhow::Result<(String, Duration)> {
@@ -165,14 +195,34 @@ mod tests {
 
     async fn handle_token(
         State((hits, expires_in)): State<EndpointState>,
+        headers: axum::http::HeaderMap,
         Form(form): Form<std::collections::HashMap<String, String>>,
     ) -> String {
         hits.fetch_add(1, Ordering::SeqCst);
+        // Credentials must be sent via HTTP Basic auth (client_secret_basic), not
+        // the form body, matching the SSA token endpoint. Compare the full header
+        // without logging it so a failure cannot leak the encoded credentials.
+        // Expected value is base64 of the form-urlencoded "id:secret", i.e.
+        // "client+id%2B%26:client-secret+%2B%3D%26" for the fixture below.
+        let auth = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert!(
+            auth == "Basic Y2xpZW50K2lkJTJCJTI2OmNsaWVudC1zZWNyZXQrJTJCJTNEJTI2",
+            "unexpected or missing Basic auth credentials"
+        );
+        assert!(
+            !form.contains_key("client_id"),
+            "client_id must not be in the form body"
+        );
+        assert!(
+            !form.contains_key("client_secret"),
+            "client_secret must not be in the form body"
+        );
         for (field, expected) in [
             ("grant_type", "client_credentials"),
             ("scope", "llm:check worker/+&"),
-            ("client_id", "client id+&"),
-            ("client_secret", "client-secret +=&"),
         ] {
             assert_eq!(form.get(field).map(String::as_str), Some(expected));
         }
@@ -180,6 +230,17 @@ mod tests {
             r#"{{"access_token":"minted-token","token_type":"Bearer","expires_in":{}}}"#,
             expires_in
         )
+    }
+
+    #[test]
+    fn form_encode_matches_go_query_escape() {
+        // Unreserved set is passed through; space maps to '+'.
+        assert_eq!(form_encode("nvssa-stg-AbC_1.2~3"), "nvssa-stg-AbC_1.2~3");
+        assert_eq!(form_encode("a b"), "a+b");
+        // Base64 secret characters must be percent-encoded (uppercase hex).
+        assert_eq!(form_encode("ssap-a+b/c="), "ssap-a%2Bb%2Fc%3D");
+        assert_eq!(form_encode("client id+&"), "client+id%2B%26");
+        assert_eq!(form_encode("client-secret +=&"), "client-secret+%2B%3D%26");
     }
 
     fn credentials_file(id: &str, secret: &str) -> tempfile::NamedTempFile {

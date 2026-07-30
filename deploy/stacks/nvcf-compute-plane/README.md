@@ -40,6 +40,31 @@ Helmfile.
 an environment file for your registry and service endpoints, then pass its name
 without the `.yaml` suffix.
 
+## Observability
+
+The stack defaults `observability.profile` to `compute`. The `compute` and
+`all` profiles enable the NVCA collector and `BYOObservability` feature gate.
+The `control` and `disabled` profiles leave both off.
+
+One value selects the normal behavior:
+
+```yaml
+observability:
+  profile: compute
+```
+
+Explicit NVCA values override the profile defaults:
+
+```yaml
+global:
+  nvcaOperator:
+    selfManaged:
+      otelCollector:
+        enabled: false
+      featureGateValues:
+        - "-BYOObservability"
+```
+
 ## Chart and Image Sources
 
 The stack pins the NVCA operator chart in

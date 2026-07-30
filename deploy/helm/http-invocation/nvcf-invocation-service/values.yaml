@@ -1,0 +1,125 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default values for nvcf-invocation-service.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+invocation:
+  # Namespace to deploy the resources. Default is the release namespace.
+  namespace: ""
+
+  nameOverride: ""
+  fullNameOverride: ""
+
+  replicaCount: 1
+
+  image:
+    registry: "" # must be supplied
+    repository: "" # must be supplied
+    pullPolicy: IfNotPresent
+    tag: "0.8.8"
+
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext: {}
+
+  securityContext:
+  capabilities:
+    drop:
+    - ALL
+    add:
+    # Then add back only what's needed
+    - NET_BIND_SERVICE
+  # runAsUser: 1000
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+
+  service:
+    ports:
+      - name: http
+        port: 8080
+        targetPort: 8080
+        protocol: TCP
+      - name: metrics
+        port: 41337
+        targetPort: 41337
+        protocol: TCP
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+
+  # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+
+  # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    # targetMemoryUtilizationPercentage: 80
+
+  # Additional volumes on the output Deployment definition.
+  volumes:
+    - name: token
+      projected:
+        sources:
+        - serviceAccountToken:
+            path: token
+            expirationSeconds: 3600
+            audience: http://openbao-server.vault-system.svc.cluster.local:8200
+
+  # Additional volumeMounts on the output Deployment definition.
+  volumeMounts:
+    - name: token
+      mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      readOnly: true
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  ports:
+    - name: http
+      containerPort: 8080
+      protocol: TCP
+    - name: metrics
+      containerPort: 41337
+      protocol: TCP
+
+  env:
+    NVCF_API_ADDRESS: "http://api.nvcf.svc.cluster.local:9090"
+    NATS_PROPERTIES__NATS_ADDRESS: "nats://nats.nats-system.svc.cluster.local:4222"
+    REGIONAL_NVCF_API_GRPC_ADDRESS: "http://api.nvcf.svc.cluster.local:9090"
+    RATE_LIMIT_ADDRESS: "http://api.ratelimiter.svc.cluster.local:7777"
+    RATE_LIMIT_ENABLED: "false"
+    S3_PROPERTIES__ENABLE_LARGE_RESPONSE_URL: "false"
+    SECRETS_PATH: "/vault/secrets/secrets.json"
+    OAUTH2_BASE_URL: "https://oauth2.example.com"

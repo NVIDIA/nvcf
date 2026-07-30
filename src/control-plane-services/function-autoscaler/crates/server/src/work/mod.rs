@@ -170,7 +170,11 @@ async fn get_byoc_instance_count(
     let env_suffix = if ignore_env {
         String::new()
     } else {
-        let env_val = if env == "stg" { "stage" } else { "prod" };
+        let env_val = if env == "stg" {
+            "staging"
+        } else {
+            "production"
+        };
         format!(r#", environment="{}""#, env_val)
     };
 
@@ -875,6 +879,47 @@ mod tests {
 
         assert_eq!(n, 7);
         assert_eq!(src, MetricSource::ControlPlane);
+    }
+
+    #[tokio::test]
+    async fn test_byoc_instance_count_uses_control_plane_environment_labels() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let mut server = mockito::Server::new_async().await;
+        let body = vm_series(
+            &format!(r#""function_id":"{fid}","function_version_id":"{fvid}""#),
+            "3",
+        );
+
+        let _prd = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("production".into()))
+            .with_status(200)
+            .with_body(body.clone())
+            .create_async()
+            .await;
+        let _stg = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("staging".into()))
+            .with_status(200)
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let client = ts_client(server.url());
+
+        assert_eq!(
+            get_byoc_instance_count(&client, &fid, &fvid, "prd", false)
+                .await
+                .expect("prod cp instance count"),
+            3
+        );
+        assert_eq!(
+            get_byoc_instance_count(&client, &fid, &fvid, "stg", false)
+                .await
+                .expect("stage cp instance count"),
+            3
+        );
     }
 
     /// No worker series and the BYOC query fails -> control-plane with 0 instances.

@@ -65,6 +65,7 @@ if [ -z "$WORKLOAD" ]; then
     echo "Workloads (single-GPU CRIU):"
     echo "  vllm-small        TinyLlama 1.1B on vLLM"
     echo "  vllm-8b           Llama-3.1-8B on vLLM"
+    echo "  gemma-sglang      gemma-4-31B on SGLang (NVCA benchmark)"
     echo "  sglang-small      TinyLlama 1.1B on SGLang"
     echo "  sglang-8b         Llama-3.1-8B on SGLang"
     echo "  trtllm-small      TinyLlama 1.1B on TensorRT-LLM"
@@ -145,6 +146,20 @@ case "$WORKLOAD" in
         POST_INFER_DATA='{"model":"Qwen/Qwen2.5-32B-Instruct","prompt":"The meaning of life is","max_tokens":10}'
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-qwen32b.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-qwen32b-restore.yaml"
+        ;;
+    gemma-sglang)
+        # NVCA benchmark single-GPU SGLang model, criu-v2 path.
+        POD_NAME="gemma-sglang"
+        CONTAINER_NAME="sglang"
+        RESTORE_POD_NAME="gemma-sglang-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=30000
+        MODEL="google/gemma-4-31B-it"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"google/gemma-4-31B-it","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"google/gemma-4-31B-it","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/gemma-sglang.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/gemma-sglang-restore.yaml"
         ;;
     sglang-small)
         POD_NAME="sglang-small"
@@ -250,7 +265,7 @@ case "$WORKLOAD" in
         ;;
     *)
         echo "Unknown workload: $WORKLOAD"
-        echo "Supported: vllm-small, vllm-8b, sglang-small, sglang-8b, trtllm-small, nim-llama-8b, vllm-70b, nim-qwen3-32b"
+        echo "Supported: vllm-small, vllm-8b, gemma-sglang, sglang-small, sglang-8b, trtllm-small, nim-llama-8b, vllm-70b, nim-qwen3-32b"
         exit 1
         ;;
 esac
