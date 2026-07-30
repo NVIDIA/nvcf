@@ -94,6 +94,8 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BEFORE_SHA: ${{ github.event.before }}
+          # merge_group has no `before`; its payload carries the queue base.
+          MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.sha }}
           BASE_REF: ${{ github.base_ref }}
         run: |
@@ -191,6 +193,24 @@ jobs:
             pull_request)
               if ! changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" 2>/dev/null); then
                 echo "diff vs origin/${BASE_REF} failed; running full matrix"
+                run_all=true
+              fi
+              ;;
+            merge_group)
+              # `github.event.before` does not exist on merge_group, so without
+              # this branch every queue entry fell through to the default arm
+              # and rebuilt all 24 rows regardless of what the pull request
+              # touched. The queue head is the base plus the queued commits, so
+              # diffing from base_sha yields exactly those changes (and, for a
+              # batched entry, every pull request in the batch).
+              if [ -z "${MERGE_BASE_SHA}" ]; then
+                echo "merge_group base_sha missing; running full matrix"
+                run_all=true
+              elif ! git rev-parse --verify -q "${MERGE_BASE_SHA}^{commit}" >/dev/null 2>&1; then
+                echo "merge_group base ${MERGE_BASE_SHA} not in history; running full matrix"
+                run_all=true
+              elif ! changed=$(git diff --name-only "${MERGE_BASE_SHA}...${HEAD_SHA}" 2>/dev/null); then
+                echo "diff ${MERGE_BASE_SHA}...${HEAD_SHA} failed; running full matrix"
                 run_all=true
               fi
               ;;
