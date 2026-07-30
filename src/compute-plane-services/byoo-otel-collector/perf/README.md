@@ -31,11 +31,22 @@ what the suite measures.
 - `pkg/validate` — render-shape validation gate.
 - `pkg/profile` — `dev` and `baseline` execution profiles.
 
-This is a standalone Go module. Run its Go commands with `GOWORK=off`:
+This is a standalone Go module, deliberately kept out of the collector
+`go.work` (it carries its own `replace` directives and k8s pins). Run its Go
+commands with `GOWORK=off`:
 
 ```bash
 GOWORK=off go build ./...
 GOWORK=off go test ./...
+```
+
+Because it is outside `go.work` and has no Bazel targets, the Bazel CI lane does
+not cover it. Its build/vet/test run as a required check via the `perf` job in
+`.github/workflows/byoo-otel-collector.yml`, which invokes `make perf-test` from
+the collector directory. Run the same target locally with:
+
+```bash
+make -C .. perf-test
 ```
 
 ## Usage
