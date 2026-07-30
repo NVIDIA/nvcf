@@ -71,6 +71,8 @@ func main() {
 		"NvSnap-server base URL for peer-fanout catalog lookups (e.g. http://nvsnap-server.nvsnap-system.svc.cluster.local:8080). Empty disables cross-node cascade.")
 	flag.StringVar(&config.NodeIP, "node-ip", os.Getenv("HOST_IP"),
 		"This agent's reachable address from peers (downward API status.hostIP when hostNetwork:true). Empty disables peer registration.")
+	flag.StringVar(&config.AdvertiseIP, "advertise-ip", os.Getenv("POD_IP"),
+		"Address peers dial to reach this agent (downward API status.podIP; equals the node IP under hostNetwork). Falls back to --node-ip when empty. See GH #490.")
 	flag.StringVar(&config.BlobStoreURL, "blob-store-url", os.Getenv("NVSNAP_BLOB_STORE_URL"),
 		"NvSnap-blobstore base URL for Phase 5d.2 durable backstop (e.g. http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000). Empty disables capture-side upload AND cascade tier-3 fallback.")
 	// Cross-cluster replication (docs/design/cross-cluster-replication.md).
@@ -188,6 +190,8 @@ func main() {
 		"Strategy for restore-side overlay mount prep: inline (do mounts during admission, default) or init-container (delegate to nvsnap-mount-prep init container on the restored pod)")
 	flag.StringVar(&config.Webhook.MountPrepInitImage, "webhook-mount-prep-init-image", "",
 		"Image ref for the nvsnap-mount-prep init container injected when --webhook-restore-prep-strategy=init-container. Must contain /nvsnap-mount-prep (the agent image satisfies this).")
+	flag.StringVar(&config.Webhook.AgentBaseURL, "webhook-agent-base-url", os.Getenv("NVSNAP_WEBHOOK_AGENT_BASE_URL"),
+		"Base URL the injected nvsnap-mount-prep init container uses to reach its node-local agent. Empty uses http://$(NVSNAP_HOST_IP):<port>, which requires hostPort. Set to the internalTrafficPolicy:Local Service under pod networking. See GH #490.")
 	flag.IntVar(&config.Webhook.AgentHostPort, "webhook-agent-host-port", 8081,
 		"Port the nvsnap-mount-prep init container reaches the agent on (matches --listen and the agent DaemonSet's hostPort).")
 

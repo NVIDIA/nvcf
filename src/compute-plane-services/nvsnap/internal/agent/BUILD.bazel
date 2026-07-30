@@ -91,6 +91,7 @@ go_test(
         "l2_promote_async_test.go",
         "l2_writer_test.go",
         "nim_backend_test.go",
+        "advertise_test.go",
         "auth_test.go",
         "pathsafe_test.go",
         "peer_fanout_test.go",
