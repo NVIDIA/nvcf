@@ -206,11 +206,11 @@
     "id": "S14-enable-llm-functions",
     "question": "I need to deploy functionType: LLM functions on a self-managed, single-node isolated test cluster. What Helmfile configuration and verification steps do I need?",
     "expected_skill": "nvcf-self-managed-installation",
-    "ground_truth": "The agent enabled the LLM addon with addons.llm.enabled, configured single replicas for the LLM API Gateway and request router, and included the documented request-router load-balancer configuration. For the isolated plaintext cluster, it included both addons.llm.gateway.auth.grpcInsecure and agentConfig.mergeConfig.workload.stargateQUICInsecure, with a warning that those settings are not for production. It refreshed the compute plane using the same handoff used during installation, redeployed existing LLM functions, and verified the LLM deployments, route, and llm-worker sidecar.",
+    "ground_truth": "The agent enabled the LLM addon with addons.llm.enabled, configured single replicas for the LLM API Gateway and request router, and explained that the request router uses power-of-two when no load-balancer configuration is set. It linked the canonical request-router load-balancing guide for other routing methods. For the isolated plaintext cluster, it included both addons.llm.gateway.auth.grpcInsecure and agentConfig.mergeConfig.workload.stargateQUICInsecure, with a warning that those settings are not for production. It refreshed the compute plane using the same handoff used during installation, redeployed existing LLM functions, and verified the LLM deployments, route, and llm-worker sidecar.",
     "expected_behavior": [
       "The agent used addons.llm.enabled, not the obsolete llm.enabled path",
       "The agent set gateway and requestRouter replicaCount to 1 for the single-node test cluster",
-      "The agent included addons.llm.requestRouter.loadBalancer.config with the documented default and request algorithms",
+      "The agent stated that the request router defaults to power-of-two and linked the canonical request-router load-balancing guide for other methods",
       "The agent included addons.llm.gateway.auth.grpcInsecure and workload.stargateQUICInsecure for the isolated plaintext cluster, and warned against using them in production",
       "The agent applied the control-plane Helmfile environment, refreshed the compute plane with the same selected handoff, and recreated or redeployed existing LLM functions",
       "The agent verified llm-api-gateway, llm-request-router, the LLM HTTPRoute, and the llm-worker sidecar including --quic-insecure"

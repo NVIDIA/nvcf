@@ -52,6 +52,7 @@ go_test(
     ],
     embed = [":client"],
     deps = [
+        "//src/clis/nvcf-cli/internal/state",
         "@com_github_spf13_viper//:viper",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

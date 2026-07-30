@@ -42,7 +42,7 @@ data:
     cloudProvider: "NCP"
     region: "us-west-1"
     attributes: []
-    capabilities: ["DynamicGPUDiscovery","InfraResourceOverhead","EnforceHelmFunctionResourceLimits","EnforceContainerFunctionResourceLimits","EnforceHelmTaskResourceLimits","EnforceContainerTaskResourceLimits"]
+    capabilities: ["DynamicGPUDiscovery","InfraResourceOverhead","EnforceHelmFunctionResourceLimits","EnforceContainerFunctionResourceLimits","EnforceHelmTaskResourceLimits","EnforceContainerTaskResourceLimits","BYOObservability"]
     gpusB64: ""
     cacheCSIVolumeMountOptionsConfig:
       disabled: false
@@ -67,7 +67,7 @@ data:
       imageRepository: "nvcr.io/0651155215864979/ncp-dev/samba"
       imageTag: "1.0.5"
     otelCollector:
-      enabled: false
+      enabled: true
       imageConfig:
         repository: "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
         tag: "0.143.2"

@@ -47,8 +47,10 @@ pub struct CassandraSslCertificates {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct TimeseriesDbCredentials {
-    pub username: String,
-    pub password: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub client_certificate_pem_b64: Option<String>,
+    pub client_private_key_pem_b64: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -45,6 +45,8 @@ module(
 # ============================================================================
 # OCI containers (multi-arch). Mirrors the umbrella's MODULE.bazel.
 # ============================================================================
+# Bazel 9 no longer provides sh_test as a native global.
+bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_oci", version = "2.2.7")
 bazel_dep(name = "rules_pkg", version = "1.2.0")
@@ -65,6 +67,10 @@ python.toolchain(
 # ============================================================================
 # Go
 # ============================================================================
+# protobuf ships prebuilt protoc for every platform and registers the
+# toolchain itself, so protoc can never disagree with the protobuf module.
+# Nothing to pin here and nothing that can drift.
+bazel_dep(name = "protobuf", version = "33.4", repo_name = "com_google_protobuf")
 bazel_dep(name = "rules_go", version = "0.60.0")
 bazel_dep(name = "gazelle", version = "0.48.0")
 
@@ -126,13 +132,7 @@ use_repo(
 # declares proto_library targets. Without this, Bazel builds C++ protoc
 # from source on every cold build.
 # ============================================================================
-bazel_dep(name = "toolchains_protoc", version = "0.6.1")
 
-protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
-protoc.toolchain(
-    google_protobuf = "com_google_protobuf",
-    version = "v29.0",
-)
 
 # ============================================================================
 # C++ cross-compilation (multi-arch container builds).

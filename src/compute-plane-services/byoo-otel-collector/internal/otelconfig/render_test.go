@@ -727,10 +727,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, map[string]interface{}{
-		"endpoint": "${env:OTEL_POD_IP:-0.0.0.0}:19091",
-		"resource_to_telemetry_conversion": map[string]interface{}{
-			"enabled": true,
-		},
+		"endpoint":            "${env:OTEL_POD_IP:-0.0.0.0}:19091",
 		"send_timestamps":     true,
 		"metric_expiration":   "5m",
 		"enable_open_metrics": true,

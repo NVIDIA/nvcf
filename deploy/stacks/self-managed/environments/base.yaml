@@ -133,6 +133,32 @@ global:
       # global.observability.metrics.enabled
       enabled: false
 
+# One profile installs and configures the shared observability stack for the
+# selected planes. Self-managed control-plane installs need no other
+# observability flags.
+observability:
+  profile: control
+
+# Defaults consumed only for the control and all observability profiles.
+functionAutoscaler:
+  chartVersion: "0.1.0"
+  image:
+    # Keep the stack's image pin independent of the chart's release metadata.
+    tag: "1.18.3"
+  region: local
+  cassandra:
+    contactPoints: cassandra.cassandra-system.svc.cluster.local
+    isDevelopment: false
+  nvcfApi:
+    grpcAddress: http://api.nvcf.svc.cluster.local:9090
+    # Self-managed NVCF currently uses its internal unauthenticated gRPC path.
+    disableAuth: true
+    dryRun: false
+  timeseriesDb:
+    # Self-hosted control-plane metrics do not require the hosted TSDB's
+    # environment label.
+    ignoreEnv: true
+
 accounts:
   limits:
     maxFunctions: 10
@@ -277,7 +303,7 @@ addons:
     enabled: false
 
 stateMetrics:
-  enabled: false
+  enabled: true
   # Disable ServiceMonitor for environments without Prometheus Operator
   serviceMonitor:
     enabled: false
