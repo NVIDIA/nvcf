@@ -115,6 +115,76 @@ class GithubReleaseTest(unittest.TestCase):
             self.assertIn("byoo-otel-collector-v0.153.6 already exists", output.getvalue())
             self.assertIn("skipping", output.getvalue())
 
+    def test_release_floor_anchor_uses_the_highest_internal_history_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            service_dir = root / "src/control-plane-services/helm-reval"
+            service_dir.mkdir(parents=True)
+            (service_dir / "README.md").write_text("initial\n")
+            self.commit_all(root, "initial helm-reval")
+            old_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, check=True, text=True, stdout=subprocess.PIPE
+            ).stdout.strip()
+            git(root, "tag", "src/control-plane-services/helm-reval/v0.4.0")
+            (service_dir / "README.md").write_text("next\n")
+            self.commit_all(root, "next helm-reval change")
+
+            service = {
+                "id": "helm-reval",
+                "path": "src/control-plane-services/helm-reval",
+                "service_name": "nvcf-helm-reval-api",
+                "release_floor_version": "0.17.0",
+            }
+
+            with chdir(root):
+                self.github_release.synthesize_release_floor_anchor(root, service)
+
+            floor_tag = "src/control-plane-services/helm-reval/v0.17.0"
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "rev-list", "-n", "1", floor_tag], cwd=root, check=True, text=True, stdout=subprocess.PIPE
+                ).stdout.strip(),
+                old_sha,
+            )
+            with chdir(root):
+                self.assertEqual(self.github_release.latest_service_tag(service), floor_tag)
+
+    def test_helm_reval_cutover_is_a_stable_version_above_its_history_floor(self):
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        service = next(service for service in metadata["services"] if service["id"] == "helm-reval")
+
+        floor = self.github_release.configured_stable_version(service, "release_floor_version")
+        cutover = self.github_release.configured_stable_version(service, "cutover_version")
+
+        self.assertEqual(floor, "0.17.0")
+        self.assertEqual(cutover, "0.18.0")
+        self.assertGreater(
+            self.github_release.stable_semver_key(cutover),
+            self.github_release.stable_semver_key(floor),
+        )
+
+    def test_cutover_release_dry_run_creates_the_configured_tag_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            service_dir = root / "src/control-plane-services/helm-reval"
+            service_dir.mkdir(parents=True)
+            (service_dir / "README.md").write_text("cutover\n")
+            self.commit_all(root, "release configuration")
+            service = {
+                "id": "helm-reval",
+                "path": "src/control-plane-services/helm-reval",
+                "service_name": "nvcf-helm-reval-api",
+                "cutover_version": "0.18.0",
+            }
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.assertTrue(self.github_release.publish_cutover_release(root, service, dry_run=True))
+
+            self.assertIn("would create cutover tag src/control-plane-services/helm-reval/v0.18.0", output.getvalue())
+
     def test_nvca_branch_cut_uses_path_scoped_release_branch(self):
         service = {
             "id": "nvca",

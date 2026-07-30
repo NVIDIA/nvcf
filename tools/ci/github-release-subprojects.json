@@ -135,7 +135,9 @@
       "id": "helm-reval",
       "path": "src/control-plane-services/helm-reval",
       "service_name": "nvcf-helm-reval-api",
-      "legacy_tag_prefix": "nvcf-helm-reval-api-v"
+      "legacy_tag_prefix": "nvcf-helm-reval-api-v",
+      "release_floor_version": "0.17.0",
+      "cutover_version": "0.18.0"
     },
     {
       "id": "ess-agent",
