@@ -13,18 +13,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Phase 1 Bazel-scope go workspace.
+// Bazel-scope go workspace.
 //
-// Only lists the native Go subtrees that Bazel currently builds:
-//   - src/clis/nvcf-cli
-//   - src/libraries/go/lib
-//   - src/libraries/go/worker
-//   - src/compute-plane-services/nvsnap
+// The use() block below is the list, and is the only place it is written down.
+// An enumeration in this comment was tried first and went stale within a
+// release, which is the same failure mode tools/ci/nested-modules.txt warns
+// about: a second copy of a list drifts into describing a repository that no
+// longer exists.
 //
-// The repo also has a generated go.work (gitignored) used by the existing
-// non-Bazel CI for license/dependency checks across all 31 go.mod files.
-// Bazel deliberately uses a narrower scope to avoid pulling in deps for
-// upstream-owned subtrees that are out of scope for Phase 1.
+// Every Go subtree the root Bazel module builds appears here. A subtree is
+// added as part of migrating it out of its own nested MODULE.bazel; see
+// tools/ci/nested-modules.txt for what has not migrated yet.
+//
+// The repo also has a generated go.work (gitignored) used by the non-Bazel CI
+// for license and dependency checks across every go.mod. That one is wider on
+// purpose: it covers upstream-owned subtrees Bazel does not build.
 go 1.26.5
 
 use (
@@ -32,4 +35,5 @@ use (
 	./src/libraries/go/lib
 	./src/libraries/go/worker
 	./src/compute-plane-services/nvsnap
+	./src/compute-plane-services/image-credential-helper
 )
