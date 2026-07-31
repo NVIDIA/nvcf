@@ -38,7 +38,6 @@ scaffolding  rules/oci-destinations
 
 ledger       src/compute-plane-services/byoo-otel-collector
 ledger       src/compute-plane-services/ess-agent
-ledger       src/compute-plane-services/image-credential-helper
 ledger       src/compute-plane-services/nvca
 ledger       src/compute-plane-services/nvcf-unbound
 ledger       src/compute-plane-services/worker-init

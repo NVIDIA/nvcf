@@ -33,7 +33,6 @@
 # loadable. The siblings below still carry nested MODULE.bazel files.
 src/compute-plane-services/byoo-otel-collector
 src/compute-plane-services/ess-agent
-src/compute-plane-services/image-credential-helper
 src/compute-plane-services/nvca
 src/compute-plane-services/nvcf-unbound
 src/compute-plane-services/worker-init
@@ -83,6 +82,11 @@ tests/bdd
 # from MODULE.bazel via Gazelle's go_deps extension, not from on-disk vendor.
 src/libraries/go/lib/vendor
 src/clis/nvcf-cli/vendor
+# image-credential-helper vendors the shared NVCF Go library and ships
+# BUILD.bazel files inside vendor/. Bazel resolves that module through go_deps,
+# so the vendored copy must stay unloadable or the same importpath is declared
+# by two packages and analysis fails on a duplicate.
+src/compute-plane-services/image-credential-helper/vendor
 
 # Tool-pin directory: holds only a //go:build tools file for go.mod and yields
 # no Bazel package. Skipped directly here because some Bazel commands (build

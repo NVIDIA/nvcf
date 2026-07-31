@@ -138,7 +138,6 @@ jobs:
           vanity-gateway|src/invocation-plane-services/vanity-gateway|false
           nvca|src/compute-plane-services/nvca|false
           ess-agent|src/compute-plane-services/ess-agent|false
-          image-credential-helper|src/compute-plane-services/image-credential-helper|false
           nvcf-unbound|src/compute-plane-services/nvcf-unbound|false
           worker-init|src/compute-plane-services/worker-init|false
           worker-llm-credentials|src/compute-plane-services/worker-llm-credentials|false
@@ -147,7 +146,8 @@ jobs:
           function-autoscaler|src/control-plane-services/function-autoscaler|false
           helm-reval|src/control-plane-services/helm-reval|false
           stargate|src/libraries/rust/stargate|false
-          nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container'
+          nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container
+          image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container'
 
           # Java rows are discovered from component-local bazel-java-ci.json
           # descriptors. The descriptor's parent directory is the component
