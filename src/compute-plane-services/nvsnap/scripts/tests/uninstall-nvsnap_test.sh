@@ -61,37 +61,79 @@ JSON
   *"get ds"*"desiredNumberScheduled"*) echo 1 ;;
   *"get ns"*) exit 1 ;;                                # namespace absent
   *"config current-context"*) echo fake-cluster ;;
-  *) ;;
+  # Cluster-scoped inventory: nothing of ours exists in this fixture, so the
+  # script should find nothing to delete.
+  *"get crd"*|*"get clusterrole"*|*"get mutatingwebhookconfiguration"*|*"get validatingwebhookconfiguration"*) ;;
+  # The mutations under test. Listed explicitly so the assertions below are
+  # checking commands this fixture actually sanctions.
+  *"delete pvc "*|*"delete pv "*|*"patch pv "*|*"delete ns "*) ;;
+  *"rollout status"*|*" logs "*|*"apply -f"*|*"delete ds "*) ;;
+  # Anything else is a command this test has never reviewed. Falling through
+  # to success would let a regression introduce an extra mutation -- a stray
+  # delete, a namespace-wide wipe -- and still pass.
+  *) echo "UNMODELED kubectl $*" >> "$CALLS"; exit 97 ;;
 esac
 exit 0
 EOF
 cat > "$FAKE/helm" <<'EOF'
 #!/usr/bin/env bash
 echo "helm $*" >> "$CALLS"
-[ "${1:-}" = "status" ] && exit 1   # not installed
-exit 0
+case "${1:-}" in
+  status) exit 1 ;;                 # not installed
+  *) echo "UNMODELED helm $*" >> "$CALLS"; exit 97 ;;
+esac
 EOF
 chmod +x "$FAKE/kubectl" "$FAKE/helm"
 export PATH="$FAKE:$PATH" CALLS
 
+# expect_rc <desc> <want> <got>
+expect_rc() {
+    if [ "$3" = "$2" ]; then pass=$((pass+1)); printf '  ok   %s\n' "$1"
+    else fail=$((fail+1)); printf '  FAIL %s\n       exit %s, want %s\n' "$1" "$3" "$2"
+    fi
+}
+
 echo "== dry run makes no changes =="
 : > "$CALLS"
-out="$("$SCRIPT" 2>&1)"
+out="$("$SCRIPT" 2>&1)"; rc=$?
+expect_rc "exits 0"                    0 "$rc"
+refute  "issues no unmodeled command"  "UNMODELED" "$(cat "$CALLS")"
 check   "announces dry run"            "DRY RUN" "$out"
 refute  "issues no delete"             "kubectl delete" "$(cat "$CALLS")"
 refute  "issues no patch"              "kubectl patch"  "$(cat "$CALLS")"
 
 echo "== ownership selection (--apply) =="
 : > "$CALLS"
-out="$("$SCRIPT" --apply --keep-node-state 2>&1)"
+out="$("$SCRIPT" --apply --keep-node-state 2>&1)"; rc=$?
 calls="$(cat "$CALLS")"
-check  "deletes our rox- claim"        "delete pvc rox-abc123" "$calls"
-check  "deletes our rwx- claim"        "delete pvc rwx-abc123" "$calls"
+expect_rc "exits 0"                    0 "$rc"
+refute  "issues no unmodeled command"  "UNMODELED" "$calls"
+# Full argument strings, not fragments: a regression that drops the namespace
+# would still satisfy a "delete pvc rox-abc123" substring search and delete a
+# claim of the same name in whatever namespace kubectl defaults to.
+check  "deletes our rox- claim in-namespace" \
+       "delete pvc rox-abc123 -n nvsnap-system --ignore-not-found --wait=false" "$calls"
+check  "deletes our rwx- claim in-namespace" \
+       "delete pvc rwx-abc123 -n nvsnap-system --ignore-not-found --wait=false" "$calls"
 refute "spares an unrelated claim"     "someone-elses-data"    "$calls"
 check  "reclaims our released PV"      "delete pv pv-ours"     "$calls"
 refute "spares a PV from another claim" "pv-theirs"            "$calls"
 refute "never touches a Bound PV"      "pv-bound-ours"         "$calls"
-check  "flips Retain before deleting"  "patch pv pv-ours"      "$calls"
+check  "flips Retain to Delete"        \
+       'patch pv pv-ours -p {"spec":{"persistentVolumeReclaimPolicy":"Delete"}}' "$calls"
+# Ordering matters: deleting a Retain PV first strands the backing volume,
+# which is the exact leak this step exists to stop. Substring checks cannot
+# see order, so compare line numbers.
+patch_line=$(printf '%s\n' "$calls" | grep -n "patch pv pv-ours" | head -1 | cut -d: -f1)
+del_line=$(printf '%s\n'   "$calls" | grep -n "delete pv pv-ours" | head -1 | cut -d: -f1)
+if [ -n "$patch_line" ] && [ -n "$del_line" ] && [ "$patch_line" -lt "$del_line" ]; then
+    pass=$((pass+1)); printf '  ok   %s\n' "patches reclaim policy BEFORE deleting the PV"
+else
+    fail=$((fail+1)); printf '  FAIL %s\n       patch@%s delete@%s\n' \
+        "patches reclaim policy BEFORE deleting the PV" "${patch_line:-none}" "${del_line:-none}"
+fi
+# helm uninstall must not run when the release is absent.
+refute "no helm uninstall when not installed" "helm uninstall" "$calls"
 
 echo "== node state is opt-out =="
 refute "skipped with --keep-node-state" "nvsnap-cleanup" "$calls"
