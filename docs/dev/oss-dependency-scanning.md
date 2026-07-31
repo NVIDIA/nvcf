@@ -4,8 +4,8 @@ How to enumerate third-party dependencies in this repository for source
 scanning. Written for Black Duck / Pulse, but the queries are tool-agnostic.
 
 Every command here was run against a clean checkout and returns the stated
-result. If one of them returns nothing, that is a bug in this document or the
-repository, not in your setup. Please report it.
+result. An empty result can be legitimate for a filtered or language-specific
+query. Report non-zero exits, with the full command output.
 
 ## Scope: what `//...` covers today
 
@@ -32,9 +32,32 @@ When that lands, `//...` covers everything and the per-directory step goes away.
 `kind(j.*import, ...)` matches `jvm_import` only. There is no `go_import` or
 `rust_import` rule, so that pattern silently returns nothing for Go and Rust.
 
-Everything, all languages:
+Everything, all languages. Use `query`, not `cquery`, and understand why:
 
-    bazel cquery 'deps(//...)' --output=label | sed 's/ (.*)//' | sort -u
+    bazel query 'deps(//...)' --output=label | sort -u
+
+`query` runs at the loading phase and takes every branch of every `select()`, so
+it reports what the repository could depend on under any configuration. That
+conservative superset is what a license or vulnerability scan wants.
+
+`cquery` runs after analysis and resolves `select()` against a configuration, so
+it drops branches that configuration does not take. It is the better tool when
+you need to know what a specific build actually pulls in, and the worse one for
+scanning. Neither output contains the other:
+
+| | labels |
+| --- | --- |
+| `bazel query 'deps(//...)'` | 19668 |
+| `bazel cquery 'deps(//...)'` | 30155 |
+| present in `query`, absent from `cquery` | 2293 |
+
+`cquery` returns more in total because it emits a row per configured target, and
+the same label can appear under host, exec and target configurations. It still
+misses 2293 labels that `query` sees, mostly C++ dependencies reachable only
+through branches no configuration selects here.
+
+The language filters below use `cquery` deliberately: `kind()` matches on rule
+class, which is only accurate after analysis.
 
 Java third-party jars:
 
@@ -79,9 +102,10 @@ only. Exclude them explicitly:
       --output=label
 
 A `target_compatible_with` constraint would not help here. It causes
-`bazel build //...` to skip a target, but `query` and `cquery` are
-configuration-independent: they walk every branch of every `select()` and list
-incompatible targets regardless. Any dependency scan sees them.
+`bazel build //...` to skip a target, but neither `query` nor `cquery` applies
+incompatible-target skipping: both still list the target. That is separate from
+how the two treat `select()`, described above. Any dependency scan sees them
+either way, so the exclusion has to be explicit.
 
 ## Running in a container
 
