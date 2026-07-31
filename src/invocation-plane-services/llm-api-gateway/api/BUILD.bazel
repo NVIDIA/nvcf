@@ -57,6 +57,7 @@ go_library(
         "//src/invocation-plane-services/llm-api-gateway/templating/prompt",
         "@com_github_google_uuid//:uuid",
         "@com_github_labstack_echo_v4//:echo",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_rs_zerolog//:zerolog",
         "@com_github_rs_zerolog//log",
         "@io_opentelemetry_go_otel//:otel",
@@ -81,6 +82,7 @@ go_test(
     srcs = [
         "auth_middleware_test.go",
         "embeddings_handler_test.go",
+        "info_test.go",
         "middleware_telemetry_test.go",
         "middleware_test.go",
         "model_ids_test.go",

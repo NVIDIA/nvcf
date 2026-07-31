@@ -21,6 +21,8 @@ import (
 	"net/http"
 
 	echo "github.com/labstack/echo/v4"
+
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 )
 
 func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
@@ -30,6 +32,7 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 	e.GET("/readyz", func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
+	e.Any("/info", echo.WrapHandler(golibversion.Handler()))
 
 	group := e.Group("", rejectClientSuppliedPriority)
 	handlers.AsOpenAIChatHandlers().RegisterRoutes(group)
