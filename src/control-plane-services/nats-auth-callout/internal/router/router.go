@@ -23,6 +23,7 @@ import (
 	"time"
 
 	_ "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/api"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 
 	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
@@ -127,6 +128,11 @@ func (r *Router) prometheusMiddleware() gin.HandlerFunc {
 func (r *Router) setupRoutes() {
 	// Health check interface (no version)
 	r.engine.GET("/healthz", r.handleHealthz)
+
+	// Build/version metadata served by the shared go-lib handler. Registered
+	// for all methods so the handler itself enforces the GET-only contract
+	// (405 + Allow: GET on non-GET) instead of gin returning a bare 404.
+	r.engine.Any("/info", gin.WrapH(golibversion.Handler()))
 
 	// Note: Metrics endpoint is now served on a separate port via GetMetricsHandler()
 	// and not included in the main application routes
