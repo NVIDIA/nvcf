@@ -753,7 +753,14 @@ BYOO collector debug and log chunking example:
                sizer: bytes
                minSize: 1000000
                maxSize: 1000000
+         logSampling:
+           samplingPercentage: 10
+         traceSampling:
+           samplingPercentage: 1
 ```
+
+`logSampling` and `traceSampling` configure separate probabilistic sampling
+percentages. Leave either setting unset to keep that signal unsampled.
 
 BYOO metric subset example:
 

@@ -600,6 +600,8 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 	batchSendMaxSize := int64(200)
 	logBatchSendSize := int64(340)
 	logBatchSendMaxSize := int64(340)
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
 
 	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
 		Namespace: "test-namespace",
@@ -637,6 +639,12 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 				Timeout:          "400ms",
 				SendBatchSize:    &logBatchSendSize,
 				SendBatchMaxSize: &logBatchSendMaxSize,
+			},
+			LogSampling: SamplingConfig{
+				SamplingPercentage: &logSamplingPercentage,
+			},
+			TraceSampling: SamplingConfig{
+				SamplingPercentage: &traceSamplingPercentage,
 			},
 		},
 	})
@@ -684,9 +692,15 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 		"timeout":             "400ms",
 		"send_batch_max_size": int64(340),
 	}, otelConfig.Processors["batch/logs"])
-	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
+	assert.Equal(t, map[string]interface{}{
+		"sampling_percentage": logSamplingPercentage,
+	}, otelConfig.Processors["probabilistic_sampler/logs"])
+	assert.Equal(t, map[string]interface{}{
+		"sampling_percentage": traceSamplingPercentage,
+	}, otelConfig.Processors["probabilistic_sampler/traces"])
+	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/logs", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
 	assert.Equal(t, []string{"memory_limiter", "filter/metrics", "resource", "metrics_transform", "batch"}, otelConfig.Service.Pipelines["metrics"].Processors)
-	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
+	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/traces", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
 }
 
 func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {

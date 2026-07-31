@@ -208,6 +208,10 @@ agent:
   byooOtelCollector:
     exporterHelper:
       timeout: 30s
+    logSampling:
+      samplingPercentage: 10
+    traceSampling:
+      samplingPercentage: 1
 `))
 	require.NoError(t, err)
 
@@ -217,6 +221,10 @@ agent:
 	assert.Equal(t, int64(131072), completed.Agent.BYOOLogChunking.MaxBodyBytes)
 	assert.True(t, completed.Agent.BYOODebugMode.Enabled)
 	assert.Equal(t, "30s", completed.Agent.BYOOOTelCollector.ExporterHelper.Timeout)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, 10.0, *completed.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, 1.0, *completed.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
 }
 
 func TestConfig_EncodeDecode_Tolerations(t *testing.T) {

@@ -31,6 +31,8 @@ type OTelCollectorConfig struct {
 	MemoryLimiter  MemoryLimiterConfig  `json:"memoryLimiter,omitempty"`
 	Batch          BatchConfig          `json:"batch,omitempty"`
 	LogBatch       BatchConfig          `json:"logBatch,omitempty"`
+	LogSampling    SamplingConfig       `json:"logSampling,omitempty"`
+	TraceSampling  SamplingConfig       `json:"traceSampling,omitempty"`
 }
 
 // IsZero returns true when no collector rendering overrides are configured.
@@ -41,7 +43,19 @@ func (c *OTelCollectorConfig) IsZero() bool {
 	return c.ExporterHelper.IsZero() &&
 		c.MemoryLimiter.IsZero() &&
 		c.Batch.IsZero() &&
-		c.LogBatch.IsZero()
+		c.LogBatch.IsZero() &&
+		c.LogSampling.IsZero() &&
+		c.TraceSampling.IsZero()
+}
+
+// SamplingConfig configures a BYOO collector probabilistic sampling processor.
+type SamplingConfig struct {
+	SamplingPercentage *float64 `json:"samplingPercentage,omitempty"`
+}
+
+// IsZero returns true when no sampling override is configured.
+func (c *SamplingConfig) IsZero() bool {
+	return c == nil || c.SamplingPercentage == nil
 }
 
 // ExporterHelperConfig configures common exporterhelper settings for BYOO exporters.
@@ -183,6 +197,34 @@ func applyOTelCollectorConfig(otelConfig *OpenTelemetryConfig, cfg OTelCollector
 	applyMemoryLimiterConfig(otelConfig, cfg.MemoryLimiter)
 	applyBatchConfig(otelConfig, "batch", cfg.Batch)
 	applyLogBatchConfig(otelConfig, cfg.LogBatch)
+	applySamplingConfig(otelConfig, "logs", "probabilistic_sampler/logs", cfg.LogSampling)
+	applySamplingConfig(otelConfig, "traces", "probabilistic_sampler/traces", cfg.TraceSampling)
+}
+
+func applySamplingConfig(otelConfig *OpenTelemetryConfig, pipelineID, processorID string, cfg SamplingConfig) {
+	if cfg.IsZero() {
+		return
+	}
+	pipeline, ok := otelConfig.Service.Pipelines[pipelineID]
+	if !ok {
+		return
+	}
+
+	otelConfig.Processors[processorID] = map[string]interface{}{
+		"sampling_percentage": *cfg.SamplingPercentage,
+	}
+	for i, existingProcessorID := range pipeline.Processors {
+		if existingProcessorID != "batch" && existingProcessorID != "batch/logs" {
+			continue
+		}
+		processors := append([]string{}, pipeline.Processors[:i]...)
+		processors = append(processors, processorID)
+		pipeline.Processors = append(processors, pipeline.Processors[i:]...)
+		otelConfig.Service.Pipelines[pipelineID] = pipeline
+		return
+	}
+	pipeline.Processors = append(pipeline.Processors, processorID)
+	otelConfig.Service.Pipelines[pipelineID] = pipeline
 }
 
 func applyExporterHelperConfig(otelConfig *OpenTelemetryConfig, cfg ExporterHelperConfig) {

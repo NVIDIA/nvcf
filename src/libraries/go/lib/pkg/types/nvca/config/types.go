@@ -192,6 +192,8 @@ type BYOOOTelCollectorConfig struct {
 	MemoryLimiter  BYOOOTelMemoryLimiterConfig  `mapstructure:"memoryLimiter" yaml:"memoryLimiter,omitempty" json:"memoryLimiter,omitempty"`
 	Batch          BYOOOTelBatchConfig          `mapstructure:"batch" yaml:"batch,omitempty" json:"batch,omitempty"`
 	LogBatch       BYOOOTelBatchConfig          `mapstructure:"logBatch" yaml:"logBatch,omitempty" json:"logBatch,omitempty"`
+	LogSampling    BYOOOTelSamplingConfig       `mapstructure:"logSampling" yaml:"logSampling,omitempty" json:"logSampling,omitempty"`
+	TraceSampling  BYOOOTelSamplingConfig       `mapstructure:"traceSampling" yaml:"traceSampling,omitempty" json:"traceSampling,omitempty"`
 }
 
 // IsZero returns true when no collector rendering overrides are configured.
@@ -199,7 +201,9 @@ func (c BYOOOTelCollectorConfig) IsZero() bool {
 	return c.ExporterHelper.IsZero() &&
 		c.MemoryLimiter.IsZero() &&
 		c.Batch.IsZero() &&
-		c.LogBatch.IsZero()
+		c.LogBatch.IsZero() &&
+		c.LogSampling.IsZero() &&
+		c.TraceSampling.IsZero()
 }
 
 // EnvVars returns the BYOO collector env vars for the structured config.
@@ -215,6 +219,16 @@ func (c BYOOOTelCollectorConfig) EnvVars() []corev1.EnvVar {
 		Name:  BYOOOTelCollectorConfigEnv,
 		Value: base64.StdEncoding.EncodeToString(data),
 	}}
+}
+
+// BYOOOTelSamplingConfig configures the BYOO collector probabilistic sampling processor.
+type BYOOOTelSamplingConfig struct {
+	SamplingPercentage *float64 `mapstructure:"samplingPercentage" yaml:"samplingPercentage,omitempty" json:"samplingPercentage,omitempty"`
+}
+
+// IsZero returns true when no sampling override is configured.
+func (c BYOOOTelSamplingConfig) IsZero() bool {
+	return c.SamplingPercentage == nil
 }
 
 // BYOOOTelExporterHelperConfig configures common exporterhelper settings for BYOO exporters.

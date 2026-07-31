@@ -2852,6 +2852,12 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 						},
 					},
 				},
+				LogSampling: nvcaconfig.BYOOOTelSamplingConfig{
+					SamplingPercentage: ptr.To(10.0),
+				},
+				TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+					SamplingPercentage: ptr.To(1.0),
+				},
 			},
 			BYOODebugMode: nvcaconfig.BYOODebugModeConfig{
 				Enabled: true,
@@ -2883,6 +2889,10 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 	require.NotNil(t, got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MaxSize)
 	assert.Equal(t, int64(1000000), *got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MinSize)
 	assert.Equal(t, int64(1000000), *got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MaxSize)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, 10.0, *got.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, 1.0, *got.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
 	assert.True(t, got.Agent.BYOODebugMode.Enabled)
 	assert.True(t, got.Agent.BYOOMetricSubset.Enabled)
 	assert.Contains(t, got.Agent.BYOOMetricSubset.FilterConfig, "metric.name")

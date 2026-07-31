@@ -192,6 +192,8 @@ func TestBYOOWorkloadMetricsConfig_EnvVars(t *testing.T) {
 
 func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
 	queueSize := int64(2048)
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
 	cfg := AgentConfig{
 		BYOOLogChunking: BYOOLogChunkingConfig{
 			Enabled: true,
@@ -211,6 +213,12 @@ func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
 				SendingQueue: BYOOOTelSendingQueueConfig{
 					QueueSize: &queueSize,
 				},
+			},
+			LogSampling: BYOOOTelSamplingConfig{
+				SamplingPercentage: &logSamplingPercentage,
+			},
+			TraceSampling: BYOOOTelSamplingConfig{
+				SamplingPercentage: &traceSamplingPercentage,
 			},
 		},
 	}

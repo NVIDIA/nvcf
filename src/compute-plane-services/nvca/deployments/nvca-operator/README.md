@@ -43,7 +43,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `nvcaHelmRepositoryPrefix`                | Enables Helm repository restrictions to specific org/teams                                                                                                                                            | `""`                       |
 | `enableGXCache`                           | Enables GXCache Support in NVCA                                                                                                                                                                       | `true`                     |
 | `ddcsIPAllowList`                         | provides comma separated CIDR ranges to allowList                                                                                                                                                     | `""`                       |
-| `agentConfig.mergeConfig`                 | Merge fields into the generated NVCA config. Must be a string.                                                                                                                                        | `""`                       |
+| `agentConfig.mergeConfig`                 | Merge fields into the generated NVCA config, including BYOO log and trace sampling. Must be a string.                                                                                                 | `""`                       |
 
 ### resources Resource requests and limits for the nvca-operator container
 

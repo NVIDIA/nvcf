@@ -127,7 +127,7 @@ Exposed Ports:
 
 The configuration produced by otelconfig-generator guarantees that only `otlp` telemetry and selected platform metrics are received, processed and exported by the collector using the generated configuration.
 
-### 🧩 Oversized Log Chunking
+### Oversized Log Chunking
 
 Some telemetry backends reject a single log entry when its body and attributes are larger than the backend's per-entry size limit. The BYOO collector can insert a custom `logchunk/byoo` processor into the logs pipeline to split oversized log bodies and attributes into correlated chunks before export. Maps and slices are traversed recursively, their string and byte leaves can be split, and each emitted fragment keeps the original partial map or slice type. Scalar values remain atomic.
 
@@ -138,7 +138,7 @@ Chunking is disabled by default. Configure it with:
 - `BYOO_LOG_CHUNK_MAX_BODY_BYTES`: deprecated alias for `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES`. When both are set, `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES` wins.
 - `BYOO_LOG_CHUNK_DRY_RUN`: records oversized-log metrics and warnings without mutating log payloads. Dry-run metric datapoints use `mode=dry_run`.
 - `BYOO_DEBUG_MODE`: enables collector debug logging and adds the `debug` exporter to every generated pipeline.
-- `BYOO_OTEL_COLLECTOR_CONFIG_B64`: optional base64-encoded JSON for advanced collector rendering overrides, such as exporterhelper timeout, retry, sending queue, sending queue batch, memory limiter, batch, and log batch settings.
+- `BYOO_OTEL_COLLECTOR_CONFIG_B64`: optional base64-encoded JSON for advanced collector rendering overrides, such as exporterhelper timeout, retry, sending queue, sending queue batch, memory limiter, batch, log batch, and separate log and trace sampling settings.
 - `BYOO_METRIC_SUBSET_ENABLED`: enables an additional OTLP-only metrics pipeline that exposes filtered user metrics through a Prometheus exporter on port `19091`. Disabled by default.
 - `BYOO_METRIC_SUBSET_FILTER_CONFIG`: optional YAML filter processor config for the metric subset pipeline. If unset, the default drops every metric except `BpsInstrument`, `FpsInstrument`, `RtdInstrument`, and `StageOpenDuration`, and drops datapoints/resources explicitly labeled `metric_subset_enabled=false`.
 - `BYOO_WORKLOAD_METRICS_DROP_LABELS`: comma-separated resource attribute names removed from the generated workload `metrics` pipeline. If unset, defaults to `metric_subset_enabled` only when the metric subset pipeline is enabled.

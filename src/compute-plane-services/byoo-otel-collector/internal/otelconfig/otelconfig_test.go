@@ -25,6 +25,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -159,11 +160,15 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCF_WORKLOAD_TYPE":             "function",
 				"NVCT_TASK_ID":                   "task-123",
 				"NVCF_ZONE_NAME":                 "zone-1",
-				"BYOO_OTEL_COLLECTOR_CONFIG_B64": base64.StdEncoding.EncodeToString([]byte(`{"exporterHelper":{"timeout":"30s"}}`)),
+				"BYOO_OTEL_COLLECTOR_CONFIG_B64": base64.StdEncoding.EncodeToString([]byte(`{"exporterHelper":{"timeout":"30s"},"logSampling":{"samplingPercentage":10},"traceSampling":{"samplingPercentage":1}}`)),
 			},
 			expectErr: false,
 			expect: func(t *testing.T, cfg TemplateConfig) {
 				assert.Equal(t, "30s", cfg.OTelCollector.ExporterHelper.Timeout)
+				require.NotNil(t, cfg.OTelCollector.LogSampling.SamplingPercentage)
+				assert.Equal(t, 10.0, *cfg.OTelCollector.LogSampling.SamplingPercentage)
+				require.NotNil(t, cfg.OTelCollector.TraceSampling.SamplingPercentage)
+				assert.Equal(t, 1.0, *cfg.OTelCollector.TraceSampling.SamplingPercentage)
 			},
 		},
 		{

@@ -200,6 +200,10 @@ func assertBYOOOTelCollectorEnvVars(t *testing.T, envs []corev1.EnvVar) {
 	var collectorConfig nvcaconfig.BYOOOTelCollectorConfig
 	require.NoError(t, json.Unmarshal(decodedCollectorConfig, &collectorConfig))
 	assert.Equal(t, "30s", collectorConfig.ExporterHelper.Timeout)
+	require.NotNil(t, collectorConfig.LogSampling.SamplingPercentage)
+	assert.Equal(t, 10.0, *collectorConfig.LogSampling.SamplingPercentage)
+	require.NotNil(t, collectorConfig.TraceSampling.SamplingPercentage)
+	assert.Equal(t, 1.0, *collectorConfig.TraceSampling.SamplingPercentage)
 	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOMetricSubsetEnabledEnv])
 	assert.Contains(t, envsByName[nvcaconfig.BYOOMetricSubsetFilterConfigEnv], "metric.name")
 	assert.Equal(t, "metric_subset_enabled,custom_label", envsByName[nvcaconfig.BYOOWorkloadMetricsDropLabelsEnv])
@@ -279,6 +283,8 @@ func TestReconcile_Function(t *testing.T) {
 		Operator: corev1.TolerationOpExists,
 		Effect:   corev1.TaintEffectNoSchedule,
 	}
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
 		Enabled:         true,
@@ -288,6 +294,12 @@ func TestReconcile_Function(t *testing.T) {
 	r.cfg.Agent.BYOOOTelCollector = nvcaconfig.BYOOOTelCollectorConfig{
 		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
 			Timeout: "30s",
+		},
+		LogSampling: nvcaconfig.BYOOOTelSamplingConfig{
+			SamplingPercentage: &logSamplingPercentage,
+		},
+		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+			SamplingPercentage: &traceSamplingPercentage,
 		},
 	}
 	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{
@@ -2199,6 +2211,8 @@ func TestReconcile_Task(t *testing.T) {
 		return r.Client, nil
 	}
 
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
 		Enabled:         true,
@@ -2208,6 +2222,12 @@ func TestReconcile_Task(t *testing.T) {
 	r.cfg.Agent.BYOOOTelCollector = nvcaconfig.BYOOOTelCollectorConfig{
 		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
 			Timeout: "30s",
+		},
+		LogSampling: nvcaconfig.BYOOOTelSamplingConfig{
+			SamplingPercentage: &logSamplingPercentage,
+		},
+		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+			SamplingPercentage: &traceSamplingPercentage,
 		},
 	}
 	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{
