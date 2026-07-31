@@ -141,6 +141,48 @@ release rules as the generated GitLab release jobs:
 - `chore:`, `ci:`, `docs:`, `style:`, `refactor:`, `test:`, and
   `build:` do not create releases
 
+## Java framework dependency releases
+
+`semantic-release-monorepo` scopes a service's commits to its own
+subtree path. A change to the shared Java framework under
+`src/libraries/java/` lands outside every service directory, so
+semantic-release sees no commits for any dependent service and releases
+nothing. CI still rebuilds and tests each dependent service, but the
+rebuilt artifact never leaves the CI job.
+
+`tools/ci/github-release auto` closes that gap. It reads the
+per-component `bazel-java-ci.json` descriptors, the same files
+`.github/workflows/bazel.yml` reads to schedule its matrix, so the
+framework-to-service edge is declared once:
+
+- `component_kind: java-framework` marks a shared framework path.
+- `component_kind: java-service` marks a component that is rebuilt when
+  any framework path changes.
+
+For a registered subproject whose path matches a `java-service`
+descriptor, the script cuts a dependency-triggered release when all of
+the following hold:
+
+- semantic-release computed no version for that service on this run. If
+  the same push also touched the service, semantic-release owns the
+  version and nothing extra is tagged.
+- The service already has a release tag to bump from.
+- At least one commit touching a framework path landed since that tag.
+
+The synthesized bump is always a patch, including when the framework
+commit is a `feat:`. A framework feature adds no capability to a service
+that has not adopted it, and the service's own changelog has nothing to
+substantiate a minor. A service that does adopt a new framework API does
+so in a commit under its own directory, which semantic-release turns
+into the correct bump; the fan-out does not run in that case.
+
+The release notes state that the release is dependency-triggered and
+list the framework commits, so a reader of a GitHub Release with no
+changes in the service directory can see why the version moved.
+
+Dry-run mode prints the tag and notes it would create and creates
+nothing, the same as every other release path in this script.
+
 ## Release notes for pushed tags
 
 On tag pushes, the workflow validates the tag and creates lightweight
