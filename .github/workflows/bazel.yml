@@ -429,6 +429,26 @@ jobs:
         working-directory: ${{ matrix.subtree.workdir }}
         run: bazel version
 
+      # Cache identity is keyed on the module, not on the row.
+      #
+      # These paths hold the Bazel install base and the repository cache. No
+      # disk_cache is configured, so their content is a pure function of the
+      # two files hashed below and carries nothing row-specific. Keying on
+      # matrix.subtree.id made sense while every subtree had its own nested
+      # MODULE.bazel: the rows genuinely had different dependency closures.
+      #
+      # They no longer do. Every row that builds from the root module hashes
+      # the same root lock and produces byte-identical content, so keying by id
+      # would store ~22 copies of the same multi-gigabyte entry. GitHub's cache
+      # is 10 GB per repository with LRU eviction, so those copies cannot
+      # coexist: they would evict each other on every run and the cache would
+      # stop working for every branch, not just this one. Root-scoped rows
+      # therefore share a single identity, which is what their content already
+      # implies. The literal `root` row lands on the same key by construction,
+      # since it hashes the same files.
+      #
+      # Concurrent saves to one key are safe: the first writer wins and the rest
+      # no-op. Rows with their own module keep a per-row identity.
       - name: Cache Bazel repository + disk caches
         if: steps.precheck.outputs.skip == 'false'
         uses: actions/cache@v4
@@ -436,9 +456,9 @@ jobs:
           path: |
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
-          key: bazel-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
+          key: bazel-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
           restore-keys: |
-            bazel-${{ matrix.subtree.id }}-
+            bazel-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-
 
       # byoo-otel-collector's binary is built by a no-sandbox genrule that shells
       # out to `go build` (ocb-generated source) and fetches the whole otel
@@ -723,11 +743,19 @@ jobs:
           # Root test quarantine: subtract known-flaky packages (nvcf-go owns the
           # test-layer fix; see the file header and NVIDIA/nvcf#284) from the root
           # row's test set. Negative patterns are appended after the positive
-          # patterns so Bazel removes them from the resolved set. The file lives at
-          # the repo root, so it is present only for the root row (whose working
-          # directory is the repo root); other rows have no such file.
+          # patterns so Bazel removes them from the resolved set.
+          #
+          # The row is matched explicitly. This used to rely on the file simply
+          # not resolving from a subtree working directory, which stopped being
+          # true when every migrated service began building from the repository
+          # root: the quarantine then applied to every root-scoped row. It is
+          # inert today because the patterns do not intersect those scopes, but
+          # a future entry that did would silently stop testing a service with
+          # no signal anywhere. An implicit guard that depends on the working
+          # directory is the same trap as a `manual` tag that only holds under
+          # wildcard expansion, so state the intent instead of inferring it.
           qfile=".github/bazel-root-test-quarantine.txt"
-          if [ -f "$qfile" ]; then
+          if [ "${{ matrix.subtree.id }}" = "root" ] && [ -f "$qfile" ]; then
             n=$(grep -cE '^[[:space:]]*-//' "$qfile" || true)
             grep -E '^[[:space:]]*-//' "$qfile" | sed -E 's/^[[:space:]]+//' >> "$ttfile"
             echo "quarantine: subtracted ${n:-0} pattern(s) from the root test set"
@@ -856,9 +884,9 @@ jobs:
           path: |
             ~/.cache/bazel/*/install
             ~/.cache/bazel/*/cache
-          key: bazel-docker-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
+          key: bazel-docker-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
           restore-keys: |
-            bazel-docker-${{ matrix.subtree.id }}-
+            bazel-docker-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-
       # Enable the public EC2 Buildbarn remote cache when the token+endpoint are
       # present. Upload only on main pushes so PRs are read-only and cannot
       # poison the shared cache.
