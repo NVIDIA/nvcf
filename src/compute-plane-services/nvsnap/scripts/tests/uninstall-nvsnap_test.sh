@@ -101,6 +101,10 @@ refute  "issues no unmodeled command"  "UNMODELED" "$(cat "$CALLS")"
 check   "announces dry run"            "DRY RUN" "$out"
 refute  "issues no delete"             "kubectl delete" "$(cat "$CALLS")"
 refute  "issues no patch"              "kubectl patch"  "$(cat "$CALLS")"
+# apply is a mutation too: the node-state step creates a privileged cleanup
+# DaemonSet with it. Dry run must not create that either.
+refute  "creates no cleanup DaemonSet" "kubectl apply"  "$(cat "$CALLS")"
+refute  "uninstalls no helm release"   "helm uninstall" "$(cat "$CALLS")"
 
 echo "== ownership selection (--apply) =="
 : > "$CALLS"
