@@ -655,9 +655,14 @@ def publish_framework_dependency_release(root, service, components, dry_run, dra
 
 def resolve_release_outcome(exit_code, output):
     """Classify a semantic-release run: it released, it released nothing, or it is unreadable."""
+    if exit_code != 0:
+        # A run that died is untrustworthy even if it printed a version before
+        # dying: the publish run may not reproduce it. Report it rather than
+        # previewing a tag that may never be created.
+        return "unknown"
     if parse_next_version(output):
         return "released"
-    if exit_code == 0 and no_release_output(output):
+    if no_release_output(output):
         return "no-release"
     return "unknown"
 
@@ -941,7 +946,7 @@ def auto_release(args):
                     # semantic-release child was killed on a large history).
                     # Do not fail the inert workflow on a preview; record it so
                     # it is visible and gets resolved before the cutover.
-                    reason = f"semantic-release dry-run exited {code} with no NEXT_VERSION"
+                    reason = f"semantic-release dry-run exited {code} without a trustworthy release decision"
                     print(f"[github-release] WARNING: {service['id']}: {reason}; continuing (dry-run preview)")
                     dry_run_failures.append((service["id"], reason))
             else:

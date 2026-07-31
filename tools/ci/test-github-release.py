@@ -373,6 +373,38 @@ class GithubReleaseTest(unittest.TestCase):
             "no-release",
         )
         self.assertEqual(self.github_release.resolve_release_outcome(1, "boom"), "unknown")
+        # A run that printed a version and then died is not trustworthy: the
+        # publish run may not reproduce it, so it must be reported rather than
+        # previewed as a tag.
+        self.assertEqual(
+            self.github_release.resolve_release_outcome(1, "The next release version is 2.4.0"),
+            "unknown",
+        )
+        self.assertEqual(
+            self.github_release.resolve_release_outcome(
+                137, "There are no relevant changes, so no new version is released."
+            ),
+            "unknown",
+        )
+
+    def test_failed_semantic_release_run_does_not_fan_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_java_repo(root)
+            self.commit_framework_change(root)
+            components = self.github_release.java_ci_components(root)
+            service_id, path, _version = self.JAVA_SERVICES[0]
+            service = self.java_service_metadata(service_id, path)
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                outcome = self.github_release.finish_semantic_release(
+                    root, service, components, 137, "killed mid-run\n", dry_run=True, draft=False
+                )
+
+            self.assertEqual(outcome, "unknown")
+            self.assertNotIn("would create", output.getvalue())
+            self.assertNotIn("dependency-triggered", output.getvalue())
 
     def list_tags(self, root):
         result = subprocess.run(
