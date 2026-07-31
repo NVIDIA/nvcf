@@ -431,7 +431,7 @@ func TestHelmValuesIdentitySource(t *testing.T) {
 // `## @param` schema (top-level clusterID/clusterGroupID/ncaID with the
 // mixed-case "ID" suffix). The chart's self-managed-nvcfbackend-cm.yaml
 // renders these into the cluster-dto.yaml that the operator's mapper
-// deserializes into NVCFBackend.spec.clusterConfig — getting the casing
+// deserializes into NVCFBackend.spec.clusterConfig. Getting the casing
 // or nesting wrong leaves ClusterID empty and trips the preflight reject
 // in pkg/operator/reconcile/nvcaagent_reconcile.go.
 
@@ -463,7 +463,7 @@ func TestHelmValuesYAMLSchema(t *testing.T) {
 	assert.Contains(t, got, "icmsServiceURL: http://sis.localhost:18080")
 	assert.Contains(t, got, "revalServiceURL: http://reval.localhost:18080")
 	assert.Contains(t, got, "natsURL: nats://nats.localhost:4222")
-	// Old (pre-fix) schema must not appear — these keys would silently
+	// Old (pre-fix) schema must not appear, these keys would silently
 	// fall through to chart defaults and leave the operator with empty IDs.
 	assert.NotContains(t, got, "clusterId:")
 	assert.NotContains(t, got, "clusterGroupId:")
@@ -606,6 +606,14 @@ func TestBuildKubectlCommand(t *testing.T) {
 		cmd := buildKubectlCommand(config, []string{"get", "--raw", "/openid/v1/jwks"})
 		assert.Contains(t, cmd.Args, "--context")
 		assert.Contains(t, cmd.Args, "k3d-compute")
+	})
+
+	t.Run("puts both global flags before the subcommand args", func(t *testing.T) {
+		config := &client.Config{KubeconfigPath: "/home/user/.kube/config", KubeContext: "k3d-compute"}
+		cmd := buildKubectlCommand(config, []string{"get", "pods"})
+		assert.Equal(t,
+			[]string{"kubectl", "--context", "k3d-compute", "--kubeconfig", "/home/user/.kube/config", "get", "pods"},
+			cmd.Args)
 	})
 
 	t.Run("preserves all arguments", func(t *testing.T) {

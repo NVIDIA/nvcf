@@ -136,6 +136,10 @@ impl OAuth2Client {
     }
 
     pub async fn get_jwt_token(&self) -> Result<String, Box<dyn std::error::Error>> {
+        if let Some(token) = self.static_access_token() {
+            return Ok(token);
+        }
+
         // Check if we have a cached valid token
         {
             let cache = self.token_cache.read().await;
@@ -157,6 +161,14 @@ impl OAuth2Client {
         .await
     }
 
+    fn static_access_token(&self) -> Option<String> {
+        self.secrets_watcher
+            .get_config()
+            .nvcf_api
+            .and_then(|creds| creds.access_token)
+            .filter(|token| !token.is_empty())
+    }
+
     async fn refresh_token_internal(
         token_cache: &Arc<RwLock<Option<CachedToken>>>,
         oauth2_api_url: &str,
@@ -170,6 +182,10 @@ impl OAuth2Client {
         let nvcf_creds = secrets
             .nvcf_api
             .ok_or("No NVCF API credentials found in secrets")?;
+
+        if let Some(access_token) = nvcf_creds.access_token.filter(|token| !token.is_empty()) {
+            return Ok(access_token);
+        }
 
         let (new_token, expires_in) = Self::get_token_request_internal(
             oauth2_api_url,
@@ -323,6 +339,33 @@ mod tests {
         let creds = secrets.nvcf_api.unwrap();
         assert_eq!(creds.client_id, "test_client_id");
         assert_eq!(creds.client_secret, "test_client_secret");
+    }
+
+    #[tokio::test]
+    async fn test_get_jwt_token_uses_static_access_token() {
+        let temp_dir = TempDir::new().unwrap();
+        let secrets_file = temp_dir.path().join("secrets.json");
+        let secrets_content = serde_json::json!({
+            "kv": {
+                "nvcf_api": {
+                    "access_token": "vault_rendered_token"
+                }
+            }
+        });
+        fs::write(&secrets_file, secrets_content.to_string())
+            .await
+            .unwrap();
+        let secrets_watcher = SecretFileWatcher::new(&secrets_file).await.unwrap();
+
+        let oauth2_client = OAuth2Client::new(
+            "http://127.0.0.1:1".to_string(),
+            TEST_SCOPE.to_string(),
+            Arc::new(secrets_watcher),
+        )
+        .unwrap();
+
+        let token = oauth2_client.get_jwt_token().await.unwrap();
+        assert_eq!(token, "vault_rendered_token");
     }
 
     #[tokio::test]

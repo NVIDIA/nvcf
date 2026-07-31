@@ -104,7 +104,7 @@ public class NgcArtifactRegistryClient {
         this.artifactBaseUrl = baseUrl.replace("-ngc", "");
 
         var authWebClient = WebClientUtils.createWebClient(
-                webClientBuilder.clone(),
+                webClientBuilder,
                 oauth2BaseUrl, Duration.ofSeconds(5));
         this.authServiceStub = WebClientUtils.createStubService(
                 authWebClient, AuthServiceStub.class);
@@ -113,7 +113,7 @@ public class NgcArtifactRegistryClient {
                          + " connectTimeout: {}, responseTimeout: {}, writeTimeout: {}",
                  hostname, exchangeTimeout, connectTimeout, responseTimeout, writeTimeout);
         var artifactWebClient = WebClientUtils.createWebClient(
-                webClientBuilder.clone(),
+                webClientBuilder,
                 artifactBaseUrl, exchangeTimeout, connectTimeout, responseTimeout, writeTimeout, 3);
         this.ngcArtifactRegistryStub = WebClientUtils.createStubService(
                 artifactWebClient, NgcArtifactRegistryStub.class);

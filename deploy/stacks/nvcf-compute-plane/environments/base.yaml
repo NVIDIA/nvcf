@@ -63,6 +63,10 @@ global:
   #   value: worker
   #   effect: NoSchedule
 
+# One profile controls all compute observability defaults.
+observability:
+  profile: compute
+
 # =============================================================================
 # Optional Add-on Operators
 # =============================================================================

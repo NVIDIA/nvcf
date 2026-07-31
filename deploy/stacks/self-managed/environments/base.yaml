@@ -133,29 +133,28 @@ global:
       # global.observability.metrics.enabled
       enabled: false
 
-# Shared observability infrastructure. Self-managed control-plane installs keep
-# this on because the function autoscaler depends on a populated TSDB.
+# One profile installs and configures the shared observability stack for the
+# selected planes. Self-managed control-plane installs need no other
+# observability flags.
 observability:
-  mode: install
+  profile: control
 
-prometheusOperatorCrds:
-  # Disable this when the cluster already owns Prometheus Operator CRDs, such as
-  # through an existing kube-prometheus-stack install, to avoid CRD conflicts.
-  enabled: true
-
-opentelemetryOperator:
-  enabled: true
-
-controlPlaneCollector:
-  enabled: true
-
-victoriaMetrics:
-  enabled: true
-
-defaultMonitors:
-  enabled: true
-  controlPlane:
-    enabled: true
+# Defaults consumed only for the control and all observability profiles.
+functionAutoscaler:
+  chartVersion: "0.1.0"
+  region: local
+  cassandra:
+    contactPoints: cassandra.cassandra-system.svc.cluster.local
+    isDevelopment: false
+  nvcfApi:
+    grpcAddress: http://api.nvcf.svc.cluster.local:9090
+    # Self-managed auth uses the OpenBao-rendered bearer token.
+    disableAuth: false
+    dryRun: false
+  timeseriesDb:
+    # Self-hosted control-plane metrics do not require the hosted TSDB's
+    # environment label.
+    ignoreEnv: true
 
 accounts:
   limits:
@@ -201,20 +200,24 @@ openbao:
     # Override to 1 in single-node / minimal test pools to avoid Pending pods.
     replicas: 2
     webhook:
-      failurePolicy: Fail
-      namespaceSelector:
-        matchExpressions:
-          - key: kubernetes.io/metadata.name
-            operator: In
-            # nvcf-ui is appended by global.yaml.gotmpl only when the
-            # addons.nvcfUi addon is enabled, so the disabled-by-default path
-            # leaves the injector's namespace selector unchanged.
-            values:
-              - api-keys
-              - ess
-              - nats-system
-              - nvcf
-              - sis
+      # Ignore admits pods when the injector webhook is unavailable.
+      # Set to Fail when successful secret injection is required for admission.
+      failurePolicy: Ignore
+      # The selector is omitted by default, so the webhook applies to all namespaces.
+      # Uncomment this block to restrict it to the selected NVCF namespaces.
+      # When the addon is enabled, nvcf-ui is appended to a
+      # kubernetes.io/metadata.name In expression. Other selector shapes
+      # must match the nvcf-ui namespace without template mutation.
+      # namespaceSelector:
+      #   matchExpressions:
+      #     - key: kubernetes.io/metadata.name
+      #       operator: In
+      #       values:
+      #         - api-keys
+      #         - ess
+      #         - nats-system
+      #         - nvcf
+      #         - sis
 
 addons:
   # LLS/TURN Low-Latency Streaming addon

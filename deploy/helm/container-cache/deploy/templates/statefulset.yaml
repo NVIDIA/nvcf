@@ -260,6 +260,10 @@ spec:
               path: lua-gen-key.lua
             - key: lua-ssl.lua
               path: lua-ssl.lua
+            {{- if (.Values.consistentHashRouting).enabled }}
+            - key: cc-route.lua
+              path: cc-route.lua
+            {{- end }}
         - name: nginx-default-config
           configMap:
             name: nvcf-default-config

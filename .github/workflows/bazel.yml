@@ -94,6 +94,8 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BEFORE_SHA: ${{ github.event.before }}
+          # merge_group has no `before`; its payload carries the queue base.
+          MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.sha }}
           BASE_REF: ${{ github.base_ref }}
         run: |
@@ -191,6 +193,24 @@ jobs:
             pull_request)
               if ! changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" 2>/dev/null); then
                 echo "diff vs origin/${BASE_REF} failed; running full matrix"
+                run_all=true
+              fi
+              ;;
+            merge_group)
+              # `github.event.before` does not exist on merge_group, so without
+              # this branch every queue entry fell through to the default arm
+              # and rebuilt all 24 rows regardless of what the pull request
+              # touched. The queue head is the base plus the queued commits, so
+              # diffing from base_sha yields exactly those changes (and, for a
+              # batched entry, every pull request in the batch).
+              if [ -z "${MERGE_BASE_SHA}" ]; then
+                echo "merge_group base_sha missing; running full matrix"
+                run_all=true
+              elif ! git rev-parse --verify -q "${MERGE_BASE_SHA}^{commit}" >/dev/null 2>&1; then
+                echo "merge_group base ${MERGE_BASE_SHA} not in history; running full matrix"
+                run_all=true
+              elif ! changed=$(git diff --name-only "${MERGE_BASE_SHA}...${HEAD_SHA}" 2>/dev/null); then
+                echo "diff ${MERGE_BASE_SHA}...${HEAD_SHA} failed; running full matrix"
                 run_all=true
               fi
               ;;
@@ -331,8 +351,32 @@ jobs:
   bazel:
     name: bazel (${{ matrix.subtree.id }})
     needs: detect
-    if: needs.detect.outputs.any == 'true'
-    runs-on: ubuntu-latest
+    # Guard on THIS lane's matrix, not the combined `any`. A change touching
+    # only docker-host subtrees leaves this matrix empty while `any` is still
+    # true; GitHub cannot create a job from an empty matrix vector and resolves
+    # it to `failure`, not `skipped`, which failed the required check on PRs
+    # that had nothing wrong with them. bazel-docker already guards this way.
+    if: needs.detect.outputs.matrix != '[]'
+    # NVIDIA self-hosted runners (nv-cpu-general), not GitHub-hosted. Access is
+    # granted per repository in nv-gha-runners/enterprise-runner-configuration
+    # and expires, so it must be renewed there.
+    #
+    # This is a capacity change, not a tuning one. On GitHub-hosted runners a
+    # merge-queue entry saw twelve rows start immediately and the rest wait 26
+    # to 31 minutes for a runner, against a slowest row of ~650s: the wall clock
+    # was queueing, not work. cpu16 is also 4x the cores of the hosted runner,
+    # so it shortens the critical path as well as the wait, which matters
+    # because the row is a Bazel build that parallelises well.
+    # NVIDIA policy blocks `pull_request` events on self-hosted runners, since a
+    # fork's pull request could otherwise execute untrusted code inside the
+    # network: the job is accepted and then killed at setup with "Workflows
+    # triggered by pull_request events are not allowed to run on self-hosted
+    # runners". Pull requests therefore stay on GitHub-hosted capacity.
+    #
+    # merge_group and push run trusted, already-reviewed code, and the merge
+    # queue is where the starvation actually hurt: twelve rows waited 26 to 31
+    # minutes for a runner against a slowest row of ~650s.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'linux-amd64-cpu16' }}
     # Public EC2 Buildbarn cache (grpcs, bearer-token gated). The token is a
     # repo secret, so fork PRs (which never receive secrets) fall back to a
     # cacheless build automatically. The CA cert is a repo variable (public).
@@ -345,7 +389,7 @@ jobs:
       # Bazelisk then selects the root .bazelversion release. Update this tag
       # only after the corresponding internal image has been published and
       # mirrored.
-      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.13.0' }}
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.14.0' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -938,8 +982,14 @@ jobs:
             exit 0
           fi
 
-          if [ "${BAZEL_RESULT}" != "success" ]; then
-            echo "one or more Bazel matrix rows failed, were cancelled, or were skipped"
+          # `skipped` is legitimate here and means the build-container matrix was
+          # empty, i.e. every selected subtree runs in the docker-host lane. The
+          # job's `if` is tied to that matrix being non-empty, so skipped can
+          # only mean "nothing for this lane to do" -- it cannot hide a row that
+          # should have run. The BAZEL_ANY check above already catches the case
+          # where no subtree was selected at all.
+          if [ "${BAZEL_RESULT}" != "success" ] && [ "${BAZEL_RESULT}" != "skipped" ]; then
+            echo "one or more Bazel matrix rows failed or were cancelled"
             exit 1
           fi
 

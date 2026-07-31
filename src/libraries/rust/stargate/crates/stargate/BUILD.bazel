@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
@@ -62,6 +63,7 @@ rust_library(
         ],
     ),
     aliases = aliases(),
+    compile_data = ["//:load_balancer_configuration_doc"],
     crate_name = "stargate",
     edition = "2024",
     proc_macro_deps = all_crate_deps(proc_macro = True),

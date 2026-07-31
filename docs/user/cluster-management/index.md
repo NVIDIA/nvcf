@@ -5,7 +5,10 @@ The NVIDIA Cluster Agent (NVCA) connects GPU clusters to the NVCF control plane,
 For a fresh install, use the [Quickstart](../quickstart.md). The one-click CLI flow can register a GPU cluster as part of the install. Use this section for manual cluster registration, standalone NVCA installation, and day-two cluster configuration.
 
 <Warning>
-If you pin NVCA separately from the recommended compute-plane stack, check the current NVCA version before upgrading to NVCA 3.x. Clusters running NVCA 2.51.0 or earlier have version-specific upgrade guidance. See the [0.6.0 upgrade notes](../release-notes/0.6.0.md#upgrade-notes).
+If you pin NVCA separately from the recommended compute-plane stack, check the
+current NVCA version before upgrading to NVCA 3.x. Clusters running NVCA 2.51.0
+or earlier have version-specific upgrade guidance. See the
+[0.6.0 upgrade notes](https://docs.nvidia.com/nvcf/v0.6.0/0-6-0-release-notes#upgrade-notes).
 </Warning>
 
 After installing NVCA on a cluster:

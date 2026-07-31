@@ -125,14 +125,14 @@ The following tables list the complete artifact inventory.
 | `helm-nvcf-notary-service` | `1.4.2` | Required | Deploys the notary service for signing and validation. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-notary-service:1.4.2` |  |
 | `helm-nvcf-nvct-api` | `1.4.3` | Required | Deploys the NVCF tenant API service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nvct-api:1.4.3` |  |
 | `helm-nvcf-openbao-server` | `0.30.23` | Required | Deploys OpenBao secret management. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-openbao-server:0.30.23` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/openbao) / [Upstream](https://github.com/openbao/openbao-helm) |
+| `helm-nvcf-pki` | `0.1.0` | Optional | Provisions the OpenBao-backed ClusterIssuer for NVCF service TLS. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-pki:0.1.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nvcf-pki) |
 | `helm-nvcf-rate-limiter` | `1.0.3` | Optional | Deploys request rate limiting for supported invocation paths. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-rate-limiter:1.0.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/ratelimiter) |
 | `helm-nvcf-sis` | `1.18.3` | Required | Deploys the Spot Instance Service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-sis:1.18.3` |  |
 | `helm-nvcf-state-metrics` | `1.0.1` | Optional | Deploys NVCF state metrics for observability. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-state-metrics:1.0.1` |  |
-| `helm-nvcf-ui` | `1.1.2` | Optional | Deploys the optional NVCF UI admin panel. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-ui:1.1.2` |  |
 | `helm-nvcf-vanity-gateway` | `0.1.0-nvcf-10204.1` | Optional | Deploys the optional vanity hostname gateway. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-vanity-gateway:0.1.0-nvcf-10204.1` |  |
 | `helm-reval` | `1.3.8` | Required | Deploys the function revalidation service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-reval:1.3.8` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/helm-reval) |
 | `nvcf-example-dashboards` | `1.6.0` | Optional | Deploys example Grafana dashboards for NVCF telemetry. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-example-dashboards:1.6.0` |  |
-| `nvcf-gateway-routes` | `1.15.0` | Optional | Deploys Gateway API routes for the reference architecture. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes:1.15.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/gateway-routes) |
+| `nvcf-gateway-routes` | `1.14.0` | Optional | Deploys Gateway API routes for the reference architecture. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes:1.14.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/gateway-routes) |
 | `nvcf-observability-reference-stack` | `1.10.0` | Optional | Deploys a reference observability backend for evaluation. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-observability-reference-stack:1.10.0` |  |
 
 ### Control plane services and images
@@ -157,7 +157,7 @@ The following tables list the complete artifact inventory.
 | `nvcf-invocation-service` | `0.8.5` | Required | Routes stateless HTTP function invocation requests. | `nvcr.io/nvidia/nvcf/nvcf-invocation-service:0.8.5` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/http-invocation) |
 | `nvcf-nats-auth-callout-service` | `0.5.10` | Required | Authorizes NATS clients for NVCF services and workloads. | `nvcr.io/nvidia/nvcf/nvcf-nats-auth-callout-service:0.5.10` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/nats-auth-callout) |
 | `nvcf-openbao` | `2.5.4-nv-1.3.0` | Required | Stores and manages control-plane secrets. | `nvcr.io/0833294136851237/selfhosted-ga/nvcf-openbao:2.5.4-nv-1.3.0-ea` | [Upstream](https://github.com/openbao/openbao) |
-| `nvcf-openbao-migrations` | `0.16.1` | Required | Applies the OpenBao configuration required by NVCF. | `nvcr.io/nvidia/nvcf/nvcf-openbao-migrations:0.16.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/openbao) |
+| `nvcf-openbao-migrations` | `0.16.2` | Required | Applies the OpenBao configuration required by NVCF. | `nvcr.io/nvidia/nvcf/nvcf-openbao-migrations:0.16.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/openbao) |
 | `nvcf-service-oss` | `1.9.0-hotfix.1` | Required | Provides the primary NVCF control-plane API. | `nvcr.io/nvidia/nvcf/nvcf-service-oss:1.9.0-hotfix.1` |  |
 | `nvct-service-oss` | `1.5.9-hotfix.1` | Required | Provides tenant-scoped NVCF control-plane operations. | `nvcr.io/nvidia/nvcf/nvct-service-oss:1.5.9-hotfix.1` |  |
 | `oss-vault-k8s` | `1.7.4` | Required | Integrates Kubernetes workloads with OpenBao secrets. | `nvcr.io/nvidia/nvcf/oss-vault-k8s:1.7.4` |  |

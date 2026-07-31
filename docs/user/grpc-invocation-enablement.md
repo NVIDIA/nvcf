@@ -15,7 +15,7 @@ because workers can reach grpc-proxy pod IPs directly.
 
 For a complete Amazon EKS installation example that compares single-cluster and
 multi-cluster topologies, see the
-[CSP End-to-End Example](https://docs.nvidia.com/nvcf/v0.6.0/csp-end-to-end-example).
+[CSP End-to-End Example](./csp-end-to-end-example-installation.md).
 
 <Warning>
 Split or multi-cluster gRPC invocation is beta in 0.6.0. It supports one

@@ -20,9 +20,12 @@ import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SpanProcessor;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.opentelemetry.sdk.trace.export.SpanExporter;
+import java.util.concurrent.atomic.AtomicInteger;
+import net.devh.boot.grpc.server.event.GrpcServerStartedEvent;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.context.event.EventListener;
 
 /**
  * Test configuration that provides an in-memory span exporter for asserting
@@ -35,6 +38,16 @@ import org.springframework.context.annotation.Primary;
 public class ActuatorTracingTestConfiguration {
 
     public static final InMemorySpanExporter SPAN_EXPORTER = InMemorySpanExporter.create();
+    private static final AtomicInteger GRPC_PORT = new AtomicInteger();
+
+    static int grpcPort() {
+        return GRPC_PORT.get();
+    }
+
+    @EventListener
+    public void captureGrpcPort(GrpcServerStartedEvent event) {
+        GRPC_PORT.set(event.getServer().getPort());
+    }
 
     @Bean
     @Primary

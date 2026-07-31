@@ -1,5 +1,6 @@
 load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
 load("//rules/java:spring.bzl", "spring_boot_app")
+load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -73,4 +74,43 @@ nvct_library_test(
         "requires-docker",
     ],
     timeout = "long",
+)
+
+# Release image. Push the _index label (multi-arch amd64 + arm64), never
+# :nvct-service-oss-image, which is the single host-arch image.
+#
+# Runtime parity with the pre-Bazel nvct-service/Dockerfile, which is the
+# contract this image must preserve:
+#   COPY app.jar /usr/share/app.jar
+#   ENV ULIMIT_FLAG=1
+#   ENV JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=40.0 ..."
+#   WORKDIR /home/app
+#   CMD ["java", "-jar", "/usr/share/app.jar"]
+#
+# ULIMIT_FLAG is load-bearing, not decoration: the base's shelless_ulimit shim
+# reads it, so without it the shim runs and raises nothing. JDK_JAVA_OPTIONS
+# carries the container heap sizing (MaxRAMPercentage), so dropping it silently
+# changes JVM memory behavior in production.
+java_oci_image(
+    name = "nvct-service-oss-image",
+    jar = ":app",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "-XX:MaxRAMPercentage=40.0 -XX:+EnableDynamicAgentLoading -Dreactor.netty.pool.maxIdleTime=30000 -Dreactor.netty.pool.maxConnections=500",
+    },
+    workdir = "/home/app",
+)
+
+# Runtime-contract guard for the image, shared with every other Java service
+# so the assertions cannot drift apart between them.
+java_image_contract_test(
+    name = "image_contract_test",
+    image = ":nvct-service-oss-image",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "-XX:MaxRAMPercentage=40.0 -XX:+EnableDynamicAgentLoading -Dreactor.netty.pool.maxIdleTime=30000 -Dreactor.netty.pool.maxConnections=500",
+    },
+    workdir = "/home/app",
 )

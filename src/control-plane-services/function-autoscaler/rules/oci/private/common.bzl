@@ -6,17 +6,26 @@
 load("@aspect_bazel_lib//lib:expand_template.bzl", "expand_template")
 load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//rules/oci:transition.bzl", "multi_arch")
 
 DEFAULT_BASE = "@distroless_cc"
-# linux_x86_64 only for now. linux_arm64 builds fail at openssl-sys's
-# build script because the crate.annotation in MODULE.bazel points at
-# /usr/lib/x86_64-linux-gnu/libssl.so; under the zig cc cross-compile
-# to aarch64 that path is wrong. Re-add linux_arm64 once we either
-# vendor libssl via http_archive + multi-arch crate.annotation, or
-# switch the scylla driver's TLS feature to rustls.
 DEFAULT_PLATFORMS = [
+    "//platforms:linux_arm64",
     "//platforms:linux_x86_64",
+]
+
+# Architectures every published image index must carry.
+#
+# Deliberately a separate constant rather than something derived from
+# DEFAULT_PLATFORMS. Derived expectations cannot catch a platform being dropped:
+# removing arm64 from DEFAULT_PLATFORMS would remove it from the expectation
+# too, the index would shrink, and the test would still pass. That is exactly
+# how this service shipped an amd64-only image for months without CI noticing.
+# Changing this list is a policy decision and should be visible in review.
+REQUIRED_ARCHES = [
+    "amd64",
+    "arm64",
 ]
 
 COMMON_LAYERS = []
@@ -83,6 +92,16 @@ def create_oci_image(
         images = [multi_arch_name],
         visibility = visibility,
         tags = all_tags,
+    )
+
+    # Guards the published manifest, not just the build. Note this test is NOT
+    # tagged "manual": the image targets are, so `bazel test //...` would skip
+    # this too and the guard would be inert.
+    sh_test(
+        name = name + "_platforms_test",
+        srcs = ["//rules/oci/private:image_index_platforms_test.sh"],
+        args = ["$(location {}_index)".format(name)] + REQUIRED_ARCHES,
+        data = [name + "_index"],
     )
 
     load_name = name + "_load"
