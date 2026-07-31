@@ -577,8 +577,13 @@ jobs:
           tfile="$RUNNER_TEMP/targets.txt"
           # SCOPE is //... for standalone-module rows, and //<path>/...
           # for a root-scoped lane so it builds only its own targets out of the
-          # shared root module.
-          full() { printf '%s\n' "$SCOPE" > "$tfile"; echo "targets: $SCOPE (full build)"; }
+          # shared root module. The root row is several patterns in one string
+          # ("//... -//a/... -//b/..."), because it subtracts every other row's
+          # path. --target_pattern_file takes one pattern per line, so SCOPE is
+          # deliberately unquoted here to word-split; quoting it writes the whole
+          # string as a single line and Bazel rejects it as one invalid package
+          # name. The patterns contain no glob characters, so splitting is safe.
+          full() { printf '%s\n' $SCOPE > "$tfile"; echo "targets: $SCOPE (full build)"; }
 
           # Only the root row on a pull_request is a narrowing candidate. Every
           # other trigger (main push warms + uploads the whole closure; dispatch
