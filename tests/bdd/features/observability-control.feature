@@ -17,6 +17,7 @@ Feature: Install local Helmfile observability with the control profile
     # The public stack ships Makefile.dist. Copy it for this live run so the
     # ledger restores the untracked development Makefile state afterward.
     And I copy the file "deploy/stacks/self-managed/Makefile.dist" to "deploy/stacks/self-managed/Makefile"
+    # Set the self-managed stack environment.
     And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-control.yaml"
     And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-control.yaml" with keys:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -25,9 +26,7 @@ Feature: Install local Helmfile observability with the control profile
       | observability.profile           | control                              |
       | functionAutoscaler.chartVersion | 0.2.0                                |
       | functionAutoscaler.image.tag    | 1.18.10                              |
-    # The shared observability Helmfile receives the same named environment.
-    # It resolves the profile and image-source values while the self-managed
-    # Helmfile owns the rest of the control-plane configuration.
+    # Set the shared observability stack environment.
     And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/observability/environments/local-bdd-observability-control.yaml"
     And I update yaml file "deploy/stacks/observability/environments/local-bdd-observability-control.yaml" with keys:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
