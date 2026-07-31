@@ -298,6 +298,38 @@ jobs:
               java-*|go-root) workdir="."; scope="//${path}/..."; scoped="root" ;;
               *)              workdir="$path"; scope="//..."; scoped="" ;;
             esac
+            # The root row owns what no other row claims, and nothing more.
+            #
+            # While every service had its own nested module those subtrees sat
+            # in .bazelignore, so `//...` from the repository root simply could
+            # not see them and the root row naturally covered only root-owned
+            # code. Consolidation removed those entries, which silently turned
+            # the root row into a superset of all eighteen service rows: it
+            # rebuilt and retested every service a second time, on one machine,
+            # with their tests running concurrently.
+            #
+            # That is not merely wasted work. Sixty-eight test packages in this
+            # repository bind literal ports, and they overlap heavily across
+            # services (8080 in fifteen packages, 4222 in twelve). Each was safe
+            # while it had a row to itself. Run together they collide, which is
+            # how vanity-gateway's suite began panicking with
+            # "listen tcp 0.0.0.0:10085: bind: address already in use" while its
+            # own row stayed green.
+            #
+            # Subtracting the rows that own a path restores the invariant that
+            # every target is covered by exactly one row, which removes the
+            # duplicate work and the cross-service concurrency together. Fixing
+            # the hard-coded ports is worth doing on its own merits, but it is a
+            # change to sixty-eight packages and does not belong here.
+            if [ "$id" = "root" ]; then
+              excl=""
+              while IFS='|' read -r _oid opath _ots _ock _ocl; do
+                opath="$(echo "$opath" | xargs)"
+                [ -z "$opath" ] || [ "$opath" = "." ] && continue
+                excl="${excl} -//${opath}/..."
+              done <<< "$ROWS"
+              scope="//... ${excl}"
+            fi
             hit=false
             if [ "$run_all" = "true" ]; then
               hit=true
