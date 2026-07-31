@@ -28,7 +28,7 @@ Lists of 264 third-party dependencies.
      (Apache-2.0) proto-google-common-protos (com.google.api.grpc:proto-google-common-protos:2.29.0 - https://github.com/googleapis/sdk-platform-java)
      (The Apache Software License, Version 2.0) FindBugs-jsr305 (com.google.code.findbugs:jsr305:3.0.2 - http://findbugs.sourceforge.net/)
      (Apache-2.0) Gson (com.google.code.gson:gson:2.13.2 - https://github.com/google/gson)
-     (Apache 2.0) error-prone annotations (com.google.errorprone:error_prone_annotations:2.41.0 - https://errorprone.info)
+     (Apache 2.0) error-prone annotations (com.google.errorprone:error_prone_annotations:2.49.0 - https://errorprone.info)
      (Apache License, Version 2.0) Guava InternalFutureFailureAccess and InternalFutures (com.google.guava:failureaccess:1.0.3 - https://github.com/google/guava)
      (Apache License, Version 2.0) Guava: Google Core Libraries for Java (com.google.guava:guava:33.6.0-jre - https://github.com/google/guava)
      (The Apache Software License, Version 2.0) Guava ListenableFuture only (com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava - https://github.com/google/guava)

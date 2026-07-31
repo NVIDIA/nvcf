@@ -199,13 +199,6 @@
       "name": "FindBugs-jsr305",
       "url": "http://findbugs.sourceforge.net/"
     },
-    "com.google.errorprone:error_prone_annotations:2.41.0": {
-      "licenses": [
-        "Apache 2.0"
-      ],
-      "name": "error-prone annotations",
-      "url": "https://errorprone.info"
-    },
     "com.google.errorprone:error_prone_annotations:2.49.0": {
       "licenses": [
         "Apache 2.0"

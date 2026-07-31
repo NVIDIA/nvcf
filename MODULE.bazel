@@ -334,6 +334,10 @@ maven.install(
         "ch.qos.logback:logback-core:1.5.37",
         "com.github.ben-manes.caffeine:guava",
         "com.google.code.gson:gson",
+        # Direct pin overrides the Spring Boot BOM, which manages this to
+        # 2.41.0. Without the pin the Maven resolver downgrades the shared
+        # graph from 2.49.0; keep the higher version across all services.
+        "com.google.errorprone:error_prone_annotations:2.49.0",
         "com.github.java-json-tools:json-patch:1.13",
         "com.jayway.jsonpath:json-path",
         "com.nimbusds:nimbus-jose-jwt:10.9.1",

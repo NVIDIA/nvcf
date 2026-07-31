@@ -17,7 +17,7 @@ Lists of 163 third-party dependencies.
      (The Apache Software License, Version 2.0) jnr-ffi (com.github.jnr:jnr-ffi:2.1.7 - http://github.com/jnr/jnr-ffi)
      (Eclipse Public License - v 2.0) (GNU General Public License Version 2) (GNU Lesser General Public License Version 2.1) jnr-posix (com.github.jnr:jnr-posix:3.1.15 - http://nexus.sonatype.org/oss-repository-hosting.html)
      (MIT License) jnr-x86asm (com.github.jnr:jnr-x86asm:1.0.2 - http://github.com/jnr/jnr-x86asm)
-     (Apache 2.0) error-prone annotations (com.google.errorprone:error_prone_annotations:2.41.0 - https://errorprone.info)
+     (Apache 2.0) error-prone annotations (com.google.errorprone:error_prone_annotations:2.49.0 - https://errorprone.info)
      (Apache License, Version 2.0) Guava InternalFutureFailureAccess and InternalFutures (com.google.guava:failureaccess:1.0.3 - https://github.com/google/guava)
      (Apache License, Version 2.0) Guava: Google Core Libraries for Java (com.google.guava:guava:33.6.0-jre - https://github.com/google/guava)
      (The Apache Software License, Version 2.0) Guava ListenableFuture only (com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava - https://github.com/google/guava)
