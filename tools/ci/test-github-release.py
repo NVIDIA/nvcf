@@ -107,7 +107,7 @@ class GithubReleaseTest(unittest.TestCase):
             git(root, "tag", f"{path}/v{version}")
 
     def commit_framework_change(self, root, message="fix(nv-boot): bump shared framework"):
-        (root / self.JAVA_FRAMEWORK_PATH / "README.md").write_text("framework change\n")
+        (root / self.JAVA_FRAMEWORK_PATH / "README.md").write_text(f"{message}\n")
         self.commit_all(root, message)
 
     def fanout_dry_run(self, root, service):
@@ -195,8 +195,45 @@ class GithubReleaseTest(unittest.TestCase):
                     service = self.java_service_metadata(service_id, path)
                     created, text = self.fanout_dry_run(root, service)
                     self.assertFalse(created)
-                    self.assertIn("no Java framework commits since", text)
+                    self.assertIn("no release-worthy Java framework commits since", text)
                     self.assertNotIn("would create", text)
+
+    def test_non_release_worthy_framework_commits_release_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_java_repo(root)
+            for message in (
+                "docs(nv-boot): document the shared framework",
+                "chore(nv-boot): reformat",
+                "refactor(nv-boot): extract a helper",
+                "no conventional prefix at all",
+            ):
+                self.commit_framework_change(root, message)
+
+            for service_id, path, _version in self.JAVA_SERVICES:
+                with self.subTest(service=service_id):
+                    service = self.java_service_metadata(service_id, path)
+                    created, text = self.fanout_dry_run(root, service)
+                    self.assertFalse(created)
+                    self.assertIn("no release-worthy Java framework commits since", text)
+
+            # One release-worthy framework commit is enough to fan out, and the
+            # notes quote only the release-worthy ones.
+            self.commit_framework_change(root, "perf(nv-boot): trim startup work")
+            service_id, path, version = self.JAVA_SERVICES[0]
+            created, text = self.fanout_dry_run(root, self.java_service_metadata(service_id, path))
+            self.assertTrue(created)
+            self.assertIn(f"would create {path}/v{self.github_release.next_patch_version(version)}", text)
+            self.assertIn("perf(nv-boot): trim startup work", text)
+            self.assertNotIn("chore(nv-boot): reformat", text)
+
+    def test_releases_a_version_follows_the_configured_release_rules(self):
+        releases_a_version = self.github_release.releases_a_version
+        for subject in ("feat: x", "fix(scope): x", "perf: x", "chore(scope)!: x", "FIX: x"):
+            self.assertTrue(releases_a_version(subject), subject)
+        for subject in ("chore: x", "ci(scope): x", "docs: x", "style: x", "refactor: x",
+                        "test: x", "build: x", "not a conventional commit"):
+            self.assertFalse(releases_a_version(subject), subject)
 
     def test_framework_fanout_needs_an_existing_service_release_tag(self):
         with tempfile.TemporaryDirectory() as tmp:

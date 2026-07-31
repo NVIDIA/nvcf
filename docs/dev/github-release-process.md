@@ -167,7 +167,12 @@ the following hold:
   the same push also touched the service, semantic-release owns the
   version and nothing extra is tagged.
 - The service already has a release tag to bump from.
-- At least one commit touching a framework path landed since that tag.
+- At least one release-worthy commit touching a framework path landed
+  since that tag. Release-worthiness uses the same rules listed above: a
+  framework `feat:`, `fix:`, `perf:`, or breaking `!` commit fans out; a
+  framework `docs:`, `chore:`, `ci:`, `style:`, `refactor:`, `test:`, or
+  `build:` commit releases nothing for the framework and so releases
+  nothing for its dependents either.
 
 The synthesized bump is always a patch, including when the framework
 commit is a `feat:`. A framework feature adds no capability to a service

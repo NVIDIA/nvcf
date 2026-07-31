@@ -41,6 +41,8 @@ JAVA_COMPONENT_KINDS = (JAVA_FRAMEWORK_KIND, JAVA_SERVICE_KIND)
 # Framework commits quoted in dependency-triggered release notes. A service that
 # is many framework commits behind should still get readable notes.
 MAX_QUOTED_FRAMEWORK_COMMITS = 20
+# Conventional Commit subject prefix, for example "fix(nv-boot)!: subject".
+COMMIT_SUBJECT_PATTERN = re.compile(r"^(?P<type>[a-zA-Z]+)(?:\([^)]*\))?(?P<breaking>!)?:")
 
 
 def bool_env(name, default=False):
@@ -531,13 +533,44 @@ def next_patch_version(version):
     return f"{major}.{minor}.{patch + 1}"
 
 
-def framework_commits_since(root, framework_paths, since_tag):
+def releases_a_version(subject):
+    """Whether a commit subject releases a version under RELEASE_RULES.
+
+    Derived from RELEASE_RULES so the fan-out applies exactly the rules
+    semantic-release is configured with: `feat`, `fix`, and `perf` release, the
+    other declared types do not, and a `!` breaking marker always releases. A
+    subject that is not a Conventional Commit releases nothing, the same as it
+    would inside a service directory.
+    """
+    match = COMMIT_SUBJECT_PATTERN.match(subject)
+    if not match:
+        return False
+    if match.group("breaking"):
+        return True
+    releasing = {rule["type"] for rule in RELEASE_RULES if rule["release"]}
+    return match.group("type").lower() in releasing
+
+
+def release_worthy_framework_commits_since(root, framework_paths, since_tag):
+    """Framework commits since a tag that would have released, had they been in a service.
+
+    A framework `docs:` or `chore:` commit releases nothing for the framework,
+    so it must not release anything for the framework's dependents either.
+    """
     raw = run(
         ["git", "log", "--format=%h %s", f"{since_tag}..HEAD", "--", *framework_paths],
         cwd=root,
         capture=True,
     )
-    return [line.strip() for line in raw.splitlines() if line.strip()]
+    commits = []
+    for line in raw.splitlines():
+        commit = line.strip()
+        if not commit:
+            continue
+        _sha, _, subject = commit.partition(" ")
+        if releases_a_version(subject):
+            commits.append(commit)
+    return commits
 
 
 def framework_dependency_reason(service, framework_paths, since_tag, commits):
@@ -595,18 +628,19 @@ def publish_framework_dependency_release(root, service, components, dry_run, dra
         )
         return False
 
-    commits = framework_commits_since(root, framework_paths, last_tag)
+    commits = release_worthy_framework_commits_since(root, framework_paths, last_tag)
     if not commits:
         print(
-            f"[github-release] {service['id']}: no Java framework commits since {last_tag}; "
-            "nothing to release"
+            f"[github-release] {service['id']}: no release-worthy Java framework commits since "
+            f"{last_tag}; nothing to release"
         )
         return False
 
     version = next_patch_version(current_version)
     print(
-        f"[github-release] {service['id']}: {len(commits)} Java framework commit(s) since "
-        f"{last_tag} with no service release; cutting dependency patch release {version}"
+        f"[github-release] {service['id']}: {len(commits)} release-worthy Java framework "
+        f"commit(s) since {last_tag} with no service release; cutting dependency patch "
+        f"release {version}"
     )
     publish_tag_for_version(
         root,
