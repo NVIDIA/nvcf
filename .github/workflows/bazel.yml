@@ -695,8 +695,17 @@ jobs:
             # a scope's only tests are requires-docker. Filtering
             # them in the query lets such a scope resolve to empty and skip cleanly,
             # matching the tag filter applied to the run below.
+            #
+            # `manual` is excluded for a different reason. Bazel only honours that
+            # tag when expanding wildcard patterns; naming a target explicitly
+            # runs it regardless. Because this step resolves an explicit label
+            # list and passes it to `bazel test`, every manual-tagged test ran in
+            # CI even though `bazel test //...` skips it locally, so the tag was
+            # silently doing nothing here. Ten test targets across the repo carry
+            # it deliberately, with comments saying why. Honouring it restores
+            # that intent and makes CI agree with a local run.
             tests=$(bazel query --noshow_progress --output=label \
-              "tests(set($patterns)) except attr(tags, 'requires-docker', set($patterns))" 2>/dev/null) || tests="__QFAIL__"
+              "tests(set($patterns)) except attr(tags, 'requires-docker', set($patterns)) except attr(tags, 'manual', set($patterns))" 2>/dev/null) || tests="__QFAIL__"
             if [ "$tests" = "__QFAIL__" ]; then
               echo "tests() query failed; falling back to full test set"
               printf '//...\n' > "$ttfile"
