@@ -34,10 +34,8 @@
 # src/control-plane-services is carved out per-subtree: cloud-tasks is native
 # (Phase B) and must stay loadable, while these siblings still carry nested
 # MODULE.bazel / WORKSPACE-style BUILD files that conflict with bzlmod.
-src/control-plane-services/function-autoscaler
 # http-invocation is still a nested Bazel module (Rust, own crate
 # universe); the rest of this tree has migrated to the root module.
-src/invocation-plane-services/http-invocation
 src/libraries/python
 # stargate is a nested Bazel module (own MODULE.bazel under
 # src/libraries/rust/stargate), built via a dedicated CI matrix row with
@@ -46,7 +44,6 @@ src/libraries/python
 # The root module keeps it ignored so its crate BUILD files (which load
 # @stargate_crates from the nested module) do not resolve against the
 # umbrella root MODULE.bazel.
-src/libraries/rust/stargate
 src/libraries/ts
 deploy
 docs
