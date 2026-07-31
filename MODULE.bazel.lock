@@ -417,7 +417,7 @@
     "@@rules_oci+//oci:extensions.bzl%oci": {
       "general": {
         "bzlTransitiveDigest": "IPpbSHX7+8yLBfvZyia9qXU/WRxkP+dWAO8m5+BsBY8=",
-        "usagesDigest": "TmAErGeNtIJO+2rVHmC4/RzcSlnwilOXTNQP2ithdKo=",
+        "usagesDigest": "EDzShmIAPaiLhkdqPiXbibm5GmGgklN1Yz6iboWtAQ4=",
         "recordedInputs": [
           "REPO_MAPPING:aspect_bazel_lib+,bazel_tools bazel_tools",
           "REPO_MAPPING:bazel_features+,bazel_tools bazel_tools",
@@ -699,6 +699,49 @@
               "reproducible": true
             }
           },
+          "distroless_cc_linux_amd64": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/cc",
+              "identifier": "sha256:92a46f84206c3e4610043eaef50946451019e3c479b71d280015919ba311babb",
+              "platform": "linux/amd64",
+              "target_name": "distroless_cc_linux_amd64",
+              "bazel_tags": []
+            }
+          },
+          "distroless_cc_linux_arm64_v8": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/cc",
+              "identifier": "sha256:92a46f84206c3e4610043eaef50946451019e3c479b71d280015919ba311babb",
+              "platform": "linux/arm64/v8",
+              "target_name": "distroless_cc_linux_arm64_v8",
+              "bazel_tags": []
+            }
+          },
+          "distroless_cc": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_alias",
+            "attributes": {
+              "target_name": "distroless_cc",
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "nvcr.io",
+              "repository": "nvidia/distroless/cc",
+              "identifier": "sha256:92a46f84206c3e4610043eaef50946451019e3c479b71d280015919ba311babb",
+              "platforms": {
+                "@@platforms//cpu:x86_64": "@distroless_cc_linux_amd64",
+                "@@platforms//cpu:arm64": "@distroless_cc_linux_arm64_v8"
+              },
+              "bzlmod_repository": "distroless_cc",
+              "reproducible": true
+            }
+          },
           "oci_crane_darwin_amd64": {
             "repoRuleId": "@@rules_oci+//oci:repositories.bzl%crane_repositories",
             "attributes": {
@@ -833,7 +876,10 @@
             "distroless_java_linux_arm64_v8",
             "distroless_go",
             "distroless_go_linux_amd64",
-            "distroless_go_linux_arm64_v8"
+            "distroless_go_linux_arm64_v8",
+            "distroless_cc",
+            "distroless_cc_linux_amd64",
+            "distroless_cc_linux_arm64_v8"
           ],
           "explicitRootModuleDirectDevDeps": [],
           "useAllRepos": "NO",
