@@ -73,6 +73,7 @@ observability:
 addons:
 
   # KAI Scheduler (disabled by default). Required when enabling Grove or Dynamo.
+  # When enabled, NVCA also gets the KAIScheduler feature gate.
   # Per-component resource overrides: addons.kaiScheduler.<component>.resources
   # (requests/limits). Defaults live in helmfile.d/01-dependencies.yaml.gotmpl.
   kaiScheduler:
@@ -99,6 +100,7 @@ addons:
     topologyAwareScheduling: {}
     network: {}
 
-  # Dynamo inference framework scheduling operator (disabled by default)
+  # Dynamo inference framework scheduling operator (disabled by default).
+  # When enabled, NVCA also gets the DynamoOperatorSupport feature gate.
   dynamoOperator:
     enabled: false

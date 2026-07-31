@@ -119,9 +119,11 @@ inside one NVLink clique instead of binding pods one at a time. It requires
 KAI Scheduler v0.12.0 or later. See
 [the KAI Scheduler guide](../../../docs/user/cluster-management/kai-scheduler.md).
 
-Enabling the `KAIScheduler` feature gate or the Grove add-on also adds the
-matching gang-scheduling CRDs to the NVCA validation policy, so functions may
-deploy `PodGroup` and `PodCliqueSet` objects without restating the whole policy.
+Enabling `addons.kaiScheduler.enabled` or `addons.dynamoOperator.enabled` also
+adds the matching NVCA feature gates (`KAIScheduler`, `DynamoOperatorSupport`).
+Enabling KAI, Grove, or Dynamo also adds the matching CRDs to the NVCA
+validation policy, so functions may deploy `PodGroup`, `PodCliqueSet`, and
+Dynamo graph objects without restating the whole policy.
 
 For a standalone KAI install outside this stack, follow the
 [KAI Scheduler guide](https://docs.nvidia.com/cloud-functions/current/latest/cluster-management/kai-scheduler.html).

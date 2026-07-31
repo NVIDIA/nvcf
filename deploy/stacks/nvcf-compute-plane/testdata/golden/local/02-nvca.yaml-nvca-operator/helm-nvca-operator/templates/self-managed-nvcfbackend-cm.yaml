@@ -42,7 +42,7 @@ data:
     cloudProvider: "NCP"
     region: "us-west-1"
     attributes: []
-    capabilities: ["KAIScheduler","DynamicGPUDiscovery","InfraResourceOverhead","EnforceHelmFunctionResourceLimits","EnforceContainerFunctionResourceLimits","EnforceHelmTaskResourceLimits","EnforceContainerTaskResourceLimits","BYOObservability"]
+    capabilities: ["DynamicGPUDiscovery","InfraResourceOverhead","EnforceHelmFunctionResourceLimits","EnforceContainerFunctionResourceLimits","EnforceHelmTaskResourceLimits","EnforceContainerTaskResourceLimits","BYOObservability","KAIScheduler","DynamoOperatorSupport"]
     gpusB64: ""
     cacheCSIVolumeMountOptionsConfig:
       disabled: false

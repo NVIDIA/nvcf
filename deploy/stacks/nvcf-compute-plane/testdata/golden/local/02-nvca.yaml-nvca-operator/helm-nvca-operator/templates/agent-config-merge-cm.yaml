@@ -56,4 +56,28 @@ data:
             kind: PodGang
             resource: podgangs
             version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoCheckpoint
+            resource: dynamocheckpoints
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoComponentDeployment
+            resource: dynamocomponentdeployments
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoGraphDeploymentRequest
+            resource: dynamographdeploymentrequests
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoGraphDeploymentScalingAdapter
+            resource: dynamographdeploymentscalingadapters
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoModel
+            resource: dynamomodels
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoWorkerMetadata
+            resource: dynamoworkermetadatas
+            version: v1alpha1
         name: Unrestricted
