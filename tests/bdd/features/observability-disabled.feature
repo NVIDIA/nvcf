@@ -49,17 +49,10 @@ Feature: Render local Helmfile stacks with observability disabled
       """
     Then the command exit code should be 0
 
-    When I run command "rg --fixed-strings 'name: function-autoscaler' tests/bdd/out/observability-disabled"
-    Then the command exit code should be 1
-
-    When I run command "rg --fixed-strings 'kind: OpenTelemetryCollector' tests/bdd/out/observability-disabled"
-    Then the command exit code should be 1
-
-    When I run command "rg --fixed-strings 'kind: ServiceMonitor' tests/bdd/out/observability-disabled"
-    Then the command exit code should be 1
-
-    When I run command "rg --fixed-strings 'kind: PodMonitor' tests/bdd/out/observability-disabled"
-    Then the command exit code should be 1
-
-    When I run command "rg --fixed-strings 'BYOObservability' tests/bdd/out/observability-disabled"
-    Then the command exit code should be 1
+    Then the rendered manifests in "tests/bdd/out/observability-disabled" should not contain:
+      | text                         |
+      | name: function-autoscaler    |
+      | kind: OpenTelemetryCollector |
+      | kind: ServiceMonitor         |
+      | kind: PodMonitor             |
+      | BYOObservability             |

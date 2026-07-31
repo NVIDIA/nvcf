@@ -642,18 +642,13 @@ func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
-	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
-		"rg --fixed-strings 'name: function-autoscaler' tests/bdd/out/observability-disabled":    {ExitCode: 1},
-		"rg --fixed-strings 'kind: OpenTelemetryCollector' tests/bdd/out/observability-disabled": {ExitCode: 1},
-		"rg --fixed-strings 'kind: ServiceMonitor' tests/bdd/out/observability-disabled":         {ExitCode: 1},
-		"rg --fixed-strings 'kind: PodMonitor' tests/bdd/out/observability-disabled":             {ExitCode: 1},
-		"rg --fixed-strings 'BYOObservability' tests/bdd/out/observability-disabled":             {ExitCode: 1},
-	}))
+	suite := newWiringSuite(t, newFakeRunner(nil))
 	t.Setenv("REPO_ROOT", suite.Config.RepoRoot)
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	seedObservabilityDisabledRegistrationValuesFixture(t, suite.Config.RepoRoot)
+	seedObservabilityDisabledRenderOutput(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "observability-disabled.feature")
@@ -690,6 +685,22 @@ func seedObservabilityDisabledRegistrationValuesFixture(t *testing.T, repoRoot s
 		t.Fatalf("read registration fixture %s: %v", fixturePath, err)
 	}
 	writeFixture(t, repoRoot, "ncp-local-register-values.yaml", string(body))
+}
+
+func seedObservabilityDisabledRenderOutput(t *testing.T, repoRoot string) {
+	t.Helper()
+	for _, relativePath := range []string{
+		filepath.Join("control-plane", "api.yaml"),
+		filepath.Join("compute-plane", "nvca.yaml"),
+	} {
+		path := filepath.Join(repoRoot, "tests", "bdd", "out", "observability-disabled", relativePath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create rendered output directory: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("kind: Deployment\n"), 0o644); err != nil {
+			t.Fatalf("write rendered output %s: %v", relativePath, err)
+		}
+	}
 }
 
 // helmListAllNamespacesJSON returns canned helm-list output covering
