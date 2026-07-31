@@ -7,8 +7,8 @@ go_library(
     importpath = "github.com/nats-io/nats-server/v2/test",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/nats-io/nats-server/v2/logger",
-        "//vendor/github.com/nats-io/nats-server/v2/server",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/logger",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server",
     ],
 )
 

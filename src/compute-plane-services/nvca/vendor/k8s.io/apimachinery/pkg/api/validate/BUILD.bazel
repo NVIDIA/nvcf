@@ -24,12 +24,12 @@ go_library(
     importpath = "k8s.io/apimachinery/pkg/api/validate",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/apimachinery/pkg/api/equality",
-        "//vendor/k8s.io/apimachinery/pkg/api/operation",
-        "//vendor/k8s.io/apimachinery/pkg/api/validate/constraints",
-        "//vendor/k8s.io/apimachinery/pkg/api/validate/content",
-        "//vendor/k8s.io/apimachinery/pkg/util/sets",
-        "//vendor/k8s.io/apimachinery/pkg/util/validation/field",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/equality",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/operation",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/validate/constraints",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/validate/content",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/validation/field",
     ],
 )
 

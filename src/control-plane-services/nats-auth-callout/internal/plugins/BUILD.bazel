@@ -19,13 +19,13 @@ go_library(
     name = "plugins",
     srcs = ["manager.go"],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
     deps = [
-        "//internal/config",
-        "//internal/plugins/nkey",
-        "//internal/plugins/oauth",
-        "//internal/plugins/types",
-        "//internal/plugins/webhook",
+        "//src/control-plane-services/nats-auth-callout/internal/config",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/nkey",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/oauth",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/types",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/webhook",
         "@org_uber_go_zap//:zap",
     ],
 )
@@ -33,5 +33,5 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":plugins",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
 )

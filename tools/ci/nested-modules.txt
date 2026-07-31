@@ -36,22 +36,8 @@ vendored     src/compute-plane-services/nvca/vendor/cel.dev/expr
 
 scaffolding  rules/oci-destinations
 
-ledger       src/compute-plane-services/byoo-otel-collector
-ledger       src/compute-plane-services/ess-agent
-ledger       src/compute-plane-services/nvca
-ledger       src/compute-plane-services/nvcf-unbound
-ledger       src/compute-plane-services/worker-init
-ledger       src/compute-plane-services/worker-llm-credentials
-ledger       src/compute-plane-services/worker-task
-ledger       src/compute-plane-services/worker-utils
 ledger       src/control-plane-services/function-autoscaler
-ledger       src/control-plane-services/helm-reval
-ledger       src/control-plane-services/nats-auth-callout
-ledger       src/invocation-plane-services/grpc-proxy
 ledger       src/invocation-plane-services/http-invocation
-ledger       src/invocation-plane-services/llm-api-gateway
-ledger       src/invocation-plane-services/ratelimiter
-ledger       src/invocation-plane-services/vanity-gateway
 ledger       src/libraries/rust/stargate
 
 # No permanent exceptions today. nvsnap was the open question in Phase 1 and it

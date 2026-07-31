@@ -34,7 +34,7 @@ go_library(
         "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.GitCommit": "{STABLE_GIT_COMMIT}",
         "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.BuildDate": "{BUILD_DATE}",
     },
-    deps = ["//cmd/nvcf-nats-auth-callout-service/cli"],
+    deps = ["//src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service/cli"],
 )
 
 go_binary(

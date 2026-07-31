@@ -38,6 +38,7 @@ def create_oci_image(
         extra_registries = None,
         tags = None,
         env = None,
+        cmd = None,
         workdir = None):
     """Creates OCI image targets with platform transitions and tarball output.
 
@@ -61,6 +62,7 @@ def create_oci_image(
         base = base,
         tars = tars + COMMON_LAYERS,
         entrypoint = entrypoint,
+        cmd = cmd,
         env = env,
         workdir = workdir,
         visibility = ["//visibility:private"],

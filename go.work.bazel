@@ -36,4 +36,19 @@ use (
 	./src/libraries/go/worker
 	./src/compute-plane-services/nvsnap
 	./src/compute-plane-services/image-credential-helper
+	./src/compute-plane-services/nvcf-unbound
+	./src/compute-plane-services/worker-init
+	./src/compute-plane-services/worker-llm-credentials
+	./src/compute-plane-services/worker-task
+	./src/compute-plane-services/worker-utils
+	./src/invocation-plane-services/grpc-proxy
+	./src/invocation-plane-services/llm-api-gateway
+	./src/invocation-plane-services/ratelimiter
+	./src/invocation-plane-services/vanity-gateway
+	./src/control-plane-services/nats-auth-callout
+	./src/compute-plane-services/ess-agent
+	./src/compute-plane-services/ess-agent/api
+	./src/compute-plane-services/ess-agent/sdk
+	./src/control-plane-services/helm-reval
+	./src/compute-plane-services/byoo-otel-collector
 )

@@ -12,9 +12,9 @@ go_library(
     importpath = "github.com/spiffe/go-spiffe/v2/bundle/x509bundle",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/spiffe/go-spiffe/v2/internal/pemutil",
-        "//vendor/github.com/spiffe/go-spiffe/v2/internal/x509util",
-        "//vendor/github.com/spiffe/go-spiffe/v2/spiffeid",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/internal/pemutil",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/internal/x509util",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/spiffeid",
     ],
 )
 

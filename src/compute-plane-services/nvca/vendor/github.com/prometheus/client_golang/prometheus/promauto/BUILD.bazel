@@ -6,7 +6,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promauto",
     importpath = "github.com/prometheus/client_golang/prometheus/promauto",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/prometheus/client_golang/prometheus"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus"],
 )
 
 alias(

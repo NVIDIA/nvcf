@@ -27,7 +27,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry",
     visibility = ["//visibility:public"],
     deps = [
-        "//internal/must",
+        "//src/invocation-plane-services/llm-api-gateway/internal/must",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
         "@com_github_olric_data_olric//:olric",
         "@com_github_olric_data_olric//stats",

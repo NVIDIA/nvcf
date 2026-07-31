@@ -24,7 +24,7 @@ go_library(
     importpath = "nvcf-grpc-proxy/proxy/hacks",
     visibility = ["//visibility:public"],
     deps = [
-        "//nvcf/pb",
+        "//src/invocation-plane-services/grpc-proxy/nvcf/pb",
         "@org_golang_google_grpc//:grpc",
     ],
 )

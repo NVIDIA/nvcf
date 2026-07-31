@@ -11,9 +11,9 @@ go_library(
     visibility = ["//visibility:public"],
     deps = select({
         "@rules_go//go/platform:windows": [
-            "//vendor/github.com/google/go-tpm/legacy/tpm2",
-            "//vendor/github.com/google/go-tpm/tpmutil",
-            "//vendor/github.com/nats-io/nkeys",
+            "//src/compute-plane-services/nvca/vendor/github.com/google/go-tpm/legacy/tpm2",
+            "//src/compute-plane-services/nvca/vendor/github.com/google/go-tpm/tpmutil",
+            "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nkeys",
         ],
         "//conditions:default": [],
     }),

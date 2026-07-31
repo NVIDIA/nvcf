@@ -21,8 +21,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/service",
     visibility = ["//visibility:public"],
     deps = [
-        "//configs",
-        "//internal/workerinit",
+        "//src/compute-plane-services/worker-init/configs",
+        "//src/compute-plane-services/worker-init/internal/workerinit",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/config",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//types",
@@ -38,8 +38,8 @@ go_test(
     srcs = ["service_test.go"],
     embed = [":service"],
     deps = [
-        "//configs",
-        "//internal/workerinit",
+        "//src/compute-plane-services/worker-init/configs",
+        "//src/compute-plane-services/worker-init/internal/workerinit",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//test/testutils",
         "@org_uber_go_zap//:zap",

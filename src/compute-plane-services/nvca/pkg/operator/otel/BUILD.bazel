@@ -9,10 +9,10 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/otel",
     visibility = ["//visibility:public"],
     deps = [
-        "//pkg/apis/nvcf/v1:nvcf",
-        "//vendor/go.opentelemetry.io/otel",
-        "//vendor/go.opentelemetry.io/otel/attribute",
-        "//vendor/go.opentelemetry.io/otel/trace",
+        "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace",
     ],
 )
 
@@ -27,8 +27,8 @@ go_test(
     srcs = ["otel_test.go"],
     embed = [":otel"],
     deps = [
-        "//pkg/apis/nvcf/v1:nvcf",
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
     ],
 )

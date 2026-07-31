@@ -16,10 +16,10 @@ go_library(
     visibility = ["//visibility:public"],
     deps = select({
         "@rules_go//go/platform:solaris": [
-            "//vendor/golang.org/x/sys/unix",
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/unix",
         ],
         "@rules_go//go/platform:windows": [
-            "//vendor/golang.org/x/sys/windows",
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/windows",
         ],
         "//conditions:default": [],
     }),

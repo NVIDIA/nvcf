@@ -12,9 +12,9 @@ go_library(
     importpath = "github.com/spiffe/go-spiffe/v2/bundle/jwtbundle",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
-        "//vendor/github.com/spiffe/go-spiffe/v2/internal/jwtutil",
-        "//vendor/github.com/spiffe/go-spiffe/v2/spiffeid",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/internal/jwtutil",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/spiffeid",
     ],
 )
 

@@ -10,14 +10,14 @@ go_library(
     importpath = "k8s.io/client-go/informers/apiserverinternal/v1alpha1",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/api/apiserverinternal/v1alpha1",
-        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
-        "//vendor/k8s.io/apimachinery/pkg/runtime",
-        "//vendor/k8s.io/apimachinery/pkg/watch",
-        "//vendor/k8s.io/client-go/informers/internalinterfaces",
-        "//vendor/k8s.io/client-go/kubernetes",
-        "//vendor/k8s.io/client-go/listers/apiserverinternal/v1alpha1",
-        "//vendor/k8s.io/client-go/tools/cache",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/apiserverinternal/v1alpha1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/internalinterfaces",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers/apiserverinternal/v1alpha1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
     ],
 )
 

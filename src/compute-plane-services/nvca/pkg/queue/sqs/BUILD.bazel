@@ -9,13 +9,13 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/sqs",
     visibility = ["//visibility:public"],
     deps = [
-        "//pkg/queue",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/github.com/aws/aws-sdk-go/aws",
-        "//vendor/github.com/aws/aws-sdk-go/aws/credentials",
-        "//vendor/github.com/aws/aws-sdk-go/aws/endpoints",
-        "//vendor/github.com/aws/aws-sdk-go/aws/session",
-        "//vendor/github.com/aws/aws-sdk-go/service/sqs",
+        "//src/compute-plane-services/nvca/pkg/queue",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/credentials",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/endpoints",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/session",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/service/sqs",
     ],
 )
 
@@ -30,9 +30,9 @@ go_test(
     srcs = ["sqs_test.go"],
     embed = [":sqs"],
     deps = [
-        "//pkg/queue",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/pkg/queue",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
     ],
 )

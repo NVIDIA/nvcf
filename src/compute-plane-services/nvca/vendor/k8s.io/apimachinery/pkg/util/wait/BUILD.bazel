@@ -16,8 +16,8 @@ go_library(
     importpath = "k8s.io/apimachinery/pkg/util/wait",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/apimachinery/pkg/util/runtime",
-        "//vendor/k8s.io/utils/clock",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/utils/clock",
     ],
 )
 

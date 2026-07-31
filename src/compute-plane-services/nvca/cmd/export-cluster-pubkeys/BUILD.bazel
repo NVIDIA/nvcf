@@ -11,13 +11,13 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/export-cluster-pubkeys",
     visibility = ["//visibility:private"],
     deps = [
-        "//cmd/internal",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
-        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
-        "//vendor/github.com/urfave/cli/v2:cli",
-        "//vendor/gopkg.in/yaml.v3:yaml_v3",
-        "//vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/cmd/internal",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//src/compute-plane-services/nvca/vendor/github.com/urfave/cli/v2:cli",
+        "//src/compute-plane-services/nvca/vendor/gopkg.in/yaml.v3:yaml_v3",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
     ],
 )
 
@@ -38,11 +38,11 @@ go_test(
     srcs = ["main_test.go"],
     embed = [":export-cluster-pubkeys_lib"],
     deps = [
-        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
-        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
-        "//vendor/k8s.io/client-go/kubernetes/scheme",
-        "//vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/scheme",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
     ],
 )

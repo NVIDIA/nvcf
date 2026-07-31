@@ -11,15 +11,15 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/syncutil",
     importpath = "oras.land/oras-go/v2/internal/syncutil",
-    visibility = ["//vendor/oras.land/oras-go/v2:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2:__subpackages__"],
     deps = [
-        "//vendor/golang.org/x/sync/errgroup",
-        "//vendor/golang.org/x/sync/semaphore",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/sync/errgroup",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/sync/semaphore",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":syncutil",
-    visibility = ["//vendor/oras.land/oras-go/v2:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2:__subpackages__"],
 )
