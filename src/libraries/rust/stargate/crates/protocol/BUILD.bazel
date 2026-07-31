@@ -12,6 +12,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # hermetic capnp toolchain is a follow-up.
 cargo_build_script(
     name = "build_script",
+    edition = "2024",
     srcs = [
         "build.rs",
         "src/build_plan.rs",

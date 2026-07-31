@@ -29,6 +29,7 @@ expand_template(
 # extension fetches; same pattern as nvcf-invocation-service !313.
 cargo_build_script(
     name = "build_script",
+    edition = "2021",
     srcs = ["build.rs"],
     build_script_env = {
         "PROTOC": "$(execpath @com_google_protobuf//:protoc)",

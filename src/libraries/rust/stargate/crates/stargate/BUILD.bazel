@@ -27,6 +27,7 @@ _WORKSPACE_DEPS = [
 # The released image tag is stamped separately through tools/workspace_status.sh.
 cargo_build_script(
     name = "build_script",
+    edition = "2024",
     srcs = ["build.rs"],
     # The `built` crate reads the CARGO_PKG_* variables that cargo would
     # normally export; cargo_build_script does not set them, so `built`

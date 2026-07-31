@@ -29,7 +29,7 @@ module(
     version = "0.0.1",
 )
 
-bazel_dep(name = "rules_python", version = "1.4.1")
+bazel_dep(name = "rules_python", version = "1.7.0")
 bazel_dep(name = "rules_shell", version = "0.8.0")
 
 # ============================================================================
@@ -41,9 +41,9 @@ bazel_dep(name = "rules_oci", version = "2.2.7")
 # rules_cc backs nvsnap's lib/nvsnap_intercept and lib/nvsnap_restore_helper.
 # Transitively available via rules_oci; declared explicitly so those BUILD files
 # load @rules_cc//cc:defs.bzl against a pinned version.
-bazel_dep(name = "rules_cc", version = "0.2.14")
+bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "rules_pkg", version = "1.2.0")
-bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
+bazel_dep(name = "aspect_bazel_lib", version = "2.21.2")
 
 bazel_dep(
     name = "hermetic_cc_toolchain",
@@ -185,11 +185,18 @@ use_repo(go_deps, "cat_dario_mergo", "com_github_armon_go_metrics", "com_github_
 #
 # The toolchain is stargate's 1.97.0; function-autoscaler and http-invocation
 # were on 1.91.1 and move forward, since one root module registers one version.
-# Editions are deliberately NOT unified: every Rust target sets `edition`
-# explicitly in its own BUILD file (2021 for function-autoscaler and
-# http-invocation, 2024 for stargate), so the value here is only a default
-# nothing relies on. Moving a crate between editions is a source change with
-# real breaking semantics, not a build setting.
+# Editions are deliberately NOT unified. Every Rust target now names its own
+# edition (2021 for function-autoscaler and http-invocation, 2024 for
+# stargate), so the value below is a default nothing reads. That was not true
+# at first: cargo_build_script targets carried no edition and silently took
+# this default, which each nested module had set to match its own crate. One
+# root module registers one default, so stargate's build.rs -- which uses
+# let-chains -- failed to compile as 2021. Every build script now sets its
+# edition explicitly rather than depending on what is registered here.
+#
+# Moving a crate between editions is a source migration with real breaking
+# semantics, not a build setting, so the value here is kept at the majority
+# edition and carries no meaning beyond that.
 # ============================================================================
 bazel_dep(name = "rules_rust", version = "0.69.0")
 
