@@ -102,6 +102,27 @@ go_sdk.from_file(go_mod = "//tools/go-toolchain:go.mod")
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_work = "//:go.work.bazel")
 
+# containerd/cgroups ships stats/v1/metrics.proto, which imports
+# "gogoproto/gogo.proto" from a package the module does not contain. Gazelle
+# emits a proto_library depending on //gogoproto:gogoproto_proto, and any query
+# over the dependency graph then fails with
+# "no such package '@@gazelle++go_deps+com_github_containerd_cgroups//gogoproto'".
+#
+# `bazel build //...` does not hit this. The only path into the module runs
+# through hcsshim, which is Windows-only, so that select() branch is never
+# taken. query and cquery are configuration-independent and walk every branch,
+# so they fail where the build succeeds. That asymmetry is why it went
+# unnoticed: it breaks dependency scanning and nothing else. Third-party OSS
+# scanners drive Bazel through `deps(//...)`, so to that tooling the repository
+# looks unqueryable.
+#
+# Reachable via //src/compute-plane-services/nvsnap/pkg/discovery ->
+# containerd//mount -> hcsshim -> containerd/cgroups//stats/v1.
+go_deps.gazelle_override(
+    directives = ["gazelle:proto disable_global"],
+    path = "github.com/containerd/cgroups",
+)
+
 # use_repo entries below are auto-managed by `bazel mod tidy`. Re-run after
 # adding new imports in nvcf-cli, src/libraries/go/lib, or
 # src/libraries/go/worker.
