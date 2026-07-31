@@ -18,9 +18,13 @@
 package com.nvidia.boot.mock.ngc;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.absent;
+import static com.github.tomakehurst.wiremock.client.WireMock.any;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.matching;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static com.nvidia.boot.mock.BootTestConstants.IMAGE_MEDIA_TYPES;
 import static com.nvidia.boot.mock.BootTestConstants.TEST_VALID_CONTAINER_HASH;
 import static com.nvidia.boot.mock.BootTestConstants.TEST_VALID_CONTAINER_NAME;
@@ -30,6 +34,7 @@ import static com.nvidia.boot.mock.BootTestConstants.TEST_VALID_CONTAINER_TAG;
 import static com.nvidia.boot.mock.BootTestConstants.TEST_VALID_ORG_NAME;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.ResponseDefinitionBuilder;
 import java.net.URI;
 import lombok.Getter;
 import lombok.SneakyThrows;
@@ -38,9 +43,32 @@ import org.springframework.http.MediaType;
 
 public class MockNgcContainerRegistryServer {
 
+    /**
+     * Token endpoint advertised by the challenge. Deliberately not {@code /proxy_auth}: the
+     * client must discover this path from the challenge rather than assume a well-known one.
+     */
+    public static final String MOCK_TOKEN_ENDPOINT_URL = "/mock-token-endpoint";
+    public static final String V2_PING_URL = "/v2/";
+    public static final String MOCK_BEARER_TOKEN = "mockBearerToken";
+    public static final String MOCK_INVALID_REGISTRY_CRED = "invalid-registry-credential";
+    private static final String DOCKER_CONTENT_DIGEST_HEADER = "Docker-Content-Digest";
+
     @Getter
     private static WireMockServer ngcContainerRegistryMockServer;
-    private static final String PROXY_AUTH_URL = "/proxy_auth";
+    private static final String MANIFEST_URL_PATTERN = "/v2/.+/manifests/.+";
+    /**
+     * Scope is templated from the request path, so any repository gets the scope a registry
+     * would advertise for it: path segments are {@code /v2/{org}/{image}/manifests/{reference}}.
+     */
+    private static final String MANIFEST_CHALLENGE =
+            "Bearer realm=\"%s\",scope=\"repository:"
+                    + "{{request.path.[1]}}/{{request.path.[2]}}:pull\"";
+    private static final String CHALLENGE_TOKEN_RESPONSE = """
+            {
+                "expires_in": 3600,
+                "token": "%s"
+            }
+            """.formatted(MOCK_BEARER_TOKEN);
     private static final String VALIDATE_MANIFEST_URL =
             "/v2/" + TEST_VALID_ORG_NAME + "/" + TEST_VALID_CONTAINER_NAME + "/manifests/" +
                     TEST_VALID_CONTAINER_TAG;
@@ -53,12 +81,6 @@ public class MockNgcContainerRegistryServer {
     private static final String VALIDATE_MANIFEST_NOT_EXISTS_URL =
             "/v2/" + TEST_VALID_ORG_NAME + "/" + TEST_VALID_CONTAINER_NAME +
                     "/manifests/" + TEST_VALID_CONTAINER_NOT_EXIST_TAG;
-    private static final String PROXY_AUTH = """
-            {
-                "expires_in": 600,
-                "token": "mockBearerToken"
-            }
-            """;
     private static final String VALIDATE_MANIFEST = """
             589386975/mega-dev/mega-scheduler-service@sha256:d3f9786af0f21490f55299ac0af2f2da871f927865b042def17c63a3699d8d51
             {
@@ -192,46 +214,113 @@ public class MockNgcContainerRegistryServer {
     @SneakyThrows
     public static void start(String ngcRegistryBaseUrl) {
         stop();
-        ngcContainerRegistryMockServer = new WireMockServer(URI.create(ngcRegistryBaseUrl).getPort());
+        var port = URI.create(ngcRegistryBaseUrl).getPort();
+        ngcContainerRegistryMockServer = new WireMockServer(port);
         ngcContainerRegistryMockServer.start();
 
-        ngcContainerRegistryMockServer.stubFor(get(urlPathEqualTo(PROXY_AUTH_URL))
-                                                       .willReturn(aResponse().withStatus(200)
-                                                                           .withHeader(
-                                                                                   HttpHeaders.CONTENT_TYPE,
-                                                                                   MediaType.APPLICATION_JSON_VALUE)
-                                                                           .withBody(PROXY_AUTH)));
-        ngcContainerRegistryMockServer.stubFor(get(urlPathEqualTo(VALIDATE_MANIFEST_URL))
-                                                       .withHeader(HttpHeaders.ACCEPT,
-                                                                   equalTo(IMAGE_MEDIA_TYPES))
-                                                       .willReturn(aResponse().withStatus(200)
-                                                                           .withHeader(
-                                                                                   HttpHeaders.CONTENT_TYPE,
-                                                                                   MediaType.APPLICATION_JSON_VALUE)
-                                                                           .withBody(
-                                                                                   VALIDATE_MANIFEST)));
-        ngcContainerRegistryMockServer.stubFor(
-                get(urlPathEqualTo(VALIDATE_MANIFEST_URL_WITH_DIGEST))
-                        .withHeader(HttpHeaders.ACCEPT,
-                                    equalTo(IMAGE_MEDIA_TYPES))
-                        .willReturn(aResponse().withStatus(200)
-                                            .withHeader(
-                                                    HttpHeaders.CONTENT_TYPE,
-                                                    MediaType.APPLICATION_JSON_VALUE)
-                                            .withBody(
-                                                    VALIDATE_MANIFEST)));
-        ngcContainerRegistryMockServer.stubFor(
-                get(urlPathEqualTo(VALIDATE_MANIFEST_PERMISSION_DENIED_URL))
-                        .withHeader(HttpHeaders.ACCEPT, equalTo(IMAGE_MEDIA_TYPES))
-                        .willReturn(aResponse().withStatus(403)));
-        ngcContainerRegistryMockServer.stubFor(get(urlPathEqualTo(VALIDATE_MANIFEST_NOT_EXISTS_URL))
-                                                       .withHeader(HttpHeaders.ACCEPT,
-                                                                   equalTo(IMAGE_MEDIA_TYPES))
-                                                       .willReturn(aResponse().withStatus(404)));
+        // The realm must be a URL the client can actually dereference. Downstream suites pass
+        // registry hostnames like localhost-ngc:<port> (the unique-hostname convention), which
+        // do not resolve, so the challenge advertises the loopback address the server binds
+        // instead of echoing the caller's hostname - which also exercises the client following
+        // the realm rather than assuming the registry host.
+        registerChallengeDiscoveryStubs("http://localhost:" + port + MOCK_TOKEN_ENDPOINT_URL);
+        registerTokenEndpointStubs();
+
+        registerAuthenticatedManifestStub(VALIDATE_MANIFEST_URL, manifestFoundResponse());
+        registerAuthenticatedManifestStub(VALIDATE_MANIFEST_URL_WITH_DIGEST,
+                                          manifestFoundResponse());
+        registerAuthenticatedManifestStub(VALIDATE_MANIFEST_PERMISSION_DENIED_URL,
+                                          aResponse().withStatus(403));
+        registerAuthenticatedManifestStub(VALIDATE_MANIFEST_NOT_EXISTS_URL,
+                                          aResponse().withStatus(404));
     }
 
+    private static ResponseDefinitionBuilder manifestFoundResponse() {
+        return aResponse().withStatus(200)
+                .withHeader(DOCKER_CONTENT_DIGEST_HEADER, TEST_VALID_CONTAINER_HASH)
+                .withHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .withBody(VALIDATE_MANIFEST);
+    }
+
+    /**
+     * Answers a manifest request that carries a bearer token. Registered for both GET and HEAD:
+     * the registry client validates with HEAD, while {@link #setResponse} callers still GET.
+     */
+    private static void registerAuthenticatedManifestStub(String url,
+                                                          ResponseDefinitionBuilder response) {
+        ngcContainerRegistryMockServer.stubFor(
+                any(urlPathEqualTo(url))
+                        .withHeader(HttpHeaders.AUTHORIZATION,
+                                    equalTo("Bearer " + MOCK_BEARER_TOKEN))
+                        .withHeader(HttpHeaders.ACCEPT, equalTo(IMAGE_MEDIA_TYPES))
+                        .willReturn(response));
+    }
+
+    /**
+     * Call 1 - discover the authentication challenge. An unauthenticated {@code /v2/} ping
+     * answers 401 with a Bearer challenge whose scope is empty and which advertises no service,
+     * matching what NGC returns on {@code /v2/} today; an unauthenticated manifest request
+     * answers 401 with a repository-scoped challenge. The realm points at
+     * {@link #MOCK_TOKEN_ENDPOINT_URL} rather than the legacy {@code /proxy_auth} so that a
+     * client which hardcodes the old path fails here.
+     *
+     * <p>Registries challenge any unauthenticated {@code /v2/} request, including one for a
+     * repository that does not exist, so the manifest stub deliberately matches before
+     * existence is considered. The response-template transformer derives the challenge scope
+     * from the requested path, the way a registry does, instead of needing one stub per image;
+     * it is applied per-stub so no other fixture's body is ever run through templating.
+     */
+    private static void registerChallengeDiscoveryStubs(String realm) {
+        ngcContainerRegistryMockServer.stubFor(
+                get(urlPathEqualTo(V2_PING_URL))
+                        .willReturn(aResponse().withStatus(401)
+                                            .withHeader(HttpHeaders.WWW_AUTHENTICATE,
+                                                        "Bearer realm=\"%s\",scope=\"\""
+                                                                .formatted(realm))));
+
+        ngcContainerRegistryMockServer.stubFor(
+                any(urlPathMatching(MANIFEST_URL_PATTERN))
+                        .withHeader(HttpHeaders.AUTHORIZATION, absent())
+                        .willReturn(aResponse().withStatus(401)
+                                            .withHeader(HttpHeaders.WWW_AUTHENTICATE,
+                                                        MANIFEST_CHALLENGE.formatted(realm))
+                                            .withTransformers("response-template")));
+    }
+
+    /**
+     * Call 2 - exchange the credential for a token at the advertised realm. Any request
+     * carrying an {@code Authorization} header receives a token - downstream suites use
+     * arbitrary credentials, so no single valid secret is pinned; the exported
+     * {@link #MOCK_INVALID_REGISTRY_CRED} is rejected with 401 via a higher-priority stub.
+     *
+     * <p>A request without the header matches no fixture and draws WireMock's 404 default, so
+     * a client that drops the header still fails loudly. (Real NGC would instead answer 200
+     * with an anonymous token - a silent false pass a credential check must never rely on.)
+     */
+    private static void registerTokenEndpointStubs() {
+        ngcContainerRegistryMockServer.stubFor(
+                get(urlPathEqualTo(MOCK_TOKEN_ENDPOINT_URL))
+                        .withHeader(HttpHeaders.AUTHORIZATION, matching(".+"))
+                        .willReturn(aResponse().withStatus(200)
+                                            .withHeader(HttpHeaders.CONTENT_TYPE,
+                                                        MediaType.APPLICATION_JSON_VALUE)
+                                            .withBody(CHALLENGE_TOKEN_RESPONSE)));
+
+        ngcContainerRegistryMockServer.stubFor(
+                get(urlPathEqualTo(MOCK_TOKEN_ENDPOINT_URL))
+                        .withHeader(HttpHeaders.AUTHORIZATION,
+                                    equalTo("Basic " + MOCK_INVALID_REGISTRY_CRED))
+                        .atPriority(1)
+                        .willReturn(aResponse().withStatus(401)));
+    }
+
+    /**
+     * Stubs a successful response for a URL, whatever the request method. Manifest paths are
+     * validated with HEAD but fetched with GET, and callers only mean "this URL succeeds", so
+     * matching any method keeps them working either way.
+     */
     public static void setResponse(String url, byte[] body) {
-        ngcContainerRegistryMockServer.stubFor(get(urlPathEqualTo(url))
+        ngcContainerRegistryMockServer.stubFor(any(urlPathEqualTo(url))
                                                        .willReturn(aResponse().withStatus(200)
                                                                            .withHeader(
                                                                                    HttpHeaders.CONTENT_TYPE,

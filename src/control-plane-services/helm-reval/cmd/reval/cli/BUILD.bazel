@@ -25,6 +25,7 @@ go_library(
         "@com_github_go_chi_chi_v5//middleware",
         "@com_github_go_chi_render//:render",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/cobraautobind",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_spf13_cobra//:cobra",
         "@com_github_spf13_viper//:viper",
         "@io_opentelemetry_go_otel//:otel",
