@@ -92,10 +92,25 @@ var unauthenticatedPaths = map[string]bool{
 
 // tokenGuard returns middleware enforcing mode against token.
 //
-// Returns nil when there is nothing to enforce, so the caller can skip
-// installing it entirely rather than paying for a no-op on every request.
+// Returns nil only for AuthDisabled, where there is genuinely nothing to
+// enforce and the caller can skip installing a no-op on every request.
+//
+// AuthRequired with an empty token returns a deny-all guard rather than nil.
+// Startup already rejects that combination, but a security primitive that
+// silently becomes a no-op when misconfigured is the wrong shape: any future
+// caller that builds a guard without going through main() would open the API
+// and nothing would say so. Fail closed, and say why in the log.
 func tokenGuard(mode AuthMode, token string, log *logrus.Logger) func(http.Handler) http.Handler {
-	if mode == AuthDisabled || token == "" {
+	if mode == AuthDisabled {
+		return nil
+	}
+	if token == "" {
+		if mode == AuthRequired {
+			log.Error("Agent API auth is required but no token is configured; denying all requests")
+			return denyAll
+		}
+		// Permissive with no token can only ever log every request as
+		// unauthenticated; that is noise, not signal.
 		return nil
 	}
 	return func(next http.Handler) http.Handler {
@@ -127,6 +142,21 @@ func tokenGuard(mode AuthMode, token string, log *logrus.Logger) func(http.Handl
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		})
 	}
+}
+
+// denyAll is the fail-closed fallback: everything except the probe endpoints
+// gets a 401, so a misconfigured agent is loudly broken rather than quietly
+// open.
+func denyAll(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if unauthenticatedPaths[r.URL.Path] {
+			next.ServeHTTP(w, r)
+			return
+		}
+		metrics.AgentAuthTotal.WithLabelValues(authMissing).Inc()
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized: agent has no token configured", http.StatusUnauthorized)
+	})
 }
 
 const (
@@ -180,8 +210,11 @@ func checkToken(r *http.Request, want string) string {
 	if h == "" {
 		return authMissing
 	}
-	got, ok := strings.CutPrefix(h, "Bearer ")
-	if !ok {
+	// RFC 7235 makes the auth scheme case-insensitive, so "bearer <tok>" is a
+	// valid credential a conforming client may send. Compare the scheme with
+	// EqualFold; the token itself stays a byte-exact constant-time compare.
+	scheme, got, ok := strings.Cut(h, " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
 		return authInvalid
 	}
 	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {

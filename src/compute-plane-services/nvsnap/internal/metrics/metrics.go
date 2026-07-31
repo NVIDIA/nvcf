@@ -132,7 +132,19 @@ var (
 var (
 	agentOnce  sync.Once
 	serverOnce sync.Once
+	// apiOnce guards the RED pair, which BOTH the agent and the server
+	// register. Without its own Once, a process starting both would panic in
+	// MustRegister on the second call.
+	apiOnce sync.Once
 )
+
+// registerAPIMetrics registers the shared request rate/duration pair used by
+// InstrumentRoute on any router.
+func registerAPIMetrics() {
+	apiOnce.Do(func() {
+		prometheus.MustRegister(APIRequestsTotal, APIRequestDuration)
+	})
+}
 
 // RegisterAgent registers agent-side metrics with the default Prometheus registry.
 func RegisterAgent() {
@@ -148,6 +160,9 @@ func RegisterAgent() {
 			GPUProcessesDiscovered,
 			AgentAuthTotal,
 		)
+		// The agent serves an HTTP API too, so it needs the same RED metrics
+		// the server has. See InstrumentRoute.
+		registerAPIMetrics()
 		// Counters must exist before the first scrape or rate() gaps and
 		// absent() alerts misfire.
 		for _, r := range []string{"ok", "missing", "invalid"} {
@@ -160,11 +175,10 @@ func RegisterAgent() {
 func RegisterServer() {
 	serverOnce.Do(func() {
 		prometheus.MustRegister(
-			APIRequestsTotal,
-			APIRequestDuration,
 			CheckpointsStored,
 			WebSocketConnections,
 		)
+		registerAPIMetrics()
 	})
 }
 

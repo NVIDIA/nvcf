@@ -74,8 +74,8 @@ type Config struct {
 	AuthToken string
 	// AuthMode is disabled (default), permissive, or required. See auth.go
 	// for why the rollout needs a permissive state.
-	AuthMode AuthMode
-	UseNsenter          bool // Run CRIU/cuda-checkpoint in host mount namespace (for containerized agents)
+	AuthMode   AuthMode
+	UseNsenter bool // Run CRIU/cuda-checkpoint in host mount namespace (for containerized agents)
 
 	// Prewarm enables agent-side page-cache prewarm of the rox-backed
 	// overlay lowerdir on restore (--prewarm, default true). Reads the
@@ -445,19 +445,22 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	router := mux.NewRouter()
 
-	// Every {id}/{hash}/{pod-uid} below names a directory under a hostPath
-	// mount. Validate them in one place so a route added later is covered
-	// without remembering to. See pathVarGuard in pathsafe.go.
-	router.Use(pathVarGuard)
+	// RED metrics for every route: rate and status via APIRequestsTotal,
+	// duration via APIRequestDuration, keyed on the route TEMPLATE rather
+	// than the concrete path so checkpoint IDs never become label values.
+	// Registered outermost so it also observes requests the auth guard
+	// rejects -- a spike of 401s is exactly what the rollout needs to see.
+	router.Use(metrics.InstrumentRoute())
 
-	// Authenticate before anything else runs. Installed only when a token is
-	// configured, so an upgrade that has not been given one behaves exactly
-	// as before -- but say so loudly, since an agent silently serving an
-	// unauthenticated privileged API is the state this guards against.
 	// Present the token on our own peer calls too. Set unconditionally: an
 	// agent in permissive mode still has peers that may already require it.
 	SetOutboundToken(a.config.AuthToken)
 
+	// Order matters: gorilla/mux runs middleware in registration order, so
+	// auth is registered FIRST. Otherwise pathVarGuard answers a malformed
+	// {id} with 400 before the caller is authenticated, telling an
+	// unauthenticated client which routes exist and how their variables are
+	// shaped. Authenticate, then validate.
 	if guard := tokenGuard(a.config.AuthMode, a.config.AuthToken, a.log); guard != nil {
 		router.Use(guard)
 		a.log.WithField("mode", a.config.AuthMode).Info("Agent API authentication enabled")
@@ -465,6 +468,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.log.Warn("Agent API is UNAUTHENTICATED: set NVSNAP_AGENT_TOKEN and " +
 			"--auth-mode to require a bearer token (GH #486)")
 	}
+
+	// Every {id}/{hash}/{pod-uid} below names a directory under a hostPath
+	// mount. Validate them in one place so a route added later is covered
+	// without remembering to. See pathVarGuard in pathsafe.go.
+	router.Use(pathVarGuard)
 
 	// Metrics endpoint
 	router.Handle("/metrics", metrics.Handler()).Methods("GET")

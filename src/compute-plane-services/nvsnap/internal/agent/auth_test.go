@@ -59,6 +59,10 @@ func TestTokenGuardRequired(t *testing.T) {
 		// returns 0 on a length mismatch, but assert it rather than trust it.
 		{"token prefix", "Bearer " + tok[:5], false, http.StatusUnauthorized},
 		{"wrong scheme", "Basic " + tok, false, http.StatusUnauthorized},
+		// RFC 7235: the scheme is case-insensitive, so a conforming client
+		// may legitimately send these and must not be turned away.
+		{"lowercase scheme", "bearer " + tok, true, http.StatusOK},
+		{"mixed-case scheme", "BeArEr " + tok, true, http.StatusOK},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -84,9 +88,49 @@ func TestTokenGuardDisabledInstallsNothing(t *testing.T) {
 	if g := tokenGuard(AuthDisabled, "tok", quietLog()); g != nil {
 		t.Error("mode=disabled returned a middleware; caller should skip installing one")
 	}
-	// An empty token is the same situation: nothing to enforce against.
-	if g := tokenGuard(AuthRequired, "", quietLog()); g != nil {
-		t.Error("empty token returned a middleware")
+	// Permissive with no token could only log every request as
+	// unauthenticated, which is noise; skipping it is correct.
+	if g := tokenGuard(AuthPermissive, "", quietLog()); g != nil {
+		t.Error("permissive with no token returned a middleware")
+	}
+}
+
+// AuthRequired with no token must FAIL CLOSED. Returning nil here would make
+// Agent.Run skip the middleware entirely and serve the privileged API
+// unauthenticated -- a misconfiguration silently becoming an open API is the
+// exact failure this feature exists to prevent.
+func TestTokenGuardRequiredWithoutTokenDeniesAll(t *testing.T) {
+	g := tokenGuard(AuthRequired, "", quietLog())
+	if g == nil {
+		t.Fatal("mode=required with no token returned nil; the API would be served unauthenticated")
+	}
+	ran := false
+	h := g(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		ran = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/restore", http.NoBody))
+	if ran || w.Code != http.StatusUnauthorized {
+		t.Errorf("privileged route: ran=%v code=%d, want ran=false code=401", ran, w.Code)
+	}
+	// Even a well-formed token cannot help: there is nothing to compare to.
+	ran = false
+	w = httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/restore", http.NoBody)
+	r.Header.Set(authHeader, "Bearer anything")
+	h.ServeHTTP(w, r)
+	if ran || w.Code != http.StatusUnauthorized {
+		t.Errorf("with a token: ran=%v code=%d, want ran=false code=401", ran, w.Code)
+	}
+	// Probes must still work, or the pod fails its liveness check and the
+	// operator sees a crashloop instead of the actual misconfiguration.
+	ran = false
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", http.NoBody))
+	if !ran || w.Code != http.StatusOK {
+		t.Errorf("/health: ran=%v code=%d, want ran=true code=200", ran, w.Code)
 	}
 }
 
