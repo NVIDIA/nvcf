@@ -79,3 +79,76 @@ defaultQueue:
 ```bash
 helm install kai-scheduler oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler -f values.yaml -n kai-scheduler --create-namespace --version v0.14.0
 ```
+
+## NVLink Clique Gang Scheduling
+
+On [NVLink-optimized clusters](./configuration.md#nvlink-optimized-clusters), a multi-node
+function must land entirely inside one NVLink clique to get the inter-node bandwidth it was
+sized for. Without a topology constraint, KAI Scheduler binds pods one at a time and
+bin-packs the first pod into the most saturated clique. If that clique cannot hold the rest
+of the replicas, the remaining pods stay `Pending` and the deployment never becomes ready.
+Redeploying may succeed only because placement happens to land somewhere else.
+
+A cluster `Topology` fixes this. It tells KAI Scheduler which node labels describe the
+clique hierarchy, so it can hold placement until every replica of a workload fits in a
+single clique.
+
+### Install the Topology
+
+The compute plane stack ships this as an optional add-on. Enable it in
+`environments/<env>.yaml` and run `make apply`:
+
+```yaml
+addons:
+  kaiScheduler:
+    enabled: true
+    clusterTopologies:
+      enabled: true
+      topologies:
+        - name: nvcf-mnnvl-topology
+          levels:
+            - nodeLabel: nvidia.com/gpu.clique
+            - nodeLabel: kubernetes.io/hostname
+```
+
+The add-on requires the `kai-scheduler` release (enable `addons.kaiScheduler.enabled`)
+and KAI Scheduler v0.12.0 or later, which is when the native `kai.scheduler/v1alpha1`
+Topology CRD was introduced. For each entry under `topologies` it creates a
+cluster-scoped resource such as:
+
+```yaml
+apiVersion: kai.scheduler/v1alpha1
+kind: Topology
+metadata:
+  name: nvcf-mnnvl-topology
+spec:
+  levels:
+  - nodeLabel: nvidia.com/gpu.clique
+  - nodeLabel: kubernetes.io/hostname
+```
+
+The `nvidia.com/gpu.clique` label is applied by the NVIDIA GPU DRA driver, which is already
+a prerequisite on NVLink-optimized clusters.
+
+Verify the resource exists:
+
+```bash
+kubectl get topologies.kai.scheduler nvcf-mnnvl-topology
+```
+
+To apply it without the compute plane stack, write the manifest above to a file and run
+`kubectl apply -f`.
+
+### Opt a function in
+
+Creating the Topology changes nothing on its own. Each workload opts in through annotations
+on the StatefulSet, described in [Helm Functions](../helm-functions.md#multi-node-gang-scheduling).
+
+### Gang-scheduling object types
+
+Enabling the `KAIScheduler` feature gate adds the KAI `PodGroup` type to the cluster
+validation policy, and enabling the Grove add-on adds the `PodCliqueSet`, `PodClique`,
+`PodCliqueScalingGroup`, and `PodGang` types. The Cluster Agent needs these to render,
+admit, and clean up the objects the schedulers create for a function, and to grant itself
+the matching RBAC. Charts that ship their own gang-scheduling objects are validated against
+the same list.

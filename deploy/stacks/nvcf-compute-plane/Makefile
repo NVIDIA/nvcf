@@ -130,6 +130,9 @@ dist: clean-dist
 	# Copy helmfile.d files
 	@cp -r "$(MAKEFILE_DIR)/helmfile.d" "$(DIST_DIR)/"
 
+	# Copy local charts referenced by helmfile.d releases via relative paths
+	@cp -r "$(MAKEFILE_DIR)/charts" "$(DIST_DIR)/"
+
 	# Copy and transform README (remove internal references)
 	@sed -e 's|nvcf-ncp-internal/ncp-dev|your-org/your-team|g' \
 	     -e 's|0651155215864979/ncp-dev|YOUR_ORG/YOUR_TEAM|g' \

@@ -76,6 +76,52 @@ helmDefaults:
 {{- $agentMergeConfig = mergeOverwrite $agentMergeConfig ($environmentAgentMergeConfig | fromYaml | default dict) }}
 {{- end }}
 
+{{- $selfManaged := dig "nvcaOperator" "selfManaged" dict .Values.global }}
+{{- $featureGateValues := dig "featureGateValues" list $selfManaged }}
+
+{{- /*
+  Gang-scheduling CRDs owned by KAI Scheduler and Grove. NVCA needs these in
+  its validation policy to render, admit, and garbage collect the objects the
+  schedulers create for a Helm function, and the nvca-operator chart derives
+  the matching ClusterRole from the same list. Adding them here means an
+  operator does not have to restate the whole policy just to run multi-node
+  gang-scheduled workloads. Entries supplied through registration or
+  environment values always win over these defaults.
+*/}}
+{{- $gangTypes := list }}
+{{- if has "KAIScheduler" $featureGateValues }}
+{{-   $gangTypes = append $gangTypes (dict "group" "scheduling.run.ai" "version" "v2alpha2" "kind" "PodGroup" "resource" "podgroups") }}
+{{- end }}
+{{- if dig "addons" "groveOperator" "enabled" false .Values }}
+{{-   $gangTypes = concat $gangTypes (list
+        (dict "group" "grove.io" "version" "v1alpha1" "kind" "PodCliqueSet" "resource" "podcliquesets")
+        (dict "group" "grove.io" "version" "v1alpha1" "kind" "PodClique" "resource" "podcliques")
+        (dict "group" "grove.io" "version" "v1alpha1" "kind" "PodCliqueScalingGroup" "resource" "podcliquescalinggroups")
+        (dict "group" "scheduler.grove.io" "version" "v1alpha1" "kind" "PodGang" "resource" "podgangs")
+      ) }}
+{{- end }}
+{{- if $gangTypes }}
+{{-   $validationPolicy := dig "cluster" "validationPolicy" dict $agentMergeConfig }}
+{{-   $allowedTypes := dig "allowedExtraKubernetesTypes" list $validationPolicy }}
+{{-   $seen := dict }}
+{{-   range $allowedTypes }}
+{{-     $seen = set $seen (printf "%s/%s/%s" .group .version .kind) true }}
+{{-   end }}
+{{-   range $gangTypes }}
+{{-     $key := printf "%s/%s/%s" .group .version .kind }}
+{{-     if not (hasKey $seen $key) }}
+{{-       $allowedTypes = append $allowedTypes . }}
+{{-     end }}
+{{-   end }}
+{{-   $validationPolicy = set $validationPolicy "allowedExtraKubernetesTypes" $allowedTypes }}
+{{- /* ReVal only accepts "Default" or "Unrestricted"; an unset name is rejected. */}}
+{{-   if not (dig "name" "" $validationPolicy) }}
+{{-     $validationPolicy = set $validationPolicy "name" "Default" }}
+{{-   end }}
+{{-   $cluster := set (dig "cluster" dict $agentMergeConfig) "validationPolicy" $validationPolicy }}
+{{-   $agentMergeConfig = set $agentMergeConfig "cluster" $cluster }}
+{{- end }}
+
 releases:
 
   - name: nvca-operator
@@ -114,7 +160,6 @@ releases:
           clusterSource: self-managed
         clusterName: {{ requiredEnv "CLUSTER_NAME" }}
         ncaId: {{ requiredEnv "NCA_ID" }}
-        {{- $selfManaged := dig "nvcaOperator" "selfManaged" dict .Values.global }}
         {{- $otelCollector := dig "otelCollector" dict $selfManaged }}
         {{- $otelCollectorEnabled := dig "enabled" $computeObservabilityEnabled $otelCollector }}
         selfManaged:
@@ -139,7 +184,7 @@ releases:
           {{- end }}
           featureGateValues:
           {{- include "nvca-operator.featureGateValues" (dict
-                "values" (dig "featureGateValues" list $selfManaged)
+                "values" $featureGateValues
                 "byooEnabled" $computeObservabilityEnabled) | nindent 10 }}
           otelCollector:
             enabled: {{ $otelCollectorEnabled }}

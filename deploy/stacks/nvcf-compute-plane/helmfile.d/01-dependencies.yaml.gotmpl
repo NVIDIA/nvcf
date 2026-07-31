@@ -1,9 +1,11 @@
 # NVCF Compute Plane Releases
 #
-# Optional releases — installed once per GPU cluster:
-#   kai-scheduler    — optional; addons.kaiScheduler.enabled (required by grove/dynamo)
-#   grove-operator   — optional; topology-aware scheduling (addons.groveOperator.enabled)
-#   dynamo-operator  — optional; Dynamo inference framework scheduling (addons.dynamoOperator.enabled)
+# Optional releases, installed once per GPU cluster:
+#   kai-scheduler:        addons.kaiScheduler.enabled (required by grove/dynamo)
+#   nvcf-kai-topology:    KAI Topologies for gang scheduling
+#                         (addons.kaiScheduler.clusterTopologies.enabled)
+#   grove-operator:       topology-aware scheduling (addons.groveOperator.enabled)
+#   dynamo-operator:      Dynamo inference framework scheduling (addons.dynamoOperator.enabled)
 #
 # CLUSTER_NAME is required and scopes the registration values handoff file.
 # Run `make register-cluster CLUSTER_NAME=<name>` before `make install`.
@@ -223,6 +225,34 @@ releases:
               quota: -1
               limit: -1
               overQuotaWeight: 1
+    labels:
+      release-group: workers
+    wait: true
+    waitForJobs: true
+
+  - name: nvcf-kai-topology
+    # Cluster-scoped KAI Scheduler Topology resources (optional; disabled by
+    # default). Workloads opt in through the `kai.scheduler/topology`
+    # annotation so KAI places every replica of a StatefulSet inside a single
+    # clique instead of binding pods one at a time.
+    #
+    # Enable per-environment: addons.kaiScheduler.clusterTopologies.enabled: true
+    # Configure the Topology list under
+    # addons.kaiScheduler.clusterTopologies.topologies.
+    #
+    # Requires the kai-scheduler release (and KAI v0.12.0 or later) for the
+    # native `kai.scheduler/v1alpha1` Topology CRD.
+    #
+    # Topologies are cluster-scoped; the release lives in the nvca-operator
+    # namespace so lifecycle stays with NVCA-owned resources.
+    condition: addons.kaiScheduler.clusterTopologies.enabled
+    chart: ../charts/nvcf-kai-topology
+    namespace: nvca-operator
+    needs:
+      - kai-scheduler/kai-scheduler
+    values:
+      - topologies:
+        {{- toYaml (dig "kaiScheduler" "clusterTopologies" "topologies" list .Values.addons) | nindent 10 }}
     labels:
       release-group: workers
     wait: true

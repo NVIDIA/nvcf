@@ -14,3 +14,52 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvca-operator-allowed-extra-types
+  labels:
+    helm.sh/chart: helm-nvca-operator-1.14.0
+    app.kubernetes.io/name: nvca-operator
+    app.kubernetes.io/instance: nvca-operator
+    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/managed-by: Helm
+rules:
+- apiGroups: ["nvidia.com"]
+  resources: ["dynamographdeployments"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["scheduling.run.ai"]
+  resources: ["podgroups"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["grove.io"]
+  resources: ["podcliquesets"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["grove.io"]
+  resources: ["podcliques"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["grove.io"]
+  resources: ["podcliquescalinggroups"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["scheduler.grove.io"]
+  resources: ["podgangs"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+---
+# Source: helm-nvca-operator/templates/rbac_allowed_extra_types.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvca-operator-allowed-extra-types
+  labels:
+    helm.sh/chart: helm-nvca-operator-1.14.0
+    app.kubernetes.io/name: nvca-operator
+    app.kubernetes.io/instance: nvca-operator
+    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nvca-operator-allowed-extra-types
+subjects:
+- kind: ServiceAccount
+  name: nvca-operator
+  namespace: nvca-operator

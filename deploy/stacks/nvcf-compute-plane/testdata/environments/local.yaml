@@ -16,11 +16,31 @@ global:
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
       revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
+      # Covers the KAI branch of the validation policy defaults in
+      # helmfile.d/02-nvca.yaml.gotmpl.
+      featureGateValues:
+        - KAIScheduler
 
 addons:
   kaiScheduler:
     enabled: true
+    clusterTopologies:
+      enabled: true
   groveOperator:
     enabled: true
   dynamoOperator:
     enabled: true
+
+# An operator-supplied validation policy. The KAI and Grove gang-scheduling
+# defaults in helmfile.d/02-nvca.yaml.gotmpl are appended to this list, and the
+# policy name set here is kept.
+agentConfig:
+  mergeConfig: |
+    cluster:
+      validationPolicy:
+        name: Unrestricted
+        allowedExtraKubernetesTypes:
+          - group: nvidia.com
+            version: v1alpha1
+            kind: DynamoGraphDeployment
+            resource: dynamographdeployments

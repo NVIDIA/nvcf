@@ -68,11 +68,95 @@ For gRPC-based functions, set `"inferenceURL" : "/gRPC"`. This signals to Cloud 
 
 3. Proceed with function deployment and invocation normally.
 
-**Multi-node helm deployment**
+### Multi-node helm deployment
+
 To create a multi-node helm deployment, you need to use the following format for the `instanceType`:
 `<CSP>.GPU.<GPU_NAME>_<number of gpus per node>x[.x<number of nodes>]`. For example, `DGXC.GPU.L40S_1x` is a single L40S instance while `ON-PREM.GPU.B200_8x.x2` is two full nodes of 8-way B200.
 
 A sample helm chart for a multi-node deployment can be found [in the multi-node helm example](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/helmchart-samples/multi-node-helm-function-test/).
+
+#### Multi-node NVLink (MNNVL) Scheduling
+
+<Note>
+The cluster must have the `NVLinkOptimized` cluster attribute applied during compute cluster registration
+to use MNNVL in NVCF compute clusters. See [configuration](../cluster-management/configuration.md) for details.
+
+</Note>
+
+NVCF has the ability to schedule a set of Pods from one multi-node Helm chart function into a single
+[NVLink partition (GPU clique)](https://developer.nvidia.com/blog/running-ai-workloads-on-rack-scale-supercomputers-from-hardware-to-topology-aware-scheduling/)
+using node `nvidia.com/gpu.clique` labels. NVCA automatically creates a
+[`ComputeDomain`](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html)
+to connect all GPU workload Pods via IMEX channel.
+
+<Note>
+All Pods in your Helm chart must request an entire node's worth of GPUs to use MNNVL and the `ComputeDomain`
+without error.
+
+</Note>
+
+There are several options on how to inform NVCF on how to schedule Pods.
+
+##### With KAI Scheduler
+
+On an NVLink-optimized cluster running KAI Scheduler, a multi-node workload should be placed
+all at once inside a single NVLink clique. Otherwise the scheduler can bind the first pod
+into a clique with no room for the rest, and those pods stay `Pending`.
+
+Request atomic placement by annotating the StatefulSet with `kai.scheduler/*` annotations
+on the StatefulSet's own `metadata.annotations`:
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  annotations:
+    kai.scheduler/topology: "nvcf-mnnvl-topology"
+    kai.scheduler/topology-required-placement: "nvidia.com/gpu.clique"
+```
+
+KAI Scheduler builds one `PodGroup` per StatefulSet and copies these annotations into its
+topology constraint. No pod in the StatefulSet binds to a node until every replica can land
+in one clique.
+
+Prerequisites, and how a cluster operator installs the `nvcf-mnnvl-topology` resource, are
+in the [KAI Scheduler guide](./cluster-management/kai-scheduler.md#nvlink-clique-gang-scheduling).
+Ask your cluster operator whether the Topology exists before relying on these annotations;
+if it is missing, KAI rejects the workload's topology constraint.
+
+<Warning>
+Gang scheduling this way only works for StatefulSets. KAI Scheduler puts every replica of a
+Deployment in its own `PodGroup`, so a Deployment cannot be gang scheduled and this
+annotation has no effect there. Use a StatefulSet for multi-node workloads.
+
+</Warning>
+
+##### Without KAI Scheduler
+
+<Warning>
+Using KAI Scheduler is advised to ensure atomicity in gang scheduling. Without KAI Scheduler,
+there is no guarantee that Pods will be scheduled into a GPU clique big enough to fit the set,
+even if one exists.
+
+</Warning>
+
+On an NVLink-optimized cluster without KAI Scheduler, you can use the `dra.nvcf.nvidia.io/required-nvlink-domain-index`
+Pod annotation to attempt to schedule a set of Pods onto a single GPU clique:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    metadata:
+      annotations:
+        dra.nvcf.nvidia.io/required-nvlink-domain-index: "0"
+```
+
+NVCF will apply inter-pod affinities to all Pods with the same index value. For example, `"0"` and `"1"`
+indices will create two different inter-pod affinities, thus two sets of Pods that will likely land in
+different cliques.
+
 
 ## Limitations
 

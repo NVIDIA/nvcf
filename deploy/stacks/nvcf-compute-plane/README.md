@@ -89,15 +89,17 @@ make install CLUSTER_NAME=...   # downloads helmfile v1.1.9 + helm v3.15.4 on fi
 
 ## Optional Add-ons
 
-KAI Scheduler, Grove (topology-aware scheduling), and Dynamo (inference framework
-scheduling) are disabled by default. Grove and Dynamo require KAI Scheduler
-(release and namespace `kai-scheduler`). Enable per-environment in
-`environments/<env>.yaml`:
+KAI Scheduler, Grove (topology-aware scheduling), Dynamo (inference framework
+scheduling), and optional KAI cluster Topologies are disabled by default. Grove
+and Dynamo require KAI Scheduler (release and namespace `kai-scheduler`). Enable
+per-environment in `environments/<env>.yaml`:
 
 ```yaml
 addons:
   kaiScheduler:
     enabled: true
+    clusterTopologies:
+      enabled: true
   groveOperator:
     enabled: true
   dynamoOperator:
@@ -107,6 +109,19 @@ addons:
 Override KAI component resources under `addons.kaiScheduler.<component>.resources`
 (for example `addons.kaiScheduler.scheduler.resources.requests.memory`). Defaults
 are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
+
+`kaiScheduler.clusterTopologies` installs one or more cluster-scoped KAI
+`Topology` resources from `clusterTopologies.topologies`. The default entry
+names the `nvidia.com/gpu.clique` and `kubernetes.io/hostname` node labels.
+Multi-node functions reference a Topology by name through the
+`kai.scheduler/topology` annotation so KAI places every replica of a workload
+inside one NVLink clique instead of binding pods one at a time. It requires
+KAI Scheduler v0.12.0 or later. See
+[the KAI Scheduler guide](../../../docs/user/cluster-management/kai-scheduler.md).
+
+Enabling the `KAIScheduler` feature gate or the Grove add-on also adds the
+matching gang-scheduling CRDs to the NVCA validation policy, so functions may
+deploy `PodGroup` and `PodCliqueSet` objects without restating the whole policy.
 
 For a standalone KAI install outside this stack, follow the
 [KAI Scheduler guide](https://docs.nvidia.com/cloud-functions/current/latest/cluster-management/kai-scheduler.html).

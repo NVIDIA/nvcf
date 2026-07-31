@@ -27,7 +27,33 @@ metadata:
     app.kubernetes.io/version: "3.0.4"
     app.kubernetes.io/managed-by: Helm
 data:
-  config.yaml:  |-
+  config.yaml:  |2
+  
     cluster:
       validationPolicy:
+        allowedExtraKubernetesTypes:
+          - group: nvidia.com
+            kind: DynamoGraphDeployment
+            resource: dynamographdeployments
+            version: v1alpha1
+          - group: scheduling.run.ai
+            kind: PodGroup
+            resource: podgroups
+            version: v2alpha2
+          - group: grove.io
+            kind: PodCliqueSet
+            resource: podcliquesets
+            version: v1alpha1
+          - group: grove.io
+            kind: PodClique
+            resource: podcliques
+            version: v1alpha1
+          - group: grove.io
+            kind: PodCliqueScalingGroup
+            resource: podcliquescalinggroups
+            version: v1alpha1
+          - group: scheduler.grove.io
+            kind: PodGang
+            resource: podgangs
+            version: v1alpha1
         name: Unrestricted

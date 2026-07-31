@@ -78,6 +78,21 @@ addons:
   kaiScheduler:
     enabled: false
 
+    # Cluster-scoped Topologies for KAI Scheduler gang placement (disabled by
+    # default). Enable on NVLink-optimized clusters so multi-node functions can
+    # request clique-level gang placement. Function owners opt in per workload
+    # with the `kai.scheduler/topology` annotation naming one of the entries
+    # below. Requires addons.kaiScheduler.enabled (or an equivalent in-cluster
+    # KAI install with the Topology CRD).
+    clusterTopologies:
+      enabled: false
+      topologies:
+        - name: nvcf-mnnvl-topology
+          # Ordered widest domain first, narrowest last.
+          levels:
+            - nodeLabel: nvidia.com/gpu.clique
+            - nodeLabel: kubernetes.io/hostname
+
   # Grove topology-aware scheduling operator (disabled by default)
   groveOperator:
     enabled: false
