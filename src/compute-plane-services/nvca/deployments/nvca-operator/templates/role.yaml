@@ -108,3 +108,8 @@ rules:
 - apiGroups: ["run.ai"]
   resources: ["kartas"]
   verbs: ["get", "list", "watch"]
+{{- if and .Values.webhook.certManager .Values.webhook.certManager.enabled }}
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}

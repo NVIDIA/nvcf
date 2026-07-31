@@ -23,3 +23,40 @@ tolerations:
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+# cert-manager subchart image overrides for helm-nvcf-cert-manager.
+cert-manager:
+  {{- if .Values.global.imagePullSecrets }}
+  global:
+    imagePullSecrets:
+      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
+  {{- end }}
+  image:
+    repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-controller
+  webhook:
+    image:
+      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-webhook
+  cainjector:
+    image:
+      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-cainjector
+  acmesolver:
+    image:
+      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-acmesolver
+  startupapicheck:
+    image:
+      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-startupapicheck
+  {{- if .Values.global.nodeSelector.enabled -}}
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: {{ .Values.global.nodeSelector.key | quote }}
+            operator: In
+            values:
+            - {{ .Values.global.nodeSelector.value | quote }}
+  {{- end }}
+  {{- if not (empty .Values.global.tolerations) -}}
+  tolerations:
+  {{- toYaml .Values.global.tolerations | nindent 8 }}
+  {{- end }}

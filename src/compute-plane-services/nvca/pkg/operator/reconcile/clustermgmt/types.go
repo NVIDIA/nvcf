@@ -193,6 +193,11 @@ type clusterDTO struct {
 			Repository string `json:"repository"`
 			Tag        string `json:"tag"`
 		} `json:"imageConfig,omitempty"`
+		CertManager *struct {
+			Enabled    bool   `json:"enabled"`
+			IssuerName string `json:"issuerName,omitempty"`
+			IssuerKind string `json:"issuerKind,omitempty"`
+		} `json:"certManager,omitempty"`
 	} `json:"webhookConfig,omitempty"`
 	// SharedStorage configures the shared storage image in NVCA.
 	SharedStorage *struct {

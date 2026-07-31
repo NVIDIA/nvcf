@@ -54,6 +54,9 @@ func (bc *BackendK8sCache) runTLSCertRotate(ctx context.Context, certRefreshPeri
 				log.Errorf("Unexpected number of NVCFBackends found for TLS cert refresh: %d", len(nbs))
 				continue
 			}
+			if webhookCertManagerEnabled(nbs[0]) {
+				continue
+			}
 			if err := bc.rotateTLSCert(ctx, nbs[0], bc.now()); err != nil {
 				log.WithError(err).Error("Failed to refresh TLS cert, must be done manually")
 			}

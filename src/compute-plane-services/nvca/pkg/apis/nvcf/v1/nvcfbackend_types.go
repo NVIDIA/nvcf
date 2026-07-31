@@ -158,10 +158,18 @@ type OAuthConfig struct {
 }
 
 // +k8s:openapi-gen=true
+type WebhookCertManagerConfig struct {
+	Enabled    bool   `json:"enabled,omitempty"`
+	IssuerName string `json:"issuerName,omitempty"`
+	IssuerKind string `json:"issuerKind,omitempty"`
+}
+
+// +k8s:openapi-gen=true
 type WebhookConfig struct {
-	ListenPort  int32       `json:"listenPort,omitempty"`
-	ServicePort int32       `json:"servicePort,omitempty"`
-	ImageConfig ImageConfig `json:"imageConfig,omitempty"`
+	ListenPort  int32                     `json:"listenPort,omitempty"`
+	ServicePort int32                     `json:"servicePort,omitempty"`
+	ImageConfig ImageConfig               `json:"imageConfig,omitempty"`
+	CertManager *WebhookCertManagerConfig `json:"certManager,omitempty"`
 }
 
 // +k8s:openapi-gen=true

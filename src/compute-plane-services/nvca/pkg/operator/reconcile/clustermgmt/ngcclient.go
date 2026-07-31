@@ -438,6 +438,13 @@ func withWebhookConfigMapper() clusterMapper {
 		}
 		dest.NVCFBackend.Spec.WebhookConfig.ImageConfig.Repository = src.WebhookConfig.ImageConfig.Repository
 		dest.NVCFBackend.Spec.WebhookConfig.ImageConfig.Tag = src.WebhookConfig.ImageConfig.Tag
+		if src.WebhookConfig.CertManager != nil {
+			dest.NVCFBackend.Spec.WebhookConfig.CertManager = &nvidiaiov1.WebhookCertManagerConfig{
+				Enabled:    src.WebhookConfig.CertManager.Enabled,
+				IssuerName: src.WebhookConfig.CertManager.IssuerName,
+				IssuerKind: src.WebhookConfig.CertManager.IssuerKind,
+			}
+		}
 		return nil
 	}
 }

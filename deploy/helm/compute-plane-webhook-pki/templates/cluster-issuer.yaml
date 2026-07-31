@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned-bootstrap
+  labels:
+    {{- include "compute-plane-webhook-pki.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "compute-plane-webhook-pki.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: compute-plane-webhook-ca
+  secretName: {{ .Release.Name }}-ca-secret
+  duration: 87600h
+  renewBefore: 720h
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned-bootstrap
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.clusterIssuerName }}
+  labels:
+    {{- include "compute-plane-webhook-pki.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-ca-secret

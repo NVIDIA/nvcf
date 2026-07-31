@@ -100,6 +100,30 @@ addons:
     enabled: true
 ```
 
+## Webhook TLS (cert-manager)
+
+By default `certManager.enabled: true` in `environments/base.yaml` installs
+cert-manager on the GPU cluster and provisions webhook TLS for Grove, Dynamo, and
+NVCA through `Certificate` resources. CA bundles are injected into
+`*WebhookConfiguration` objects via cert-manager annotations.
+
+Set `certManager.enabled: false` in your environment file to keep legacy
+in-operator certificate generation (Grove `auto` mode, Dynamo built-in rotator,
+NVCA operator-managed secrets).
+
+Optional overrides:
+
+```yaml
+certManager:
+  enabled: true
+  clusterIssuerName: compute-plane-ca-issuer
+```
+
+The Dynamo chart creates its own namespace-scoped CA chain when
+`webhook.certManager.enabled` is true; Grove and NVCA use the shared
+`clusterIssuerName`. This stack installs cert-manager separately from the
+control-plane self-managed stack.
+
 ## Multi-Cluster Example
 
 Each cluster is registered and installed independently. Pass `KUBECONFIG_FILE`

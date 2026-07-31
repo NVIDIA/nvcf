@@ -541,13 +541,24 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(ctx context.Context, nb *nvidiaio
 			nb.Namespace, nb.Name, err)
 	}
 
-	webhookCert, err := generateWebhookCerts(nb, bc.now())
-	if err != nil {
-		return fmt.Errorf("failed to create webhookCerts, err: %w", err)
-	}
+	var webhookCert WebhookCert
+	if webhookCertManagerEnabled(nb) {
+		if err := bc.setupWebhookCertificate(ctx, nb); err != nil {
+			return fmt.Errorf("failed to setup webhook Certificate: %w", err)
+		}
+		if err := bc.waitForWebhookTLSSecret(ctx, nb); err != nil {
+			return err
+		}
+	} else {
+		var err error
+		webhookCert, err = generateWebhookCerts(nb, bc.now())
+		if err != nil {
+			return fmt.Errorf("failed to create webhookCerts, err: %w", err)
+		}
 
-	if err := bc.setupWebhookSecrets(ctx, nb, webhookCert); err != nil {
-		return fmt.Errorf("failed to create webhook secrets, err: %w", err)
+		if err := bc.setupWebhookSecrets(ctx, nb, webhookCert); err != nil {
+			return fmt.Errorf("failed to create webhook secrets, err: %w", err)
+		}
 	}
 
 	err = bc.setupStaticGPUConfigMap(ctx, nb)
@@ -1896,12 +1907,7 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 	runAsGroup := bc.nvcaRunAsGroupID
 
 	volumes = append(volumes,
-		corev1.Volume{
-			Name: SrvCertsVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
-		},
+		webhookServerCertsVolume(nb),
 		corev1.Volume{
 			Name: CACertsVolumeName,
 			VolumeSource: corev1.VolumeSource{
@@ -2350,10 +2356,9 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 			Tolerations:                 append([]corev1.Toleration(nil), effectiveConfig.DeploymentConfig.Tolerations...),
 		},
 		Webhook: nvcaconfig.WebhookConfig{
-			SvcAddress:    fmt.Sprintf(":%d", getWebHooksListenPort(nb)),
-			TLSCertFile:   fmt.Sprintf("%s/%s", SrvCertsMountDir, TLSCertName),
-			TLSKeyFile:    fmt.Sprintf("%s/%s", SrvCertsMountDir, TLSKeyName),
-			TLSSecretName: NVCAWebhookTLSCertSecretName,
+			SvcAddress:  fmt.Sprintf(":%d", getWebHooksListenPort(nb)),
+			TLSCertFile: fmt.Sprintf("%s/%s", SrvCertsMountDir, TLSCertName),
+			TLSKeyFile:  fmt.Sprintf("%s/%s", SrvCertsMountDir, TLSKeyName),
 		},
 		Workload: nvcaconfig.WorkloadConfig{
 			DefaultStargateAddress: llmRequestRouterAddress,
@@ -2494,6 +2499,10 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 		}
 	}
 
+	if !webhookCertManagerEnabled(nb) {
+		cfg.Webhook.TLSSecretName = NVCAWebhookTLSCertSecretName
+	}
+
 	return cfg, nil
 }
 
@@ -2510,6 +2519,12 @@ func (bc *BackendK8sCache) setupNVCAMutatingWebhookConfiguration(ctx context.Con
 			Name:        nvcaoptypes.NVCAModuleName,
 			Annotations: getNBAnnotations(nb),
 		},
+	}
+	if webhookCertManagerEnabled(nb) {
+		if whc.Annotations == nil {
+			whc.Annotations = map[string]string{}
+		}
+		whc.Annotations[certManagerInjectCAFromAnnotation] = webhookCertManagerInjectCAFrom(nb)
 	}
 
 	whc.Webhooks = append(whc.Webhooks, bc.makeMiniServiceMutatingWebhooks(nb, webhookCert)...)
