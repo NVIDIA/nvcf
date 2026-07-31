@@ -36,9 +36,6 @@ vendored     src/compute-plane-services/nvca/vendor/cel.dev/expr
 
 scaffolding  rules/oci-destinations
 
-ledger       src/control-plane-services/function-autoscaler
-ledger       src/invocation-plane-services/http-invocation
-ledger       src/libraries/rust/stargate
 
 # No permanent exceptions today. nvsnap was the open question in Phase 1 and it
 # migrated in NVIDIA/nvcf#471, so it is absent from this file entirely, which is

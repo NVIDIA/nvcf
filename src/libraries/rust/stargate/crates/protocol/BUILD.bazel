@@ -47,6 +47,6 @@ rust_test(
     name = "stargate-protocol_test",
     crate = ":stargate-protocol",
     deps = [
-        "//crates/stargate-tls:stargate-tls",
+        "//src/libraries/rust/stargate/crates/stargate-tls:stargate-tls",
     ] + all_crate_deps(normal_dev = True),
 )
