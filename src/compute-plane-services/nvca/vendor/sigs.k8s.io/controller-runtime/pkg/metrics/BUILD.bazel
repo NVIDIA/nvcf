@@ -13,9 +13,9 @@ go_library(
     importpath = "sigs.k8s.io/controller-runtime/pkg/metrics",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/prometheus/client_golang/prometheus",
-        "//vendor/k8s.io/client-go/tools/leaderelection",
-        "//vendor/k8s.io/client-go/tools/metrics",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/leaderelection",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/metrics",
     ],
 )
 

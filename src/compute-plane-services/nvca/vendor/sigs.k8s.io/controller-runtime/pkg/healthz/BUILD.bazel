@@ -10,8 +10,8 @@ go_library(
     importpath = "sigs.k8s.io/controller-runtime/pkg/healthz",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/apimachinery/pkg/util/sets",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
     ],
 )
 

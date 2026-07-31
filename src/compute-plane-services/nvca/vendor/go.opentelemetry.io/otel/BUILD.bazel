@@ -16,11 +16,11 @@ go_library(
     importpath = "go.opentelemetry.io/otel",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/go-logr/logr",
-        "//vendor/go.opentelemetry.io/otel/internal/global",
-        "//vendor/go.opentelemetry.io/otel/metric",
-        "//vendor/go.opentelemetry.io/otel/propagation",
-        "//vendor/go.opentelemetry.io/otel/trace",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/internal/global",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/propagation",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace",
     ],
 )
 

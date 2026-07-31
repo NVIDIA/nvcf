@@ -5,11 +5,11 @@ go_library(
     srcs = ["byte.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/internal/sdkio",
     importpath = "github.com/volcengine/volcengine-go-sdk/internal/sdkio",
-    visibility = ["//vendor/github.com/volcengine/volcengine-go-sdk:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":sdkio",
-    visibility = ["//vendor/github.com/volcengine/volcengine-go-sdk:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk:__subpackages__"],
 )

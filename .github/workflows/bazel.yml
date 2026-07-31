@@ -130,21 +130,21 @@ jobs:
           # longest-first ordering when adding rows.
           ROWS='byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false
           root|.|false
-          grpc-proxy|src/invocation-plane-services/grpc-proxy|false|service|docker-host
-          nats-auth-callout|src/control-plane-services/nats-auth-callout|false
-          ratelimiter|src/invocation-plane-services/ratelimiter|false
+          grpc-proxy|src/invocation-plane-services/grpc-proxy|false|go-root|docker-host
+          nats-auth-callout|src/control-plane-services/nats-auth-callout|false|go-root|build-container
+          ratelimiter|src/invocation-plane-services/ratelimiter|false|go-root|build-container
           http-invocation|src/invocation-plane-services/http-invocation|false
-          llm-api-gateway|src/invocation-plane-services/llm-api-gateway|false
-          vanity-gateway|src/invocation-plane-services/vanity-gateway|false
-          nvca|src/compute-plane-services/nvca|false
-          ess-agent|src/compute-plane-services/ess-agent|false
-          nvcf-unbound|src/compute-plane-services/nvcf-unbound|false
-          worker-init|src/compute-plane-services/worker-init|false
-          worker-llm-credentials|src/compute-plane-services/worker-llm-credentials|false
-          worker-task|src/compute-plane-services/worker-task|false
-          worker-utils|src/compute-plane-services/worker-utils|false
+          llm-api-gateway|src/invocation-plane-services/llm-api-gateway|false|go-root|build-container
+          vanity-gateway|src/invocation-plane-services/vanity-gateway|false|go-root|build-container
+          nvca|src/compute-plane-services/nvca|false|go-root|build-container
+          ess-agent|src/compute-plane-services/ess-agent|false|go-root|build-container
+          nvcf-unbound|src/compute-plane-services/nvcf-unbound|false|go-root|build-container
+          worker-init|src/compute-plane-services/worker-init|false|go-root|build-container
+          worker-llm-credentials|src/compute-plane-services/worker-llm-credentials|false|go-root|build-container
+          worker-task|src/compute-plane-services/worker-task|false|go-root|build-container
+          worker-utils|src/compute-plane-services/worker-utils|false|go-root|build-container
           function-autoscaler|src/control-plane-services/function-autoscaler|false
-          helm-reval|src/control-plane-services/helm-reval|false
+          helm-reval|src/control-plane-services/helm-reval|false|go-root|build-container
           stargate|src/libraries/rust/stargate|false
           nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container
           image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container'

@@ -8,7 +8,7 @@ go_library(
     srcs = ["client.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures/fake",
     visibility = ["//visibility:public"],
-    deps = ["//pkg/types"],
+    deps = ["//src/compute-plane-services/nvca/pkg/types"],
 )
 
 alias(

@@ -19,7 +19,7 @@ load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "strip_prefi
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("//rules/oci/private:common.bzl", "DEFAULT_BASE", "create_oci_image")
 
-def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, registry, extra_registries, tags):
+def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, env, extra_layers, registry, extra_registries, tags):
     layer_name = name + "_layer"
 
     # Where the binary lands inside the layer tarball. Left to rules_pkg, it
@@ -55,7 +55,12 @@ def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, 
             extension = "tar.gz",  # gzip the layer (Docker parity; rules_oci ships pkg_tar as-is)
             name = layer_name,
             srcs = [":" + files_name],
-            visibility = ["//visibility:private"],
+            # The layer carries the image's visibility rather than being
+            # private, so a caller can point an entrypoint-mode test at it and
+            # assert the entrypoint is packaged 0755. That check is the reason
+            # the layer is reachable at all; keeping it private forces callers
+            # to test the whole tarball instead.
+            visibility = visibility,
         )
         default_entry = [binary_path]
     else:
@@ -74,7 +79,7 @@ def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, 
             mode = "0755",
             package_dir = "/",
             strip_prefix = strip_prefix.from_pkg(""),
-            visibility = ["//visibility:private"],
+            visibility = visibility,
         )
         default_entry = ["/" + native.package_relative_label(binary).name]
 
@@ -82,9 +87,12 @@ def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, 
 
     create_oci_image(
         name = name,
-        tars = [layer_name],
+        # extra_layers are appended after the binary layer, so a file they
+        # provide wins over a same-path file from the binary layer.
+        tars = [layer_name] + list(extra_layers),
         base = base,
         entrypoint = entry,
+        env = env,
         visibility = visibility,
         registry = registry,
         extra_registries = extra_registries,
@@ -114,6 +122,15 @@ go_oci_image = macro(
                   "/usr/bin/app. Defaults to /{binary_name}.",
             configurable = False,
         ),
+        "env": attr.string_dict(
+            doc = "Environment variables to set in the image. Unset leaves " +
+                  "the base image's values untouched.",
+            configurable = False,
+        ),
+        "extra_layers": attr.label_list(
+            doc = "Additional layer tarballs appended after the binary layer.",
+            configurable = False,
+        ),
         "registry": attr.string(
             doc = "Registry to push to. If not set, push target is not created.",
             configurable = False,
@@ -121,6 +138,99 @@ go_oci_image = macro(
         "extra_registries": attr.string_dict(
             doc = "Additional registries to push to, keyed by target-name " +
                   "suffix: each entry creates {name}_push_{suffix}.",
+            configurable = False,
+        ),
+        "tags": attr.string_list(
+            doc = "Tags for generated targets. 'manual' is always added.",
+            configurable = False,
+        ),
+    },
+)
+
+def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint, cmd, registry, extra_registries, tags):
+    """Pack multiple go_binary targets into a single OCI image layer.
+
+    Used for images that bundle several binaries (eg nvca-operator's image
+    ships nvca-operator + nvca-mirror + nvca-operator-cleanup at distinct
+    paths under /usr/bin/). Each binary is placed at the path declared as
+    its dict value.
+    """
+
+    # Build one pkg_files target per binary, then merge them into a single
+    # tarball. Each pkg_files renames the binary so it lands at the
+    # declared path (rather than at its workspace short-path).
+    files_targets = []
+    first_path = None
+    for i, (bin_label, bin_path) in enumerate(binaries.items()):
+        parts = bin_path.rsplit("/", 1)
+        pkg_dir = parts[0] if parts[0] else "/"
+        new_name = parts[1]
+        files_name = name + "_files_" + str(i)
+        pkg_files(
+            name = files_name,
+            srcs = [bin_label],
+            prefix = pkg_dir,
+            renames = {bin_label: new_name},
+            attributes = pkg_attributes(mode = "0755"),
+            visibility = ["//visibility:private"],
+        )
+        files_targets.append(":" + files_name)
+        if first_path == None:
+            first_path = bin_path
+
+    layer_name = name + "_layer"
+    pkg_tar(
+        extension = "tar.gz",  # gzip the layer (Docker parity; rules_oci ships pkg_tar as-is)
+        name = layer_name,
+        srcs = files_targets,
+        visibility = visibility,
+    )
+
+    create_oci_image(
+        name = name,
+        tars = [layer_name],
+        base = base,
+        entrypoint = entrypoint,
+        cmd = cmd,
+        visibility = visibility,
+        registry = registry,
+        extra_registries = extra_registries,
+        tags = tags,
+    )
+
+go_oci_multi_binary_image = macro(
+    doc = "Packages multiple go_binary targets into one multi-arch OCI image. " +
+          "Use when a single deployable image needs more than one binary " +
+          "(eg an operator image that ships operator + mirror + cleanup helpers).",
+    implementation = _go_oci_multi_binary_image_impl,
+    attrs = {
+        "binaries": attr.label_keyed_string_dict(
+            doc = "Map of go_binary label -> absolute path inside the container " +
+                  "where it should be placed (eg {':nvca-operator': '/usr/bin/nvca-operator'}). " +
+                  "Iteration order determines the default entrypoint; pass " +
+                  "`entrypoint` explicitly when relying on a specific order.",
+            mandatory = True,
+            configurable = False,
+        ),
+        "base": attr.label(
+            doc = "Base OCI image.",
+            default = DEFAULT_BASE,
+            configurable = False,
+        ),
+        "entrypoint": attr.string_list(
+            doc = "Container entrypoint, if any.",
+            configurable = False,
+        ),
+        "cmd": attr.string_list(
+            doc = "Container cmd, if any.",
+            configurable = False,
+        ),
+        "registry": attr.string(
+            doc = "Primary registry to push to.",
+            configurable = False,
+        ),
+        "extra_registries": attr.string_dict(
+            doc = "Additional registries keyed by suffix.",
             configurable = False,
         ),
         "tags": attr.string_list(

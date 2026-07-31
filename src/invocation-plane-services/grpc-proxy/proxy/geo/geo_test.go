@@ -30,7 +30,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/testcontainers/testcontainers-go"
@@ -194,7 +193,7 @@ func getTestConfig() *TestConfig {
 }
 
 func setupS3Client(ctx context.Context, ls *localstack.LocalStackContainer) (*s3.Client, error) {
-	mappedPort, err := ls.MappedPort(ctx, nat.Port("4566/tcp"))
+	mappedPort, err := ls.MappedPort(ctx, "4566/tcp")
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +209,7 @@ func setupS3Client(ctx context.Context, ls *localstack.LocalStackContainer) (*s3
 		return nil, err
 	}
 
-	endpoint := fmt.Sprintf("http://%s:%d", host, mappedPort.Int())
+	endpoint := fmt.Sprintf("http://%s:%s", host, mappedPort.Port())
 
 	awsCfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion("us-east-1"),

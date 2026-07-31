@@ -15,10 +15,10 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/golang.org/x/crypto/internal/poly1305",
     importpath = "golang.org/x/crypto/internal/poly1305",
-    visibility = ["//vendor/golang.org/x/crypto:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/golang.org/x/crypto:__subpackages__"],
     deps = select({
         "@rules_go//go/platform:s390x": [
-            "//vendor/golang.org/x/sys/cpu",
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/cpu",
         ],
         "//conditions:default": [],
     }),
@@ -27,5 +27,5 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":poly1305",
-    visibility = ["//vendor/golang.org/x/crypto:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/golang.org/x/crypto:__subpackages__"],
 )

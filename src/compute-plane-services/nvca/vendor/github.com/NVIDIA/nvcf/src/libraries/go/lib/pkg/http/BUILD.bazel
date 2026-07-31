@@ -11,11 +11,11 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
-        "//vendor/github.com/hashicorp/go-retryablehttp",
-        "//vendor/github.com/sirupsen/logrus",
-        "//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
+        "//src/compute-plane-services/nvca/vendor/github.com/hashicorp/go-retryablehttp",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
     ],
 )
 

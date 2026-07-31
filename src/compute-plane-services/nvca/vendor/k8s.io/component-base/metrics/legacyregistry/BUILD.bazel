@@ -7,10 +7,10 @@ go_library(
     importpath = "k8s.io/component-base/metrics/legacyregistry",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/prometheus/client_golang/prometheus",
-        "//vendor/github.com/prometheus/client_golang/prometheus/collectors",
-        "//vendor/github.com/prometheus/client_golang/prometheus/promhttp",
-        "//vendor/k8s.io/component-base/metrics",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/collectors",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promhttp",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/component-base/metrics",
     ],
 )
 

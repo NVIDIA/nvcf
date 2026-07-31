@@ -23,7 +23,7 @@ go_library(
         "pb.go",
     ],
     importpath = "nvcf-grpc-proxy/proxy/internal/echo",
-    visibility = ["//proxy:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/grpc-proxy/proxy:__subpackages__"],
     deps = [
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
@@ -36,7 +36,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":echo",
-    visibility = ["//proxy:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/grpc-proxy/proxy:__subpackages__"],
 )
 
 go_test(

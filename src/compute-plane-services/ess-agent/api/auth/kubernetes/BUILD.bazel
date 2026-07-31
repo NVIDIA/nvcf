@@ -8,7 +8,7 @@ go_library(
     srcs = ["kubernetes.go"],
     importpath = "github.com/hashicorp/vault/api/auth/kubernetes",
     visibility = ["//visibility:public"],
-    deps = ["//api"],
+    deps = ["//src/compute-plane-services/ess-agent/api"],
 )
 
 alias(
