@@ -136,13 +136,70 @@ var (
 		}
 		return float64(nc.Stats().Reconnects)
 	})
+
+	// Worker tunnel lifecycle. The proxy closes worker tunnels for several
+	// ordinary reasons (cache TTL expiry, the connection going inactive,
+	// capacity eviction, shutdown drain). Until now the reason was computed on
+	// every close and only written to a DEBUG log, so "why did the tunnel
+	// close" could not be answered from production data.
+
+	WorkerConnectionsActive = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: RootNamespace,
+			Name:      "worker_connections_active",
+			Help:      "worker tunnel connections currently held by this pod",
+		})
+
+	WorkerConnectionOpenedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "worker_connection_opened_total",
+			Help:      "total worker tunnel connections opened",
+		})
+
+	WorkerConnectionClosedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "worker_connection_closed_total",
+			Help:      "total worker tunnel connections closed, by reason",
+		}, []string{"reason"})
+
+	// Buckets deliberately straddle the two timers that can close a tunnel:
+	// the worker-side QUIC idle timeout (8s) and this service's worker
+	// connection cache TTL (consts.Timeout, 30s). A hard cliff at either
+	// value indicates connections being killed by a timer rather than ending
+	// naturally.
+	WorkerConnectionDurationSeconds = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: RootNamespace,
+			Name:      "worker_connection_duration_seconds",
+			Help:      "how long worker tunnel connections stayed open before being closed",
+			Buckets:   []float64{1, 5, 8, 10, 15, 30, 45, 60, 120, 300, 600, 1800, 3600},
+		})
 )
+
+// WorkerConnectionCloseReasons enumerates every reason the proxy reports when
+// closing a worker tunnel. Kept here so the counter can be pre-initialised to
+// zero for each one: uninitialised counters produce gaps in rate() and make
+// absent() alerts misfire.
+var WorkerConnectionCloseReasons = []string{
+	"ttl_expired",
+	"deleted",
+	"capacity_reached",
+	"unknown",
+}
 
 func init() {
 	// Set up OpenTelemetry metrics with Prometheus exporter
 	exporter := lo.Must(otelprom.New())
 	provider := metric.NewMeterProvider(metric.WithReader(exporter))
 	otel.SetMeterProvider(provider)
+
+	// Pre-initialise every close reason so the series exist on the first
+	// scrape rather than appearing only once a reason first occurs.
+	for _, reason := range WorkerConnectionCloseReasons {
+		WorkerConnectionClosedTotal.WithLabelValues(reason)
+	}
 }
 
 var nc atomic.Pointer[nats.Conn]
