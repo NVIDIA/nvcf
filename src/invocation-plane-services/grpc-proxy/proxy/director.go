@@ -27,11 +27,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	nverrors "github.com/NVIDIA/nvcf-go/pkg/nvkit/errors"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
 	"github.com/jellydator/ttlcache/v3"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -119,6 +121,12 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 				if connAlreadyExisted {
 					zap.L().Error("worker conn already present in cache, closing new worker conn", zap.Stringer("request id", k.requestId))
 					_ = newWorkerConnection.Close()
+				} else {
+					// Counted here rather than at dial so the open and close
+					// counts balance: eviction fires for every entry that
+					// makes it into the cache.
+					metrics.WorkerConnectionOpenedTotal.Inc()
+					metrics.WorkerConnectionsActive.Inc()
 				}
 				return conn
 			}), nil)),
@@ -126,11 +134,39 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 	cache.OnEviction(func(ctx context.Context, reason ttlcache.EvictionReason, i *ttlcache.Item[workerConnectionKey, *worker.WorkerConnection]) {
 		reasonStr := mapEvictionReason(reason)
 		wc := i.Value()
-		zap.L().Debug("worker connection cache eviction triggered",
+		heldFor := time.Since(wc.CreatedAt)
+
+		metrics.WorkerConnectionClosedTotal.WithLabelValues(reasonStr).Inc()
+		metrics.WorkerConnectionsActive.Dec()
+		metrics.WorkerConnectionDurationSeconds.Observe(heldFor.Seconds())
+
+		// Promoted from debug to info: this is the only place the proxy records
+		// WHY it dropped a worker tunnel, and that question is routinely asked
+		// during incidents. At debug it was unavailable in production exactly
+		// when it was needed. The message text is unchanged so existing log
+		// searches keep working.
+		zap.L().Info("worker connection cache eviction triggered",
 			zap.Stringer("request_id", i.Key().requestId),
 			zap.String("eviction_reason", reasonStr),
+			zap.Duration("held_for", heldFor),
 			zap.String("function_id", wc.FunctionId),
 			zap.String("function_version_id", wc.FunctionVersionId))
+
+		// The eviction context is the cache's own, not the session's, so this
+		// span has no parent to attach to. It carries the request id as an
+		// attribute so a dropped session can still be correlated in tracing
+		// without grepping logs. Name follows the service.operation convention
+		// in AGENTS.md and must stay stable so dashboards do not break.
+		_, span := otel.GetTracerProvider().Tracer("proxy-tracer").Start(ctx, "grpc-proxy.worker_connection_cache_eviction",
+			trace.WithAttributes(
+				attribute.Stringer("request_id", i.Key().requestId),
+				attribute.String("eviction_reason", reasonStr),
+				attribute.Float64("held_for_seconds", heldFor.Seconds()),
+				attribute.String("function_id", wc.FunctionId),
+				attribute.String("function_version_id", wc.FunctionVersionId),
+			))
+		span.End()
+
 		_ = wc.Close()
 	})
 	go cache.Start()

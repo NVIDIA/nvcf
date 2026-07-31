@@ -29,6 +29,7 @@ import (
 	"nvcf-grpc-proxy/proxy/rp"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -40,6 +41,7 @@ func NewWorkerConnection(requestId uuid.UUID, functionId, functionVersionId stri
 		RequestId:         requestId,
 		FunctionId:        functionId,
 		FunctionVersionId: functionVersionId,
+		CreatedAt:         time.Now(),
 		connPopulated:     make(chan struct{}),
 		onActive:          onActive,
 		onInactive:        onInactive,
@@ -50,12 +52,15 @@ type WorkerConnection struct {
 	RequestId         uuid.UUID
 	FunctionId        string
 	FunctionVersionId string
-	connSetOnce       sync.Once
-	connPopulated     chan struct{}
-	handler           atomic.Pointer[httputil.ReverseProxy]
-	closeWorkerConn   io.Closer
-	onActive          func() // call this function to indicate the connection is active
-	onInactive        func() // call this function to indicate the connection is idle
+	// CreatedAt is when this connection entered the worker connection cache.
+	// Used to report how long a tunnel stayed open when it is closed.
+	CreatedAt       time.Time
+	connSetOnce     sync.Once
+	connPopulated   chan struct{}
+	handler         atomic.Pointer[httputil.ReverseProxy]
+	closeWorkerConn io.Closer
+	onActive        func() // call this function to indicate the connection is active
+	onInactive      func() // call this function to indicate the connection is idle
 }
 
 // WaitForConnection may return without a connection if the WorkerConnection struct is closed while
