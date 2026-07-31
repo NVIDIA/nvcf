@@ -1,0 +1,210 @@
+{
+  "artifacts": {
+    "com.google.code.gson:gson:2.13.2": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Gson",
+      "url": "https://github.com/google/gson"
+    },
+    "io.micrometer:micrometer-registry-prometheus:1.16.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-registry-prometheus",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
+    "io.netty:netty-codec-native-quic:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Native/Quic",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-resolver-dns-classes-macos:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS/Classes/MacOS",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-resolver-dns-native-macos:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS/Native/MacOS",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-transport-classes-epoll:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Classes/Epoll",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-transport-native-epoll:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Native/Epoll",
+      "url": "https://netty.io/"
+    },
+    "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:2.21.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Instrumentation for Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java-instrumentation"
+    },
+    "io.projectreactor:reactor-core-micrometer:3.8.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Reactor-Core Micrometer Metrics support",
+      "url": "https://github.com/reactor/reactor-core"
+    },
+    "io.projectreactor:reactor-tools:3.8.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Reactor Tools",
+      "url": "https://github.com/reactor/reactor-core"
+    },
+    "io.prometheus:prometheus-metrics-config:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Config",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-core:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Core",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-exposition-formats:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Exposition Formats",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-exposition-textformats:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Exposition Text Formats",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-model:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Model",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-tracer-common:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Tracer Common",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "jakarta.servlet:jakarta.servlet-api:6.1.0": {
+      "licenses": [
+        "EPL 2.0",
+        "GPL2 w/ CPE"
+      ],
+      "name": "Jakarta Servlet",
+      "url": "https://projects.eclipse.org/projects/ee4j.servlet"
+    },
+    "net.logstash.logback:logstash-logback-encoder:7.4": {
+      "licenses": [
+        "Apache License, Version 2.0",
+        "MIT License"
+      ],
+      "name": "Logstash Logback Encoder",
+      "url": "https://github.com/logfellow/logstash-logback-encoder"
+    },
+    "org.apache.commons:commons-collections4:4.5.0": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Collections",
+      "url": "https://commons.apache.org/proper/commons-collections/"
+    },
+    "org.aspectj:aspectjweaver:1.9.25.1": {
+      "licenses": [
+        "Eclipse Public License - v 2.0"
+      ],
+      "name": "AspectJ Weaver",
+      "url": "https://www.eclipse.org/aspectj/"
+    },
+    "org.springdoc:springdoc-openapi-starter-webflux-ui:3.0.3": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "springdoc-openapi-starter-webflux-ui",
+      "url": "https://springdoc.org/"
+    },
+    "org.springframework.boot:spring-boot-cache:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-cache",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-jarmode-tools:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-jarmode-tools",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-aspectj:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-aspectj",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-cache:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-cache",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-data-cassandra-reactive:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-data-cassandra-reactive",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework:spring-context-support:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Context Support",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.webjars:swagger-ui:5.32.2": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Swagger UI",
+      "url": "https://www.webjars.org"
+    },
+    "org.webjars:webjars-locator-lite:1.1.3": {
+      "licenses": [
+        "MIT"
+      ],
+      "name": "webjars-locator-lite",
+      "url": "https://webjars.org"
+    }
+  },
+  "generated_by": "tools/bazel/java/generate_notice.py --update-metadata"
+}

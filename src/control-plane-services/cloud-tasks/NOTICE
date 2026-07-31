@@ -1,8 +1,8 @@
 
 Lists of 264 third-party dependencies.
      (Apache License, Version 2.0) LZ4 Java Compression (at.yawk.lz4:lz4-java:1.10.3 - https://github.com/yawkat/lz4-java)
-     (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.34 - http://logback.qos.ch)
-     (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.34 - http://logback.qos.ch)
+     (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.37 - http://logback.qos.ch)
+     (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.37 - http://logback.qos.ch)
      (The Apache Software License, Version 2.0) bucket4j-core (com.bucket4j:bucket4j-core:8.10.1 - http://github.com/bucket4j/bucket4j/bucket4j-core)
      (The Apache Software License, Version 2.0) bucket4j_jdk17-core (com.bucket4j:bucket4j_jdk17-core:8.19.0 - http://github.com/bucket4j/bucket4j/bucket4j_jdk17-core)
      (Apache 2) An implementation of the Apache Cassandra® native protocol (com.datastax.oss:native-protocol:1.5.2 - https://github.com/datastax/native-protocol)
@@ -28,7 +28,7 @@ Lists of 264 third-party dependencies.
      (Apache-2.0) proto-google-common-protos (com.google.api.grpc:proto-google-common-protos:2.29.0 - https://github.com/googleapis/sdk-platform-java)
      (The Apache Software License, Version 2.0) FindBugs-jsr305 (com.google.code.findbugs:jsr305:3.0.2 - http://findbugs.sourceforge.net/)
      (Apache-2.0) Gson (com.google.code.gson:gson:2.13.2 - https://github.com/google/gson)
-     (Apache 2.0) error-prone annotations (com.google.errorprone:error_prone_annotations:2.49.0 - https://errorprone.info)
+     (Apache 2.0) error-prone annotations (com.google.errorprone:error_prone_annotations:2.41.0 - https://errorprone.info)
      (Apache License, Version 2.0) Guava InternalFutureFailureAccess and InternalFutures (com.google.guava:failureaccess:1.0.3 - https://github.com/google/guava)
      (Apache License, Version 2.0) Guava: Google Core Libraries for Java (com.google.guava:guava:33.6.0-jre - https://github.com/google/guava)
      (The Apache Software License, Version 2.0) Guava ListenableFuture only (com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava - https://github.com/google/guava)
@@ -37,7 +37,7 @@ Lists of 264 third-party dependencies.
      (BSD-3-Clause) Protocol Buffers [Util] (com.google.protobuf:protobuf-java-util:4.33.4 - https://developers.google.com/protocol-buffers/)
      (The Apache Software License, Version 2.0) Nimbus Content Type (com.nimbusds:content-type:2.3 - https://bitbucket.org/connect2id/nimbus-content-type)
      (The Apache Software License, Version 2.0) Nimbus LangTag (com.nimbusds:lang-tag:1.7 - https://bitbucket.org/connect2id/nimbus-language-tags)
-     (The Apache Software License, Version 2.0) Nimbus JOSE+JWT (com.nimbusds:nimbus-jose-jwt:10.4 - https://bitbucket.org/connect2id/nimbus-jose-jwt)
+     (The Apache Software License, Version 2.0) Nimbus JOSE+JWT (com.nimbusds:nimbus-jose-jwt:10.9.1 - https://bitbucket.org/connect2id/nimbus-jose-jwt)
      (Apache License, version 2.0) OAuth 2.0 SDK with OpenID Connect extensions (com.nimbusds:oauth2-oidc-sdk:11.26.1 - https://bitbucket.org/connect2id/oauth-2.0-sdk-with-openid-connect-extensions)
      (The Apache Software License, Version 2.0) okhttp-logging-interceptor (com.squareup.okhttp3:logging-interceptor:4.12.0 - https://square.github.io/okhttp/)
      (The Apache Software License, Version 2.0) okhttp (com.squareup.okhttp3:okhttp:4.12.0 - https://square.github.io/okhttp/)

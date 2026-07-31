@@ -18,6 +18,8 @@ Bazel currently builds, tests, and packages:
   application)
 - `src/control-plane-services/api-keys` (Java tests and Spring Boot
   application)
+- `src/control-plane-services/ess` (Java libraries, tests, and Spring Boot
+  application)
 
 Other upstream-owned subtrees remain excluded until they are onboarded one at
 a time. `nv-boot-parent` and onboarded Java service directories are folded

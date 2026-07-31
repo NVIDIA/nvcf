@@ -31,7 +31,6 @@ _JUNIT5_ARGS = [
     "--details=flat",
     "--disable-ansi-colors",
     "--details-theme=ascii",
-    "--include-classname=.*(Test|IntegrationTest)",
     "--fail-if-no-tests",
 ]
 
@@ -169,6 +168,8 @@ def nv_boot_library_test(
         deps,
         coverage_library,
         data = [],
+        include_classname = ".*(Test|IntegrationTest)",
+        javacopts = [],
         junit_classpath = [],
         jvm_flags = [],
         resources = [],
@@ -192,7 +193,7 @@ def nv_boot_library_test(
         srcs = srcs,
         data = data + [_JACOCO_AGENT, _MOCKITO_CORE],
         deps = deps + _LOMBOK_COMPILE_DEPS + _JUNIT5_COMPILE_DEPS,
-        javacopts = NV_JAVA_JAVACOPTS,
+        javacopts = NV_JAVA_JAVACOPTS + javacopts,
         jvm_flags = _JACOCO_AGENT_JVM_FLAGS + [
             "-javaagent:$(location %s)" % _MOCKITO_CORE,
         ] + jvm_flags,
@@ -216,6 +217,7 @@ def nv_boot_library_test(
             native.package_name(),
             "$(location %s)" % _JACOCO_CLI,
         ] + _JUNIT5_ARGS + [
+            "--include-classname=%s" % include_classname,
             "--class-path=$(location :%s.jar)" % junit_runner,
             "--scan-classpath=$(location :%s.jar)" % junit_runner,
         ] + [
@@ -270,6 +272,7 @@ def nvct_library_test(
         deps,
         coverage_library,
         data = [],
+        include_classname = ".*(Test|IntegrationTest)",
         jvm_flags = [],
         resources = [],
         runtime_deps = [],
@@ -316,6 +319,7 @@ def nvct_library_test(
             native.package_name(),
             "$(location %s)" % _JACOCO_CLI,
         ] + _JUNIT5_ARGS + [
+            "--include-classname=%s" % include_classname,
             "--class-path=$(location :%s.jar)" % junit_runner,
             "--scan-classpath=$(location :%s.jar)" % junit_runner,
         ],
