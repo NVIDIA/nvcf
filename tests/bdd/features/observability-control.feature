@@ -70,14 +70,12 @@ Feature: Install local Helmfile observability with the control profile
     Then the command exit code should be 0
     And the command output should contain "true"
 
-    When I run command "kubectl get servicemonitor nvcf-default-monitors-state-metrics -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 0
-    When I run command "kubectl get servicemonitor nvcf-default-monitors-grpc-proxy -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 0
-    When I run command "kubectl get servicemonitor nvcf-default-monitors-llm-api-gateway -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 0
-    When I run command "kubectl get servicemonitor nvcf-default-monitors-invocation-service -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 0
+    Then these ServiceMonitors should exist in namespace "monitoring" using context "k3d-ncp-local":
+      | name                                             |
+      | nvcf-default-monitors-state-metrics              |
+      | nvcf-default-monitors-grpc-proxy                  |
+      | nvcf-default-monitors-llm-api-gateway             |
+      | nvcf-default-monitors-invocation-service          |
 
     When I run command "kubectl get servicemonitor nvcf-default-monitors-nvca -n monitoring --context k3d-ncp-local"
     Then the command exit code should be 1

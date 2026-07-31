@@ -469,21 +469,19 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 // shared releases and monitor resources through explicit local context calls.
 func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 	const (
-		registryLoginCommand = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
-		stateMetricsCommand  = "kubectl get servicemonitor nvcf-default-monitors-state-metrics -n monitoring --context k3d-ncp-local"
-		grpcProxyCommand     = "kubectl get servicemonitor nvcf-default-monitors-grpc-proxy -n monitoring --context k3d-ncp-local"
-		llmGatewayCommand    = "kubectl get servicemonitor nvcf-default-monitors-llm-api-gateway -n monitoring --context k3d-ncp-local"
-		invocationCommand    = "kubectl get servicemonitor nvcf-default-monitors-invocation-service -n monitoring --context k3d-ncp-local"
+		registryLoginCommand   = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
+		serviceMonitorsCommand = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics" +
+			" servicemonitor/nvcf-default-monitors-grpc-proxy" +
+			" servicemonitor/nvcf-default-monitors-llm-api-gateway" +
+			" servicemonitor/nvcf-default-monitors-invocation-service" +
+			" --namespace monitoring --context k3d-ncp-local"
 	)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		registryLoginCommand:           {ExitCode: 0},
-		stateMetricsCommand:            {ExitCode: 0},
-		grpcProxyCommand:               {ExitCode: 0},
-		llmGatewayCommand:              {ExitCode: 0},
-		invocationCommand:              {ExitCode: 0},
+		serviceMonitorsCommand:         {ExitCode: 0},
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
 			ExitCode: 0,
@@ -531,10 +529,7 @@ func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 	runs := suite.Runner.(*fakeRunner).runs
 	for _, command := range []string{
 		registryLoginCommand,
-		stateMetricsCommand,
-		grpcProxyCommand,
-		llmGatewayCommand,
-		invocationCommand,
+		serviceMonitorsCommand,
 	} {
 		if !commandRanExactly(runs, command) {
 			t.Fatalf("exact command was never invoked: %s", command)
