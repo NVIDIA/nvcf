@@ -16,6 +16,17 @@
 {{ $certificate := .Values.llmRequestRouter.certificate | default dict -}}
 {{- if $certificate.enabled }}
 {{- $issuerRef := $certificate.issuerRef | default dict -}}
+{{- $dnsNames := dig "dnsNames" (list) $certificate -}}
+{{- if dig "backendRouter" "enabled" false .Values.llmRequestRouter }}
+{{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . -}}
+{{- $backendRouterWildcardDNSName := replace "{pod_name}" "*" $advertisedHostnameTemplate -}}
+{{- if not (has $backendRouterWildcardDNSName $dnsNames) -}}
+{{- $dnsNames = append $dnsNames $backendRouterWildcardDNSName -}}
+{{- end -}}
+{{- end }}
+{{- if empty $dnsNames -}}
+{{- fail "llmRequestRouter.certificate.dnsNames is required when certificate.enabled is true" -}}
+{{- end }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -31,7 +42,7 @@ spec:
   renewBefore: {{ . | quote }}
   {{- end }}
   dnsNames:
-    {{- required "llmRequestRouter.certificate.dnsNames is required when certificate.enabled is true" $certificate.dnsNames | toYaml | nindent 4 }}
+    {{- $dnsNames | toYaml | nindent 4 }}
   issuerRef:
     kind: {{ default "ClusterIssuer" $issuerRef.kind | quote }}
     name: {{ required "llmRequestRouter.certificate.issuerRef.name is required when certificate.enabled is true" $issuerRef.name | quote }}

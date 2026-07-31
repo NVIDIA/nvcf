@@ -75,6 +75,9 @@ func newLLMRouterClientContainer(
 		llmRequestRouterAddress = allEnvSet[legacyStargateAddressEnv]
 	}
 	if llmRequestRouterAddress == "" {
+		llmRequestRouterAddress = tcfg.DefaultStargateAddress
+	}
+	if llmRequestRouterAddress == "" {
 		return corev1.Container{}, fmt.Errorf(
 			"LLM request router address is not set (%s env or %s legacy env)",
 			llmRequestRouterAddressEnv,

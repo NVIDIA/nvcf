@@ -4,9 +4,17 @@ This repository contains the Helm chart for deploying NVCF ingress routes via th
 
 ## Overview
 
-The chart deploys `HTTPRoute`, `TCPRoute`, and `ReferenceGrant` resources that attach to an existing Gateway provisioned separately by the cluster operator (e.g. Envoy Gateway, Istio, Traefik, Kong). It also includes optional `PodMonitor` resources for scraping Envoy Gateway proxy metrics with Prometheus.
+The chart deploys `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `UDPRoute`, and
+`ReferenceGrant` resources that attach to an existing Gateway provisioned
+separately by the cluster operator, such as Envoy Gateway, Istio, Traefik, or
+Kong. It also includes optional `PodMonitor` resources for scraping Envoy
+Gateway proxy metrics with Prometheus.
 
-The chart deploys routing configuration only. It does not include any container images. Backend services referenced by the routes (`api`, `nvct-api`, `api-keys`, `invocation`, `llm-api-gateway`, `vanity-gateway`, `reval`, `sis`, `grpc`, `nats`) must already be deployed separately.
+The chart deploys routing configuration only. It does not include any
+container images. Backend services referenced by the routes (`api`,
+`nvct-api`, `api-keys`, `invocation`, `llm-api-gateway`,
+`llm-request-router-backend-router`, `vanity-gateway`, `reval`, `sis`, `grpc`,
+`nats`) must already be deployed separately.
 
 ## Prerequisites
 
@@ -14,7 +22,8 @@ The chart deploys routing configuration only. It does not include any container 
 - Helm 3.x
 - `kubectl`
 - A Gateway API compatible controller installed in the cluster
-- An existing `Gateway` resource with an HTTP listener (and TCP listeners if the gRPC or NATS routes are enabled)
+- Existing `Gateway` resources with the listeners required by each enabled route
+- A Gateway controller with `UDPRoute` support when LLM worker routing is enabled
 - The backend services that the routes target, deployed in their respective namespaces
 
 ## Getting Started
@@ -57,6 +66,8 @@ Important settings to review before deployment:
 - `nvcfGatewayRoutes.gateways.shared.*` for the HTTP Gateway name, namespace, and listener
 - `nvcfGatewayRoutes.gateways.grpc.*` for the TCP Gateway name, namespace, and listener
 - `nvcfGatewayRoutes.gateways.nats.*` for the NATS TCP Gateway name, namespace, and listener
+- `nvcfGatewayRoutes.gateways.llmGrpc.*` for the LLM worker gRPC TCP listener
+- `nvcfGatewayRoutes.gateways.llmQuic.*` for the LLM reverse-tunnel UDP listener
 - `nvcfGatewayRoutes.routes.<route>.enabled` to toggle individual routes
 - `nvcfGatewayRoutes.routes.nvcfApi.grpc.enabled` and
   `nvcfGatewayRoutes.routes.nvctApi.grpc.enabled` to expose API gRPC routes
@@ -87,6 +98,7 @@ Enabled `HTTPRoute` entries must not share a resolved hostname because each `HTT
 | `grpc` | TCPRoute | Not rendered | `grpc.nvcf:10081` |
 | `grpcWorker` | TCPRoute (disabled by default) | Not rendered | `grpc.nvcf:10086` |
 | `nats` | TCPRoute (disabled by default) | Not rendered | `nats.nats-system:4222` |
+| `llmWorker` | TCPRoute and UDPRoute (disabled by default) | Not rendered | `llm-request-router-backend-router.<backend namespace>:50071/TCP,50072/UDP` |
 
 Cross-namespace routing is supported via `ReferenceGrant` resources rendered into each backend namespace.
 
@@ -97,3 +109,9 @@ Cross-namespace routing is supported via `ReferenceGrant` resources rendered int
 - The `grpc` TCPRoute does not enforce HTTP hostname matching at the Gateway layer. Configure DNS or TCP load balancer routing outside this chart.
 - The `grpcWorker` TCPRoute is beta support for split or multi-cluster gRPC worker callbacks. It carries HTTP/1 CONNECT callback traffic only. Enable it only when the control-plane grpc-proxy runs one replica with HPA disabled. Multi-replica grpc-proxy requires pod-specific callback routing and is not supported by this shared TCPRoute.
 - Enabling the `nats` route requires a reachable TCP listener for NATS on the referenced Gateway. The HTTP Gateway address does not imply NATS reachability unless that same Gateway also has the NATS TCP listener configured.
+- The `llmWorker` routes target Stargate's authority/SNI-aware backend router.
+  Set `nvcfGatewayRoutes.routes.llmWorker.backend.namespace` to the effective
+  namespace of the `llm-request-router` release. The gateway chart cannot
+  derive the namespace of a separate Helm release.
+  Keep the TCP and UDP Gateways separate when the infrastructure requires
+  separate load balancers for each protocol.

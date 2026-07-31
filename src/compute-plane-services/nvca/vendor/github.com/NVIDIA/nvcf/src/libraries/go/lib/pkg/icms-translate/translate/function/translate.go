@@ -41,7 +41,7 @@ type TranslateConfig struct {
 	// to find only relevant secrets to translation.
 	DisableHelmWorkloadSecretTranslation bool
 
-	// Deprecated: LLM request router address must be supplied by environment.
+	// Default LLM request router address used when the launch environment omits one.
 	DefaultStargateAddress string `json:"defaultStargateAddress,omitempty"`
 	// Whether to use QUIC insecure mode for stargate connections
 	// If not set, "--quick-insecure" is omitted

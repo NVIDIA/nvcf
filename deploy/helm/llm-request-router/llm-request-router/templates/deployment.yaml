@@ -31,13 +31,10 @@ tunnel target.
 {{- if and $disableDnsDiscovery (gt $replicaCount 1) }}
 {{- fail "llmRequestRouter.discovery.disableDnsDiscovery cannot be true when llmRequestRouter.replicaCount is greater than 1; multi-replica routers require DNS discovery" }}
 {{- end }}
-{{- $advertisedHostnameTemplate := .Values.llmRequestRouter.kubernetes.advertisedHostnameTemplate }}
-{{- if not $advertisedHostnameTemplate }}
-{{- if eq $replicaCount 1 }}
-{{- $advertisedHostnameTemplate = printf "%s.%s.svc.cluster.local" (include "llm-request-router.fullname" .) (include "llm-request-router.namespace" .) }}
-{{- else }}
-{{- $advertisedHostnameTemplate = printf "{pod_name}.%s.%s.svc.cluster.local" .Values.llmRequestRouter.service.headlessName (include "llm-request-router.namespace" .) }}
-{{- end }}
+{{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . }}
+{{- $backendRouterEnabled := dig "backendRouter" "enabled" false .Values.llmRequestRouter }}
+{{- if and $backendRouterEnabled (not .Values.llmRequestRouter.transport.reverseTunnelListenAddr) }}
+{{- fail "llmRequestRouter.backendRouter.enabled requires llmRequestRouter.transport.reverseTunnelListenAddr" }}
 {{- end }}
 spec:
   serviceName: {{ .Values.llmRequestRouter.service.headlessName }}
@@ -97,7 +94,10 @@ spec:
             - --backend-connectivity=reverse
             - --reverse-tunnel-listen-addr={{ .Values.llmRequestRouter.transport.reverseTunnelListenAddr }}
             {{- end }}
-            {{- if and .Values.llmRequestRouter.transport.reverseTunnelListenAddr (gt $replicaCount 1) }}
+            {{- if $backendRouterEnabled }}
+            - --grpc-pylon-dial-addr={{ required "llmRequestRouter.backendRouter.pylonGrpcDialAddress is required when backendRouter.enabled is true" .Values.llmRequestRouter.backendRouter.pylonGrpcDialAddress }}
+            - --reverse-tunnel-pylon-dial-addr={{ required "llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress is required when backendRouter.enabled is true" .Values.llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress }}
+            {{- else if and .Values.llmRequestRouter.transport.reverseTunnelListenAddr (gt $replicaCount 1) }}
             - --reverse-tunnel-pylon-dial-addr=$(POD_IP):{{ .Values.llmRequestRouter.service.reverseTunnelPort }}
             {{- end }}
             {{- if .Values.llmRequestRouter.transport.reverseTunnelConnectTimeoutMs }}
@@ -180,9 +180,7 @@ spec:
             {{- end }}
             {{- $tlsSecretNameMount := include "llm-request-router.tlsSecretName" . }}
             {{- if and $tlsSecretNameMount .Values.llmRequestRouter.tls.certPath .Values.llmRequestRouter.tls.keyPath }}
-            {{- if ne (dir .Values.llmRequestRouter.tls.certPath) (dir .Values.llmRequestRouter.tls.keyPath) }}
-            {{- fail "llmRequestRouter.tls.certPath and llmRequestRouter.tls.keyPath must use the same directory" }}
-            {{- end }}
+            {{- include "llm-request-router.validateTlsCertKeyDir" . }}
             - name: stargate-tls
               mountPath: {{ include "llm-request-router.tlsMountPath" . | quote }}
               readOnly: true

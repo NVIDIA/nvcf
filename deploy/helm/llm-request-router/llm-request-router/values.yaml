@@ -64,6 +64,43 @@ llmRequestRouter:
     reverseTunnelPort: 50072
     headlessName: llm-request-router-headless
 
+  # Routes backend registration and reverse-tunnel traffic to the Stargate pod
+  # named by gRPC authority or QUIC SNI. Enable this when pylons connect through
+  # a shared Gateway or load balancer and request-router replicaCount is greater
+  # than one.
+  backendRouter:
+    enabled: false
+    # One replica is a single point of failure. Use two or more replicas when
+    # backend worker routing requires high availability.
+    replicaCount: 1
+    image:
+      registry: ""
+      repository: ""
+      tag: ""
+      pullPolicy: ""
+    pylonGrpcDialAddress: ""
+    pylonReverseTunnelDialAddress: ""
+    serviceAccount:
+      create: true
+      annotations: {}
+      name: ""
+    service:
+      grpcPort: 50071
+      reverseTunnelPort: 50072
+      healthPort: 8080
+    podAnnotations: {}
+    podLabels: {}
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+
   resources:
     requests:
       cpu: 100m
@@ -110,8 +147,8 @@ llmRequestRouter:
     # suffixes). REQUIRED when enabled. Typically:
     #   "<customer-domain>,cluster.local"
     # so the signing role accepts both the customer's external DNS and
-    # in-cluster service names. Missing value → script aborts non-zero →
-    # entrypoint accumulator → Job fails on backoff exhaustion.
+    # in-cluster service names. Missing value -> script aborts non-zero ->
+    # entrypoint accumulator -> Job fails on backoff exhaustion.
     allowedDomains: ""
     # nvcf-openbao-migrations image. The chart picks up the same image
     # that the k8s-openbao Helm hook uses; supply registry/repository/tag

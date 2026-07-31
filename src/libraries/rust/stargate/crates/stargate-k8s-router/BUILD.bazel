@@ -48,7 +48,7 @@ rust_test(
 # Multi-arch OCI image. distroless/cc base, binary at
 # /usr/local/bin/stargate-k8s-router.
 rust_oci_image(
-    name = "image",
+    name = "stargate-k8s-router-image",
     base = "@distroless_cc",
     binary = ":stargate-k8s-router",
     binary_path = "/usr/local/bin/stargate-k8s-router",
@@ -62,8 +62,8 @@ sh_test(
     name = "image_entrypoint_mode_test",
     srcs = ["//tools/ci:image_entrypoint_mode_test.sh"],
     args = [
-        "$(location :image_layer)",
+        "$(location :stargate-k8s-router-image_layer)",
         "/usr/local/bin/stargate-k8s-router",
     ],
-    data = [":image_layer"],
+    data = [":stargate-k8s-router-image_layer"],
 )
