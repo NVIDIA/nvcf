@@ -29,6 +29,12 @@ struct Metric {
     description: &'static str,
 }
 
+/// Status code used to mark a client early disconnect (the caller went away
+/// before any response was produced). 499 is nginx's non-standard "client closed
+/// request"; it is emitted for internal telemetry only and never sent to a
+/// client. Defined once here and reused so the value stays consistent.
+pub const CLIENT_EARLY_DISCONNECT_STATUS: &str = "499";
+
 const COUNTERS: [Metric; 19] = [
     FUNCTION_INVOCATION_ERROR,
     FUNCTION_REQUEST,
@@ -201,10 +207,11 @@ pub fn init_metrics(settings: &MetricsSettings) -> anyhow::Result<()> {
         register_histogram(name);
     }
 
-    // Pre-init the 499 series so it reports 0 before the first disconnect.
+    // Pre-init the client-early-disconnect series so it reports 0 before the
+    // first disconnect.
     counter!(
         FUNCTION_INVOCATION_ERROR.name,
-        "http_status_code" => "499",
+        "http_status_code" => CLIENT_EARLY_DISCONNECT_STATUS,
         "function_id" => "",
     )
     .increment(0);

@@ -122,18 +122,19 @@ impl Drop for InflightRequestGuard {
             self.completed
         );
         if !self.completed {
-            // No status produced => client disconnect. Emit 499 so it's countable
-            // (server errors are already counted via `AppError::into_response`).
+            // No status produced => client early disconnect. Record it so it's
+            // countable (server errors are already counted via
+            // `AppError::into_response`).
             if !self.status_returned {
                 tracing::info!(
                     request_id = %self.request_id,
                     function_id = %self.function_id,
                     function_version_id = %self.function_version_id,
                     nca_id = %self.nca_id,
-                    "client disconnected before a response was produced; recording 499"
+                    "client disconnected before a response was produced; recording client early disconnect"
                 );
                 metrics::record_nvcf_application_error(
-                    "499".to_string(),
+                    metrics::CLIENT_EARLY_DISCONNECT_STATUS.to_string(),
                     Some(self.function_id.to_string()),
                 );
             }
@@ -788,10 +789,11 @@ mod tests {
         assert!(result.is_err(), "completed guard must not publish a cancel");
     }
 
-    /// A client disconnect (dropped without a status ever produced) records a 499.
+    /// A client disconnect (dropped without a status ever produced) records a
+    /// client early disconnect.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires docker; run with cargo test -- --ignored"]
-    async fn test_inflight_guard_drop_records_499_on_client_disconnect() {
+    async fn test_inflight_guard_drop_records_client_early_disconnect() {
         let (svc, _observer, _container) = make_nats_service().await;
         let function_id = Uuid::new_v4();
         let fvid = Uuid::new_v4();
@@ -816,24 +818,27 @@ mod tests {
             .find_map(|(key, _, _, value)| {
                 let matches = key.kind() == MetricKind::Counter
                     && key.key().name() == "app.invocation.error"
-                    && key
-                        .key()
-                        .labels()
-                        .any(|label| label.key() == "http_status_code" && label.value() == "499")
+                    && key.key().labels().any(|label| {
+                        label.key() == "http_status_code"
+                            && label.value() == metrics::CLIENT_EARLY_DISCONNECT_STATUS
+                    })
                     && key.key().labels().any(|label| {
                         label.key() == "function_id" && label.value() == function_id.to_string()
                     });
                 matches.then_some(value)
             })
-            .expect("client disconnect should record a 499 app.invocation.error");
+            .expect(
+                "client disconnect should record a client-early-disconnect app.invocation.error",
+            );
 
         assert_eq!(value, DebugValue::Counter(1));
     }
 
-    /// A server-side early exit (status was returned) must NOT be counted as a 499.
+    /// A server-side early exit (status was returned) must NOT be counted as a
+    /// client early disconnect.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires docker; run with cargo test -- --ignored"]
-    async fn test_inflight_guard_drop_no_499_on_server_error() {
+    async fn test_inflight_guard_drop_no_client_early_disconnect_on_server_error() {
         let (svc, _observer, _container) = make_nats_service().await;
         let function_id = Uuid::new_v4();
         let fvid = Uuid::new_v4();
@@ -852,18 +857,22 @@ mod tests {
             guard.mark_status_returned();
         });
 
-        let found_499 = snapshotter
-            .snapshot()
-            .into_vec()
-            .into_iter()
-            .any(|(key, _, _, _)| {
-                key.key().name() == "app.invocation.error"
-                    && key
-                        .key()
-                        .labels()
-                        .any(|label| label.key() == "http_status_code" && label.value() == "499")
-            });
+        let found_disconnect =
+            snapshotter
+                .snapshot()
+                .into_vec()
+                .into_iter()
+                .any(|(key, _, _, _)| {
+                    key.key().name() == "app.invocation.error"
+                        && key.key().labels().any(|label| {
+                            label.key() == "http_status_code"
+                                && label.value() == metrics::CLIENT_EARLY_DISCONNECT_STATUS
+                        })
+                });
 
-        assert!(!found_499, "server-side error must not record a 499");
+        assert!(
+            !found_disconnect,
+            "server-side error must not record a client early disconnect"
+        );
     }
 }
