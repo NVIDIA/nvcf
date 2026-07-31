@@ -421,6 +421,17 @@ maven.install(
         # testcontainers 2.0.5 / shedlock 7.7.0). Explicit versions match the
         # validated Cloud Tasks baseline; io.grpc pins track GRPC_VERSION.
         "com.bucket4j:bucket4j_jdk17-core:8.19.0",
+        # Instance Cluster Management service closure. Version-less
+        # coordinates are managed by the shared BOMs above; explicit versions
+        # match the imported ICMS Maven baseline unless a newer shared root is
+        # already pinned for another Java service.
+        "com.amazonaws:aws-java-sdk-sns:1.12.696",
+        "com.amazonaws:aws-java-sdk-sqs:1.12.696",
+        "com.amazonaws:aws-java-sdk-sts:1.12.696",
+        "com.google.crypto.tink:tink:1.6.1",
+        "com.vdurmont:semver4j:3.1.0",
+        "io.nats:jwt-java:2.2.0",
+        "net.logstash.logback:logstash-logback-encoder:8.1",
         "com.github.ben-manes.caffeine:caffeine",
         "com.google.protobuf:protobuf-java:4.33.4",
         "com.google.protobuf:protobuf-java-util:4.33.4",
@@ -434,14 +445,21 @@ maven.install(
         "net.devh:grpc-server-spring-boot-starter:3.1.0.RELEASE",
         "net.javacrumbs.shedlock:shedlock-provider-cassandra",
         "net.javacrumbs.shedlock:shedlock-spring",
+        "org.apache.cassandra:java-driver-mapper-runtime",
+        "org.apache.cassandra:java-driver-query-builder",
         "org.assertj:assertj-core",
+        "org.apache.httpcomponents.client5:httpclient5",
         "org.awaitility:awaitility",
         "org.junit.jupiter:junit-jupiter-params",
+        "org.mapstruct:mapstruct:1.5.2.Final",
         "org.mockito:mockito-core",
         "org.mockito:mockito-junit-jupiter",
         "org.ow2.asm:asm:9.9",
         "org.ow2.asm:asm-commons:9.9",
         "org.ow2.asm:asm-tree:9.9",
+        "org.reflections:reflections:0.10.2",
+        "software.amazon.awssdk:arns:2.40.1",
+        "software.amazon.awssdk:sts:2.40.1",
         "org.springframework:spring-context-support",
         "org.springframework:spring-webflux",
         "org.springframework.boot:spring-boot-actuator",
