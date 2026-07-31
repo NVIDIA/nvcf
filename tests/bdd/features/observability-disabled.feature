@@ -31,12 +31,9 @@ Feature: Render local Helmfile stacks with observability disabled
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | disabled                             |
-    # Seed the Make target's required registration input without contacting ICMS.
-    # The target validates this path before copying it to OUTPUT_DIR.
+    # Seed the compute stack's registration handoff without contacting ICMS.
+    # The Make target copies this input to OUTPUT_DIR before Helmfile evaluates it.
     And I copy the file "tests/bdd/fixtures/ncp-local-register-values.yaml" to "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml"
-    # Seed the separate fixed path read by the NVCA Helmfile during evaluation.
-    # The Helmfile does not use OUTPUT_DIR to locate this registration handoff.
-    And I copy the file "tests/bdd/fixtures/ncp-local-register-values.yaml" to "deploy/stacks/nvcf-compute-plane/out/ncp-local-register-values.yaml"
 
   Scenario: Disabled profile renders no observability resources
     When I run command:

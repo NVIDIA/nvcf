@@ -58,7 +58,8 @@ helmDefaults:
     - "--dry-run=server"
 
 {{- $clusterName := requiredEnv "CLUSTER_NAME" }}
-{{- $registrationValuesPath := printf "../out/%s-register-values.yaml" $clusterName }}
+{{- $outputDir := requiredEnv "OUTPUT_DIR" }}
+{{- $registrationValuesPath := printf "%s/%s-register-values.yaml" $outputDir $clusterName }}
 {{- $registrationValues := readFile $registrationValuesPath | fromYaml | default dict }}
 {{- $registrationAgentMergeConfig := dig "agentConfig" "mergeConfig" "" $registrationValues }}
 {{- $environmentAgentMergeConfig := dig "agentConfig" "mergeConfig" "" .Values }}
@@ -92,7 +93,7 @@ releases:
       # `make register-cluster CLUSTER_NAME=<cluster>` — uses
       # selfManaged.clusterId/clusterGroupId schema emitted by nvcf-cli and
       # read by the nvca-operator chart.
-      - {{ $registrationValuesPath }}
+      - {{ $registrationValuesPath | quote }}
       # Resolve operator + nvca images through global.image.{registry,repository}.
       # The chart's image.tag and selfManaged.nvcaVersion defaults supply the
       # actual image tag; this block only overrides repository and pullPolicy.
