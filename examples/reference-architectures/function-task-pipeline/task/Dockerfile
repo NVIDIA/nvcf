@@ -7,4 +7,7 @@ WORKDIR /app
 
 COPY inventory_artifacts.py /app/
 
+RUN useradd --no-create-home --uid 1000 taskrunner
+USER taskrunner
+
 CMD ["python3", "/app/inventory_artifacts.py"]

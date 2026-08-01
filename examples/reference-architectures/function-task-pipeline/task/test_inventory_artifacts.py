@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import datetime
 import hashlib
 import json
 import os
@@ -110,7 +111,45 @@ class InventoryArtifactsTest(unittest.TestCase):
             self.assertEqual(progress["taskId"], "task-test")
             self.assertEqual(progress["percentComplete"], 100)
             self.assertEqual(progress["name"], "artifact-inventory")
+            self.assertRegex(
+                progress["lastUpdatedAt"],
+                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$",
+            )
+            parsed_progress_time = datetime.datetime.fromisoformat(
+                progress["lastUpdatedAt"].replace("Z", "+00:00")
+            )
+            self.assertEqual(parsed_progress_time.tzinfo, datetime.timezone.utc)
             self.assertEqual(progress["metadata"], metadata)
+
+    def test_build_report_separates_artifacts_on_shared_volume(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            shared_root = Path(temporary_directory)
+            models_dir = shared_root / "model"
+            resources_dir = shared_root / "dataset"
+            models_dir.mkdir()
+            resources_dir.mkdir()
+            (models_dir / "weights.bin").write_bytes(b"model")
+            (resources_dir / "eval.jsonl").write_bytes(b"dataset")
+
+            config = inventory_artifacts.Config(
+                models_dir=models_dir,
+                resources_dir=resources_dir,
+                results_dir=shared_root / "results",
+                progress_file=shared_root / "results" / "progress",
+                task_id="task-test",
+                results_location="test-org/test-model",
+                workflow_request={"workflowId": "workflow-test"},
+            )
+            report = inventory_artifacts.build_report(config)
+
+            self.assertEqual(
+                [artifact["path"] for artifact in report["modelArtifacts"]],
+                ["weights.bin"],
+            )
+            self.assertEqual(
+                [artifact["path"] for artifact in report["datasetArtifacts"]],
+                ["eval.jsonl"],
+            )
 
     def test_build_report_rejects_missing_dataset_files(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -236,6 +275,8 @@ class InventoryArtifactsTest(unittest.TestCase):
             os.environ,
             {
                 "WORKFLOW_REQUEST_BASE64": encoded_request,
+                "INPUT_MODELS_DIR": "/config/models/model",
+                "INPUT_RESOURCES_DIR": "/config/resources/dataset",
                 "NVCT_TASK_ID": "task-test",
                 "RESULTS_LOCATION": "test-org/test-model",
             },
@@ -244,6 +285,8 @@ class InventoryArtifactsTest(unittest.TestCase):
             config = inventory_artifacts.load_config()
 
         self.assertEqual(config.workflow_request, request)
+        self.assertEqual(config.models_dir, Path("/config/models/model"))
+        self.assertEqual(config.resources_dir, Path("/config/resources/dataset"))
         self.assertEqual(config.task_id, "task-test")
         self.assertEqual(config.results_location, "test-org/test-model")
 
@@ -259,6 +302,44 @@ class InventoryArtifactsTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "must encode a JSON object"):
                 inventory_artifacts.load_config()
+
+    def test_load_config_reports_missing_required_environment(self):
+        request = {"workflowId": "workflow-test"}
+        environment = {
+            "WORKFLOW_REQUEST_BASE64": base64.b64encode(
+                json.dumps(request).encode()
+            ).decode(),
+            "RESULTS_LOCATION": "test-org/test-model",
+        }
+        for missing_name in ("WORKFLOW_REQUEST_BASE64", "RESULTS_LOCATION"):
+            with self.subTest(missing_name=missing_name):
+                incomplete_environment = environment.copy()
+                incomplete_environment.pop(missing_name)
+                with mock.patch.dict(os.environ, incomplete_environment, clear=True):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        f"required environment variable {missing_name} is not set",
+                    ):
+                        inventory_artifacts.load_config()
+
+    def test_load_config_rejects_empty_required_environment(self):
+        request = {"workflowId": "workflow-test"}
+        environment = {
+            "WORKFLOW_REQUEST_BASE64": base64.b64encode(
+                json.dumps(request).encode()
+            ).decode(),
+            "RESULTS_LOCATION": "test-org/test-model",
+        }
+        for empty_name in ("WORKFLOW_REQUEST_BASE64", "RESULTS_LOCATION"):
+            with self.subTest(empty_name=empty_name):
+                empty_environment = environment.copy()
+                empty_environment[empty_name] = "   "
+                with mock.patch.dict(os.environ, empty_environment, clear=True):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        f"required environment variable {empty_name} is empty",
+                    ):
+                        inventory_artifacts.load_config()
 
 
 if __name__ == "__main__":

@@ -1322,9 +1322,10 @@ Bound an individual task status request when it is part of a larger workflow:
 nvcf-cli task get --timeout 30
 ```
 
-The same optional timeout bounds an individual result request:
+The same optional timeout bounds an individual event or result request:
 
 ```bash
+nvcf-cli task events --timeout 30
 nvcf-cli task results --timeout 30
 ```
 
@@ -1363,7 +1364,7 @@ nvcf-cli task bulk --input-file examples/bulk-tasks.json
 ### Watching Events and Results
 
 ```bash
-nvcf-cli task events --limit 100       # latest events for current task
+nvcf-cli task events --limit 100 --timeout 30  # bounded latest events request
 nvcf-cli task results --timeout 30     # bounded results request (UPLOAD strategy)
 nvcf-cli --json task events > events.json   # automation-friendly output
 ```

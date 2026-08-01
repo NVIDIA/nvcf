@@ -130,6 +130,8 @@ case " $* " in
         encoded_request=
         model_artifact=
         dataset_artifact=
+        models_dir=
+        resources_dir=
         previous=
         for argument in "$@"; do
             if [[ $previous == --input-file ]]; then
@@ -144,11 +146,22 @@ case " $* " in
             if [[ $argument == WORKFLOW_REQUEST_BASE64=* ]]; then
                 encoded_request=${argument#WORKFLOW_REQUEST_BASE64=}
             fi
+            if [[ $argument == INPUT_MODELS_DIR=* ]]; then
+                models_dir=${argument#INPUT_MODELS_DIR=}
+            fi
+            if [[ $argument == INPUT_RESOURCES_DIR=* ]]; then
+                resources_dir=${argument#INPUT_RESOURCES_DIR=}
+            fi
             previous=$argument
         done
-        if [[ $model_artifact != ${FAKE_EXPECTED_MODEL_ARTIFACT:-model:test:ngc://models/test} ||
-              $dataset_artifact != dataset:test:ngc://datasets/test ]]; then
+        if [[ $model_artifact != "${FAKE_EXPECTED_MODEL_ARTIFACT:-model:test:ngc://models/test}" ||
+              $dataset_artifact != "${FAKE_EXPECTED_DATASET_ARTIFACT:-dataset:test:ngc://datasets/test}" ]]; then
             printf 'Task did not mount the admitted artifacts\n' >&2
+            exit 2
+        fi
+        if [[ $models_dir != "/config/models/${model_artifact%%:*}" ||
+              $resources_dir != "/config/resources/${dataset_artifact%%:*}" ]]; then
+            printf 'Task did not isolate artifacts on the shared volume\n' >&2
             exit 2
         fi
         if [[ ! -f $input_file ]] ||
@@ -172,7 +185,8 @@ case " $* " in
                 $request.operation == "inventory-model-artifacts" and
                 $request.inputs.model ==
                     env.FAKE_EXPECTED_MODEL_ARTIFACT and
-                $request.inputs.dataset == "dataset:test:ngc://datasets/test"
+                $request.inputs.dataset ==
+                    env.FAKE_EXPECTED_DATASET_ARTIFACT
         ' >/dev/null; then
             printf 'Task did not receive the admitted workflow request\n' >&2
             exit 2
@@ -195,6 +209,9 @@ case " $* " in
         fi
         count=$((count + 1))
         printf '%s\n' "$count" >"$FAKE_TASK_STATE"
+        if ((count <= ${FAKE_TASK_GET_FAILURES:-0})); then
+            exit 4
+        fi
         if [[ ${FAKE_ALWAYS_RUNNING:-false} == true ]]; then
             status=RUNNING
         elif ((count == 1)) && [[ -n ${FAKE_FIRST_STATUS:-} ]]; then
@@ -211,6 +228,14 @@ case " $* " in
             "$status" "$progress"
         ;;
     *" --json task events "*)
+        if [[ " $* " != *" --timeout "* ]]; then
+            printf 'Task events must have a timeout\n' >&2
+            exit 2
+        fi
+        sleep "${FAKE_TASK_EVENTS_DELAY_SECONDS:-0}"
+        if [[ ${FAKE_TASK_EVENTS_FAIL:-false} == true ]]; then
+            exit 4
+        fi
         printf '%s\n' '{"events":[{"taskId":"task-test","message":"COMPLETED"}]}'
         ;;
     *" --json task results "*)
@@ -343,7 +368,10 @@ run_workflow() {
     FAKE_EMPTY_TASK_ID=${FAKE_EMPTY_TASK_ID:-false} \
     FAKE_FIRST_STATUS=${FAKE_FIRST_STATUS:-} \
     FAKE_ALWAYS_RUNNING=${FAKE_ALWAYS_RUNNING:-false} \
+    FAKE_TASK_GET_FAILURES=${FAKE_TASK_GET_FAILURES:-0} \
     FAKE_TASK_GET_DELAY_SECONDS=${FAKE_TASK_GET_DELAY_SECONDS:-0} \
+    FAKE_TASK_EVENTS_FAIL=${FAKE_TASK_EVENTS_FAIL:-false} \
+    FAKE_TASK_EVENTS_DELAY_SECONDS=${FAKE_TASK_EVENTS_DELAY_SECONDS:-0} \
     FAKE_TERMINAL_STATUS=${FAKE_TERMINAL_STATUS:-COMPLETED} \
     FAKE_REJECT_ADMISSION=${FAKE_REJECT_ADMISSION:-false} \
     FAKE_ADMITTED_WORKFLOW_ID=${FAKE_ADMITTED_WORKFLOW_ID:-test-run} \
@@ -353,6 +381,7 @@ run_workflow() {
     FAKE_EMPTY_ADMITTED_MODEL=${FAKE_EMPTY_ADMITTED_MODEL:-false} \
     FAKE_EMPTY_ADMITTED_DATASET=${FAKE_EMPTY_ADMITTED_DATASET:-false} \
     FAKE_EXPECTED_MODEL_ARTIFACT=${FAKE_EXPECTED_MODEL_ARTIFACT:-model:test:ngc://models/test} \
+    FAKE_EXPECTED_DATASET_ARTIFACT=${FAKE_EXPECTED_DATASET_ARTIFACT:-dataset:test:ngc://datasets/test} \
     FAKE_EXPECTED_SECRET=nvapi-test \
     FAKE_NO_RESULTS=${FAKE_NO_RESULTS:-false} \
     FAKE_RESULTS_DELAY_CALLS=${FAKE_RESULTS_DELAY_CALLS:-0} \
@@ -382,7 +411,10 @@ run_workflow() {
     WORKFLOW_ID=$workflow_id \
     POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-1} \
     TASK_TIMEOUT_SECONDS=${TASK_TIMEOUT_SECONDS:-5} \
+    TASK_STATUS_READ_ATTEMPTS=${TASK_STATUS_READ_ATTEMPTS:-3} \
+    TASK_EVENTS_TIMEOUT_SECONDS=${TASK_EVENTS_TIMEOUT_SECONDS:-1} \
     RESULTS_TIMEOUT_SECONDS=${RESULTS_TIMEOUT_SECONDS:-5} \
+    KEEP_RESOURCES=${KEEP_RESOURCES:-false} \
     CLEANUP_DELETE_ATTEMPTS=3 \
     CLEANUP_RETRY_INTERVAL_SECONDS=0 \
     "$script_dir/run.sh"
@@ -489,6 +521,19 @@ if ((task_results_attempts != 2)); then
 fi
 
 reset_fake
+events_failure_output=$(FAKE_TASK_EVENTS_FAIL=true \
+    FAKE_TASK_EVENTS_DELAY_SECONDS=1 \
+    TASK_EVENTS_TIMEOUT_SECONDS=1 \
+    RESULTS_TIMEOUT_SECONDS=1 \
+    run_workflow)
+if ! jq -e '.task.events.events == []' <<<"$events_failure_output" >/dev/null; then
+    printf 'An event request failure must produce an empty event list\n' >&2
+    exit 1
+fi
+grep -q -- "task events --timeout 1" "$fake_log"
+grep -q -- "task results --timeout" "$fake_log"
+
+reset_fake
 if FAKE_NO_RESULTS=true RESULTS_TIMEOUT_SECONDS=1 \
     run_workflow >/dev/null 2>&1; then
     printf 'Expected missing task results to fail the workflow\n' >&2
@@ -569,7 +614,9 @@ for mismatch in \
         printf 'Expected mismatched %s result metadata to fail\n' "$mismatch" >&2
         exit 1
     fi
-    unset "${mismatch_env[0]%%=*}"
+    for assignment in "${mismatch_env[@]}"; do
+        unset "${assignment%%=*}"
+    done
 done
 
 reset_fake
@@ -578,8 +625,41 @@ FAKE_RESULT_TOTAL_BYTES=0 run_workflow >/dev/null
 reset_fake
 FAKE_ADMITTED_MODEL=model:accepted:ngc://models/accepted \
 FAKE_EXPECTED_MODEL_ARTIFACT=model:accepted:ngc://models/accepted \
+FAKE_ADMITTED_DATASET=evalset:accepted:ngc://datasets/accepted \
+FAKE_EXPECTED_DATASET_ARTIFACT=evalset:accepted:ngc://datasets/accepted \
     run_workflow >/dev/null
 grep -q -- "--models model:accepted:ngc://models/accepted" "$fake_log"
+grep -q -- "--resources evalset:accepted:ngc://datasets/accepted" "$fake_log"
+grep -q -- "INPUT_MODELS_DIR=/config/models/model" "$fake_log"
+grep -q -- "INPUT_RESOURCES_DIR=/config/resources/evalset" "$fake_log"
+
+reset_fake
+if FAKE_ADMITTED_DATASET=model:accepted:ngc://datasets/accepted \
+    run_workflow >/dev/null 2>&1; then
+    printf 'Expected identical model and dataset names to be rejected\n' >&2
+    exit 1
+fi
+if grep -q -- "task create" "$fake_log"; then
+    printf 'Aliased artifact names must be rejected before Task creation\n' >&2
+    exit 1
+fi
+
+for unsafe_model in \
+    '../resources:accepted:ngc://models/accepted' \
+    'model/name:accepted:ngc://models/accepted'; do
+    reset_fake
+    if FAKE_ADMITTED_MODEL="$unsafe_model" \
+        FAKE_EXPECTED_MODEL_ARTIFACT="$unsafe_model" \
+        run_workflow >/dev/null 2>&1; then
+        printf 'Expected unsafe model artifact name to be rejected: %s\n' \
+            "$unsafe_model" >&2
+        exit 1
+    fi
+    if grep -q -- "task create" "$fake_log"; then
+        printf 'Unsafe artifact names must be rejected before Task creation\n' >&2
+        exit 1
+    fi
+done
 
 for admission_mismatch in workflow operation model dataset; do
     reset_fake
@@ -603,7 +683,9 @@ for admission_mismatch in workflow operation model dataset; do
             "$admission_mismatch" >&2
         exit 1
     fi
-    unset "${mismatch_env[0]%%=*}"
+    for assignment in "${mismatch_env[@]}"; do
+        unset "${assignment%%=*}"
+    done
     if grep -q -- "task create" "$fake_log"; then
         printf 'An invalid admission must not create a Task\n' >&2
         exit 1
@@ -646,6 +728,26 @@ if FAKE_ALWAYS_RUNNING=true TASK_TIMEOUT_SECONDS=1 run_workflow >/dev/null 2>&1;
     exit 1
 fi
 grep -q -- "task cancel task-test" "$fake_log"
+
+reset_fake
+FAKE_TASK_GET_FAILURES=2 run_workflow >/dev/null
+task_get_attempts=$(grep -c -- "task get --timeout" "$fake_log")
+if ((task_get_attempts != 3)); then
+    printf 'Expected transient task status failures to be retried\n' >&2
+    exit 1
+fi
+
+reset_fake
+if FAKE_TASK_GET_FAILURES=3 TASK_STATUS_READ_ATTEMPTS=3 \
+    run_workflow >/dev/null 2>&1; then
+    printf 'Expected exhausted task status reads to fail the workflow\n' >&2
+    exit 1
+fi
+task_get_attempts=$(grep -c -- "task get --timeout" "$fake_log")
+if ((task_get_attempts != 3)); then
+    printf 'Expected task status reads to stop at the retry limit\n' >&2
+    exit 1
+fi
 
 reset_fake
 cancel_failure_log="${test_dir}/cancel-failure.log"
@@ -714,20 +816,26 @@ if grep -q -- "task events" "$fake_log"; then
 fi
 
 reset_fake
-if FAKE_MALFORMED_CREATE=true run_workflow >/dev/null 2>&1; then
+malformed_create_log="${test_dir}/malformed-create.log"
+if FAKE_MALFORMED_CREATE=true \
+    run_workflow >/dev/null 2>"$malformed_create_log"; then
     printf 'Expected missing Function IDs to fail the workflow\n' >&2
     exit 1
 fi
+grep -q -- "inspect function-task-test-run manually" "$malformed_create_log"
 if grep -q -- "function deploy create" "$fake_log"; then
     printf 'A malformed Function create response must not be deployed\n' >&2
     exit 1
 fi
 
 reset_fake
-if FAKE_EMPTY_FUNCTION_IDS=true run_workflow >/dev/null 2>&1; then
+empty_function_ids_log="${test_dir}/empty-function-ids.log"
+if FAKE_EMPTY_FUNCTION_IDS=true \
+    run_workflow >/dev/null 2>"$empty_function_ids_log"; then
     printf 'Expected empty Function IDs to fail the workflow\n' >&2
     exit 1
 fi
+grep -q -- "inspect function-task-test-run manually" "$empty_function_ids_log"
 if grep -q -- "function deploy create" "$fake_log"; then
     printf 'Empty Function IDs must not be deployed\n' >&2
     exit 1
@@ -750,6 +858,23 @@ if POLL_INTERVAL_SECONDS=0 run_workflow >/dev/null 2>&1; then
 fi
 if [[ -s $fake_log ]]; then
     printf 'Poll interval validation should run before creating resources\n' >&2
+    exit 1
+fi
+
+reset_fake
+if TASK_EVENTS_TIMEOUT_SECONDS=0 run_workflow >/dev/null 2>&1; then
+    printf 'Expected a zero Task events timeout to be rejected\n' >&2
+    exit 1
+fi
+if [[ -s $fake_log ]]; then
+    printf 'Task events timeout validation should run before creating resources\n' >&2
+    exit 1
+fi
+
+reset_fake
+KEEP_RESOURCES=true run_workflow >/dev/null
+if grep -q -E -- "task delete|function deploy remove|function delete" "$fake_log"; then
+    printf 'KEEP_RESOURCES=true must not delete workflow resources\n' >&2
     exit 1
 fi
 

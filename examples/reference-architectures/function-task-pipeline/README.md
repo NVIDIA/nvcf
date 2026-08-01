@@ -7,7 +7,9 @@ inventory flow:
 1. The client sends a model and dataset request to the Function.
 2. The Function admits the request and returns the accepted payload.
 3. The client mounts the accepted model and dataset artifacts into a Task.
-4. The Task hashes every input file and uploads an inventory report.
+4. The Task hashes the admitted model and dataset directories and uploads an
+   inventory report. NVCT exposes both artifact kinds through one shared volume,
+   so the coordinator selects their distinct name-based subdirectories.
 5. The client reads the Task result metadata and sends it to the Function.
 
 The Function uses the existing FastAPI echo sample, so this example treats its
@@ -171,6 +173,8 @@ KEEP_RESOURCES=true \
 | `FUNCTION_DEPLOY_TIMEOUT_SECONDS` | `900` | Function deployment deadline. |
 | `POLL_INTERVAL_SECONDS` | `10` | Delay between status and result requests. |
 | `TASK_TIMEOUT_SECONDS` | `900` | Task execution deadline. |
+| `TASK_STATUS_READ_ATTEMPTS` | `3` | Consecutive status read attempts before failure. |
+| `TASK_EVENTS_TIMEOUT_SECONDS` | `30` | Best-effort Task events request deadline. |
 | `RESULTS_TIMEOUT_SECONDS` | `120` | Task result availability deadline. |
 | `CLEANUP_DELETE_ATTEMPTS` | `6` | Attempts for each cleanup deletion. |
 | `CLEANUP_RETRY_INTERVAL_SECONDS` | `5` | Delay between cleanup attempts. |

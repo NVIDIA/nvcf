@@ -21,6 +21,8 @@ REGIONS=${REGIONS:-us-west-1}
 FUNCTION_DEPLOY_TIMEOUT_SECONDS=${FUNCTION_DEPLOY_TIMEOUT_SECONDS:-900}
 POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-10}
 TASK_TIMEOUT_SECONDS=${TASK_TIMEOUT_SECONDS:-900}
+TASK_STATUS_READ_ATTEMPTS=${TASK_STATUS_READ_ATTEMPTS:-3}
+TASK_EVENTS_TIMEOUT_SECONDS=${TASK_EVENTS_TIMEOUT_SECONDS:-30}
 RESULTS_TIMEOUT_SECONDS=${RESULTS_TIMEOUT_SECONDS:-120}
 CLEANUP_DELETE_ATTEMPTS=${CLEANUP_DELETE_ATTEMPTS:-6}
 CLEANUP_RETRY_INTERVAL_SECONDS=${CLEANUP_RETRY_INTERVAL_SECONDS:-5}
@@ -163,6 +165,12 @@ fi
 if [[ ! $TASK_TIMEOUT_SECONDS =~ ^[1-9][0-9]*$ ]]; then
     fail "TASK_TIMEOUT_SECONDS must be a positive integer"
 fi
+if [[ ! $TASK_STATUS_READ_ATTEMPTS =~ ^[1-9][0-9]*$ ]]; then
+    fail "TASK_STATUS_READ_ATTEMPTS must be a positive integer"
+fi
+if [[ ! $TASK_EVENTS_TIMEOUT_SECONDS =~ ^[1-9][0-9]*$ ]]; then
+    fail "TASK_EVENTS_TIMEOUT_SECONDS must be a positive integer"
+fi
 if [[ ! $RESULTS_TIMEOUT_SECONDS =~ ^[1-9][0-9]*$ ]]; then
     fail "RESULTS_TIMEOUT_SECONDS must be a positive integer"
 fi
@@ -189,12 +197,14 @@ function_create_json=$(cli --json function create \
     --health-protocol HTTP \
     --health-port 8000 \
     --health-timeout PT30S)
-function_id=$(jq -er \
+if ! function_id=$(jq -er \
     '.function.id | select(type == "string" and length > 0)' \
-    <<<"$function_create_json")
-version_id=$(jq -er \
-    '.function.versionId | select(type == "string" and length > 0)' \
-    <<<"$function_create_json")
+    <<<"$function_create_json") ||
+    ! version_id=$(jq -er \
+        '.function.versionId | select(type == "string" and length > 0)' \
+        <<<"$function_create_json"); then
+    fail "Function create returned no usable identifiers; inspect ${function_name} manually"
+fi
 function_created=true
 
 log "Deploying function ${function_id}/${version_id}"
@@ -247,6 +257,19 @@ admission_payload=$(jq -cer \
 ' <<<"$admission_output")
 accepted_model_artifact=$(jq -er '.inputs.model' <<<"$admission_payload")
 accepted_dataset_artifact=$(jq -er '.inputs.dataset' <<<"$admission_payload")
+accepted_model_name=${accepted_model_artifact%%:*}
+accepted_dataset_name=${accepted_dataset_artifact%%:*}
+if [[ $accepted_model_artifact != *:*:* ||
+      ! $accepted_model_name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    fail "Admitted model artifact must use a safe name:version:uri value"
+fi
+if [[ $accepted_dataset_artifact != *:*:* ||
+      ! $accepted_dataset_name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    fail "Admitted dataset artifact must use a safe name:version:uri value"
+fi
+if [[ $accepted_model_name == "$accepted_dataset_name" ]]; then
+    fail "Model and dataset artifact names must be distinct on the shared artifact volume"
+fi
 workflow_request_base64=$(jq -r @base64 <<<"$admission_payload")
 
 task_secret_file=$(mktemp)
@@ -264,6 +287,8 @@ task_create_json=$(cli --json task create \
     --image "$TASK_IMAGE" \
     --container-env "WORKFLOW_REQUEST_BASE64=${workflow_request_base64}" \
     --container-env "RESULTS_LOCATION=${RESULTS_LOCATION}" \
+    --container-env "INPUT_MODELS_DIR=/config/models/${accepted_model_name}" \
+    --container-env "INPUT_RESOURCES_DIR=/config/resources/${accepted_dataset_name}" \
     --models "$accepted_model_artifact" \
     --resources "$accepted_dataset_artifact" \
     --description "Inventory model and dataset artifacts for workflow ${WORKFLOW_ID}" \
@@ -280,6 +305,7 @@ task_id=$(jq -er \
 
 task_deadline=$((SECONDS + TASK_TIMEOUT_SECONDS))
 task_status=
+status_read_failures=0
 while true; do
     remaining_seconds=$((task_deadline - SECONDS))
     if ((remaining_seconds <= 0)); then
@@ -291,8 +317,20 @@ while true; do
         if ((SECONDS >= task_deadline)); then
             fail "Task ${task_id} did not finish within ${TASK_TIMEOUT_SECONDS} seconds"
         fi
-        fail "Failed to read status for task ${task_id}"
+        status_read_failures=$((status_read_failures + 1))
+        if ((status_read_failures >= TASK_STATUS_READ_ATTEMPTS)); then
+            fail "Failed to read status for task ${task_id} after ${status_read_failures} attempts"
+        fi
+        log "Transient status read failure for task ${task_id} (${status_read_failures}/${TASK_STATUS_READ_ATTEMPTS})"
+        remaining_seconds=$((task_deadline - SECONDS))
+        sleep_seconds=$POLL_INTERVAL_SECONDS
+        if ((sleep_seconds > remaining_seconds)); then
+            sleep_seconds=$remaining_seconds
+        fi
+        sleep "$sleep_seconds"
+        continue
     fi
+    status_read_failures=0
     if ((SECONDS >= task_deadline)); then
         fail "Task ${task_id} did not finish within ${TASK_TIMEOUT_SECONDS} seconds"
     fi
@@ -325,7 +363,12 @@ while true; do
     sleep "$sleep_seconds"
 done
 
-events_output=$(cli --json task events "$task_id")
+if ! events_output=$(cli --json task events \
+    --timeout "$TASK_EVENTS_TIMEOUT_SECONDS" \
+    "$task_id"); then
+    log "Task events are unavailable; continuing with result retrieval"
+    events_output='{"events":[]}'
+fi
 results_deadline=$((SECONDS + RESULTS_TIMEOUT_SECONDS))
 result_summary=
 while true; do

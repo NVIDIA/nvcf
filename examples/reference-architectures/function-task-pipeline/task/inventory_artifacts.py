@@ -22,8 +22,18 @@ class Config:
     workflow_request: dict
 
 
+def require_env(name: str) -> str:
+    try:
+        value = os.environ[name]
+    except KeyError as error:
+        raise ValueError(f"required environment variable {name} is not set") from error
+    if not value.strip():
+        raise ValueError(f"required environment variable {name} is empty")
+    return value
+
+
 def load_config() -> Config:
-    encoded_request = os.environ["WORKFLOW_REQUEST_BASE64"]
+    encoded_request = require_env("WORKFLOW_REQUEST_BASE64")
     try:
         decoded_request = base64.b64decode(encoded_request, validate=True)
         workflow_request = json.loads(decoded_request)
@@ -41,7 +51,7 @@ def load_config() -> Config:
             os.getenv("NVCT_PROGRESS_FILE_PATH", str(results_dir / "progress"))
         ),
         task_id=os.getenv("NVCT_TASK_ID", ""),
-        results_location=os.environ["RESULTS_LOCATION"],
+        results_location=require_env("RESULTS_LOCATION"),
         workflow_request=workflow_request,
     )
 

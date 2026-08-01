@@ -70,6 +70,7 @@ func configureAdminTest(t *testing.T, srvURL string) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("NVCF_API_KEY", "")
+	t.Setenv("NVCF_TOKEN", "")
 
 	oldCfgFile := cfgFile
 	oldStateManager := configStateManager

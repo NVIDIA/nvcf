@@ -190,7 +190,6 @@ like { "secrets": [{"name": "...", "value": "..."}] }.`,
 	RunE: runTaskUpdateSecrets,
 }
 
-
 // ============================================================================
 // Configuration structs
 // ============================================================================
@@ -199,23 +198,23 @@ like { "secrets": [{"name": "...", "value": "..."}] }.`,
 // near 1:1 mapping of CreateTaskRequest with secret values typed loosely so
 // users can drop in either strings or objects.
 type TaskCreateConfig struct {
-	Name                           string                             `json:"name"`
-	GpuSpecification               *TaskGpuSpecificationInput         `json:"gpuSpecification,omitempty"`
-	ContainerImage                 string                             `json:"containerImage,omitempty"`
-	ContainerArgs                  string                             `json:"containerArgs,omitempty"`
-	ContainerEnvironment           []ContainerEnvironmentEntry        `json:"containerEnvironment,omitempty"`
-	Models                         []ArtifactConfig                   `json:"models,omitempty"`
-	Resources                      []ArtifactConfig                   `json:"resources,omitempty"`
-	Tags                           []string                           `json:"tags,omitempty"`
-	Description                    string                             `json:"description,omitempty"`
-	MaxRuntimeDuration             string                             `json:"maxRuntimeDuration,omitempty"`
-	MaxQueuedDuration              string                             `json:"maxQueuedDuration,omitempty"`
-	TerminationGracePeriodDuration string                             `json:"terminationGracePeriodDuration,omitempty"`
-	ResultHandlingStrategy         string                             `json:"resultHandlingStrategy,omitempty"`
-	ResultsLocation                string                             `json:"resultsLocation,omitempty"`
-	HelmChart                      string                             `json:"helmChart,omitempty"`
-	Telemetries                    *TaskTelemetriesInput              `json:"telemetries,omitempty"`
-	Secrets                        interface{}                        `json:"secrets,omitempty"` // []string or []SecretConfig
+	Name                           string                      `json:"name"`
+	GpuSpecification               *TaskGpuSpecificationInput  `json:"gpuSpecification,omitempty"`
+	ContainerImage                 string                      `json:"containerImage,omitempty"`
+	ContainerArgs                  string                      `json:"containerArgs,omitempty"`
+	ContainerEnvironment           []ContainerEnvironmentEntry `json:"containerEnvironment,omitempty"`
+	Models                         []ArtifactConfig            `json:"models,omitempty"`
+	Resources                      []ArtifactConfig            `json:"resources,omitempty"`
+	Tags                           []string                    `json:"tags,omitempty"`
+	Description                    string                      `json:"description,omitempty"`
+	MaxRuntimeDuration             string                      `json:"maxRuntimeDuration,omitempty"`
+	MaxQueuedDuration              string                      `json:"maxQueuedDuration,omitempty"`
+	TerminationGracePeriodDuration string                      `json:"terminationGracePeriodDuration,omitempty"`
+	ResultHandlingStrategy         string                      `json:"resultHandlingStrategy,omitempty"`
+	ResultsLocation                string                      `json:"resultsLocation,omitempty"`
+	HelmChart                      string                      `json:"helmChart,omitempty"`
+	Telemetries                    *TaskTelemetriesInput       `json:"telemetries,omitempty"`
+	Secrets                        interface{}                 `json:"secrets,omitempty"` // []string or []SecretConfig
 }
 
 // TaskGpuSpecificationInput maps to GpuSpecificationDto.
@@ -230,8 +229,8 @@ type TaskGpuSpecificationInput struct {
 
 // TaskHelmValidationInput maps to HelmValidationPolicyDto.
 type TaskHelmValidationInput struct {
-	Name                 string                  `json:"name"`
-	ExtraKubernetesTypes []TaskKubernetesTypeIn  `json:"extraKubernetesTypes,omitempty"`
+	Name                 string                 `json:"name"`
+	ExtraKubernetesTypes []TaskKubernetesTypeIn `json:"extraKubernetesTypes,omitempty"`
 }
 
 // TaskKubernetesTypeIn maps to KubernetesType.
@@ -265,11 +264,11 @@ type TaskBulkConfig struct {
 var taskCreateFlags struct {
 	inputFile string
 
-	name           string
-	gpu            string
-	instanceType   string
-	backend        string
-	clusters       []string
+	name         string
+	gpu          string
+	instanceType string
+	backend      string
+	clusters     []string
 
 	containerImage       string
 	containerArgs        string
@@ -313,8 +312,9 @@ var taskGetFlags struct {
 }
 
 var taskPaginationFlags struct {
-	limit  int
-	cursor string
+	limit          int
+	cursor         string
+	timeoutSeconds int
 }
 
 var taskResultsPaginationFlags struct {
@@ -327,7 +327,6 @@ var taskUpdateSecretsFlags struct {
 	inputFile string
 	secrets   []string
 }
-
 
 // ============================================================================
 // Init
@@ -394,6 +393,7 @@ func init() {
 	// task events flags
 	taskEventsCmd.Flags().IntVar(&taskPaginationFlags.limit, "limit", 0, "Maximum number of events to return")
 	taskEventsCmd.Flags().StringVar(&taskPaginationFlags.cursor, "cursor", "", "Pagination cursor returned by previous response")
+	taskEventsCmd.Flags().IntVar(&taskPaginationFlags.timeoutSeconds, "timeout", 0, "Maximum request duration in seconds (default client timeout)")
 
 	// task results flags
 	taskResultsCmd.Flags().IntVar(&taskResultsPaginationFlags.limit, "limit", 0, "Maximum number of results to return")
@@ -1060,7 +1060,13 @@ func runTaskEvents(cmd *cobra.Command, args []string) error {
 	}
 	defer c.Close()
 
-	resp, err := c.GetTaskEvents(context.Background(), taskID, &client.PaginationOptions{
+	ctx, cancel, err := newTaskRequestContext(taskPaginationFlags.timeoutSeconds)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	resp, err := c.GetTaskEvents(ctx, taskID, &client.PaginationOptions{
 		Limit:  taskPaginationFlags.limit,
 		Cursor: taskPaginationFlags.cursor,
 	})
