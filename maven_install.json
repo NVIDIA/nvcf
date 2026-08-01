@@ -5,16 +5,21 @@
     "at.yawk.lz4:lz4-java": 1725015399,
     "ch.qos.logback:logback-classic": -1622778065,
     "ch.qos.logback:logback-core": -1878965258,
+    "com.amazonaws:aws-java-sdk-sns": -468673589,
+    "com.amazonaws:aws-java-sdk-sqs": 1149177486,
+    "com.amazonaws:aws-java-sdk-sts": -1527938735,
     "com.bucket4j:bucket4j_jdk17-core": -1409600715,
     "com.github.ben-manes.caffeine:caffeine": 1100418982,
     "com.github.ben-manes.caffeine:guava": 1054685015,
     "com.github.java-json-tools:json-patch": -1031005245,
     "com.google.code.gson:gson": 988637195,
+    "com.google.crypto.tink:tink": -1774240767,
     "com.google.errorprone:error_prone_annotations": 1790047777,
     "com.google.protobuf:protobuf-java": 1906581597,
     "com.google.protobuf:protobuf-java-util": -1626074784,
     "com.jayway.jsonpath:json-path": 489827081,
     "com.nimbusds:nimbus-jose-jwt": -1260914239,
+    "com.vdurmont:semver4j": -1532032838,
     "commons-codec:commons-codec": -1269462382,
     "commons-logging:commons-logging": -916690979,
     "io.cloudevents:cloudevents-core": -2103567774,
@@ -25,6 +30,7 @@
     "io.micrometer:micrometer-registry-prometheus": 1865600799,
     "io.micrometer:micrometer-tracing-bridge-otel": -754588172,
     "io.nats:jnats": 572014237,
+    "io.nats:jwt-java": 89793856,
     "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations": -1738770709,
     "io.opentelemetry:opentelemetry-exporter-otlp": -12806658,
     "io.opentelemetry:opentelemetry-sdk-testing": -32635354,
@@ -39,11 +45,14 @@
     "net.javacrumbs.shedlock:shedlock-bom": -1406345450,
     "net.javacrumbs.shedlock:shedlock-provider-cassandra": -1200872,
     "net.javacrumbs.shedlock:shedlock-spring": -326290089,
-    "net.logstash.logback:logstash-logback-encoder": 583721182,
+    "net.logstash.logback:logstash-logback-encoder": 947571822,
+    "org.apache.cassandra:java-driver-mapper-runtime": 682905080,
     "org.apache.cassandra:java-driver-metrics-micrometer": -465267397,
+    "org.apache.cassandra:java-driver-query-builder": -489577192,
     "org.apache.commons:commons-collections4": 1132363499,
     "org.apache.commons:commons-lang3": -278168457,
     "org.apache.commons:commons-pool2": -1576571923,
+    "org.apache.httpcomponents.client5:httpclient5": 1889897058,
     "org.apache.tomcat.embed:tomcat-embed-core": 1111422783,
     "org.apache.tomcat.embed:tomcat-embed-el": -1143469369,
     "org.apache.tomcat.embed:tomcat-embed-websocket": -1668976381,
@@ -59,6 +68,7 @@
     "org.junit.platform:junit-platform-console-standalone": -1481831078,
     "org.junit.platform:junit-platform-launcher": -354104948,
     "org.junit.platform:junit-platform-reporting": 1896713402,
+    "org.mapstruct:mapstruct": -1143112980,
     "org.mockito:mockito-core": -554630660,
     "org.mockito:mockito-junit-jupiter": -1104541639,
     "org.ow2.asm:asm": -221905796,
@@ -67,6 +77,7 @@
     "org.ow2.asm:asm-tree": -242459737,
     "org.ow2.asm:asm-util": -307204853,
     "org.projectlombok:lombok": -2073039513,
+    "org.reflections:reflections": 1048675919,
     "org.springdoc:springdoc-openapi-starter-webflux-api": 1102747448,
     "org.springdoc:springdoc-openapi-starter-webflux-ui": -420246430,
     "org.springdoc:springdoc-openapi-starter-webmvc-api": 655186513,
@@ -117,7 +128,9 @@
     "org.testcontainers:testcontainers-localstack": 1146768038,
     "org.wiremock:wiremock-standalone": -1242936487,
     "repositories": -1624298853,
+    "software.amazon.awssdk:arns": -1247094155,
     "software.amazon.awssdk:regions": -1274787064,
+    "software.amazon.awssdk:sts": -794152901,
     "tools.jackson.module:jackson-module-blackbird": -423541381
   },
   "__RESOLVED_ARTIFACTS_HASH": {
@@ -129,6 +142,16 @@
     "ch.qos.logback:logback-classic:jar:sources": -1264560118,
     "ch.qos.logback:logback-core": 1441290378,
     "ch.qos.logback:logback-core:jar:sources": -208502196,
+    "com.amazonaws:aws-java-sdk-core": -1219639971,
+    "com.amazonaws:aws-java-sdk-core:jar:sources": -1864552030,
+    "com.amazonaws:aws-java-sdk-sns": -1260894531,
+    "com.amazonaws:aws-java-sdk-sns:jar:sources": 1001818572,
+    "com.amazonaws:aws-java-sdk-sqs": 1357154480,
+    "com.amazonaws:aws-java-sdk-sqs:jar:sources": 1839399050,
+    "com.amazonaws:aws-java-sdk-sts": 1558950255,
+    "com.amazonaws:aws-java-sdk-sts:jar:sources": -1854820264,
+    "com.amazonaws:jmespath-java": -1785509229,
+    "com.amazonaws:jmespath-java:jar:sources": 719796157,
     "com.bucket4j:bucket4j-core": -332288989,
     "com.bucket4j:bucket4j-core:jar:sources": -559201191,
     "com.bucket4j:bucket4j_jdk17-core": -1244833112,
@@ -143,6 +166,8 @@
     "com.fasterxml.jackson.core:jackson-core:jar:sources": 1404881423,
     "com.fasterxml.jackson.core:jackson-databind": -1922910990,
     "com.fasterxml.jackson.core:jackson-databind:jar:sources": -802304801,
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor": -1948997380,
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:jar:sources": -279570634,
     "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml": 2129087476,
     "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:sources": -175522790,
     "com.fasterxml.jackson.datatype:jackson-datatype-jsr310": 1940996847,
@@ -188,6 +213,8 @@
     "com.google.code.findbugs:jsr305:jar:sources": -1300148931,
     "com.google.code.gson:gson": 328405842,
     "com.google.code.gson:gson:jar:sources": -329485452,
+    "com.google.crypto.tink:tink": -1125558941,
+    "com.google.crypto.tink:tink:jar:sources": 99979554,
     "com.google.errorprone:error_prone_annotations": -1266099896,
     "com.google.errorprone:error_prone_annotations:jar:sources": 936701586,
     "com.google.guava:failureaccess": -56291903,
@@ -225,6 +252,8 @@
     "com.typesafe:config:jar:sources": -892423283,
     "com.vaadin.external.google:android-json": -1531950165,
     "com.vaadin.external.google:android-json:jar:sources": -116078240,
+    "com.vdurmont:semver4j": -830282953,
+    "com.vdurmont:semver4j:jar:sources": 938495145,
     "commons-codec:commons-codec": -835030550,
     "commons-codec:commons-codec:jar:sources": 990790236,
     "commons-io:commons-io": -1021273518,
@@ -290,9 +319,16 @@
     "io.micrometer:micrometer-tracing-bridge-otel:jar:sources": 1300289348,
     "io.micrometer:micrometer-tracing:jar:sources": 266031561,
     "io.nats:jnats": 1273546329,
+    "io.nats:jnats-json": 1080840129,
+    "io.nats:jnats-json:jar:sources": -35506321,
     "io.nats:jnats:jar:sources": 194791155,
+    "io.nats:jwt-java": 1389770019,
+    "io.nats:jwt-java:jar:sources": -1854451321,
+    "io.nats:nkeys-java": 1763468041,
+    "io.nats:nkeys-java:jar:sources": 748006274,
     "io.netty:netty-buffer": -1740802869,
     "io.netty:netty-buffer:jar:sources": 622468392,
+    "io.netty:netty-codec": 916082736,
     "io.netty:netty-codec-base": -1042304993,
     "io.netty:netty-codec-base:jar:sources": -612797714,
     "io.netty:netty-codec-classes-quic": -702276906,
@@ -307,14 +343,19 @@
     "io.netty:netty-codec-http3": -194972071,
     "io.netty:netty-codec-http3:jar:sources": 1699772273,
     "io.netty:netty-codec-http:jar:sources": -116842177,
+    "io.netty:netty-codec-marshalling": 1971807326,
+    "io.netty:netty-codec-marshalling:jar:sources": -317402620,
     "io.netty:netty-codec-native-quic:jar:linux-aarch_64": -2075260519,
     "io.netty:netty-codec-native-quic:jar:linux-x86_64": -1982796133,
     "io.netty:netty-codec-native-quic:jar:osx-aarch_64": -632727283,
     "io.netty:netty-codec-native-quic:jar:osx-x86_64": 1253945631,
     "io.netty:netty-codec-native-quic:jar:sources": -986328940,
     "io.netty:netty-codec-native-quic:jar:windows-x86_64": -115110822,
+    "io.netty:netty-codec-protobuf": -1879881872,
+    "io.netty:netty-codec-protobuf:jar:sources": 1174451608,
     "io.netty:netty-codec-socks": 336734625,
     "io.netty:netty-codec-socks:jar:sources": -1241946572,
+    "io.netty:netty-codec:jar:sources": -637079407,
     "io.netty:netty-common": -1557278455,
     "io.netty:netty-common:jar:sources": -467395659,
     "io.netty:netty-handler": -1757690436,
@@ -417,6 +458,8 @@
     "jakarta.xml.bind:jakarta.xml.bind-api:jar:sources": -945798747,
     "javax.annotation:javax.annotation-api": 193132517,
     "javax.annotation:javax.annotation-api:jar:sources": -1766532873,
+    "joda-time:joda-time": 1418453875,
+    "joda-time:joda-time:jar:sources": 1525455666,
     "net.bytebuddy:byte-buddy": 383637760,
     "net.bytebuddy:byte-buddy-agent": -1380713096,
     "net.bytebuddy:byte-buddy-agent:jar:sources": 564051985,
@@ -443,6 +486,8 @@
     "org.apache.cassandra:java-driver-core:jar:sources": -1508814165,
     "org.apache.cassandra:java-driver-guava-shaded": 568990261,
     "org.apache.cassandra:java-driver-guava-shaded:jar:sources": 1291502230,
+    "org.apache.cassandra:java-driver-mapper-runtime": 1860945458,
+    "org.apache.cassandra:java-driver-mapper-runtime:jar:sources": -51680672,
     "org.apache.cassandra:java-driver-metrics-micrometer": -93817708,
     "org.apache.cassandra:java-driver-metrics-micrometer:jar:sources": -2019023443,
     "org.apache.cassandra:java-driver-query-builder": 303143232,
@@ -455,6 +500,16 @@
     "org.apache.commons:commons-lang3:jar:sources": 1890991939,
     "org.apache.commons:commons-pool2": -896009560,
     "org.apache.commons:commons-pool2:jar:sources": 611628049,
+    "org.apache.httpcomponents.client5:httpclient5": 853723130,
+    "org.apache.httpcomponents.client5:httpclient5:jar:sources": 1809549841,
+    "org.apache.httpcomponents.core5:httpcore5": -1585286746,
+    "org.apache.httpcomponents.core5:httpcore5-h2": -2096354597,
+    "org.apache.httpcomponents.core5:httpcore5-h2:jar:sources": -662914656,
+    "org.apache.httpcomponents.core5:httpcore5:jar:sources": 118696657,
+    "org.apache.httpcomponents:httpclient": 791361107,
+    "org.apache.httpcomponents:httpclient:jar:sources": 961025298,
+    "org.apache.httpcomponents:httpcore": -353060362,
+    "org.apache.httpcomponents:httpcore:jar:sources": 1074219445,
     "org.apache.logging.log4j:log4j-api": 191755139,
     "org.apache.logging.log4j:log4j-api:jar:sources": 1226633672,
     "org.apache.logging.log4j:log4j-to-slf4j": 357996538,
@@ -501,6 +556,8 @@
     "org.jacoco:org.jacoco.core:jar:sources": -458393909,
     "org.jacoco:org.jacoco.report": -1287135579,
     "org.jacoco:org.jacoco.report:jar:sources": -2068401168,
+    "org.javassist:javassist": -521539343,
+    "org.javassist:javassist:jar:sources": 373129795,
     "org.jboss.logging:jboss-logging": -2136063667,
     "org.jboss.logging:jboss-logging:jar:sources": 2066441551,
     "org.jetbrains.kotlin:kotlin-stdlib": -570435334,
@@ -533,6 +590,8 @@
     "org.junit.platform:junit-platform-reporting:jar:sources": -1771745730,
     "org.latencyutils:LatencyUtils": 1082471286,
     "org.latencyutils:LatencyUtils:jar:sources": 1894864087,
+    "org.mapstruct:mapstruct": -1827707095,
+    "org.mapstruct:mapstruct:jar:sources": -1388272555,
     "org.mockito:mockito-core": 734095861,
     "org.mockito:mockito-core:jar:sources": 1757924088,
     "org.mockito:mockito-junit-jupiter": -501680015,
@@ -557,6 +616,8 @@
     "org.projectlombok:lombok:jar:sources": 1834083797,
     "org.reactivestreams:reactive-streams": -1996658890,
     "org.reactivestreams:reactive-streams:jar:sources": -258070571,
+    "org.reflections:reflections": -698245899,
+    "org.reflections:reflections:jar:sources": -1631903393,
     "org.rnorth.duct-tape:duct-tape": 615461963,
     "org.rnorth.duct-tape:duct-tape:jar:sources": 427419407,
     "org.skyscreamer:jsonassert": -1571197746,
@@ -800,16 +861,30 @@
     "org.yaml:snakeyaml:jar:sources": 393768628,
     "software.amazon.awssdk:annotations": -647669452,
     "software.amazon.awssdk:annotations:jar:sources": -277384386,
+    "software.amazon.awssdk:apache-client": -525263168,
+    "software.amazon.awssdk:apache-client:jar:sources": -988461571,
+    "software.amazon.awssdk:arns": -989059395,
+    "software.amazon.awssdk:arns:jar:sources": 1040369297,
+    "software.amazon.awssdk:auth": -169714512,
+    "software.amazon.awssdk:auth:jar:sources": -908455985,
+    "software.amazon.awssdk:aws-core": -964530509,
+    "software.amazon.awssdk:aws-core:jar:sources": -2056881600,
+    "software.amazon.awssdk:aws-query-protocol": -173402282,
+    "software.amazon.awssdk:aws-query-protocol:jar:sources": -1913348674,
     "software.amazon.awssdk:checksums": 573213413,
     "software.amazon.awssdk:checksums-spi": -720493267,
     "software.amazon.awssdk:checksums-spi:jar:sources": -650776626,
     "software.amazon.awssdk:checksums:jar:sources": -241565759,
     "software.amazon.awssdk:endpoints-spi": 1412926322,
     "software.amazon.awssdk:endpoints-spi:jar:sources": -1092637607,
+    "software.amazon.awssdk:http-auth": 487532892,
     "software.amazon.awssdk:http-auth-aws": -589182304,
+    "software.amazon.awssdk:http-auth-aws-eventstream": 2054119394,
+    "software.amazon.awssdk:http-auth-aws-eventstream:jar:sources": 667922477,
     "software.amazon.awssdk:http-auth-aws:jar:sources": -993506252,
     "software.amazon.awssdk:http-auth-spi": -45686548,
     "software.amazon.awssdk:http-auth-spi:jar:sources": -1486999869,
+    "software.amazon.awssdk:http-auth:jar:sources": -730435501,
     "software.amazon.awssdk:http-client-spi": 1386281563,
     "software.amazon.awssdk:http-client-spi:jar:sources": 541891925,
     "software.amazon.awssdk:identity-spi": -969758372,
@@ -818,8 +893,12 @@
     "software.amazon.awssdk:json-utils:jar:sources": 1618084806,
     "software.amazon.awssdk:metrics-spi": -500500368,
     "software.amazon.awssdk:metrics-spi:jar:sources": -1496041869,
+    "software.amazon.awssdk:netty-nio-client": -1304349935,
+    "software.amazon.awssdk:netty-nio-client:jar:sources": 794739516,
     "software.amazon.awssdk:profiles": 1556987661,
     "software.amazon.awssdk:profiles:jar:sources": 517790158,
+    "software.amazon.awssdk:protocol-core": -1219323173,
+    "software.amazon.awssdk:protocol-core:jar:sources": 1683429150,
     "software.amazon.awssdk:regions": 1394259783,
     "software.amazon.awssdk:regions:jar:sources": 927040140,
     "software.amazon.awssdk:retries": 1273159411,
@@ -828,10 +907,16 @@
     "software.amazon.awssdk:retries:jar:sources": 1826499536,
     "software.amazon.awssdk:sdk-core": 1641186658,
     "software.amazon.awssdk:sdk-core:jar:sources": -769872481,
+    "software.amazon.awssdk:sts": 1181279442,
+    "software.amazon.awssdk:sts:jar:sources": -1713367534,
     "software.amazon.awssdk:third-party-jackson-core": -1062653941,
     "software.amazon.awssdk:third-party-jackson-core:jar:sources": -230379012,
     "software.amazon.awssdk:utils": 1497168994,
+    "software.amazon.awssdk:utils-lite": 970628083,
+    "software.amazon.awssdk:utils-lite:jar:sources": -1159878680,
     "software.amazon.awssdk:utils:jar:sources": 249477790,
+    "software.amazon.eventstream:eventstream": 1951806649,
+    "software.amazon.eventstream:eventstream:jar:sources": 1907681324,
     "tools.jackson.core:jackson-core": -1258054011,
     "tools.jackson.core:jackson-core:jar:sources": -1689479769,
     "tools.jackson.core:jackson-databind": 1443518747,
@@ -867,6 +952,41 @@
         "sources": "abb1829e11537bbc376fa4f72cdae1f3ac195aeb8c31d05b1236cc6d7aa47bb2"
       },
       "version": "1.5.37"
+    },
+    "com.amazonaws:aws-java-sdk-core": {
+      "shasums": {
+        "jar": "b09e254327bd070a1e980371a6b47555e8668cc4307fe829c25e058558852c15",
+        "sources": "7c8efd813ea90180adbb6f943aac63d64c8fe5500eb42577be440c90422b9689"
+      },
+      "version": "1.12.696"
+    },
+    "com.amazonaws:aws-java-sdk-sns": {
+      "shasums": {
+        "jar": "2a40a659e9bb1c56eb2fbc9dc59b47fd2cff98d75e50ab3239f8fa2b8aacd870",
+        "sources": "b6658182011fae72f303037b08cedf5fe076beca4c2655c574e4ed8c74fd88ec"
+      },
+      "version": "1.12.696"
+    },
+    "com.amazonaws:aws-java-sdk-sqs": {
+      "shasums": {
+        "jar": "1857d2aadfc23ccb7950fd251d4f17dc1072bca21ac24f64dec3c51d82935555",
+        "sources": "efdf02bfe775a676bf6e1c06f804805e3688d657f0b10af4982d08eaa4db713a"
+      },
+      "version": "1.12.696"
+    },
+    "com.amazonaws:aws-java-sdk-sts": {
+      "shasums": {
+        "jar": "0a3138d80535b45a9cc99fd73ac65a3eecb8acf9c732873a18d6c2f6c955f98e",
+        "sources": "855fc88a4969d6deb0452a700489cd3fde82b70a4615e5cb892296b4dbd1480e"
+      },
+      "version": "1.12.696"
+    },
+    "com.amazonaws:jmespath-java": {
+      "shasums": {
+        "jar": "fe66ed05984fdfcac3f6c917c39acb285b521d96a1aca9880cd269cc27849870",
+        "sources": "3ff3e19a86d011466cb8474f59a679f8096bee4bd4a3bf0f636425efb0af358f"
+      },
+      "version": "1.12.696"
     },
     "com.bucket4j:bucket4j-core": {
       "shasums": {
@@ -914,6 +1034,13 @@
       "shasums": {
         "jar": "3888e9e69ab66fbacaacc9aea0e9ffbf15368288e4aca468b024dba11c09fbf9",
         "sources": "23188e78e912c9866367bf038fb7f729e79f1c2724174ca66e0a00915de70e61"
+      },
+      "version": "2.21.4"
+    },
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor": {
+      "shasums": {
+        "jar": "fbde9e27625b5b8af54fbd2e184112b5471cf43216c38c2b9e039205a50bd6a9",
+        "sources": "2a22904952ab464268c57ab1a824aa52c5dbda893b9bfb3d2b2564b339c73438"
       },
       "version": "2.21.4"
     },
@@ -1072,6 +1199,13 @@
       },
       "version": "2.13.2"
     },
+    "com.google.crypto.tink:tink": {
+      "shasums": {
+        "jar": "6cd3feff51ec5d5fbfa299381cd806bf247a805794d6f7ffb924c9e0d8b8f0d6",
+        "sources": "963ee462bae506f67a5e4711cc47dc418e34882e33ff6bab92ea8c122b3d5f37"
+      },
+      "version": "1.6.1"
+    },
     "com.google.errorprone:error_prone_annotations": {
       "shasums": {
         "jar": "3b1003e51b8ae56fdbd7c71073e81d1683b97e6c4dff5a9151164d59b769d13c",
@@ -1203,6 +1337,13 @@
         "sources": "54c781eea645c450cbbc4a5a1b5a474745465452cec1354cb567b781ea6622c3"
       },
       "version": "0.0.20131108.vaadin1"
+    },
+    "com.vdurmont:semver4j": {
+      "shasums": {
+        "jar": "0f33724dd012099f0737e3d9203e28f4a804435526998d4f5841993058651cb8",
+        "sources": "d1d07a146c97f73b723b23e9cc8dbd7139231704db9dcbc2363fecf0c12beda1"
+      },
+      "version": "3.1.0"
     },
     "commons-codec:commons-codec": {
       "shasums": {
@@ -1435,10 +1576,38 @@
       },
       "version": "2.23.0"
     },
+    "io.nats:jnats-json": {
+      "shasums": {
+        "jar": "c8f506960d1ac2891072c220ad78d2e81bedcd7d22ab515bddfc4460f66269f5",
+        "sources": "e7ae128e2a8d58f895b5c029781c21ff1d582b1536bcad12b2fd33043ce7ab79"
+      },
+      "version": "2.0.1"
+    },
+    "io.nats:jwt-java": {
+      "shasums": {
+        "jar": "faeb3a34f9ba18d95a608281e5125cedeebc7637cf887442d77ac68ce8bfbd5d",
+        "sources": "ef03e64bb82c30a71427cbae80cbc902c19efe660806303dd15d044cb0a3b594"
+      },
+      "version": "2.2.0"
+    },
+    "io.nats:nkeys-java": {
+      "shasums": {
+        "jar": "7104020fa1699b33e4166a45674b7a9e2240a2f16711191182c83979fcf96673",
+        "sources": "c90905a9e60f394e90e31dd0df0beeef7f901bf33980c2f2d928a29e1b3bab83"
+      },
+      "version": "2.1.1"
+    },
     "io.netty:netty-buffer": {
       "shasums": {
         "jar": "1361fd9c9ba85b9831cf54a1b2e45ddc3ce34a768931726c099d3f5ef0efe4a3",
         "sources": "13259b636c4a91c0f34a8536d621178fba302f9ba61f3e4aaec3a17ca291dc2a"
+      },
+      "version": "4.2.15.Final"
+    },
+    "io.netty:netty-codec": {
+      "shasums": {
+        "jar": "153b11a166459733af79fb0d4667f30bfa39792896f689b21c93a4a4091387ea",
+        "sources": "674a3a88063d0243e853f967175a6dc6f9cc272a1902bb82e779e52d1249fbe1"
       },
       "version": "4.2.15.Final"
     },
@@ -1491,6 +1660,13 @@
       },
       "version": "4.2.15.Final"
     },
+    "io.netty:netty-codec-marshalling": {
+      "shasums": {
+        "jar": "bbc655b5253387f566b25d4185152951f0121fb3afef2c352e7aa52b9fb965d3",
+        "sources": "1aac26a85b64c7b7047f442175f933a84af27afb08b9aad68d7de66de900c835"
+      },
+      "version": "4.2.15.Final"
+    },
     "io.netty:netty-codec-native-quic": {
       "shasums": {
         "linux-aarch_64": "59a8e59aa9d3a886cd7fae30fb3d3a18ebee40fa9dc08b83eb88bee58cf46774",
@@ -1499,6 +1675,13 @@
         "osx-x86_64": "10999923bf08ff5e3a75106bd8dbc5b5e4d06b5e614f8c135981ecb4377c944a",
         "sources": "d9772d6d7d0eb6fdf82ccaeb9558f88b5600c6f0696a724f5e067b67bdc049f3",
         "windows-x86_64": "40adba6df605302bf98a4a462bb002c4697f60958cea7cfec38f0fab6331eb7a"
+      },
+      "version": "4.2.15.Final"
+    },
+    "io.netty:netty-codec-protobuf": {
+      "shasums": {
+        "jar": "ecf3a24695374b3544700d94db56875da90c1dfbe1e43c744dcc15e1e8998a01",
+        "sources": "ce828a37d8b05dfa30abfe0a3d0af36e019c264b544b74b6199ba6f585f1cb7a"
       },
       "version": "4.2.15.Final"
     },
@@ -1866,6 +2049,13 @@
       },
       "version": "1.3.2"
     },
+    "joda-time:joda-time": {
+      "shasums": {
+        "jar": "b4670b95f75957c974284c5f3ada966040be2578f643c5c6083d262162061fa2",
+        "sources": "59086b3e0608df2eac1b21063d6bae37851173e24efc4cacd6705326408723d9"
+      },
+      "version": "2.8.1"
+    },
     "net.bytebuddy:byte-buddy": {
       "shasums": {
         "jar": "2b5ddc8c1f4234bdb7cb45338a8e10a13e0e3ca473e91d5d821d681127ea8ba1",
@@ -1957,6 +2147,13 @@
       },
       "version": "4.19.3"
     },
+    "org.apache.cassandra:java-driver-mapper-runtime": {
+      "shasums": {
+        "jar": "7a7613817ad4fb53cf948a79efa7d10e801f33e7adfa1c2248e016a2dd218362",
+        "sources": "cbee025faa77bda141dc36c307e5d9806a6a9daa445a15557e1f7ab7e96472b0"
+      },
+      "version": "4.19.3"
+    },
     "org.apache.cassandra:java-driver-metrics-micrometer": {
       "shasums": {
         "jar": "4f61ed8dabc978f7c9bfdae578915480b6242468feea1c73571be7d832ee3d0a",
@@ -1998,6 +2195,41 @@
         "sources": "91d50152d046429d794a197e7b466550b81838f6114fa4821de0cb767e3b218b"
       },
       "version": "2.12.1"
+    },
+    "org.apache.httpcomponents.client5:httpclient5": {
+      "shasums": {
+        "jar": "5aec3f3447ec816e593e380b59fbe3e42083318af6b215bc177386f7742f6146",
+        "sources": "d19dd279bcc8854b68bbd80b3c703e54896367e8b1608f883fc63683b7d7659e"
+      },
+      "version": "5.5.2"
+    },
+    "org.apache.httpcomponents.core5:httpcore5": {
+      "shasums": {
+        "jar": "8fb4528d3e970aca440523a1bd698a389fa710ecfea4c5c6096698b86d1669ce",
+        "sources": "08dbcd68ee403e432554010e38c2eae2b6c97ce3ed5e0af8e11679870c8f141c"
+      },
+      "version": "5.3.6"
+    },
+    "org.apache.httpcomponents.core5:httpcore5-h2": {
+      "shasums": {
+        "jar": "479a8aa5e6f99030a2a446a68d1f62320698932746f811fc656a1ea06b94184d",
+        "sources": "23816441863ed7e6cade34a1573ac2c203d399a1cb1e542e22d225e6b1f05d44"
+      },
+      "version": "5.3.6"
+    },
+    "org.apache.httpcomponents:httpclient": {
+      "shasums": {
+        "jar": "6fe9026a566c6a5001608cf3fc32196641f6c1e5e1986d1037ccdbd5f31ef743",
+        "sources": "b1e9194fd83ce135831e28346731d9644cb2a08dea37ada2aa56ceb8f1b0c566"
+      },
+      "version": "4.5.13"
+    },
+    "org.apache.httpcomponents:httpcore": {
+      "shasums": {
+        "jar": "6c9b3dd142a09dc468e23ad39aad6f75a0f2b85125104469f026e52a474e464f",
+        "sources": "705f8cf3671093b6c1db16bbf6971a7ef400e3819784f1af53e5bc3e67b5a9a0"
+      },
+      "version": "4.4.16"
     },
     "org.apache.logging.log4j:log4j-api": {
       "shasums": {
@@ -2160,6 +2392,13 @@
       },
       "version": "0.8.14"
     },
+    "org.javassist:javassist": {
+      "shasums": {
+        "jar": "57d0a9e9286f82f4eaa851125186997f811befce0e2060ff0a15a77f5a9dd9a7",
+        "sources": "0b6cf0d138dc208263a2a0a39b1daae217707d58d79d7a4973a68ce62f8c2d1f"
+      },
+      "version": "3.28.0-GA"
+    },
     "org.jboss.logging:jboss-logging": {
       "shasums": {
         "jar": "7c12ee575508f81e22b1db9334b969d0ec54ef0fd1dcba24eeab1a44235fc366",
@@ -2272,6 +2511,13 @@
       },
       "version": "2.0.3"
     },
+    "org.mapstruct:mapstruct": {
+      "shasums": {
+        "jar": "17bc6cb63dc5104d713be09faee40399b2f02f65543f353a1f1517b4eedaa1bc",
+        "sources": "2e0c622bc27c3653eff067b858cdc4ccaec6b5880a6c7af89c29f7a459d69242"
+      },
+      "version": "1.5.2.Final"
+    },
     "org.mockito:mockito-core": {
       "shasums": {
         "jar": "d1a96d252128d3a4247cfd8a2e76412efa3cc103977be17933c942117a24f374",
@@ -2355,6 +2601,13 @@
         "sources": "5a7a36ae9536698c434ebe119feb374d721210fee68eb821a37ef3859b64b708"
       },
       "version": "1.0.4"
+    },
+    "org.reflections:reflections": {
+      "shasums": {
+        "jar": "938a2d08fe54050d7610b944d8ddc3a09355710d9e6be0aac838dbc04e9a2825",
+        "sources": "7c8f0b91e298556ac8eebcbbb33de537baa146d80a7e5a6500e44cd8f76a91f4"
+      },
+      "version": "0.10.2"
     },
     "org.rnorth.duct-tape:duct-tape": {
       "shasums": {
@@ -3214,6 +3467,41 @@
       },
       "version": "2.40.1"
     },
+    "software.amazon.awssdk:apache-client": {
+      "shasums": {
+        "jar": "d574b4346a678abe5a99af9dc97142624edcecc5a540acfbe16b3fecaa0e0c2a",
+        "sources": "659842b8267b977e2be6f65acde4f02f7e80bea6a9368989ad09422c10500699"
+      },
+      "version": "2.40.1"
+    },
+    "software.amazon.awssdk:arns": {
+      "shasums": {
+        "jar": "733dfaa69d1aa8a27a6cfee9336b0f2aedcfb02190ccfded5a6af8232e2a6104",
+        "sources": "09584e0adc250d10a046ca614f20620bccb1dcb2e0e61eca2bbac7eb7e201b8f"
+      },
+      "version": "2.40.1"
+    },
+    "software.amazon.awssdk:auth": {
+      "shasums": {
+        "jar": "1547632bc510c0525cab1d1e7bd0f8e4d5c0a4f5036b990d478adcaf0fad39f1",
+        "sources": "c40aad3112ebe97dce70191c4f02827b7809c200204bf73d630e0857abaaa91e"
+      },
+      "version": "2.40.1"
+    },
+    "software.amazon.awssdk:aws-core": {
+      "shasums": {
+        "jar": "1ecba40edaeb98f00841aca9aae99b74dd83d49e80e3f636f75247b936697205",
+        "sources": "65d6b59f1a1fa37ebe5ed0e9462e7f91efa7191afca8fc35c9e9a2f03498f7a5"
+      },
+      "version": "2.40.1"
+    },
+    "software.amazon.awssdk:aws-query-protocol": {
+      "shasums": {
+        "jar": "3ae6b8d7192aa5d5a2aacb0c65316fe8af278091bf1225ffb9a7ebe8ba0c1c6f",
+        "sources": "85dc8f6e460e3283465e0235f03905f5b71d1951d40c1f1801d4a6980a1fed0f"
+      },
+      "version": "2.40.1"
+    },
     "software.amazon.awssdk:checksums": {
       "shasums": {
         "jar": "6770fdd0d970c1869cd869d784cc20963a4a6b2bee09f125da0504ba2c9e818d",
@@ -3235,10 +3523,24 @@
       },
       "version": "2.40.1"
     },
+    "software.amazon.awssdk:http-auth": {
+      "shasums": {
+        "jar": "db7f26e03a63f7c79ffc464e0c6205f39fabd055a53561e78422d92f9986811e",
+        "sources": "51ce2667c3f365f5adc5b061fe06d6d0452305c505fbb4745f5e51362ee746af"
+      },
+      "version": "2.40.1"
+    },
     "software.amazon.awssdk:http-auth-aws": {
       "shasums": {
         "jar": "9b182f3697acc111b213524126f857f844fed5fdf95f734470d16b96097fcd3a",
         "sources": "6de3c527d996a46a4e14e268fc13a32b314383a3b2976e7820720c9ddff483a5"
+      },
+      "version": "2.40.1"
+    },
+    "software.amazon.awssdk:http-auth-aws-eventstream": {
+      "shasums": {
+        "jar": "499f3776b8e8ac8c77a1051be5bb7bb7aef450b7e14b7fd4c7561fbf55858f9e",
+        "sources": "4206d5b616a5e3d838c37e15a677c09086d534b01686dff370edce2c9e56c522"
       },
       "version": "2.40.1"
     },
@@ -3277,10 +3579,24 @@
       },
       "version": "2.40.1"
     },
+    "software.amazon.awssdk:netty-nio-client": {
+      "shasums": {
+        "jar": "49cf8a267b35ce93252db966ed35f0bf326acd7be5f48e2aa6993655179996c5",
+        "sources": "076ddeb77f9c0b2d3b04ea7f269d4fe0838e6e18e34f61c6d814b41e76a3ad20"
+      },
+      "version": "2.40.1"
+    },
     "software.amazon.awssdk:profiles": {
       "shasums": {
         "jar": "602cac04531cf13d4c06d8d70d7b5b0e109517c73a4c91473058886fbe574cc1",
         "sources": "e498cf7ef147b8fc789a448554561b5706daae1062a5e23bc4870149b42d8002"
+      },
+      "version": "2.40.1"
+    },
+    "software.amazon.awssdk:protocol-core": {
+      "shasums": {
+        "jar": "dd68b9f8274c13d25fe813607b4383125961878440fdcc81d2628724f7f7684e",
+        "sources": "e2bc8989c64e0f0834a3644b21f4485d5764e7cc723fc4d646a213d80f479596"
       },
       "version": "2.40.1"
     },
@@ -3312,6 +3628,13 @@
       },
       "version": "2.40.1"
     },
+    "software.amazon.awssdk:sts": {
+      "shasums": {
+        "jar": "43ca7ef83af487acc8d5780d153eacd991cd58d3476606b7059ef563df2829b5",
+        "sources": "f240bce4f53970c0d63c2d463114a4e416e5eb6f80b36b04ec17f496bc8fd5c0"
+      },
+      "version": "2.40.1"
+    },
     "software.amazon.awssdk:third-party-jackson-core": {
       "shasums": {
         "jar": "9939a77038dd0d53675a44fc06afb9b34805cef8fc7b3641d2e861740c1655fc",
@@ -3325,6 +3648,20 @@
         "sources": "2ddd7c56fbc36d7c4e0c84739d68388faff130f51855ce2b80466c8784cf1b25"
       },
       "version": "2.40.1"
+    },
+    "software.amazon.awssdk:utils-lite": {
+      "shasums": {
+        "jar": "b43a1c42f03026314a3cda184c92e307855c96e672662f3be93995096cdd5b88",
+        "sources": "a524195db12cde4501e70c1daaf93d5d5c32e69d62c02199d579445cb45ccf9b"
+      },
+      "version": "2.40.1"
+    },
+    "software.amazon.eventstream:eventstream": {
+      "shasums": {
+        "jar": "0c37d8e696117f02c302191b8110b0d0eb20fa412fce34c3a269ec73c16ce822",
+        "sources": "8953ddf1af1680008d7ae96877df9fcfff9b8d909998d5c52519dbd583215636"
+      },
+      "version": "1.0.1"
     },
     "tools.jackson.core:jackson-core": {
       "shasums": {
@@ -3359,12 +3696,37 @@
     "com.squareup.okio:okio-jvm:3.6.0": "com.squareup.okio:okio-jvm:3.16.1",
     "commons-io:commons-io:2.19.0": "commons-io:commons-io:2.20.0",
     "org.apache.commons:commons-compress:1.27.1": "org.apache.commons:commons-compress:1.28.0",
+    "org.bouncycastle:bcprov-lts8on:2.73.7": "org.bouncycastle:bcprov-lts8on:2.73.8",
     "org.jetbrains:annotations:13.0": "org.jetbrains:annotations:17.0.0"
   },
   "dependencies": {
     "ch.qos.logback:logback-classic": [
       "ch.qos.logback:logback-core",
       "org.slf4j:slf4j-api"
+    ],
+    "com.amazonaws:aws-java-sdk-core": [
+      "com.fasterxml.jackson.core:jackson-databind",
+      "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor",
+      "commons-codec:commons-codec",
+      "commons-logging:commons-logging",
+      "joda-time:joda-time",
+      "org.apache.httpcomponents:httpclient"
+    ],
+    "com.amazonaws:aws-java-sdk-sns": [
+      "com.amazonaws:aws-java-sdk-core",
+      "com.amazonaws:aws-java-sdk-sqs",
+      "com.amazonaws:jmespath-java"
+    ],
+    "com.amazonaws:aws-java-sdk-sqs": [
+      "com.amazonaws:aws-java-sdk-core",
+      "com.amazonaws:jmespath-java"
+    ],
+    "com.amazonaws:aws-java-sdk-sts": [
+      "com.amazonaws:aws-java-sdk-core",
+      "com.amazonaws:jmespath-java"
+    ],
+    "com.amazonaws:jmespath-java": [
+      "com.fasterxml.jackson.core:jackson-databind"
     ],
     "com.datastax.cassandra:cassandra-driver-core": [
       "com.fasterxml.jackson.core:jackson-databind",
@@ -3378,6 +3740,10 @@
     "com.fasterxml.jackson.core:jackson-databind": [
       "com.fasterxml.jackson.core:jackson-annotations",
       "com.fasterxml.jackson.core:jackson-core"
+    ],
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor": [
+      "com.fasterxml.jackson.core:jackson-core",
+      "com.fasterxml.jackson.core:jackson-databind"
     ],
     "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml": [
       "com.fasterxml.jackson.core:jackson-core",
@@ -3442,6 +3808,10 @@
     ],
     "com.google.code.gson:gson": [
       "com.google.errorprone:error_prone_annotations"
+    ],
+    "com.google.crypto.tink:tink": [
+      "com.google.code.gson:gson",
+      "com.google.protobuf:protobuf-java"
     ],
     "com.google.guava:guava": [
       "com.google.errorprone:error_prone_annotations",
@@ -3664,8 +4034,24 @@
       "org.bouncycastle:bcprov-lts8on",
       "org.jspecify:jspecify"
     ],
+    "io.nats:jwt-java": [
+      "io.nats:jnats-json",
+      "io.nats:nkeys-java"
+    ],
+    "io.nats:nkeys-java": [
+      "org.bouncycastle:bcprov-lts8on"
+    ],
     "io.netty:netty-buffer": [
       "io.netty:netty-common"
+    ],
+    "io.netty:netty-codec": [
+      "io.netty:netty-buffer",
+      "io.netty:netty-codec-base",
+      "io.netty:netty-codec-compression",
+      "io.netty:netty-codec-marshalling",
+      "io.netty:netty-codec-protobuf",
+      "io.netty:netty-common",
+      "io.netty:netty-transport"
     ],
     "io.netty:netty-codec-base": [
       "io.netty:netty-buffer",
@@ -3717,6 +4103,12 @@
       "io.netty:netty-transport",
       "io.netty:netty-transport-native-unix-common"
     ],
+    "io.netty:netty-codec-marshalling": [
+      "io.netty:netty-buffer",
+      "io.netty:netty-codec-base",
+      "io.netty:netty-common",
+      "io.netty:netty-transport"
+    ],
     "io.netty:netty-codec-native-quic:jar:linux-aarch_64": [
       "io.netty:netty-codec-classes-quic"
     ],
@@ -3731,6 +4123,12 @@
     ],
     "io.netty:netty-codec-native-quic:jar:windows-x86_64": [
       "io.netty:netty-codec-classes-quic"
+    ],
+    "io.netty:netty-codec-protobuf": [
+      "io.netty:netty-buffer",
+      "io.netty:netty-codec-base",
+      "io.netty:netty-common",
+      "io.netty:netty-transport"
     ],
     "io.netty:netty-codec-socks": [
       "io.netty:netty-buffer",
@@ -3973,6 +4371,10 @@
       "org.reactivestreams:reactive-streams",
       "org.slf4j:slf4j-api"
     ],
+    "org.apache.cassandra:java-driver-mapper-runtime": [
+      "org.apache.cassandra:java-driver-core",
+      "org.apache.cassandra:java-driver-query-builder"
+    ],
     "org.apache.cassandra:java-driver-metrics-micrometer": [
       "io.micrometer:micrometer-core",
       "org.apache.cassandra:java-driver-core"
@@ -3985,6 +4387,19 @@
       "commons-codec:commons-codec",
       "commons-io:commons-io",
       "org.apache.commons:commons-lang3"
+    ],
+    "org.apache.httpcomponents.client5:httpclient5": [
+      "org.apache.httpcomponents.core5:httpcore5",
+      "org.apache.httpcomponents.core5:httpcore5-h2",
+      "org.slf4j:slf4j-api"
+    ],
+    "org.apache.httpcomponents.core5:httpcore5-h2": [
+      "org.apache.httpcomponents.core5:httpcore5"
+    ],
+    "org.apache.httpcomponents:httpclient": [
+      "commons-codec:commons-codec",
+      "commons-logging:commons-logging",
+      "org.apache.httpcomponents:httpcore"
     ],
     "org.apache.logging.log4j:log4j-to-slf4j": [
       "org.apache.logging.log4j:log4j-api",
@@ -4108,6 +4523,11 @@
       "org.ow2.asm:asm",
       "org.ow2.asm:asm-analysis",
       "org.ow2.asm:asm-tree"
+    ],
+    "org.reflections:reflections": [
+      "com.google.code.findbugs:jsr305",
+      "org.javassist:javassist",
+      "org.slf4j:slf4j-api"
     ],
     "org.rnorth.duct-tape:duct-tape": [
       "org.jetbrains:annotations"
@@ -4697,6 +5117,61 @@
     "org.xmlunit:xmlunit-core": [
       "jakarta.xml.bind:jakarta.xml.bind-api"
     ],
+    "software.amazon.awssdk:apache-client": [
+      "commons-codec:commons-codec",
+      "org.apache.httpcomponents:httpclient",
+      "org.apache.httpcomponents:httpcore",
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:http-client-spi",
+      "software.amazon.awssdk:metrics-spi",
+      "software.amazon.awssdk:utils"
+    ],
+    "software.amazon.awssdk:arns": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:utils"
+    ],
+    "software.amazon.awssdk:auth": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:checksums-spi",
+      "software.amazon.awssdk:http-auth",
+      "software.amazon.awssdk:http-auth-aws",
+      "software.amazon.awssdk:http-auth-aws-eventstream",
+      "software.amazon.awssdk:http-auth-spi",
+      "software.amazon.awssdk:http-client-spi",
+      "software.amazon.awssdk:identity-spi",
+      "software.amazon.awssdk:json-utils",
+      "software.amazon.awssdk:profiles",
+      "software.amazon.awssdk:regions",
+      "software.amazon.awssdk:sdk-core",
+      "software.amazon.awssdk:utils",
+      "software.amazon.eventstream:eventstream"
+    ],
+    "software.amazon.awssdk:aws-core": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:auth",
+      "software.amazon.awssdk:endpoints-spi",
+      "software.amazon.awssdk:http-auth",
+      "software.amazon.awssdk:http-auth-spi",
+      "software.amazon.awssdk:http-client-spi",
+      "software.amazon.awssdk:identity-spi",
+      "software.amazon.awssdk:metrics-spi",
+      "software.amazon.awssdk:profiles",
+      "software.amazon.awssdk:regions",
+      "software.amazon.awssdk:retries",
+      "software.amazon.awssdk:retries-spi",
+      "software.amazon.awssdk:sdk-core",
+      "software.amazon.awssdk:utils",
+      "software.amazon.awssdk:utils-lite",
+      "software.amazon.eventstream:eventstream"
+    ],
+    "software.amazon.awssdk:aws-query-protocol": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:aws-core",
+      "software.amazon.awssdk:http-client-spi",
+      "software.amazon.awssdk:protocol-core",
+      "software.amazon.awssdk:sdk-core",
+      "software.amazon.awssdk:utils"
+    ],
     "software.amazon.awssdk:checksums": [
       "software.amazon.awssdk:annotations",
       "software.amazon.awssdk:checksums-spi",
@@ -4708,6 +5183,13 @@
     "software.amazon.awssdk:endpoints-spi": [
       "software.amazon.awssdk:annotations"
     ],
+    "software.amazon.awssdk:http-auth": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:http-auth-spi",
+      "software.amazon.awssdk:http-client-spi",
+      "software.amazon.awssdk:identity-spi",
+      "software.amazon.awssdk:utils"
+    ],
     "software.amazon.awssdk:http-auth-aws": [
       "software.amazon.awssdk:annotations",
       "software.amazon.awssdk:checksums",
@@ -4716,6 +5198,10 @@
       "software.amazon.awssdk:http-client-spi",
       "software.amazon.awssdk:identity-spi",
       "software.amazon.awssdk:utils"
+    ],
+    "software.amazon.awssdk:http-auth-aws-eventstream": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.eventstream:eventstream"
     ],
     "software.amazon.awssdk:http-auth-spi": [
       "org.reactivestreams:reactive-streams",
@@ -4744,8 +5230,31 @@
       "software.amazon.awssdk:annotations",
       "software.amazon.awssdk:utils"
     ],
+    "software.amazon.awssdk:netty-nio-client": [
+      "io.netty:netty-buffer",
+      "io.netty:netty-codec",
+      "io.netty:netty-codec-http",
+      "io.netty:netty-codec-http2",
+      "io.netty:netty-common",
+      "io.netty:netty-handler",
+      "io.netty:netty-resolver",
+      "io.netty:netty-transport",
+      "io.netty:netty-transport-classes-epoll",
+      "org.reactivestreams:reactive-streams",
+      "org.slf4j:slf4j-api",
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:http-client-spi",
+      "software.amazon.awssdk:metrics-spi",
+      "software.amazon.awssdk:utils"
+    ],
     "software.amazon.awssdk:profiles": [
       "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:utils"
+    ],
+    "software.amazon.awssdk:protocol-core": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:http-client-spi",
+      "software.amazon.awssdk:sdk-core",
       "software.amazon.awssdk:utils"
     ],
     "software.amazon.awssdk:regions": [
@@ -4782,9 +5291,34 @@
       "software.amazon.awssdk:retries-spi",
       "software.amazon.awssdk:utils"
     ],
+    "software.amazon.awssdk:sts": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:apache-client",
+      "software.amazon.awssdk:auth",
+      "software.amazon.awssdk:aws-core",
+      "software.amazon.awssdk:aws-query-protocol",
+      "software.amazon.awssdk:endpoints-spi",
+      "software.amazon.awssdk:http-auth",
+      "software.amazon.awssdk:http-auth-aws",
+      "software.amazon.awssdk:http-auth-spi",
+      "software.amazon.awssdk:http-client-spi",
+      "software.amazon.awssdk:identity-spi",
+      "software.amazon.awssdk:json-utils",
+      "software.amazon.awssdk:metrics-spi",
+      "software.amazon.awssdk:netty-nio-client",
+      "software.amazon.awssdk:profiles",
+      "software.amazon.awssdk:protocol-core",
+      "software.amazon.awssdk:regions",
+      "software.amazon.awssdk:retries-spi",
+      "software.amazon.awssdk:sdk-core",
+      "software.amazon.awssdk:utils"
+    ],
     "software.amazon.awssdk:utils": [
       "org.reactivestreams:reactive-streams",
       "org.slf4j:slf4j-api",
+      "software.amazon.awssdk:annotations"
+    ],
+    "software.amazon.awssdk:utils-lite": [
       "software.amazon.awssdk:annotations"
     ],
     "tools.jackson.core:jackson-databind": [
@@ -4875,6 +5409,105 @@
       "ch.qos.logback.core.subst",
       "ch.qos.logback.core.testUtil",
       "ch.qos.logback.core.util"
+    ],
+    "com.amazonaws:aws-java-sdk-core": [
+      "com.amazonaws",
+      "com.amazonaws.adapters.types",
+      "com.amazonaws.annotation",
+      "com.amazonaws.arn",
+      "com.amazonaws.auth",
+      "com.amazonaws.auth.internal",
+      "com.amazonaws.auth.policy",
+      "com.amazonaws.auth.policy.conditions",
+      "com.amazonaws.auth.policy.internal",
+      "com.amazonaws.auth.presign",
+      "com.amazonaws.auth.profile",
+      "com.amazonaws.auth.profile.internal",
+      "com.amazonaws.auth.profile.internal.securitytoken",
+      "com.amazonaws.cache",
+      "com.amazonaws.client",
+      "com.amazonaws.client.builder",
+      "com.amazonaws.endpointdiscovery",
+      "com.amazonaws.event",
+      "com.amazonaws.event.request",
+      "com.amazonaws.handlers",
+      "com.amazonaws.http",
+      "com.amazonaws.http.apache",
+      "com.amazonaws.http.apache.client.impl",
+      "com.amazonaws.http.apache.request.impl",
+      "com.amazonaws.http.apache.utils",
+      "com.amazonaws.http.client",
+      "com.amazonaws.http.conn",
+      "com.amazonaws.http.conn.ssl",
+      "com.amazonaws.http.conn.ssl.privileged",
+      "com.amazonaws.http.exception",
+      "com.amazonaws.http.impl.client",
+      "com.amazonaws.http.protocol",
+      "com.amazonaws.http.request",
+      "com.amazonaws.http.response",
+      "com.amazonaws.http.settings",
+      "com.amazonaws.http.timers",
+      "com.amazonaws.http.timers.client",
+      "com.amazonaws.http.timers.request",
+      "com.amazonaws.internal",
+      "com.amazonaws.internal.auth",
+      "com.amazonaws.internal.config",
+      "com.amazonaws.internal.http",
+      "com.amazonaws.jmx",
+      "com.amazonaws.jmx.spi",
+      "com.amazonaws.log",
+      "com.amazonaws.metrics",
+      "com.amazonaws.metrics.internal",
+      "com.amazonaws.monitoring",
+      "com.amazonaws.monitoring.internal",
+      "com.amazonaws.partitions",
+      "com.amazonaws.partitions.model",
+      "com.amazonaws.profile.path",
+      "com.amazonaws.profile.path.config",
+      "com.amazonaws.profile.path.cred",
+      "com.amazonaws.protocol",
+      "com.amazonaws.protocol.json",
+      "com.amazonaws.protocol.json.internal",
+      "com.amazonaws.regions",
+      "com.amazonaws.retry",
+      "com.amazonaws.retry.internal",
+      "com.amazonaws.retry.v2",
+      "com.amazonaws.transform",
+      "com.amazonaws.util",
+      "com.amazonaws.util.endpoint",
+      "com.amazonaws.util.json",
+      "com.amazonaws.waiters"
+    ],
+    "com.amazonaws:aws-java-sdk-sns": [
+      "com.amazonaws.auth.policy.actions",
+      "com.amazonaws.auth.policy.conditions",
+      "com.amazonaws.services.sns",
+      "com.amazonaws.services.sns.message",
+      "com.amazonaws.services.sns.model",
+      "com.amazonaws.services.sns.model.transform",
+      "com.amazonaws.services.sns.util"
+    ],
+    "com.amazonaws:aws-java-sdk-sqs": [
+      "com.amazonaws.auth.policy.actions",
+      "com.amazonaws.auth.policy.resources",
+      "com.amazonaws.services.sqs",
+      "com.amazonaws.services.sqs.buffered",
+      "com.amazonaws.services.sqs.internal",
+      "com.amazonaws.services.sqs.internal.auth",
+      "com.amazonaws.services.sqs.model",
+      "com.amazonaws.services.sqs.model.transform"
+    ],
+    "com.amazonaws:aws-java-sdk-sts": [
+      "com.amazonaws.auth",
+      "com.amazonaws.auth.policy",
+      "com.amazonaws.auth.policy.actions",
+      "com.amazonaws.services.securitytoken",
+      "com.amazonaws.services.securitytoken.internal",
+      "com.amazonaws.services.securitytoken.model",
+      "com.amazonaws.services.securitytoken.model.transform"
+    ],
+    "com.amazonaws:jmespath-java": [
+      "com.amazonaws.jmespath"
     ],
     "com.bucket4j:bucket4j-core": [
       "io.github.bucket4j",
@@ -4990,6 +5623,10 @@
       "com.fasterxml.jackson.databind.type",
       "com.fasterxml.jackson.databind.util",
       "com.fasterxml.jackson.databind.util.internal"
+    ],
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor": [
+      "com.fasterxml.jackson.dataformat.cbor",
+      "com.fasterxml.jackson.dataformat.cbor.databind"
     ],
     "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml": [
       "com.fasterxml.jackson.dataformat.yaml",
@@ -5228,6 +5865,26 @@
       "com.google.gson.reflect",
       "com.google.gson.stream"
     ],
+    "com.google.crypto.tink:tink": [
+      "com.google.crypto.tink",
+      "com.google.crypto.tink.aead",
+      "com.google.crypto.tink.aead.subtle",
+      "com.google.crypto.tink.annotations",
+      "com.google.crypto.tink.config",
+      "com.google.crypto.tink.daead",
+      "com.google.crypto.tink.hybrid",
+      "com.google.crypto.tink.hybrid.subtle",
+      "com.google.crypto.tink.mac",
+      "com.google.crypto.tink.prf",
+      "com.google.crypto.tink.proto",
+      "com.google.crypto.tink.signature",
+      "com.google.crypto.tink.signature.internal",
+      "com.google.crypto.tink.streamingaead",
+      "com.google.crypto.tink.subtle",
+      "com.google.crypto.tink.subtle.prf",
+      "com.google.crypto.tink.tinkkey",
+      "com.google.crypto.tink.util"
+    ],
     "com.google.errorprone:error_prone_annotations": [
       "com.google.errorprone.annotations",
       "com.google.errorprone.annotations.concurrent"
@@ -5427,6 +6084,9 @@
     ],
     "com.vaadin.external.google:android-json": [
       "org.json"
+    ],
+    "com.vdurmont:semver4j": [
+      "com.vdurmont.semver4j"
     ],
     "commons-codec:commons-codec": [
       "org.apache.commons.codec",
@@ -5756,6 +6416,15 @@
       "io.nats.client.support",
       "io.nats.service"
     ],
+    "io.nats:jnats-json": [
+      "io.nats.json"
+    ],
+    "io.nats:jwt-java": [
+      "io.nats.jwt"
+    ],
+    "io.nats:nkeys-java": [
+      "io.nats.nkey"
+    ],
     "io.netty:netty-buffer": [
       "io.netty.buffer",
       "io.netty.buffer.search"
@@ -5793,6 +6462,12 @@
     ],
     "io.netty:netty-codec-http3": [
       "io.netty.handler.codec.http3"
+    ],
+    "io.netty:netty-codec-marshalling": [
+      "io.netty.handler.codec.marshalling"
+    ],
+    "io.netty:netty-codec-protobuf": [
+      "io.netty.handler.codec.protobuf"
     ],
     "io.netty:netty-codec-socks": [
       "io.netty.handler.codec.socks",
@@ -6196,6 +6871,15 @@
       "javax.annotation.security",
       "javax.annotation.sql"
     ],
+    "joda-time:joda-time": [
+      "org.joda.time",
+      "org.joda.time.base",
+      "org.joda.time.chrono",
+      "org.joda.time.convert",
+      "org.joda.time.field",
+      "org.joda.time.format",
+      "org.joda.time.tz"
+    ],
     "net.bytebuddy:byte-buddy": [
       "net.bytebuddy",
       "net.bytebuddy.agent.builder",
@@ -6466,6 +7150,18 @@
       "com.datastax.oss.driver.shaded.guava.j2objc.annotations",
       "com.datastax.oss.driver.shaded.guava.thirdparty.publicsuffix"
     ],
+    "org.apache.cassandra:java-driver-mapper-runtime": [
+      "com.datastax.dse.driver.api.mapper.reactive",
+      "com.datastax.dse.driver.internal.mapper.reactive",
+      "com.datastax.oss.driver.api.mapper",
+      "com.datastax.oss.driver.api.mapper.annotations",
+      "com.datastax.oss.driver.api.mapper.entity",
+      "com.datastax.oss.driver.api.mapper.entity.naming",
+      "com.datastax.oss.driver.api.mapper.entity.saving",
+      "com.datastax.oss.driver.api.mapper.result",
+      "com.datastax.oss.driver.internal.mapper",
+      "com.datastax.oss.driver.internal.mapper.entity"
+    ],
     "org.apache.cassandra:java-driver-metrics-micrometer": [
       "com.datastax.oss.driver.internal.metrics.micrometer"
     ],
@@ -6581,6 +7277,130 @@
       "org.apache.commons.pool2",
       "org.apache.commons.pool2.impl",
       "org.apache.commons.pool2.proxy"
+    ],
+    "org.apache.httpcomponents.client5:httpclient5": [
+      "org.apache.hc.client5.http",
+      "org.apache.hc.client5.http.async",
+      "org.apache.hc.client5.http.async.methods",
+      "org.apache.hc.client5.http.auth",
+      "org.apache.hc.client5.http.classic",
+      "org.apache.hc.client5.http.classic.methods",
+      "org.apache.hc.client5.http.config",
+      "org.apache.hc.client5.http.cookie",
+      "org.apache.hc.client5.http.entity",
+      "org.apache.hc.client5.http.entity.mime",
+      "org.apache.hc.client5.http.impl",
+      "org.apache.hc.client5.http.impl.async",
+      "org.apache.hc.client5.http.impl.auth",
+      "org.apache.hc.client5.http.impl.classic",
+      "org.apache.hc.client5.http.impl.compat",
+      "org.apache.hc.client5.http.impl.cookie",
+      "org.apache.hc.client5.http.impl.io",
+      "org.apache.hc.client5.http.impl.nio",
+      "org.apache.hc.client5.http.impl.routing",
+      "org.apache.hc.client5.http.io",
+      "org.apache.hc.client5.http.nio",
+      "org.apache.hc.client5.http.protocol",
+      "org.apache.hc.client5.http.psl",
+      "org.apache.hc.client5.http.routing",
+      "org.apache.hc.client5.http.socket",
+      "org.apache.hc.client5.http.ssl",
+      "org.apache.hc.client5.http.utils",
+      "org.apache.hc.client5.http.validator"
+    ],
+    "org.apache.httpcomponents.core5:httpcore5": [
+      "org.apache.hc.core5.annotation",
+      "org.apache.hc.core5.concurrent",
+      "org.apache.hc.core5.function",
+      "org.apache.hc.core5.http",
+      "org.apache.hc.core5.http.config",
+      "org.apache.hc.core5.http.impl",
+      "org.apache.hc.core5.http.impl.bootstrap",
+      "org.apache.hc.core5.http.impl.io",
+      "org.apache.hc.core5.http.impl.nio",
+      "org.apache.hc.core5.http.impl.routing",
+      "org.apache.hc.core5.http.io",
+      "org.apache.hc.core5.http.io.entity",
+      "org.apache.hc.core5.http.io.ssl",
+      "org.apache.hc.core5.http.io.support",
+      "org.apache.hc.core5.http.message",
+      "org.apache.hc.core5.http.nio",
+      "org.apache.hc.core5.http.nio.command",
+      "org.apache.hc.core5.http.nio.entity",
+      "org.apache.hc.core5.http.nio.ssl",
+      "org.apache.hc.core5.http.nio.support",
+      "org.apache.hc.core5.http.nio.support.classic",
+      "org.apache.hc.core5.http.protocol",
+      "org.apache.hc.core5.http.ssl",
+      "org.apache.hc.core5.http.support",
+      "org.apache.hc.core5.io",
+      "org.apache.hc.core5.net",
+      "org.apache.hc.core5.pool",
+      "org.apache.hc.core5.reactor",
+      "org.apache.hc.core5.reactor.ssl",
+      "org.apache.hc.core5.ssl",
+      "org.apache.hc.core5.util"
+    ],
+    "org.apache.httpcomponents.core5:httpcore5-h2": [
+      "org.apache.hc.core5.http2",
+      "org.apache.hc.core5.http2.config",
+      "org.apache.hc.core5.http2.frame",
+      "org.apache.hc.core5.http2.hpack",
+      "org.apache.hc.core5.http2.impl",
+      "org.apache.hc.core5.http2.impl.io",
+      "org.apache.hc.core5.http2.impl.nio",
+      "org.apache.hc.core5.http2.impl.nio.bootstrap",
+      "org.apache.hc.core5.http2.nio",
+      "org.apache.hc.core5.http2.nio.command",
+      "org.apache.hc.core5.http2.nio.pool",
+      "org.apache.hc.core5.http2.nio.support",
+      "org.apache.hc.core5.http2.protocol",
+      "org.apache.hc.core5.http2.ssl"
+    ],
+    "org.apache.httpcomponents:httpclient": [
+      "org.apache.http.auth",
+      "org.apache.http.auth.params",
+      "org.apache.http.client",
+      "org.apache.http.client.config",
+      "org.apache.http.client.entity",
+      "org.apache.http.client.methods",
+      "org.apache.http.client.params",
+      "org.apache.http.client.protocol",
+      "org.apache.http.client.utils",
+      "org.apache.http.conn",
+      "org.apache.http.conn.params",
+      "org.apache.http.conn.routing",
+      "org.apache.http.conn.scheme",
+      "org.apache.http.conn.socket",
+      "org.apache.http.conn.ssl",
+      "org.apache.http.conn.util",
+      "org.apache.http.cookie",
+      "org.apache.http.cookie.params",
+      "org.apache.http.impl.auth",
+      "org.apache.http.impl.client",
+      "org.apache.http.impl.conn",
+      "org.apache.http.impl.conn.tsccm",
+      "org.apache.http.impl.cookie",
+      "org.apache.http.impl.execchain"
+    ],
+    "org.apache.httpcomponents:httpcore": [
+      "org.apache.http",
+      "org.apache.http.annotation",
+      "org.apache.http.concurrent",
+      "org.apache.http.config",
+      "org.apache.http.entity",
+      "org.apache.http.impl",
+      "org.apache.http.impl.bootstrap",
+      "org.apache.http.impl.entity",
+      "org.apache.http.impl.io",
+      "org.apache.http.impl.pool",
+      "org.apache.http.io",
+      "org.apache.http.message",
+      "org.apache.http.params",
+      "org.apache.http.pool",
+      "org.apache.http.protocol",
+      "org.apache.http.ssl",
+      "org.apache.http.util"
     ],
     "org.apache.logging.log4j:log4j-api": [
       "org.apache.logging.log4j",
@@ -7411,6 +8231,25 @@
       "org.jacoco.report.internal.xml",
       "org.jacoco.report.xml"
     ],
+    "org.javassist:javassist": [
+      "javassist",
+      "javassist.bytecode",
+      "javassist.bytecode.analysis",
+      "javassist.bytecode.annotation",
+      "javassist.bytecode.stackmap",
+      "javassist.compiler",
+      "javassist.compiler.ast",
+      "javassist.convert",
+      "javassist.expr",
+      "javassist.runtime",
+      "javassist.scopedpool",
+      "javassist.tools",
+      "javassist.tools.reflect",
+      "javassist.tools.rmi",
+      "javassist.tools.web",
+      "javassist.util",
+      "javassist.util.proxy"
+    ],
     "org.jboss.logging:jboss-logging": [
       "org.jboss.logging"
     ],
@@ -7654,6 +8493,12 @@
     "org.latencyutils:LatencyUtils": [
       "org.LatencyUtils"
     ],
+    "org.mapstruct:mapstruct": [
+      "org.mapstruct",
+      "org.mapstruct.control",
+      "org.mapstruct.factory",
+      "org.mapstruct.util"
+    ],
     "org.mockito:mockito-core": [
       "org.mockito",
       "org.mockito.configuration",
@@ -7775,6 +8620,13 @@
     ],
     "org.reactivestreams:reactive-streams": [
       "org.reactivestreams"
+    ],
+    "org.reflections:reflections": [
+      "org.reflections",
+      "org.reflections.scanners",
+      "org.reflections.serializers",
+      "org.reflections.util",
+      "org.reflections.vfs"
     ],
     "org.rnorth.duct-tape:duct-tape": [
       "org.rnorth.ducttape",
@@ -9947,6 +10799,63 @@
     "software.amazon.awssdk:annotations": [
       "software.amazon.awssdk.annotations"
     ],
+    "software.amazon.awssdk:apache-client": [
+      "software.amazon.awssdk.http.apache",
+      "software.amazon.awssdk.http.apache.internal",
+      "software.amazon.awssdk.http.apache.internal.conn",
+      "software.amazon.awssdk.http.apache.internal.impl",
+      "software.amazon.awssdk.http.apache.internal.net",
+      "software.amazon.awssdk.http.apache.internal.utils"
+    ],
+    "software.amazon.awssdk:arns": [
+      "software.amazon.awssdk.arns"
+    ],
+    "software.amazon.awssdk:auth": [
+      "software.amazon.awssdk.auth.credentials",
+      "software.amazon.awssdk.auth.credentials.internal",
+      "software.amazon.awssdk.auth.signer",
+      "software.amazon.awssdk.auth.signer.internal",
+      "software.amazon.awssdk.auth.signer.internal.chunkedencoding",
+      "software.amazon.awssdk.auth.signer.internal.util",
+      "software.amazon.awssdk.auth.signer.params",
+      "software.amazon.awssdk.auth.token.credentials",
+      "software.amazon.awssdk.auth.token.credentials.aws",
+      "software.amazon.awssdk.auth.token.internal",
+      "software.amazon.awssdk.auth.token.signer",
+      "software.amazon.awssdk.auth.token.signer.aws"
+    ],
+    "software.amazon.awssdk:aws-core": [
+      "software.amazon.awssdk.awscore",
+      "software.amazon.awssdk.awscore.auth",
+      "software.amazon.awssdk.awscore.client.builder",
+      "software.amazon.awssdk.awscore.client.config",
+      "software.amazon.awssdk.awscore.client.handler",
+      "software.amazon.awssdk.awscore.defaultsmode",
+      "software.amazon.awssdk.awscore.endpoint",
+      "software.amazon.awssdk.awscore.endpoints",
+      "software.amazon.awssdk.awscore.endpoints.authscheme",
+      "software.amazon.awssdk.awscore.eventstream",
+      "software.amazon.awssdk.awscore.exception",
+      "software.amazon.awssdk.awscore.interceptor",
+      "software.amazon.awssdk.awscore.internal",
+      "software.amazon.awssdk.awscore.internal.auth",
+      "software.amazon.awssdk.awscore.internal.authcontext",
+      "software.amazon.awssdk.awscore.internal.client.config",
+      "software.amazon.awssdk.awscore.internal.defaultsmode",
+      "software.amazon.awssdk.awscore.internal.interceptor",
+      "software.amazon.awssdk.awscore.internal.token",
+      "software.amazon.awssdk.awscore.internal.useragent",
+      "software.amazon.awssdk.awscore.presigner",
+      "software.amazon.awssdk.awscore.retry",
+      "software.amazon.awssdk.awscore.retry.conditions",
+      "software.amazon.awssdk.awscore.util"
+    ],
+    "software.amazon.awssdk:aws-query-protocol": [
+      "software.amazon.awssdk.protocols.query",
+      "software.amazon.awssdk.protocols.query.internal.marshall",
+      "software.amazon.awssdk.protocols.query.internal.unmarshall",
+      "software.amazon.awssdk.protocols.query.unmarshall"
+    ],
     "software.amazon.awssdk:checksums": [
       "software.amazon.awssdk.checksums",
       "software.amazon.awssdk.checksums.internal"
@@ -9956,6 +10865,12 @@
     ],
     "software.amazon.awssdk:endpoints-spi": [
       "software.amazon.awssdk.endpoints"
+    ],
+    "software.amazon.awssdk:http-auth": [
+      "software.amazon.awssdk.http.auth.internal.scheme",
+      "software.amazon.awssdk.http.auth.internal.signer",
+      "software.amazon.awssdk.http.auth.scheme",
+      "software.amazon.awssdk.http.auth.signer"
     ],
     "software.amazon.awssdk:http-auth-aws": [
       "software.amazon.awssdk.http.auth.aws.crt.internal.io",
@@ -9971,6 +10886,9 @@
       "software.amazon.awssdk.http.auth.aws.internal.signer.util",
       "software.amazon.awssdk.http.auth.aws.scheme",
       "software.amazon.awssdk.http.auth.aws.signer"
+    ],
+    "software.amazon.awssdk:http-auth-aws-eventstream": [
+      "software.amazon.awssdk.http.auth.aws.eventstream"
     ],
     "software.amazon.awssdk:http-auth-spi": [
       "software.amazon.awssdk.http.auth.spi.internal.scheme",
@@ -9995,9 +10913,19 @@
       "software.amazon.awssdk.metrics",
       "software.amazon.awssdk.metrics.internal"
     ],
+    "software.amazon.awssdk:netty-nio-client": [
+      "software.amazon.awssdk.http.nio.netty",
+      "software.amazon.awssdk.http.nio.netty.internal",
+      "software.amazon.awssdk.http.nio.netty.internal.http2",
+      "software.amazon.awssdk.http.nio.netty.internal.nrs",
+      "software.amazon.awssdk.http.nio.netty.internal.utils"
+    ],
     "software.amazon.awssdk:profiles": [
       "software.amazon.awssdk.profiles",
       "software.amazon.awssdk.profiles.internal"
+    ],
+    "software.amazon.awssdk:protocol-core": [
+      "software.amazon.awssdk.protocols.core"
     ],
     "software.amazon.awssdk:regions": [
       "software.amazon.awssdk.regions",
@@ -10081,6 +11009,17 @@
       "software.amazon.awssdk.core.util",
       "software.amazon.awssdk.core.waiters"
     ],
+    "software.amazon.awssdk:sts": [
+      "software.amazon.awssdk.services.sts",
+      "software.amazon.awssdk.services.sts.auth",
+      "software.amazon.awssdk.services.sts.auth.scheme",
+      "software.amazon.awssdk.services.sts.auth.scheme.internal",
+      "software.amazon.awssdk.services.sts.endpoints",
+      "software.amazon.awssdk.services.sts.endpoints.internal",
+      "software.amazon.awssdk.services.sts.internal",
+      "software.amazon.awssdk.services.sts.model",
+      "software.amazon.awssdk.services.sts.transform"
+    ],
     "software.amazon.awssdk:third-party-jackson-core": [
       "software.amazon.awssdk.thirdparty.jackson.core",
       "software.amazon.awssdk.thirdparty.jackson.core.async",
@@ -10111,6 +11050,12 @@
       "software.amazon.awssdk.utils.io",
       "software.amazon.awssdk.utils.uri",
       "software.amazon.awssdk.utils.uri.internal"
+    ],
+    "software.amazon.awssdk:utils-lite": [
+      "software.amazon.awssdk.utilslite"
+    ],
+    "software.amazon.eventstream:eventstream": [
+      "software.amazon.eventstream"
     ],
     "tools.jackson.core:jackson-core": [
       "tools.jackson.core",
@@ -10185,6 +11130,16 @@
       "ch.qos.logback:logback-classic:jar:sources",
       "ch.qos.logback:logback-core",
       "ch.qos.logback:logback-core:jar:sources",
+      "com.amazonaws:aws-java-sdk-core",
+      "com.amazonaws:aws-java-sdk-core:jar:sources",
+      "com.amazonaws:aws-java-sdk-sns",
+      "com.amazonaws:aws-java-sdk-sns:jar:sources",
+      "com.amazonaws:aws-java-sdk-sqs",
+      "com.amazonaws:aws-java-sdk-sqs:jar:sources",
+      "com.amazonaws:aws-java-sdk-sts",
+      "com.amazonaws:aws-java-sdk-sts:jar:sources",
+      "com.amazonaws:jmespath-java",
+      "com.amazonaws:jmespath-java:jar:sources",
       "com.bucket4j:bucket4j-core",
       "com.bucket4j:bucket4j-core:jar:sources",
       "com.bucket4j:bucket4j_jdk17-core",
@@ -10199,6 +11154,8 @@
       "com.fasterxml.jackson.core:jackson-core:jar:sources",
       "com.fasterxml.jackson.core:jackson-databind",
       "com.fasterxml.jackson.core:jackson-databind:jar:sources",
+      "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor",
+      "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:jar:sources",
       "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml",
       "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:sources",
       "com.fasterxml.jackson.datatype:jackson-datatype-jsr310",
@@ -10244,6 +11201,8 @@
       "com.google.code.findbugs:jsr305:jar:sources",
       "com.google.code.gson:gson",
       "com.google.code.gson:gson:jar:sources",
+      "com.google.crypto.tink:tink",
+      "com.google.crypto.tink:tink:jar:sources",
       "com.google.errorprone:error_prone_annotations",
       "com.google.errorprone:error_prone_annotations:jar:sources",
       "com.google.guava:failureaccess",
@@ -10281,6 +11240,8 @@
       "com.typesafe:config:jar:sources",
       "com.vaadin.external.google:android-json",
       "com.vaadin.external.google:android-json:jar:sources",
+      "com.vdurmont:semver4j",
+      "com.vdurmont:semver4j:jar:sources",
       "commons-codec:commons-codec",
       "commons-codec:commons-codec:jar:sources",
       "commons-io:commons-io",
@@ -10346,9 +11307,16 @@
       "io.micrometer:micrometer-tracing-bridge-otel:jar:sources",
       "io.micrometer:micrometer-tracing:jar:sources",
       "io.nats:jnats",
+      "io.nats:jnats-json",
+      "io.nats:jnats-json:jar:sources",
       "io.nats:jnats:jar:sources",
+      "io.nats:jwt-java",
+      "io.nats:jwt-java:jar:sources",
+      "io.nats:nkeys-java",
+      "io.nats:nkeys-java:jar:sources",
       "io.netty:netty-buffer",
       "io.netty:netty-buffer:jar:sources",
+      "io.netty:netty-codec",
       "io.netty:netty-codec-base",
       "io.netty:netty-codec-base:jar:sources",
       "io.netty:netty-codec-classes-quic",
@@ -10363,14 +11331,19 @@
       "io.netty:netty-codec-http3",
       "io.netty:netty-codec-http3:jar:sources",
       "io.netty:netty-codec-http:jar:sources",
+      "io.netty:netty-codec-marshalling",
+      "io.netty:netty-codec-marshalling:jar:sources",
       "io.netty:netty-codec-native-quic:jar:linux-aarch_64",
       "io.netty:netty-codec-native-quic:jar:linux-x86_64",
       "io.netty:netty-codec-native-quic:jar:osx-aarch_64",
       "io.netty:netty-codec-native-quic:jar:osx-x86_64",
       "io.netty:netty-codec-native-quic:jar:sources",
       "io.netty:netty-codec-native-quic:jar:windows-x86_64",
+      "io.netty:netty-codec-protobuf",
+      "io.netty:netty-codec-protobuf:jar:sources",
       "io.netty:netty-codec-socks",
       "io.netty:netty-codec-socks:jar:sources",
+      "io.netty:netty-codec:jar:sources",
       "io.netty:netty-common",
       "io.netty:netty-common:jar:sources",
       "io.netty:netty-handler",
@@ -10473,6 +11446,8 @@
       "jakarta.xml.bind:jakarta.xml.bind-api:jar:sources",
       "javax.annotation:javax.annotation-api",
       "javax.annotation:javax.annotation-api:jar:sources",
+      "joda-time:joda-time",
+      "joda-time:joda-time:jar:sources",
       "net.bytebuddy:byte-buddy",
       "net.bytebuddy:byte-buddy-agent",
       "net.bytebuddy:byte-buddy-agent:jar:sources",
@@ -10499,6 +11474,8 @@
       "org.apache.cassandra:java-driver-core:jar:sources",
       "org.apache.cassandra:java-driver-guava-shaded",
       "org.apache.cassandra:java-driver-guava-shaded:jar:sources",
+      "org.apache.cassandra:java-driver-mapper-runtime",
+      "org.apache.cassandra:java-driver-mapper-runtime:jar:sources",
       "org.apache.cassandra:java-driver-metrics-micrometer",
       "org.apache.cassandra:java-driver-metrics-micrometer:jar:sources",
       "org.apache.cassandra:java-driver-query-builder",
@@ -10511,6 +11488,16 @@
       "org.apache.commons:commons-lang3:jar:sources",
       "org.apache.commons:commons-pool2",
       "org.apache.commons:commons-pool2:jar:sources",
+      "org.apache.httpcomponents.client5:httpclient5",
+      "org.apache.httpcomponents.client5:httpclient5:jar:sources",
+      "org.apache.httpcomponents.core5:httpcore5",
+      "org.apache.httpcomponents.core5:httpcore5-h2",
+      "org.apache.httpcomponents.core5:httpcore5-h2:jar:sources",
+      "org.apache.httpcomponents.core5:httpcore5:jar:sources",
+      "org.apache.httpcomponents:httpclient",
+      "org.apache.httpcomponents:httpclient:jar:sources",
+      "org.apache.httpcomponents:httpcore",
+      "org.apache.httpcomponents:httpcore:jar:sources",
       "org.apache.logging.log4j:log4j-api",
       "org.apache.logging.log4j:log4j-api:jar:sources",
       "org.apache.logging.log4j:log4j-to-slf4j",
@@ -10557,6 +11544,8 @@
       "org.jacoco:org.jacoco.core:jar:sources",
       "org.jacoco:org.jacoco.report",
       "org.jacoco:org.jacoco.report:jar:sources",
+      "org.javassist:javassist",
+      "org.javassist:javassist:jar:sources",
       "org.jboss.logging:jboss-logging",
       "org.jboss.logging:jboss-logging:jar:sources",
       "org.jetbrains.kotlin:kotlin-stdlib",
@@ -10589,6 +11578,8 @@
       "org.junit.platform:junit-platform-reporting:jar:sources",
       "org.latencyutils:LatencyUtils",
       "org.latencyutils:LatencyUtils:jar:sources",
+      "org.mapstruct:mapstruct",
+      "org.mapstruct:mapstruct:jar:sources",
       "org.mockito:mockito-core",
       "org.mockito:mockito-core:jar:sources",
       "org.mockito:mockito-junit-jupiter",
@@ -10613,6 +11604,8 @@
       "org.projectlombok:lombok:jar:sources",
       "org.reactivestreams:reactive-streams",
       "org.reactivestreams:reactive-streams:jar:sources",
+      "org.reflections:reflections",
+      "org.reflections:reflections:jar:sources",
       "org.rnorth.duct-tape:duct-tape",
       "org.rnorth.duct-tape:duct-tape:jar:sources",
       "org.skyscreamer:jsonassert",
@@ -10856,16 +11849,30 @@
       "org.yaml:snakeyaml:jar:sources",
       "software.amazon.awssdk:annotations",
       "software.amazon.awssdk:annotations:jar:sources",
+      "software.amazon.awssdk:apache-client",
+      "software.amazon.awssdk:apache-client:jar:sources",
+      "software.amazon.awssdk:arns",
+      "software.amazon.awssdk:arns:jar:sources",
+      "software.amazon.awssdk:auth",
+      "software.amazon.awssdk:auth:jar:sources",
+      "software.amazon.awssdk:aws-core",
+      "software.amazon.awssdk:aws-core:jar:sources",
+      "software.amazon.awssdk:aws-query-protocol",
+      "software.amazon.awssdk:aws-query-protocol:jar:sources",
       "software.amazon.awssdk:checksums",
       "software.amazon.awssdk:checksums-spi",
       "software.amazon.awssdk:checksums-spi:jar:sources",
       "software.amazon.awssdk:checksums:jar:sources",
       "software.amazon.awssdk:endpoints-spi",
       "software.amazon.awssdk:endpoints-spi:jar:sources",
+      "software.amazon.awssdk:http-auth",
       "software.amazon.awssdk:http-auth-aws",
+      "software.amazon.awssdk:http-auth-aws-eventstream",
+      "software.amazon.awssdk:http-auth-aws-eventstream:jar:sources",
       "software.amazon.awssdk:http-auth-aws:jar:sources",
       "software.amazon.awssdk:http-auth-spi",
       "software.amazon.awssdk:http-auth-spi:jar:sources",
+      "software.amazon.awssdk:http-auth:jar:sources",
       "software.amazon.awssdk:http-client-spi",
       "software.amazon.awssdk:http-client-spi:jar:sources",
       "software.amazon.awssdk:identity-spi",
@@ -10874,8 +11881,12 @@
       "software.amazon.awssdk:json-utils:jar:sources",
       "software.amazon.awssdk:metrics-spi",
       "software.amazon.awssdk:metrics-spi:jar:sources",
+      "software.amazon.awssdk:netty-nio-client",
+      "software.amazon.awssdk:netty-nio-client:jar:sources",
       "software.amazon.awssdk:profiles",
       "software.amazon.awssdk:profiles:jar:sources",
+      "software.amazon.awssdk:protocol-core",
+      "software.amazon.awssdk:protocol-core:jar:sources",
       "software.amazon.awssdk:regions",
       "software.amazon.awssdk:regions:jar:sources",
       "software.amazon.awssdk:retries",
@@ -10884,10 +11895,16 @@
       "software.amazon.awssdk:retries:jar:sources",
       "software.amazon.awssdk:sdk-core",
       "software.amazon.awssdk:sdk-core:jar:sources",
+      "software.amazon.awssdk:sts",
+      "software.amazon.awssdk:sts:jar:sources",
       "software.amazon.awssdk:third-party-jackson-core",
       "software.amazon.awssdk:third-party-jackson-core:jar:sources",
       "software.amazon.awssdk:utils",
+      "software.amazon.awssdk:utils-lite",
+      "software.amazon.awssdk:utils-lite:jar:sources",
       "software.amazon.awssdk:utils:jar:sources",
+      "software.amazon.eventstream:eventstream",
+      "software.amazon.eventstream:eventstream:jar:sources",
       "tools.jackson.core:jackson-core",
       "tools.jackson.core:jackson-core:jar:sources",
       "tools.jackson.core:jackson-databind",
@@ -10904,6 +11921,16 @@
       "ch.qos.logback:logback-classic:jar:sources",
       "ch.qos.logback:logback-core",
       "ch.qos.logback:logback-core:jar:sources",
+      "com.amazonaws:aws-java-sdk-core",
+      "com.amazonaws:aws-java-sdk-core:jar:sources",
+      "com.amazonaws:aws-java-sdk-sns",
+      "com.amazonaws:aws-java-sdk-sns:jar:sources",
+      "com.amazonaws:aws-java-sdk-sqs",
+      "com.amazonaws:aws-java-sdk-sqs:jar:sources",
+      "com.amazonaws:aws-java-sdk-sts",
+      "com.amazonaws:aws-java-sdk-sts:jar:sources",
+      "com.amazonaws:jmespath-java",
+      "com.amazonaws:jmespath-java:jar:sources",
       "com.bucket4j:bucket4j-core",
       "com.bucket4j:bucket4j-core:jar:sources",
       "com.bucket4j:bucket4j_jdk17-core",
@@ -10918,6 +11945,8 @@
       "com.fasterxml.jackson.core:jackson-core:jar:sources",
       "com.fasterxml.jackson.core:jackson-databind",
       "com.fasterxml.jackson.core:jackson-databind:jar:sources",
+      "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor",
+      "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:jar:sources",
       "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml",
       "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:sources",
       "com.fasterxml.jackson.datatype:jackson-datatype-jsr310",
@@ -10963,6 +11992,8 @@
       "com.google.code.findbugs:jsr305:jar:sources",
       "com.google.code.gson:gson",
       "com.google.code.gson:gson:jar:sources",
+      "com.google.crypto.tink:tink",
+      "com.google.crypto.tink:tink:jar:sources",
       "com.google.errorprone:error_prone_annotations",
       "com.google.errorprone:error_prone_annotations:jar:sources",
       "com.google.guava:failureaccess",
@@ -11000,6 +12031,8 @@
       "com.typesafe:config:jar:sources",
       "com.vaadin.external.google:android-json",
       "com.vaadin.external.google:android-json:jar:sources",
+      "com.vdurmont:semver4j",
+      "com.vdurmont:semver4j:jar:sources",
       "commons-codec:commons-codec",
       "commons-codec:commons-codec:jar:sources",
       "commons-io:commons-io",
@@ -11065,9 +12098,16 @@
       "io.micrometer:micrometer-tracing-bridge-otel:jar:sources",
       "io.micrometer:micrometer-tracing:jar:sources",
       "io.nats:jnats",
+      "io.nats:jnats-json",
+      "io.nats:jnats-json:jar:sources",
       "io.nats:jnats:jar:sources",
+      "io.nats:jwt-java",
+      "io.nats:jwt-java:jar:sources",
+      "io.nats:nkeys-java",
+      "io.nats:nkeys-java:jar:sources",
       "io.netty:netty-buffer",
       "io.netty:netty-buffer:jar:sources",
+      "io.netty:netty-codec",
       "io.netty:netty-codec-base",
       "io.netty:netty-codec-base:jar:sources",
       "io.netty:netty-codec-classes-quic",
@@ -11082,14 +12122,19 @@
       "io.netty:netty-codec-http3",
       "io.netty:netty-codec-http3:jar:sources",
       "io.netty:netty-codec-http:jar:sources",
+      "io.netty:netty-codec-marshalling",
+      "io.netty:netty-codec-marshalling:jar:sources",
       "io.netty:netty-codec-native-quic:jar:linux-aarch_64",
       "io.netty:netty-codec-native-quic:jar:linux-x86_64",
       "io.netty:netty-codec-native-quic:jar:osx-aarch_64",
       "io.netty:netty-codec-native-quic:jar:osx-x86_64",
       "io.netty:netty-codec-native-quic:jar:sources",
       "io.netty:netty-codec-native-quic:jar:windows-x86_64",
+      "io.netty:netty-codec-protobuf",
+      "io.netty:netty-codec-protobuf:jar:sources",
       "io.netty:netty-codec-socks",
       "io.netty:netty-codec-socks:jar:sources",
+      "io.netty:netty-codec:jar:sources",
       "io.netty:netty-common",
       "io.netty:netty-common:jar:sources",
       "io.netty:netty-handler",
@@ -11192,6 +12237,8 @@
       "jakarta.xml.bind:jakarta.xml.bind-api:jar:sources",
       "javax.annotation:javax.annotation-api",
       "javax.annotation:javax.annotation-api:jar:sources",
+      "joda-time:joda-time",
+      "joda-time:joda-time:jar:sources",
       "net.bytebuddy:byte-buddy",
       "net.bytebuddy:byte-buddy-agent",
       "net.bytebuddy:byte-buddy-agent:jar:sources",
@@ -11218,6 +12265,8 @@
       "org.apache.cassandra:java-driver-core:jar:sources",
       "org.apache.cassandra:java-driver-guava-shaded",
       "org.apache.cassandra:java-driver-guava-shaded:jar:sources",
+      "org.apache.cassandra:java-driver-mapper-runtime",
+      "org.apache.cassandra:java-driver-mapper-runtime:jar:sources",
       "org.apache.cassandra:java-driver-metrics-micrometer",
       "org.apache.cassandra:java-driver-metrics-micrometer:jar:sources",
       "org.apache.cassandra:java-driver-query-builder",
@@ -11230,6 +12279,16 @@
       "org.apache.commons:commons-lang3:jar:sources",
       "org.apache.commons:commons-pool2",
       "org.apache.commons:commons-pool2:jar:sources",
+      "org.apache.httpcomponents.client5:httpclient5",
+      "org.apache.httpcomponents.client5:httpclient5:jar:sources",
+      "org.apache.httpcomponents.core5:httpcore5",
+      "org.apache.httpcomponents.core5:httpcore5-h2",
+      "org.apache.httpcomponents.core5:httpcore5-h2:jar:sources",
+      "org.apache.httpcomponents.core5:httpcore5:jar:sources",
+      "org.apache.httpcomponents:httpclient",
+      "org.apache.httpcomponents:httpclient:jar:sources",
+      "org.apache.httpcomponents:httpcore",
+      "org.apache.httpcomponents:httpcore:jar:sources",
       "org.apache.logging.log4j:log4j-api",
       "org.apache.logging.log4j:log4j-api:jar:sources",
       "org.apache.logging.log4j:log4j-to-slf4j",
@@ -11276,6 +12335,8 @@
       "org.jacoco:org.jacoco.core:jar:sources",
       "org.jacoco:org.jacoco.report",
       "org.jacoco:org.jacoco.report:jar:sources",
+      "org.javassist:javassist",
+      "org.javassist:javassist:jar:sources",
       "org.jboss.logging:jboss-logging",
       "org.jboss.logging:jboss-logging:jar:sources",
       "org.jetbrains.kotlin:kotlin-stdlib",
@@ -11308,6 +12369,8 @@
       "org.junit.platform:junit-platform-reporting:jar:sources",
       "org.latencyutils:LatencyUtils",
       "org.latencyutils:LatencyUtils:jar:sources",
+      "org.mapstruct:mapstruct",
+      "org.mapstruct:mapstruct:jar:sources",
       "org.mockito:mockito-core",
       "org.mockito:mockito-core:jar:sources",
       "org.mockito:mockito-junit-jupiter",
@@ -11332,6 +12395,8 @@
       "org.projectlombok:lombok:jar:sources",
       "org.reactivestreams:reactive-streams",
       "org.reactivestreams:reactive-streams:jar:sources",
+      "org.reflections:reflections",
+      "org.reflections:reflections:jar:sources",
       "org.rnorth.duct-tape:duct-tape",
       "org.rnorth.duct-tape:duct-tape:jar:sources",
       "org.skyscreamer:jsonassert",
@@ -11575,16 +12640,30 @@
       "org.yaml:snakeyaml:jar:sources",
       "software.amazon.awssdk:annotations",
       "software.amazon.awssdk:annotations:jar:sources",
+      "software.amazon.awssdk:apache-client",
+      "software.amazon.awssdk:apache-client:jar:sources",
+      "software.amazon.awssdk:arns",
+      "software.amazon.awssdk:arns:jar:sources",
+      "software.amazon.awssdk:auth",
+      "software.amazon.awssdk:auth:jar:sources",
+      "software.amazon.awssdk:aws-core",
+      "software.amazon.awssdk:aws-core:jar:sources",
+      "software.amazon.awssdk:aws-query-protocol",
+      "software.amazon.awssdk:aws-query-protocol:jar:sources",
       "software.amazon.awssdk:checksums",
       "software.amazon.awssdk:checksums-spi",
       "software.amazon.awssdk:checksums-spi:jar:sources",
       "software.amazon.awssdk:checksums:jar:sources",
       "software.amazon.awssdk:endpoints-spi",
       "software.amazon.awssdk:endpoints-spi:jar:sources",
+      "software.amazon.awssdk:http-auth",
       "software.amazon.awssdk:http-auth-aws",
+      "software.amazon.awssdk:http-auth-aws-eventstream",
+      "software.amazon.awssdk:http-auth-aws-eventstream:jar:sources",
       "software.amazon.awssdk:http-auth-aws:jar:sources",
       "software.amazon.awssdk:http-auth-spi",
       "software.amazon.awssdk:http-auth-spi:jar:sources",
+      "software.amazon.awssdk:http-auth:jar:sources",
       "software.amazon.awssdk:http-client-spi",
       "software.amazon.awssdk:http-client-spi:jar:sources",
       "software.amazon.awssdk:identity-spi",
@@ -11593,8 +12672,12 @@
       "software.amazon.awssdk:json-utils:jar:sources",
       "software.amazon.awssdk:metrics-spi",
       "software.amazon.awssdk:metrics-spi:jar:sources",
+      "software.amazon.awssdk:netty-nio-client",
+      "software.amazon.awssdk:netty-nio-client:jar:sources",
       "software.amazon.awssdk:profiles",
       "software.amazon.awssdk:profiles:jar:sources",
+      "software.amazon.awssdk:protocol-core",
+      "software.amazon.awssdk:protocol-core:jar:sources",
       "software.amazon.awssdk:regions",
       "software.amazon.awssdk:regions:jar:sources",
       "software.amazon.awssdk:retries",
@@ -11603,10 +12686,16 @@
       "software.amazon.awssdk:retries:jar:sources",
       "software.amazon.awssdk:sdk-core",
       "software.amazon.awssdk:sdk-core:jar:sources",
+      "software.amazon.awssdk:sts",
+      "software.amazon.awssdk:sts:jar:sources",
       "software.amazon.awssdk:third-party-jackson-core",
       "software.amazon.awssdk:third-party-jackson-core:jar:sources",
       "software.amazon.awssdk:utils",
+      "software.amazon.awssdk:utils-lite",
+      "software.amazon.awssdk:utils-lite:jar:sources",
       "software.amazon.awssdk:utils:jar:sources",
+      "software.amazon.eventstream:eventstream",
+      "software.amazon.eventstream:eventstream:jar:sources",
       "tools.jackson.core:jackson-core",
       "tools.jackson.core:jackson-core:jar:sources",
       "tools.jackson.core:jackson-databind",
@@ -11632,6 +12721,11 @@
     "com.fasterxml.jackson.core:jackson-databind": {
       "com.fasterxml.jackson.core.ObjectCodec": [
         "com.fasterxml.jackson.databind.ObjectMapper"
+      ]
+    },
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor": {
+      "com.fasterxml.jackson.core.JsonFactory": [
+        "com.fasterxml.jackson.dataformat.cbor.CBORFactory"
       ]
     },
     "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml": {
@@ -12127,6 +13221,16 @@
         "wiremock.org.xmlunit.placeholder.IsDateTimePlaceholderHandler",
         "wiremock.org.xmlunit.placeholder.IsNumberPlaceholderHandler",
         "wiremock.org.xmlunit.placeholder.MatchesRegexPlaceholderHandler"
+      ]
+    },
+    "software.amazon.awssdk:apache-client": {
+      "software.amazon.awssdk.http.SdkHttpService": [
+        "software.amazon.awssdk.http.apache.ApacheSdkHttpService"
+      ]
+    },
+    "software.amazon.awssdk:netty-nio-client": {
+      "software.amazon.awssdk.http.async.SdkAsyncHttpService": [
+        "software.amazon.awssdk.http.nio.netty.NettySdkAsyncHttpService"
       ]
     },
     "software.amazon.awssdk:third-party-jackson-core": {

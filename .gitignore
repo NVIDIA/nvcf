@@ -7,6 +7,9 @@
 .idea/
 .vscode/
 *.swp
+# Per-user IntelliJ Bazel plugin project view and its generated project dir
+.bazelproject
+.ijwb/
 
 # AI agent local config (per-user settings, ephemeral plans)
 .claude/settings.local.json

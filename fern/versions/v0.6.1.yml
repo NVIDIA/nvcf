@@ -3,88 +3,88 @@
 
 navigation:
   - page: Overview
-    path: ../../docs/v0.6.1-rc/index.md
+    path: ../../docs/v0.6.1/index.md
   - page: Quickstart
-    path: ../../docs/v0.6.1-rc/quickstart.md
+    path: ../../docs/v0.6.1/quickstart.md
 
   - section: Release Notes
     skip-slug: true
     contents:
       - page: Release Notes Overview
-        path: ../../docs/v0.6.1-rc/release-notes/index.md
+        path: ../../docs/v0.6.1/release-notes/index.md
       - page: "0.6.1 Release Notes"
-        path: ../../docs/v0.6.1-rc/release-notes/0.6.1.md
+        path: ../../docs/v0.6.1/release-notes/0.6.1.md
       - page: "0.6.0 to 0.6.1 Upgrade"
-        path: ../../docs/v0.6.1-rc/release-notes/0.6.0-to-0.6.1-upgrade.md
+        path: ../../docs/v0.6.1/release-notes/0.6.0-to-0.6.1-upgrade.md
       - page: "0.6.0 Release Notes"
-        path: ../../docs/v0.6.1-rc/release-notes/0.6.0.md
+        path: ../../docs/v0.6.1/release-notes/0.6.0.md
       - page: "0.5.0 to 0.6.0 Upgrade"
-        path: ../../docs/v0.6.1-rc/release-notes/0.5.0-to-0.6.0-upgrade.md
+        path: ../../docs/v0.6.1/release-notes/0.5.0-to-0.6.0-upgrade.md
 
   - section: Before You Deploy
     skip-slug: true
     contents:
       - page: Infrastructure Sizing
-        path: ../../docs/v0.6.1-rc/infrastructure-sizing.md
+        path: ../../docs/v0.6.1/infrastructure-sizing.md
       - page: Manifest
-        path: ../../docs/v0.6.1-rc/manifest.md
+        path: ../../docs/v0.6.1/manifest.md
 
   - section: Deployment
     skip-slug: true
     contents:
       - page: Installation Overview
-        path: ../../docs/v0.6.1-rc/installation.md
+        path: ../../docs/v0.6.1/installation.md
       - page: Image Mirroring
-        path: ../../docs/v0.6.1-rc/image-mirroring.md
+        path: ../../docs/v0.6.1/image-mirroring.md
       - page: Helmfile Installation
-        path: ../../docs/v0.6.1-rc/helmfile-installation.md
+        path: ../../docs/v0.6.1/helmfile-installation.md
       - page: gRPC Invocation Enablement
-        path: ../../docs/v0.6.1-rc/grpc-invocation-enablement.md
+        path: ../../docs/v0.6.1/grpc-invocation-enablement.md
       - page: CSP End-to-End Example
-        path: ../../docs/v0.6.1-rc/csp-end-to-end-example-installation.md
+        path: ../../docs/v0.6.1/csp-end-to-end-example-installation.md
 
   - section: GPU Cluster Setup
     skip-slug: true
     contents:
       - page: GPU Cluster Setup
-        path: ../../docs/v0.6.1-rc/cluster-management/index.md
+        path: ../../docs/v0.6.1/cluster-management/index.md
       - page: Self-Managed Clusters
-        path: ../../docs/v0.6.1-rc/cluster-management/self-managed.md
+        path: ../../docs/v0.6.1/cluster-management/self-managed.md
 
   - section: Configuration
     skip-slug: true
     contents:
       - page: Optional Enhancements
-        path: ../../docs/v0.6.1-rc/optional-enhancements.md
+        path: ../../docs/v0.6.1/optional-enhancements.md
       - page: LLM Function Enablement
-        path: ../../docs/v0.6.1-rc/llm-function-enablement.md
+        path: ../../docs/v0.6.1/llm-function-enablement.md
       - page: Gateway Routing
-        path: ../../docs/v0.6.1-rc/gateway-routing.md
+        path: ../../docs/v0.6.1/gateway-routing.md
       - page: Third-Party Registries
-        path: ../../docs/v0.6.1-rc/third-party-registries.md
+        path: ../../docs/v0.6.1/third-party-registries.md
       - page: Registry Allowlist
-        path: ../../docs/v0.6.1-rc/registry-allowlist.md
+        path: ../../docs/v0.6.1/registry-allowlist.md
       - page: Cluster Configuration
-        path: ../../docs/v0.6.1-rc/cluster-management/configuration.md
+        path: ../../docs/v0.6.1/cluster-management/configuration.md
       - page: KAI Scheduler
-        path: ../../docs/v0.6.1-rc/cluster-management/kai-scheduler.md
+        path: ../../docs/v0.6.1/cluster-management/kai-scheduler.md
       - section: Low Latency Streaming
         skip-slug: true
         contents:
           - page: LLS Installation
-            path: ../../docs/v0.6.1-rc/lls-installation.md
+            path: ../../docs/v0.6.1/lls-installation.md
       - section: NVCF Caches
         skip-slug: true
         contents:
           - page: Container Cache
-            path: ../../docs/v0.6.1-rc/cluster-management/container-cache.md
+            path: ../../docs/v0.6.1/cluster-management/container-cache.md
           - page: GXCache
-            path: ../../docs/v0.6.1-rc/cluster-management/gxcache.md
+            path: ../../docs/v0.6.1/cluster-management/gxcache.md
       - section: Physical Simulation Caches
         skip-slug: true
         contents:
           - page: Simulation Caches
-            path: ../../docs/v0.6.1-rc/caches.md
+            path: ../../docs/v0.6.1/caches.md
           - section: DDCS
             skip-slug: true
             contents:
@@ -112,104 +112,104 @@ navigation:
     skip-slug: true
     contents:
       - page: API
-        path: ../../docs/v0.6.1-rc/api.md
+        path: ../../docs/v0.6.1/api.md
       - page: Function Creation
-        path: ../../docs/v0.6.1-rc/function-creation.md
+        path: ../../docs/v0.6.1/function-creation.md
       - page: LLM Gateway
-        path: ../../docs/v0.6.1-rc/llm-gateway.md
+        path: ../../docs/v0.6.1/llm-gateway.md
       - page: Generic HTTP Function Invocation
-        path: ../../docs/v0.6.1-rc/generic-http-function-invocation.md
+        path: ../../docs/v0.6.1/generic-http-function-invocation.md
       - page: gRPC Function Invocation
-        path: ../../docs/v0.6.1-rc/grpc-function-invocation.md
+        path: ../../docs/v0.6.1/grpc-function-invocation.md
       - page: Container Functions
-        path: ../../docs/v0.6.1-rc/container-functions.md
+        path: ../../docs/v0.6.1/container-functions.md
       - page: Helm Functions
-        path: ../../docs/v0.6.1-rc/helm-functions.md
+        path: ../../docs/v0.6.1/helm-functions.md
       - page: Streaming Functions
-        path: ../../docs/v0.6.1-rc/streaming-functions.md
+        path: ../../docs/v0.6.1/streaming-functions.md
       - page: Configure Autoscaling
-        path: ../../docs/v0.6.1-rc/configure-autoscaling.md
+        path: ../../docs/v0.6.1/configure-autoscaling.md
       - page: CLI
-        path: ../../docs/v0.6.1-rc/cli.md
+        path: ../../docs/v0.6.1/cli.md
       - page: Task Creation
-        path: ../../docs/v0.6.1-rc/task-creation.md
+        path: ../../docs/v0.6.1/task-creation.md
       - page: Container-Based Task Creation
-        path: ../../docs/v0.6.1-rc/container-tasks.md
+        path: ../../docs/v0.6.1/container-tasks.md
       - page: Helm-Based Task Creation
-        path: ../../docs/v0.6.1-rc/helm-tasks.md
+        path: ../../docs/v0.6.1/helm-tasks.md
 
   - section: Function Autoscaling
     skip-slug: true
     contents:
       - page: Function Autoscaling Overview
-        path: ../../docs/v0.6.1-rc/autoscaling/index.md
+        path: ../../docs/v0.6.1/autoscaling/index.md
       - page: Architecture
-        path: ../../docs/v0.6.1-rc/autoscaling/architecture.md
+        path: ../../docs/v0.6.1/autoscaling/architecture.md
       - page: Operations
-        path: ../../docs/v0.6.1-rc/autoscaling/operations.md
+        path: ../../docs/v0.6.1/autoscaling/operations.md
       - page: Observability
-        path: ../../docs/v0.6.1-rc/autoscaling/observability.md
+        path: ../../docs/v0.6.1/autoscaling/observability.md
         slug: autoscaler-observability
 
   - section: Observability
     skip-slug: true
     contents:
       - page: Observability
-        path: ../../docs/v0.6.1-rc/observability.md
+        path: ../../docs/v0.6.1/observability.md
       - page: Example Dashboards
-        path: ../../docs/v0.6.1-rc/example-dashboards.md
+        path: ../../docs/v0.6.1/example-dashboards.md
       - section: Metrics
         skip-slug: true
         contents:
           - page: Metrics Overview
-            path: ../../docs/v0.6.1-rc/metrics/metrics-index.md
+            path: ../../docs/v0.6.1/metrics/metrics-index.md
           - page: Cassandra
-            path: ../../docs/v0.6.1-rc/metrics/cassandra/metrics.md
+            path: ../../docs/v0.6.1/metrics/cassandra/metrics.md
           - page: ESS
-            path: ../../docs/v0.6.1-rc/metrics/ess/metrics.md
+            path: ../../docs/v0.6.1/metrics/ess/metrics.md
           - page: Init Container
-            path: ../../docs/v0.6.1-rc/metrics/init-container/metrics.md
+            path: ../../docs/v0.6.1/metrics/init-container/metrics.md
           - page: Invocation Service
-            path: ../../docs/v0.6.1-rc/metrics/invocation-service/metrics.md
+            path: ../../docs/v0.6.1/metrics/invocation-service/metrics.md
           - page: LLM API Gateway
-            path: ../../docs/v0.6.1-rc/metrics/llm-api-gateway/metrics.md
+            path: ../../docs/v0.6.1/metrics/llm-api-gateway/metrics.md
           - page: LLM Function Invocation Metrics Report
-            path: ../../docs/v0.6.1-rc/metrics/llm-function-invocation-path.md
+            path: ../../docs/v0.6.1/metrics/llm-function-invocation-path.md
           - page: LLM Request Router
-            path: ../../docs/v0.6.1-rc/metrics/llm-request-router/metrics.md
+            path: ../../docs/v0.6.1/metrics/llm-request-router/metrics.md
           - page: NVCF API
-            path: ../../docs/v0.6.1-rc/metrics/nvcf-api/metrics.md
+            path: ../../docs/v0.6.1/metrics/nvcf-api/metrics.md
           - page: SIS/Spot
-            path: ../../docs/v0.6.1-rc/metrics/sis-spot/metrics.md
+            path: ../../docs/v0.6.1/metrics/sis-spot/metrics.md
           - page: State Metrics
-            path: ../../docs/v0.6.1-rc/metrics/state-metrics/metrics.md
+            path: ../../docs/v0.6.1/metrics/state-metrics/metrics.md
           - page: Utils Container
-            path: ../../docs/v0.6.1-rc/metrics/utils-container/metrics.md
+            path: ../../docs/v0.6.1/metrics/utils-container/metrics.md
           - page: Vault/OpenBao
-            path: ../../docs/v0.6.1-rc/metrics/vault-openbao/metrics.md
+            path: ../../docs/v0.6.1/metrics/vault-openbao/metrics.md
 
   - section: Operations
     skip-slug: true
     contents:
       - page: Control Plane Operations
-        path: ../../docs/v0.6.1-rc/control-plane-operations.md
+        path: ../../docs/v0.6.1/control-plane-operations.md
       - page: Cluster Monitoring
-        path: ../../docs/v0.6.1-rc/cluster-management/monitoring.md
+        path: ../../docs/v0.6.1/cluster-management/monitoring.md
       - page: Troubleshooting
-        path: ../../docs/v0.6.1-rc/troubleshooting.md
+        path: ../../docs/v0.6.1/troubleshooting.md
 
   - section: Runbooks
     skip-slug: true
     contents:
       - page: Runbooks
-        path: ../../docs/v0.6.1-rc/runbooks/index.md
+        path: ../../docs/v0.6.1/runbooks/index.md
       - page: Key Rotation
-        path: ../../docs/v0.6.1-rc/runbooks/control-plane-key-rotation-mek.md
+        path: ../../docs/v0.6.1/runbooks/control-plane-key-rotation-mek.md
       - section: Cache Runbooks
         skip-slug: true
         contents:
           - page: Caches Overview
-            path: ../../docs/v0.6.1-rc/runbooks/caches.md
+            path: ../../docs/v0.6.1/runbooks/caches.md
           - link: DDCS Cache Misses
             href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/cache-misses.html
           - link: DDCS Client Sharding
@@ -235,17 +235,17 @@ navigation:
     skip-slug: true
     contents:
       - page: Cluster Reference
-        path: ../../docs/v0.6.1-rc/cluster-management/reference.md
+        path: ../../docs/v0.6.1/cluster-management/reference.md
       - page: gRPC Load Testing
-        path: ../../docs/v0.6.1-rc/grpc-load-testing.md
+        path: ../../docs/v0.6.1/grpc-load-testing.md
       - page: gRPC Load Test SLI Guide
-        path: ../../docs/v0.6.1-rc/grpc-load-test-sli-guide.md
+        path: ../../docs/v0.6.1/grpc-load-test-sli-guide.md
       - page: HTTP Load Testing
-        path: ../../docs/v0.6.1-rc/http-load-testing.md
+        path: ../../docs/v0.6.1/http-load-testing.md
       - page: HTTP Load Test SLI Guide
-        path: ../../docs/v0.6.1-rc/http-load-test-sli-guide.md
+        path: ../../docs/v0.6.1/http-load-test-sli-guide.md
       - page: HTTP Soak Testing
-        path: ../../docs/v0.6.1-rc/http-soak-testing.md
+        path: ../../docs/v0.6.1/http-soak-testing.md
 
   - section: Development
     skip-slug: true
@@ -256,17 +256,17 @@ navigation:
         skip-slug: true
         contents:
           - page: Local Development
-            path: ../../docs/v0.6.1-rc/local-development.md
+            path: ../../docs/v0.6.1/local-development.md
           - page: Single-cluster (CLI)
-            path: ../../docs/v0.6.1-rc/local-development/single-cluster-cli.md
+            path: ../../docs/v0.6.1/local-development/single-cluster-cli.md
           - page: Single-cluster (Helmfile)
-            path: ../../docs/v0.6.1-rc/local-development/single-cluster-helmfile.md
+            path: ../../docs/v0.6.1/local-development/single-cluster-helmfile.md
           - page: Multi-cluster (CLI)
-            path: ../../docs/v0.6.1-rc/local-development/multi-cluster-cli.md
+            path: ../../docs/v0.6.1/local-development/multi-cluster-cli.md
           - page: Multi-cluster (Helmfile)
-            path: ../../docs/v0.6.1-rc/local-development/multi-cluster-helmfile.md
+            path: ../../docs/v0.6.1/local-development/multi-cluster-helmfile.md
       - page: Fake GPU Operator
-        path: ../../docs/v0.6.1-rc/fake-gpu-operator.md
+        path: ../../docs/v0.6.1/fake-gpu-operator.md
       - page: Release Process
         path: ../../docs/dev/release-process.md
 
