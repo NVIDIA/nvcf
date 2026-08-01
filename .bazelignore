@@ -62,6 +62,12 @@ docs
 fern
 infra
 migrations
+# tests/bdd is the standalone `nvcf-bdd` Go module. It is not in go.work.bazel,
+# so its deps (cucumber/godog and friends) are not registered in the root
+# MODULE.bazel. It is run directly with `go test`, not Bazel. Ignore it so
+# `bazel build //...` and query do not try to analyze generated BUILD targets
+# that reference unresolvable external repos.
+tests/bdd
 
 # Note: tools/ is not ignored here so //tools/bazel/java (the root-owned Java
 # build helpers) is loadable. Gazelle is still kept out of tools/ via the
@@ -77,6 +83,12 @@ migrations
 # from MODULE.bazel via Gazelle's go_deps extension, not from on-disk vendor.
 src/libraries/go/lib/vendor
 src/clis/nvcf-cli/vendor
+
+# Tool-pin directory: holds only a //go:build tools file for go.mod and yields
+# no Bazel package. Skipped directly here because some Bazel commands (build
+# //..., query) load packages without consulting BUILD-level gazelle:exclude,
+# which otherwise fails when the transient build/ dir is missing during a scan.
+src/libraries/go/lib/pkg/nvkit/build
 
 # Bazel-managed caches we keep inside the workspace for CI cache: paths.
 .bazel-cache
