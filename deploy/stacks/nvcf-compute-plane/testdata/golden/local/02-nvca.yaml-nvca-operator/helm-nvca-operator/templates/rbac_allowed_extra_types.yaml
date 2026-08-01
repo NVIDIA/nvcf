@@ -25,8 +25,8 @@ metadata:
     app.kubernetes.io/version: "3.0.4"
     app.kubernetes.io/managed-by: Helm
 rules:
-- apiGroups: ["nvidia.com"]
-  resources: ["dynamographdeployments"]
+- apiGroups: ["foo.com"]
+  resources: ["footypes"]
   verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
 - apiGroups: ["scheduling.run.ai"]
   resources: ["podgroups"]
@@ -48,6 +48,9 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
 - apiGroups: ["nvidia.com"]
   resources: ["dynamocomponentdeployments"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["nvidia.com"]
+  resources: ["dynamographdeployments"]
   verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
 - apiGroups: ["nvidia.com"]
   resources: ["dynamographdeploymentrequests"]

@@ -136,9 +136,6 @@ Verify the resource exists:
 kubectl get topologies.kai.scheduler nvcf-mnnvl-topology
 ```
 
-To apply it without the compute plane stack, write the manifest above to a file and run
-`kubectl apply -f`.
-
 ### Opt a function in
 
 Creating the Topology changes nothing on its own. Each workload opts in through annotations

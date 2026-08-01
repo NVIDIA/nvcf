@@ -126,8 +126,8 @@ if it is missing, KAI rejects the workload's topology constraint.
 
 <Warning>
 Gang scheduling this way only works for StatefulSets. KAI Scheduler puts every replica of a
-Deployment in its own `PodGroup`, so a Deployment cannot be gang scheduled and this
-annotation has no effect there. Use a StatefulSet for multi-node workloads.
+Deployment in its own `PodGroup`, so all Pod children of a Deployment cannot be gang scheduled.
+Use a StatefulSet for multi-node workloads.
 
 </Warning>
 

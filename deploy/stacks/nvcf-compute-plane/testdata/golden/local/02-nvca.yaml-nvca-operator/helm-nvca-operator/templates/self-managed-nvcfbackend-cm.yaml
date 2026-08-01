@@ -58,6 +58,7 @@ data:
       trustBundleConfigMapName: "nvcf-transport-trust-bundle"
       trustBundleKey: "nvcf-ca-bundle.pem"
       trustBundleFingerprint: ""
+      installerImage: ""
     imageCredentialHelper:
       imageConfig:
         repository: "nvcr.io/0651155215864979/ncp-dev/nvcf-image-credential-helper"

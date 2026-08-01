@@ -35,7 +35,7 @@ agentConfig:
       validationPolicy:
         name: Unrestricted
         allowedExtraKubernetesTypes:
-          - group: nvidia.com
-            version: v1alpha1
-            kind: DynamoGraphDeployment
-            resource: dynamographdeployments
+          - group: foo.com
+            version: v1
+            kind: FooType
+            resource: footypes

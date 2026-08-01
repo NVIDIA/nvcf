@@ -22,11 +22,6 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   annotations:
-    # MNNVL scheduling on an NVLink-optimized cluster without KAI Scheduler.
-    #
-    # dra.nvcf.nvidia.io/required-nvlink-domain-index: "0"
-    #
-    #
     # Gang scheduling on an NVLink-optimized cluster running KAI Scheduler. KAI
     # reads these from the StatefulSet, not the pod template, and holds every
     # replica until they all fit in one clique. Requires the cluster operator to
@@ -50,6 +45,9 @@ spec:
     metadata:
       {{- with $profile.podAnnotations }}
       annotations:
+        # MNNVL scheduling on an NVLink-optimized cluster without KAI Scheduler.
+        #
+        # dra.nvcf.nvidia.io/required-nvlink-domain-index: "0"
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:

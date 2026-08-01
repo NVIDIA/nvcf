@@ -32,10 +32,10 @@ data:
     cluster:
       validationPolicy:
         allowedExtraKubernetesTypes:
-          - group: nvidia.com
-            kind: DynamoGraphDeployment
-            resource: dynamographdeployments
-            version: v1alpha1
+          - group: foo.com
+            kind: FooType
+            resource: footypes
+            version: v1
           - group: scheduling.run.ai
             kind: PodGroup
             resource: podgroups
@@ -63,6 +63,10 @@ data:
           - group: nvidia.com
             kind: DynamoComponentDeployment
             resource: dynamocomponentdeployments
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoGraphDeployment
+            resource: dynamographdeployments
             version: v1alpha1
           - group: nvidia.com
             kind: DynamoGraphDeploymentRequest
