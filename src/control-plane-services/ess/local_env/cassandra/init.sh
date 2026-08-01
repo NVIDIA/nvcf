@@ -27,5 +27,7 @@ done
 echo "####################### Creating ESS tables #######################"
 cqlsh cassandra -f /cassandra_cql/schema.cql
 echo "#######################  setting up for NCP testing #######################"
-cqlsh cassandra -f /cassandra_cql/ncp.cql
+# Uncomment the next line to seed the nvcf namespace for NCP mode, then run ESS
+# with the ncp-local profile. See the ESS README "NCP mode" section.
+#cqlsh cassandra -f /cassandra_cql/ncp.cql
 echo "####################### Cassandra db setup completed #######################"

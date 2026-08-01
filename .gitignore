@@ -29,6 +29,9 @@
 /public/
 /tests/bdd/out/
 
+# Maven build output. Bazel is the build path; target/ trees are transient.
+target/
+
 # Transient symlink created by root Makefile's link-secrets target;
 # points at ../../../../secrets/<env>-secrets.yaml (root-level user file).
 deploy/stacks/**/secrets/*-secrets.yaml

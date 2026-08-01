@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -12,32 +13,26 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-name: ess-local
+#
+# Stop the local Cassandra instance. Pass --purge (or -v) to also delete the
+# cassandra_data volume for a clean, empty database on the next start.
 
-services:
-  cassandra:
-    image: cassandra:4.1.0
-    ports:
-      - "9042:9042"
-    environment:
-      - CASSANDRA_CLUSTER_NAME=ess-cassandra-test-cluster
-      - CASSANDRA_BROADCAST_ADDRESS=cassandra
-    networks:
-      - cassandra_network
-    volumes:
-      - cassandra_data:/var/lib/cassandra
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
-  cassandra-init:
-    image: cassandra:4.1.0
-    networks:
-      - cassandra_network
-    volumes:
-      - ./cassandra/schema:/cassandra_cql/
-      - ./cassandra/init.sh:/init.sh
-    command: bash /init.sh
+case "${1:-}" in
+  --purge|-v)
+    echo "Stopping Cassandra and removing the cassandra_data volume ..."
+    docker compose -f "${COMPOSE_FILE}" down -v
+    ;;
+  "")
+    echo "Stopping Cassandra (volume preserved) ..."
+    docker compose -f "${COMPOSE_FILE}" down
+    ;;
+  *)
+    echo "Usage: $(basename "$0") [--purge|-v]" >&2
+    exit 2
+    ;;
+esac
 
-volumes:
-  cassandra_data:
-
-networks:
-  cassandra_network:
+echo "Done."
