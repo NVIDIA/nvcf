@@ -89,16 +89,27 @@ make install CLUSTER_NAME=...   # downloads helmfile v1.1.9 + helm v3.15.4 on fi
 
 ## Optional Add-ons
 
-Grove (topology-aware scheduling) and Dynamo (inference framework scheduling) are disabled
-by default. Enable per-environment in `environments/<env>.yaml`:
+KAI Scheduler, Grove (topology-aware scheduling), and Dynamo (inference framework
+scheduling) are disabled by default. Grove and Dynamo require KAI Scheduler
+(release and namespace `kai-scheduler`). Enable per-environment in
+`environments/<env>.yaml`:
 
 ```yaml
 addons:
+  kaiScheduler:
+    enabled: true
   groveOperator:
     enabled: true
   dynamoOperator:
     enabled: true
 ```
+
+Override KAI component resources under `addons.kaiScheduler.<component>.resources`
+(for example `addons.kaiScheduler.scheduler.resources.requests.memory`). Defaults
+are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
+
+For a standalone KAI install outside this stack, follow the
+[KAI Scheduler guide](https://docs.nvidia.com/cloud-functions/current/latest/cluster-management/kai-scheduler.html).
 
 ## Multi-Cluster Example
 

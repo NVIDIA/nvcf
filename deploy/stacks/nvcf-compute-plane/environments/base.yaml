@@ -72,6 +72,12 @@ observability:
 # =============================================================================
 addons:
 
+  # KAI Scheduler (disabled by default). Required when enabling Grove or Dynamo.
+  # Per-component resource overrides: addons.kaiScheduler.<component>.resources
+  # (requests/limits). Defaults live in helmfile.d/01-dependencies.yaml.gotmpl.
+  kaiScheduler:
+    enabled: false
+
   # Grove topology-aware scheduling operator (disabled by default)
   groveOperator:
     enabled: false

@@ -1,0 +1,41 @@
+---
+# Source: kai-scheduler/templates/hooks/pre/topology-migration/job.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: topology-migration
+  namespace: kai-scheduler
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "4"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        app: topology-migration
+    spec:
+      serviceAccountName: kai-topology-migration
+      containers:
+      - name: migration
+        image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.14.0"
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10000
+        command: ["/bin/bash", "/scripts/migrate-topologies.sh"]
+        volumeMounts:
+        - name: migration-script
+          mountPath: /scripts
+      volumes:
+      - name: migration-script
+        configMap:
+          name: topology-migration-script
+          defaultMode: 0755
+      restartPolicy: OnFailure
