@@ -53,11 +53,12 @@ data:
       deployment-environment-name: {{ .Values.reval.serviceConfig.telemetry.deploymentEnvironmentName | quote }}
 
     auth:
-      enabled: {{ .Values.reval.serviceConfig.auth.enabled }}
-    {{- if .Values.reval.serviceConfig.auth.enabled }}
-      jwk-set-url: {{ .Values.reval.serviceConfig.auth.jwkSetUrl | quote }}
-      validate-required-scopes: {{ .Values.reval.serviceConfig.auth.validateRequiredScopes | quote }}
-      render-required-scopes: {{ .Values.reval.serviceConfig.auth.renderRequiredScopes | quote }}
+      jwt:
+        enabled: {{ .Values.reval.serviceConfig.auth.jwt.enabled }}
+    {{- if .Values.reval.serviceConfig.auth.jwt.enabled }}
+        jwk-set-url: {{ .Values.reval.serviceConfig.auth.jwt.jwkSetUrl | quote }}
+        validate-required-scopes: {{ .Values.reval.serviceConfig.auth.jwt.validateRequiredScopes | quote }}
+        render-required-scopes: {{ .Values.reval.serviceConfig.auth.jwt.renderRequiredScopes | quote }}
     {{- end }}
     {{- if .Values.reval.serviceConfig.auth.oidc.enabled }}
       oidc:
