@@ -11,7 +11,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/defaults",
     importpath = "github.com/aws/aws-sdk-go-v2/aws/defaults",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/aws/aws-sdk-go-v2/aws"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws"],
 )
 
 alias(

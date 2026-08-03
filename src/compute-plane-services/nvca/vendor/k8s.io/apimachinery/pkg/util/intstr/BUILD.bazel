@@ -12,9 +12,9 @@ go_library(
     importpath = "k8s.io/apimachinery/pkg/util/intstr",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/apimachinery/pkg/runtime/serializer/cbor/direct",
-        "//vendor/k8s.io/klog/v2:klog",
-        "//vendor/sigs.k8s.io/randfill",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer/cbor/direct",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/randfill",
     ],
 )
 

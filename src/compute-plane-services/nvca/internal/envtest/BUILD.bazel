@@ -6,36 +6,36 @@ load("@rules_go//go:def.bzl", "go_library")
 # Exported CRD manifests. envtest.go resolves crds/ via runtime.Caller(0),
 # which under rules_go (compiled with -trimpath) returns
 # "internal/envtest/envtest.go". Tests that consume :envtest must:
-#   data = ["//internal/envtest:crds"]
+#   data = ["//src/compute-plane-services/nvca/internal/envtest:crds"]
 #   rundir = "."
 # so the runfiles tree materializes internal/envtest/crds/*.yaml and the
 # test process CWDs to the workspace root.
 filegroup(
     name = "crds",
     srcs = glob(["crds/*.yaml"]),
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )
 
 go_library(
     name = "envtest",
     srcs = ["envtest.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/envtest",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
     deps = [
-        "//vendor/k8s.io/client-go/kubernetes",
-        "//vendor/k8s.io/client-go/rest",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/envtest",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/healthz",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/log",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/log/zap",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/manager",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/metrics/server",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/webhook",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/envtest",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/healthz",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/log",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/log/zap",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/manager",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/metrics/server",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":envtest",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )

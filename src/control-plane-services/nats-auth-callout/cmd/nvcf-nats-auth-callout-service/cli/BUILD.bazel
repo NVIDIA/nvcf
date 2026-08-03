@@ -26,14 +26,14 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service/cli",
     # CLI is an implementation detail of the `cmd/` binary; no external
     # consumer should depend on it. CodeRabbit nit on !25.
-    visibility = ["//cmd/nvcf-nats-auth-callout-service:__pkg__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service:__pkg__"],
     deps = [
-        "//internal/config",
-        "//internal/logger",
-        "//internal/router",
-        "//internal/service",
-        "//internal/tracing",
-        "//internal/version",
+        "//src/control-plane-services/nats-auth-callout/internal/config",
+        "//src/control-plane-services/nats-auth-callout/internal/logger",
+        "//src/control-plane-services/nats-auth-callout/internal/router",
+        "//src/control-plane-services/nats-auth-callout/internal/service",
+        "//src/control-plane-services/nats-auth-callout/internal/tracing",
+        "//src/control-plane-services/nats-auth-callout/internal/version",
         "@com_github_spf13_cobra//:cobra",
         "@org_uber_go_zap//:zap",
     ],
@@ -48,8 +48,8 @@ go_test(
     ],
     embed = [":cli"],
     deps = [
-        "//internal/config",
-        "//internal/router",
+        "//src/control-plane-services/nats-auth-callout/internal/config",
+        "//src/control-plane-services/nats-auth-callout/internal/router",
         "@com_github_spf13_cobra//:cobra",
         "@com_github_spf13_pflag//:pflag",
         "@org_uber_go_zap//:zap",

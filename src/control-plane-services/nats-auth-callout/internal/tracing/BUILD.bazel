@@ -25,7 +25,7 @@ go_library(
         "otel.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/tracing",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
     deps = [
         "@io_opentelemetry_go_otel//:otel",
         "@io_opentelemetry_go_otel//propagation",
@@ -40,7 +40,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":tracing",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
 )
 
 go_test(

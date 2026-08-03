@@ -17,9 +17,9 @@ go_library(
     importpath = "sigs.k8s.io/structured-merge-diff/v6/fieldpath",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/json-iterator/go",
-        "//vendor/sigs.k8s.io/structured-merge-diff/v6/schema",
-        "//vendor/sigs.k8s.io/structured-merge-diff/v6/value",
+        "//src/compute-plane-services/nvca/vendor/github.com/json-iterator/go",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/schema",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/value",
     ],
 )
 

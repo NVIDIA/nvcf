@@ -6,7 +6,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/run-ai/karta/pkg/jq",
     importpath = "github.com/run-ai/karta/pkg/jq",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/itchyny/gojq"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/itchyny/gojq"],
 )
 
 alias(

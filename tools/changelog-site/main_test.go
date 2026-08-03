@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -184,6 +185,120 @@ func TestTagPrefixesForReleaseIncludesPathAndLegacyPrefixes(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("prefix %d = %q, want %q (all: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestBuildReleasesCollapsesDuplicateVersions covers the case that made the
+// site's from/to pickers useless: a service carrying both the legacy flat tag
+// prefix and the current path-scoped one has each release tagged twice, so the
+// version list contained the same version consecutively. The UI keys those
+// pickers by version and defaults them to the last two entries, so both
+// resolved to the same index and rendered an empty diff.
+//
+// Built against a real repo rather than by calling dedupeByVersion directly:
+// the ordering that makes the canonical tag win is a property of buildReleases
+// (prefix order from tagPrefixesForRelease plus a stable sort), and a unit test
+// on the helper alone would not notice that ordering breaking.
+func TestBuildReleasesCollapsesDuplicateVersions(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q", "-b", "main")
+	commit := func(msg string) {
+		if err := os.WriteFile(filepath.Join(repo, "f"), []byte(msg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, repo, "add", "f")
+		runGit(t, repo, "commit", "-q", "-m", msg)
+	}
+
+	commit("a")
+	runGit(t, repo, "tag", "svc/v1.0.0")
+	runGit(t, repo, "tag", "legacy-v1.0.0") // same release, both schemes
+	commit("b")
+	runGit(t, repo, "tag", "svc/v1.1.0")
+	commit("c")
+	runGit(t, repo, "tag", "svc/v1.2.0")
+
+	// Canonical prefix first, matching tagPrefixesForRelease.
+	prefixes := []string{"svc/v", "legacy-v"}
+
+	// Legacy tag on GitLab only, path-scoped tag on GitHub only: the merged
+	// release is carried by both even though neither tag alone says so.
+	originFor := func(tag string) string {
+		if strings.HasPrefix(tag, "legacy-") {
+			return "gitlab"
+		}
+		return "github"
+	}
+
+	rels, err := buildReleases(repo, prefixes, "", "", originFor)
+	if err != nil {
+		t.Fatalf("buildReleases: %v", err)
+	}
+
+	var versions []string
+	for _, r := range rels {
+		versions = append(versions, r.Version)
+	}
+	want := []string{"1.0.0", "1.1.0", "1.2.0"}
+	if len(versions) != len(want) {
+		t.Fatalf("versions = %v, want %v", versions, want)
+	}
+	for i := range want {
+		if versions[i] != want[i] {
+			t.Fatalf("versions = %v, want %v", versions, want)
+		}
+	}
+
+	// The surviving tag must be the path-scoped one, so commit ranges stay
+	// anchored to the scheme in current use.
+	if rels[0].Tag != "svc/v1.0.0" {
+		t.Errorf("kept tag = %q, want the canonical svc/v1.0.0", rels[0].Tag)
+	}
+	if rels[0].Origin != "both" {
+		t.Errorf("origin = %q, want %q (each host carried a different tag name)", rels[0].Origin, "both")
+	}
+
+	// The regression itself: the last two entries must differ, or the UI's
+	// default from/to selection collapses to an empty range.
+	last, prev := versions[len(versions)-1], versions[len(versions)-2]
+	if last == prev {
+		t.Errorf("last two versions are both %q; from/to pickers would collapse", last)
+	}
+}
+
+// TestDedupeByVersionKeepsDistinctVersions guards the other direction: the
+// collapse must not swallow genuinely different releases.
+func TestDedupeByVersionKeepsDistinctVersions(t *testing.T) {
+	in := []semver{
+		{version: "1.0.0", tag: "svc/v1.0.0"},
+		{version: "1.0.1", tag: "svc/v1.0.1"},
+		{version: "1.1.0", tag: "svc/v1.1.0"},
+	}
+	out, aliases := dedupeByVersion(in)
+	if len(out) != 3 {
+		t.Fatalf("kept %d releases, want 3: %v", len(out), out)
+	}
+	if len(aliases) != 0 {
+		t.Errorf("aliases = %v, want none", aliases)
+	}
+}
+
+// TestMergeOriginCombinesHosts pins the labelling rule used when duplicate tags
+// are folded together.
+func TestMergeOriginCombinesHosts(t *testing.T) {
+	for _, tc := range []struct{ a, b, want string }{
+		{"gitlab", "gitlab", "gitlab"},
+		{"github", "github", "github"},
+		{"gitlab", "github", "both"},
+		{"github", "gitlab", "both"},
+		{"both", "gitlab", "both"},
+	} {
+		if got := mergeOrigin(tc.a, tc.b); got != tc.want {
+			t.Errorf("mergeOrigin(%q,%q) = %q, want %q", tc.a, tc.b, got, tc.want)
 		}
 	}
 }

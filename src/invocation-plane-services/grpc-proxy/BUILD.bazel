@@ -45,7 +45,7 @@ go_library(
         "nvcf-grpc-proxy/proxy.version": "{STABLE_VERSION}",
     },
     deps = [
-        "//proxy",
+        "//src/invocation-plane-services/grpc-proxy/proxy",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/config",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/logs",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/tracing",

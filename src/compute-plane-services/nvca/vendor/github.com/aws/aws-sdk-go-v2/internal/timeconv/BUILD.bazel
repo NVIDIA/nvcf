@@ -5,11 +5,11 @@ go_library(
     srcs = ["duration.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/timeconv",
     importpath = "github.com/aws/aws-sdk-go-v2/internal/timeconv",
-    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":timeconv",
-    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
 )

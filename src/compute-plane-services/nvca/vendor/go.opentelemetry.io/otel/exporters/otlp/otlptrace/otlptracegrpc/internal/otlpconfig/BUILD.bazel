@@ -10,22 +10,22 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc/internal/otlpconfig",
     importpath = "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc/internal/otlpconfig",
-    visibility = ["//vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc:__subpackages__"],
     deps = [
-        "//vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace",
-        "//vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc/internal/envconfig",
-        "//vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc/internal/retry",
-        "//vendor/go.opentelemetry.io/otel/internal/global",
-        "//vendor/google.golang.org/grpc",
-        "//vendor/google.golang.org/grpc/backoff",
-        "//vendor/google.golang.org/grpc/credentials",
-        "//vendor/google.golang.org/grpc/credentials/insecure",
-        "//vendor/google.golang.org/grpc/encoding/gzip",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc/internal/envconfig",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc/internal/retry",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/internal/global",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/backoff",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/credentials",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/credentials/insecure",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/encoding/gzip",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":otlpconfig",
-    visibility = ["//vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc:__subpackages__"],
 )

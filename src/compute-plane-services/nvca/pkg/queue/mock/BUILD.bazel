@@ -8,7 +8,7 @@ go_library(
     srcs = ["mock.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/mock",
     visibility = ["//visibility:public"],
-    deps = ["//pkg/queue"],
+    deps = ["//src/compute-plane-services/nvca/pkg/queue"],
 )
 
 alias(
@@ -22,7 +22,7 @@ go_test(
     srcs = ["mock_test.go"],
     embed = [":mock"],
     deps = [
-        "//pkg/queue",
-        "//vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/pkg/queue",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
     ],
 )
