@@ -878,15 +878,12 @@ agentConfig:
           samplingPercentage: 10
           mode: hash_seed
           hashSeed: 1234
-          failClosed: false
-          attributeSource: record
-          fromAttribute: log.id
-          samplingPriority: sampling.priority
+          failClosed: true
         traceSampling:
           samplingPercentage: 1
           mode: hash_seed
           hashSeed: 1234
-          failClosed: false
+          failClosed: true
 ```
 
 `logSampling` and `traceSampling` configure separate probabilistic samplers.
@@ -894,6 +891,13 @@ Both support `samplingPercentage`, `mode`, `hashSeed`, and `failClosed`.
 `logSampling` also supports `attributeSource`, `fromAttribute`, and
 `samplingPriority`. An unset `mode` uses `hash_seed`. Leave either sampling
 percentage unset to keep that signal unsampled.
+
+For `hash_seed`, use `0` or a percentage of at least `0.006103515625`.
+`proportional` and `equalizing` log sampling require a TraceID or
+`sampling.randomness`; they do not support `attributeSource` or
+`fromAttribute`. Set `failClosed: true` to reject log records without usable
+randomness. If you configure `samplingPriority`, record values must be greater
+than `0`; zero is not supported by the pinned collector version.
 
 BYOO metric subset example:
 

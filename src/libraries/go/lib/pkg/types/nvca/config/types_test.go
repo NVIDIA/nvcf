@@ -255,45 +255,51 @@ func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
 	assert.Equal(t, cfg.BYOOOTelCollector, got)
 }
 
-func TestBYOOOTelCollectorConfig_EnvVarsDisablesInvalidSampling(t *testing.T) {
+func TestBYOOOTelCollectorConfig_ValidateSampling(t *testing.T) {
 	tests := []struct {
-		name               string
-		samplingPercentage float64
+		name            string
+		samplingPercent float64
+		mode            string
+		attributeSource string
+		fromAttribute   string
+		wantErr         string
 	}{
-		{name: "NaN", samplingPercentage: math.NaN()},
-		{name: "positive infinity", samplingPercentage: math.Inf(1)},
-		{name: "negative infinity", samplingPercentage: math.Inf(-1)},
-		{name: "negative", samplingPercentage: -1},
-		{name: "below precision floor", samplingPercentage: byooOTelMinSamplingPercentage / 2},
-		{name: "exceeds float32", samplingPercentage: float64(math.MaxFloat32) * 2},
+		{name: "accepts zero", samplingPercent: 0, mode: "hash_seed"},
+		{name: "rejects default hash seed below lower bound", samplingPercent: byooOTelHashSeedMinSamplingPercentage / 2, wantErr: "at least"},
+		{name: "accepts hash seed lower bound", samplingPercent: byooOTelHashSeedMinSamplingPercentage, mode: "hash_seed"},
+		{name: "rejects hash seed below lower bound", samplingPercent: byooOTelHashSeedMinSamplingPercentage / 2, mode: "hash_seed", wantErr: "at least"},
+		{name: "accepts proportional lower bound", samplingPercent: byooOTelConsistentMinSamplingPercentage, mode: "proportional"},
+		{name: "rejects NaN", samplingPercent: math.NaN(), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects positive infinity", samplingPercent: math.Inf(1), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects negative infinity", samplingPercent: math.Inf(-1), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects negative", samplingPercent: -1, mode: "hash_seed", wantErr: "between"},
+		{name: "rejects exceeding float32", samplingPercent: float64(math.MaxFloat32) * 2, mode: "hash_seed", wantErr: "between"},
+		{name: "rejects record attributes outside hash seed", samplingPercent: 1, mode: "proportional", attributeSource: "record", fromAttribute: "log.id", wantErr: "require hash_seed"},
+		{name: "rejects unsupported mode", samplingPercent: 1, mode: "invalid", wantErr: "unsupported"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			samplingPercentage := tt.samplingPercentage
+			samplingPercentage := tt.samplingPercent
 			config := BYOOOTelCollectorConfig{
-				ExporterHelper: BYOOOTelExporterHelperConfig{Timeout: "30s"},
 				LogSampling: BYOOOTelLogSamplingConfig{
 					SamplingPercentage: &samplingPercentage,
-					Mode:               "hash_seed",
+					Mode:               tt.mode,
+					AttributeSource:    tt.attributeSource,
+					FromAttribute:      tt.fromAttribute,
 				},
 				TraceSampling: BYOOOTelSamplingConfig{
 					SamplingPercentage: &samplingPercentage,
-					Mode:               "hash_seed",
+					Mode:               tt.mode,
 				},
 			}
 
-			envs := config.EnvVars()
-			require.Len(t, envs, 1)
-			assert.Equal(t, BYOOOTelCollectorConfigEnv, envs[0].Name)
-
-			data, err := base64.StdEncoding.DecodeString(envs[0].Value)
-			require.NoError(t, err)
-			var got BYOOOTelCollectorConfig
-			require.NoError(t, json.Unmarshal(data, &got))
-			assert.Equal(t, "30s", got.ExporterHelper.Timeout)
-			assert.Nil(t, got.LogSampling.SamplingPercentage)
-			assert.Nil(t, got.TraceSampling.SamplingPercentage)
+			err := config.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
 }

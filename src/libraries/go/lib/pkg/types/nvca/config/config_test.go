@@ -471,6 +471,17 @@ agent:
 		assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.Agent.BYOOWorkloadMetrics.DropLabels)
 	})
 
+	t.Run("rejects_invalid_byoo_sampling", func(t *testing.T) {
+		_, err := DecodeConfig([]byte(`
+agent:
+  byooOtelCollector:
+    logSampling:
+      samplingPercentage: 0.001
+      mode: hash_seed
+`))
+		require.ErrorContains(t, err, "validate merged config: agent.byooOtelCollector: log sampling: samplingPercentage must be 0 or at least")
+	})
+
 	t.Run("duration_parsing", func(t *testing.T) {
 		data := []byte(`
 agent:

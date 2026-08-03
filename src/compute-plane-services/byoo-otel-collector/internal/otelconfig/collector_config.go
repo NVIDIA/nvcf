@@ -36,7 +36,10 @@ type OTelCollectorConfig struct {
 	TraceSampling  SamplingConfig       `json:"traceSampling,omitempty"`
 }
 
-const minSamplingPercentage = 100.0 / (1 << 56)
+const (
+	consistentMinSamplingPercentage = 100.0 / (1 << 56)
+	hashSeedMinSamplingPercentage   = 100.0 / (1 << 14)
+)
 
 // IsZero returns true when no collector rendering overrides are configured.
 func (c *OTelCollectorConfig) IsZero() bool {
@@ -208,14 +211,18 @@ func decodeOTelCollectorConfig(encoded string) (OTelCollectorConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return OTelCollectorConfig{}, fmt.Errorf("decode json: %w", err)
 	}
-	cfg.normalizeSampling()
+	if err := cfg.Validate(); err != nil {
+		return OTelCollectorConfig{}, fmt.Errorf("validate config: %w", err)
+	}
 	return cfg, nil
 }
 
-func applyOTelCollectorConfig(otelConfig *OpenTelemetryConfig, cfg OTelCollectorConfig) {
-	cfg.normalizeSampling()
+func applyOTelCollectorConfig(otelConfig *OpenTelemetryConfig, cfg OTelCollectorConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
 	if cfg.IsZero() {
-		return
+		return nil
 	}
 	applyExporterHelperConfig(otelConfig, cfg.ExporterHelper)
 	applyMemoryLimiterConfig(otelConfig, cfg.MemoryLimiter)
@@ -223,34 +230,74 @@ func applyOTelCollectorConfig(otelConfig *OpenTelemetryConfig, cfg OTelCollector
 	applyLogBatchConfig(otelConfig, cfg.LogBatch)
 	applyLogSamplingConfig(otelConfig, "probabilistic_sampler/logs", cfg.LogSampling)
 	applySamplingConfig(otelConfig, "traces", "probabilistic_sampler/traces", cfg.TraceSampling)
+	return nil
 }
 
-func (c *OTelCollectorConfig) normalizeSampling() {
-	c.LogSampling.SamplingPercentage = normalizeSamplingPercentage("logs", c.LogSampling.SamplingPercentage)
-	c.TraceSampling.SamplingPercentage = normalizeSamplingPercentage("traces", c.TraceSampling.SamplingPercentage)
-}
-
-func normalizeSamplingPercentage(pipeline string, samplingPercentage *float64) *float64 {
-	if samplingPercentage == nil || isValidSamplingPercentage(*samplingPercentage) {
-		return samplingPercentage
+// Validate rejects sampler settings that the pinned collector cannot apply safely.
+func (c OTelCollectorConfig) Validate() error {
+	if err := c.LogSampling.validate(); err != nil {
+		return fmt.Errorf("log sampling: %w", err)
 	}
-
-	if logger.Logger != nil {
-		logger.Logger.Warnw(
-			"BYOO OTel collector sampling percentage is invalid; sampler disabled",
-			"pipeline", pipeline,
-			"samplingPercentage", *samplingPercentage,
-		)
+	if err := c.TraceSampling.validate(); err != nil {
+		return fmt.Errorf("trace sampling: %w", err)
 	}
 	return nil
 }
 
-func isValidSamplingPercentage(samplingPercentage float64) bool {
-	return !math.IsNaN(samplingPercentage) &&
-		!math.IsInf(samplingPercentage, 0) &&
-		samplingPercentage >= 0 &&
-		samplingPercentage <= math.MaxFloat32 &&
-		(samplingPercentage == 0 || samplingPercentage >= minSamplingPercentage)
+func (c SamplingConfig) validate() error {
+	return validateSampling(c.Mode, c.SamplingPercentage)
+}
+
+func (c LogSamplingConfig) validate() error {
+	if err := validateSampling(c.Mode, c.SamplingPercentage); err != nil {
+		return err
+	}
+	if c.SamplingPercentage == nil || c.Mode == "" || c.Mode == "hash_seed" {
+		return nil
+	}
+	if c.AttributeSource != "" || c.FromAttribute != "" {
+		return fmt.Errorf("attributeSource and fromAttribute require hash_seed mode")
+	}
+	return nil
+}
+
+func validateSampling(mode string, samplingPercentage *float64) error {
+	if samplingPercentage == nil {
+		return nil
+	}
+
+	minimumSamplingPercentage, err := minimumSamplingPercentage(mode)
+	if err != nil {
+		return err
+	}
+	if math.IsNaN(*samplingPercentage) || math.IsInf(*samplingPercentage, 0) {
+		return fmt.Errorf("samplingPercentage must be finite")
+	}
+	if *samplingPercentage < 0 || *samplingPercentage > math.MaxFloat32 {
+		return fmt.Errorf("samplingPercentage must be between 0 and %g", math.MaxFloat32)
+	}
+	if *samplingPercentage != 0 && *samplingPercentage < minimumSamplingPercentage {
+		return fmt.Errorf("samplingPercentage must be 0 or at least %g for %s mode", minimumSamplingPercentage, effectiveSamplingMode(mode))
+	}
+	return nil
+}
+
+func minimumSamplingPercentage(mode string) (float64, error) {
+	switch mode {
+	case "", "hash_seed":
+		return hashSeedMinSamplingPercentage, nil
+	case "proportional", "equalizing":
+		return consistentMinSamplingPercentage, nil
+	default:
+		return 0, fmt.Errorf("unsupported sampling mode %q", mode)
+	}
+}
+
+func effectiveSamplingMode(mode string) string {
+	if mode == "" {
+		return "hash_seed"
+	}
+	return mode
 }
 
 func applySamplingConfig(otelConfig *OpenTelemetryConfig, pipelineID, processorID string, cfg SamplingConfig) {

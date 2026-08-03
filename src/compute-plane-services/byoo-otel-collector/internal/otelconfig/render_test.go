@@ -97,6 +97,30 @@ func TestRenderOtelConfig(t *testing.T) {
 	}
 }
 
+func TestRenderOtelConfigRejectsRecordSamplingOutsideHashSeed(t *testing.T) {
+	samplingPercentage := 10.0
+	_, err := RenderOtelConfigFromBytes(
+		[]byte(`{"telemetries": {"logsTelemetry": {"protocol": "HTTP", "provider": "SPLUNK", "endpoint": "http://example.com", "name": "example-logs"}}}`),
+		TemplateConfig{
+			BackendType:       K8s,
+			WorkloadType:      Container,
+			Namespace:         "foo",
+			FunctionID:        "fake-function-id",
+			FunctionVersionID: "fake-function-version-id",
+			OTelCollector: OTelCollectorConfig{
+				LogSampling: LogSamplingConfig{
+					SamplingPercentage: &samplingPercentage,
+					Mode:               "proportional",
+					AttributeSource:    "record",
+					FromAttribute:      "log.id",
+				},
+			},
+		},
+	)
+
+	assert.ErrorContains(t, err, "attributeSource and fromAttribute require hash_seed mode")
+}
+
 func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
 	gotCfg, err := RenderOtelConfigFromBytes(
 		[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "example-metrics"}}}`),

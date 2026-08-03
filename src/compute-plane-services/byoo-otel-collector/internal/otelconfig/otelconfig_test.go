@@ -359,51 +359,64 @@ func TestGetTemplateConfig(t *testing.T) {
 	}
 }
 
-func TestOTelCollectorConfig_NormalizeSamplingDisablesInvalidSampling(t *testing.T) {
+func TestOTelCollectorConfig_ValidateSampling(t *testing.T) {
 	tests := []struct {
-		name               string
-		samplingPercentage float64
+		name            string
+		samplingPercent float64
+		mode            string
+		attributeSource string
+		fromAttribute   string
+		wantErr         string
 	}{
-		{name: "NaN", samplingPercentage: math.NaN()},
-		{name: "positive infinity", samplingPercentage: math.Inf(1)},
-		{name: "negative infinity", samplingPercentage: math.Inf(-1)},
-		{name: "negative", samplingPercentage: -1},
-		{name: "below precision floor", samplingPercentage: minSamplingPercentage / 2},
-		{name: "exceeds float32", samplingPercentage: float64(math.MaxFloat32) * 2},
+		{name: "accepts zero", samplingPercent: 0, mode: "hash_seed"},
+		{name: "rejects default hash seed below lower bound", samplingPercent: hashSeedMinSamplingPercentage / 2, wantErr: "at least"},
+		{name: "accepts hash seed lower bound", samplingPercent: hashSeedMinSamplingPercentage, mode: "hash_seed"},
+		{name: "rejects hash seed below lower bound", samplingPercent: hashSeedMinSamplingPercentage / 2, mode: "hash_seed", wantErr: "at least"},
+		{name: "accepts proportional lower bound", samplingPercent: consistentMinSamplingPercentage, mode: "proportional"},
+		{name: "rejects NaN", samplingPercent: math.NaN(), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects positive infinity", samplingPercent: math.Inf(1), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects negative infinity", samplingPercent: math.Inf(-1), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects negative", samplingPercent: -1, mode: "hash_seed", wantErr: "between"},
+		{name: "rejects exceeding float32", samplingPercent: float64(math.MaxFloat32) * 2, mode: "hash_seed", wantErr: "between"},
+		{name: "rejects record attributes outside hash seed", samplingPercent: 1, mode: "proportional", attributeSource: "record", fromAttribute: "log.id", wantErr: "require hash_seed"},
+		{name: "rejects unsupported mode", samplingPercent: 1, mode: "invalid", wantErr: "unsupported"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			samplingPercentage := tt.samplingPercentage
+			samplingPercentage := tt.samplingPercent
 			config := OTelCollectorConfig{
-				LogSampling:   LogSamplingConfig{SamplingPercentage: &samplingPercentage},
-				TraceSampling: SamplingConfig{SamplingPercentage: &samplingPercentage},
+				LogSampling: LogSamplingConfig{
+					SamplingPercentage: &samplingPercentage,
+					Mode:               tt.mode,
+					AttributeSource:    tt.attributeSource,
+					FromAttribute:      tt.fromAttribute,
+				},
+				TraceSampling: SamplingConfig{SamplingPercentage: &samplingPercentage, Mode: tt.mode},
 			}
 
-			config.normalizeSampling()
-
-			assert.Nil(t, config.LogSampling.SamplingPercentage)
-			assert.Nil(t, config.TraceSampling.SamplingPercentage)
-			assert.True(t, config.IsZero())
+			err := config.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
 }
 
-func TestDecodeOTelCollectorConfigDisablesInvalidSampling(t *testing.T) {
+func TestDecodeOTelCollectorConfigRejectsInvalidSampling(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte(`{
         "exporterHelper": {"timeout": "30s"},
         "logSampling": {"samplingPercentage": -1, "mode": "hash_seed"},
         "traceSampling": {"samplingPercentage": 0.000000000000001, "mode": "hash_seed"}
     }`))
 
-	config, err := decodeOTelCollectorConfig(encoded)
-	require.NoError(t, err)
-	assert.Equal(t, "30s", config.ExporterHelper.Timeout)
-	assert.Nil(t, config.LogSampling.SamplingPercentage)
-	assert.Nil(t, config.TraceSampling.SamplingPercentage)
+	_, err := decodeOTelCollectorConfig(encoded)
+	require.ErrorContains(t, err, "validate config: log sampling")
 }
 
-func TestApplyOTelCollectorConfigDisablesInvalidSampling(t *testing.T) {
+func TestApplyOTelCollectorConfigRejectsInvalidSampling(t *testing.T) {
 	invalidSamplingPercentage := -1.0
 	config := OTelCollectorConfig{
 		LogSampling:   LogSamplingConfig{SamplingPercentage: &invalidSamplingPercentage},
@@ -422,7 +435,7 @@ func TestApplyOTelCollectorConfigDisablesInvalidSampling(t *testing.T) {
 		Processors []string `yaml:"processors"`
 	}{Processors: []string{"batch"}}
 
-	applyOTelCollectorConfig(otelConfig, config)
+	require.ErrorContains(t, applyOTelCollectorConfig(otelConfig, config), "log sampling")
 
 	assert.NotContains(t, otelConfig.Processors, "probabilistic_sampler/logs")
 	assert.NotContains(t, otelConfig.Processors, "probabilistic_sampler/traces")
