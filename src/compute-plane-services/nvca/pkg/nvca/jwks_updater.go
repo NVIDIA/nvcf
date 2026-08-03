@@ -37,10 +37,18 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 )
+
+// jwksPushURLTemplate is the semconv url.template for the ICMS JWKS push. It
+// mirrors the placeholder form used by the other ICMS routes so the client
+// metrics stay low cardinality.
+const jwksPushURLTemplate = "v1/nvca/clusters/{clusterId}/jwks"
 
 // JWKSUpdater periodically checks the K8s OIDC JWKS and pushes updates to ICMS.
 type JWKSUpdater struct {
@@ -68,6 +76,12 @@ type JWKSUpdaterOptions struct {
 	// TokenPath is the projected SA token file the agent reads to authenticate
 	// the ICMS push.
 	TokenPath string
+	// TransportWrapper, when set, wraps the ICMS push client's transport as its
+	// outermost layer. The JWKS push is a fifth ICMS route that does not go
+	// through the shared retryable client, so it needs the wrapper passed in
+	// explicitly to appear in the client metrics alongside register, heartbeat,
+	// credentials and instances.
+	TransportWrapper func(http.RoundTripper) http.RoundTripper
 }
 
 // NewJWKSUpdater creates a new JWKSUpdater that pushes JWKS changes to ICMS.
@@ -90,6 +104,25 @@ func newJWKSUpdater(opts JWKSUpdaterOptions, caCertPath string) (*JWKSUpdater, e
 	if err != nil {
 		return nil, fmt.Errorf("build OIDC HTTP client for JWKS updater: %w", err)
 	}
+	// The JWKS push does not go through the shared retryable client, so its
+	// transport chain is assembled here to match what that factory provides for
+	// the other ICMS routes: otelhttp for client tracing and W3C context
+	// propagation, with the metrics wrapper outermost. otelhttp's own client
+	// metrics are suppressed when a wrapper is present so the wrapper stays the
+	// single source for the semconv HTTP client series.
+	var jwksTransport http.RoundTripper = http.DefaultTransport
+	var otelOpts []otelhttp.Option
+	if opts.TransportWrapper != nil {
+		otelOpts = append(otelOpts, otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()))
+	}
+	jwksTransport = otelhttp.NewTransport(jwksTransport, otelOpts...)
+	if opts.TransportWrapper != nil {
+		jwksTransport = opts.TransportWrapper(jwksTransport)
+	}
+	icmsClient := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: jwksTransport,
+	}
 	return &JWKSUpdater{
 		icmsURL:                opts.ICMSURL,
 		icmsHostHeaderOverride: opts.ICMSHostHeaderOverride,
@@ -98,10 +131,8 @@ func newJWKSUpdater(opts JWKSUpdaterOptions, caCertPath string) (*JWKSUpdater, e
 		interval:               30 * time.Minute,
 		k8sClient:              k8sClient,
 		oidcClient:             oidcClient,
-		icmsClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
-		k8sSATokenPath: k8sSATokenPath,
+		icmsClient:             icmsClient,
+		k8sSATokenPath:         k8sSATokenPath,
 	}, nil
 }
 
@@ -255,7 +286,10 @@ func (u *JWKSUpdater) checkAndPush(ctx context.Context) {
 		return
 	}
 
-	// Push to ICMS using structured JSON marshaling to prevent injection
+	// Push to ICMS using structured JSON marshaling to prevent injection.
+	// The url.template mirrors the other ICMS routes: the cluster ID is replaced
+	// with a placeholder so the client metrics stay low cardinality.
+	ctx = clientmetrics.ContextWithURLTemplate(ctx, jwksPushURLTemplate)
 	pushURL := fmt.Sprintf("%s/v1/nvca/clusters/%s/jwks", u.icmsURL, u.clusterID)
 	bodyBytes, err := json.Marshal(jwksPushBody{JWKS: string(jwksData)})
 	if err != nil {

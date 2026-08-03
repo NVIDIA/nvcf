@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1183,4 +1184,71 @@ func TestICMSPathConfig_CustomPathsFromEnv(t *testing.T) {
 		require.NotNil(t, req)
 		assert.Contains(t, req.URL.Path, "custom/sirs/req-99")
 	})
+}
+
+// ctxCapturingTokenFetcher records the context it was called with, so a test can
+// assert what the ICMS client hands to the auth path.
+type ctxCapturingTokenFetcher struct {
+	seenURLTemplate string
+	called          bool
+}
+
+func (f *ctxCapturingTokenFetcher) FetchToken(ctx context.Context) (string, error) {
+	f.called = true
+	f.seenURLTemplate = clientmetrics.URLTemplateFromContext(ctx)
+	return "test-token", nil
+}
+
+// TestICMSClient_DoesNotLeakURLTemplateToTokenFetcher pins a real defect: the
+// url.template must be bound to the ICMS request only, never to the caller's
+// context. The token fetcher is reached with that same context and is itself
+// instrumented (peer.service="auth"), so a template on the caller context would
+// stamp the auth server's series with an ICMS route it never called, splitting
+// one auth series across every ICMS route.
+func TestICMSClient_DoesNotLeakURLTemplateToTokenFetcher(t *testing.T) {
+	var requestTemplate string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestTemplate = clientmetrics.URLTemplateFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	tf := &ctxCapturingTokenFetcher{}
+	c := newICMSClient(ctx, "cluster-123", srv.URL, "", tf, nil)
+
+	// The handler runs server-side so it cannot observe the client context; assert
+	// on the client side instead by recording what the transport sees.
+	var transportTemplate string
+	c.client.Transport = roundTripCapture{
+		inner: c.client.Transport,
+		capture: func(req *http.Request) {
+			transportTemplate = clientmetrics.URLTemplateFromContext(req.Context())
+		},
+	}
+
+	_, _ = c.PutHealthStatus(ctx, &types.HealthStatusRequest{})
+
+	if !tf.called {
+		t.Fatal("expected the token fetcher to be called")
+	}
+	if tf.seenURLTemplate != "" {
+		t.Errorf("token fetcher context carries url.template %q; it must be bound to the ICMS request only, "+
+			"otherwise the auth client reports an ICMS route it never called", tf.seenURLTemplate)
+	}
+	if want := "v1/nvca/clusters/{clusterId}/heartbeat"; transportTemplate != want {
+		t.Errorf("ICMS request url.template = %q, want %q", transportTemplate, want)
+	}
+	_ = requestTemplate
+}
+
+type roundTripCapture struct {
+	inner   http.RoundTripper
+	capture func(*http.Request)
+}
+
+func (r roundTripCapture) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.capture(req)
+	return r.inner.RoundTrip(req)
 }
