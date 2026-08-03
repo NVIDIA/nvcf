@@ -5,9 +5,10 @@ exercises the collector under controlled telemetry load using the same workload
 shape produced in production, by rendering through the shared translation
 library (`icms-translate`) rather than hand-written collector manifests.
 
-> Status: first milestone. Only rendering and render-shape validation are
-> implemented today. Deployment, load generation, the OTLP sink, measurements,
-> and reporting land in later milestones.
+> Status: `render` (translate + validate, no cluster), `run` (deploy the
+> authentic collector to a cluster and wait until ready), and `cleanup` are
+> implemented. Load generation, the OTLP sink, measurements, and reporting land
+> in later milestones.
 
 ## Why translation-driven
 
@@ -29,6 +30,8 @@ what the suite measures.
 - `pkg/spec` — synthetic container/Helm launch specs and translate config.
 - `pkg/render` — runs `function.Translate` and extracts the collector.
 - `pkg/validate` — render-shape validation gate.
+- `pkg/deploy` — applies the rendered workload to a cluster (k3d or remote),
+  fronts it with a harness OTLP Service, waits for readiness, and tears it down.
 - `pkg/profile` — `dev` and `baseline` execution profiles.
 
 This is a standalone Go module, deliberately kept out of the collector
@@ -51,12 +54,12 @@ make -C .. perf-test
 
 ## Usage
 
+### `render`
+
 `render` runs entirely locally: it translates the workload in-process and prints
 a summary or manifest. It does **not** connect to a cluster or shell out to
 `kubectl`. The YAML/JSON it prints is a standard Pod manifest (including
-`apiVersion`/`kind`) that you can hand to `kubectl apply -f` yourself once
-deployment support lands. Deploying and driving load against a cluster is the
-job of the `run` command in a later milestone.
+`apiVersion`/`kind`) that you can hand to `kubectl apply -f` yourself.
 
 ```bash
 # Render and validate both shapes (no cluster required).
@@ -66,7 +69,7 @@ GOWORK=off go run ./cmd/perf render --shape both
 GOWORK=off go run ./cmd/perf render --shape container --output yaml
 ```
 
-### `render` flags
+Flags:
 
 - `--shape` (`both`): `container`, `helm`, or `both`.
 - `--profile` (`dev`): `dev` or `baseline`.
@@ -79,7 +82,40 @@ stderr) so it can be piped to `kubectl` or a parser. `yaml` emits a
 multi-document stream (`---`-separated) and `json` emits an array, so
 `--shape both` stays a single valid document.
 
-`run` and `cleanup` are scaffolded and return a clear "not implemented" message.
+### `run`
+
+`run` renders and validates the workload, deploys the authentic collector to the
+target cluster (fronted by a harness ClusterIP OTLP Service so later milestones
+can drive load at it), and waits for the collector pod to become ready. It reads
+the ambient kubeconfig (or `--kubeconfig`/`--context`) and cleans up afterwards
+unless `--retain` is set. When more than one shape is deployed, each gets its own
+suffixed namespace (e.g. `byoo-perf-container`) so their pods never collide.
+
+```bash
+# Deploy the container-shape collector, wait for ready, then clean up.
+GOWORK=off go run ./cmd/perf run --shape container
+
+# Deploy both shapes and keep them for inspection.
+GOWORK=off go run ./cmd/perf run --shape both --retain
+```
+
+Flags: `--shape`, `--profile`, `--mode` (`k3d`/`remote`), `--collector-image`,
+`--namespace`, `--kubeconfig`, `--context`, `--ready-timeout` (`3m`), `--retain`.
+
+> Load generation and measurement are not wired yet: `run` currently deploys the
+> authentic collector and verifies it starts.
+
+### `cleanup`
+
+`cleanup` deletes every pod and service the suite created in a namespace, scoped
+by the suite's `app.kubernetes.io/part-of=byoo-perf` label so it never touches
+unrelated resources.
+
+```bash
+GOWORK=off go run ./cmd/perf cleanup --namespace byoo-perf
+```
+
+Flags: `--shape`, `--namespace`, `--kubeconfig`, `--context`.
 
 ## Execution profiles
 
