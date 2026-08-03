@@ -150,6 +150,8 @@ func nvcfAuthHTTPError(err error) error {
 	switch status.Code(err) {
 	case codes.OK:
 		return nil
+	case codes.InvalidArgument:
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	case codes.Unauthenticated:
 		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
 	case codes.PermissionDenied:
