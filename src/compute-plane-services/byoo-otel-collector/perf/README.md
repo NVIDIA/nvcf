@@ -7,9 +7,9 @@ library (`icms-translate`) rather than hand-written collector manifests.
 
 > Status: `render` (translate + validate, no cluster), `run` (provision a
 > managed k3d cluster or use a remote one, deploy an in-cluster OTLP sink + the
-> authentic collector pointed at it, then drive telemetrygen load), and
-> `cleanup` are implemented. Measurement and reporting land in the next
-> milestone.
+> authentic collector pointed at it, drive telemetrygen load, and measure a
+> baseline), and `cleanup` are implemented. There are no pass/fail thresholds
+> yet — `run` establishes a reproducible baseline.
 
 ## Why translation-driven
 
@@ -41,6 +41,9 @@ what the suite measures.
   everything down.
 - `pkg/labels` — the shared labels every object carries so cleanup is scoped.
 - `pkg/k3d` — provisions/tears down the managed local k3d cluster (`k3d` mode).
+- `pkg/report` — parses collector/sink metric scrapes over the measurement
+  window into a baseline (throughput, drops, delivery, resources, health) and
+  emits a summary and JSON.
 - `pkg/profile` — `dev` and `baseline` execution profiles.
 
 This is a standalone Go module, deliberately kept out of the collector
@@ -102,7 +105,13 @@ multi-document stream (`---`-separated) and `json` emits an array, so
 3. deploys the collector (fronted by a harness ClusterIP OTLP Service) and waits
    for it to become ready;
 4. drives **telemetrygen** load at the profile's rates for `warmup + window`;
-5. cleans up afterwards unless `--retain` is set.
+5. **measures** a baseline: after the warmup it scrapes the collector's and
+   sink's Prometheus endpoints (through the API-server proxy, so no
+   metrics-server or port-forward is needed) at the start and end of the window
+   and computes per-signal throughput, drops, end-to-end delivery, the
+   collector's CPU/memory, and pod restart/OOM health;
+6. prints a summary (and writes `<results-dir>/<shape>.json` if `--results-dir`
+   is set), then cleans up unless `--retain` is set.
 
 The target cluster depends on `--mode`:
 
@@ -130,14 +139,20 @@ GOWORK=off go run ./cmd/perf run --shape container --import-images
 GOWORK=off go run ./cmd/perf run --mode remote --shape both --skip-load --retain
 ```
 
+```bash
+# Measure both shapes and persist JSON baselines.
+GOWORK=off go run ./cmd/perf run --shape both --results-dir ./results
+```
+
 Flags: `--shape`, `--profile`, `--mode` (`k3d`/`remote`), `--collector-image`,
 `--sink-image`, `--loadgen-image`, `--namespace`, `--kubeconfig`, `--context`,
 `--ready-timeout` (`3m`), `--retain`, `--skip-load`, `--k3d-cluster`,
-`--import-images`.
+`--import-images`, `--results-dir`.
 
-> Measurement is not wired yet: `run` drives load end-to-end but does not yet
-> collect or report throughput/resource metrics. The sink already exposes its
-> receiver counters at its `metrics` port for the next milestone to read.
+The baseline has no pass/fail thresholds yet; the numbers establish a
+reproducible baseline. Metric-name suffixes vary across collector-contrib
+versions, so `pkg/report` matches a list of candidate names per concept and
+notes any that were missing from the scrape rather than failing.
 
 ### `cleanup`
 

@@ -172,6 +172,7 @@ func TestRunCmdDefaults(t *testing.T) {
 		"loadgen-image": loadgen.DefaultImage,
 		"k3d-cluster":   "byoo-perf",
 		"import-images": "false",
+		"results-dir":   "",
 	}
 	for name, want := range defaults {
 		f := cmd.Flags().Lookup(name)
