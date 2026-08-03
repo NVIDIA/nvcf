@@ -876,12 +876,24 @@ agentConfig:
               maxSize: 1000000
         logSampling:
           samplingPercentage: 10
+          mode: hash_seed
+          hashSeed: 1234
+          failClosed: false
+          attributeSource: record
+          fromAttribute: log.id
+          samplingPriority: sampling.priority
         traceSampling:
           samplingPercentage: 1
+          mode: hash_seed
+          hashSeed: 1234
+          failClosed: false
 ```
 
-`logSampling` and `traceSampling` configure separate probabilistic sampling
-percentages. Leave either setting unset to keep that signal unsampled.
+`logSampling` and `traceSampling` configure separate probabilistic samplers.
+Both support `samplingPercentage`, `mode`, `hashSeed`, and `failClosed`.
+`logSampling` also supports `attributeSource`, `fromAttribute`, and
+`samplingPriority`. An unset `mode` uses `hash_seed`. Leave either sampling
+percentage unset to keep that signal unsampled.
 
 BYOO metric subset example:
 

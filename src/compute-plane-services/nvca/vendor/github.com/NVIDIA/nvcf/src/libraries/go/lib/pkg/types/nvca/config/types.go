@@ -192,7 +192,7 @@ type BYOOOTelCollectorConfig struct {
 	MemoryLimiter  BYOOOTelMemoryLimiterConfig  `mapstructure:"memoryLimiter" yaml:"memoryLimiter,omitempty" json:"memoryLimiter,omitempty"`
 	Batch          BYOOOTelBatchConfig          `mapstructure:"batch" yaml:"batch,omitempty" json:"batch,omitempty"`
 	LogBatch       BYOOOTelBatchConfig          `mapstructure:"logBatch" yaml:"logBatch,omitempty" json:"logBatch,omitempty"`
-	LogSampling    BYOOOTelSamplingConfig       `mapstructure:"logSampling" yaml:"logSampling,omitempty" json:"logSampling,omitempty"`
+	LogSampling    BYOOOTelLogSamplingConfig    `mapstructure:"logSampling" yaml:"logSampling,omitempty" json:"logSampling,omitempty"`
 	TraceSampling  BYOOOTelSamplingConfig       `mapstructure:"traceSampling" yaml:"traceSampling,omitempty" json:"traceSampling,omitempty"`
 }
 
@@ -221,13 +221,32 @@ func (c BYOOOTelCollectorConfig) EnvVars() []corev1.EnvVar {
 	}}
 }
 
-// BYOOOTelSamplingConfig configures the BYOO collector probabilistic sampling processor.
+// BYOOOTelSamplingConfig configures the BYOO collector trace probabilistic sampling processor.
 type BYOOOTelSamplingConfig struct {
 	SamplingPercentage *float64 `mapstructure:"samplingPercentage" yaml:"samplingPercentage,omitempty" json:"samplingPercentage,omitempty"`
+	Mode               string   `mapstructure:"mode" yaml:"mode,omitempty" json:"mode,omitempty"`
+	HashSeed           *uint32  `mapstructure:"hashSeed" yaml:"hashSeed,omitempty" json:"hashSeed,omitempty"`
+	FailClosed         *bool    `mapstructure:"failClosed" yaml:"failClosed,omitempty" json:"failClosed,omitempty"`
 }
 
-// IsZero returns true when no sampling override is configured.
+// IsZero returns true when the trace sampling percentage is unset.
 func (c BYOOOTelSamplingConfig) IsZero() bool {
+	return c.SamplingPercentage == nil
+}
+
+// BYOOOTelLogSamplingConfig configures the BYOO collector log probabilistic sampling processor.
+type BYOOOTelLogSamplingConfig struct {
+	SamplingPercentage *float64 `mapstructure:"samplingPercentage" yaml:"samplingPercentage,omitempty" json:"samplingPercentage,omitempty"`
+	Mode               string   `mapstructure:"mode" yaml:"mode,omitempty" json:"mode,omitempty"`
+	HashSeed           *uint32  `mapstructure:"hashSeed" yaml:"hashSeed,omitempty" json:"hashSeed,omitempty"`
+	FailClosed         *bool    `mapstructure:"failClosed" yaml:"failClosed,omitempty" json:"failClosed,omitempty"`
+	AttributeSource    string   `mapstructure:"attributeSource" yaml:"attributeSource,omitempty" json:"attributeSource,omitempty"`
+	FromAttribute      string   `mapstructure:"fromAttribute" yaml:"fromAttribute,omitempty" json:"fromAttribute,omitempty"`
+	SamplingPriority   string   `mapstructure:"samplingPriority" yaml:"samplingPriority,omitempty" json:"samplingPriority,omitempty"`
+}
+
+// IsZero returns true when the log sampling percentage is unset.
+func (c BYOOOTelLogSamplingConfig) IsZero() bool {
 	return c.SamplingPercentage == nil
 }
 

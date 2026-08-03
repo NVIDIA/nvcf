@@ -118,8 +118,17 @@ agentConfig:
   #     byooOtelCollector:
   #       logSampling:
   #         samplingPercentage: 10
+  #         mode: hash_seed
+  #         hashSeed: 1234
+  #         failClosed: false
+  #         attributeSource: record
+  #         fromAttribute: log.id
+  #         samplingPriority: sampling.priority
   #       traceSampling:
   #         samplingPercentage: 1
+  #         mode: hash_seed
+  #         hashSeed: 1234
+  #         failClosed: false
 ## @section resources Resource requests and limits for the nvca-operator container
 ## @param resources.limits.cpu CPU limit for the nvca-operator container
 ## @param resources.limits.memory Memory limit for the nvca-operator container

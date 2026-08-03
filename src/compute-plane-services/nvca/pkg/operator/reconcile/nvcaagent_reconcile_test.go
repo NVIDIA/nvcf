@@ -2852,11 +2852,20 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 						},
 					},
 				},
-				LogSampling: nvcaconfig.BYOOOTelSamplingConfig{
+				LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
 					SamplingPercentage: ptr.To(10.0),
+					Mode:               "hash_seed",
+					HashSeed:           ptr.To(uint32(1234)),
+					FailClosed:         ptr.To(false),
+					AttributeSource:    "record",
+					FromAttribute:      "log.id",
+					SamplingPriority:   "sampling.priority",
 				},
 				TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
 					SamplingPercentage: ptr.To(1.0),
+					Mode:               "hash_seed",
+					HashSeed:           ptr.To(uint32(1234)),
+					FailClosed:         ptr.To(false),
 				},
 			},
 			BYOODebugMode: nvcaconfig.BYOODebugModeConfig{
@@ -2891,8 +2900,21 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 	assert.Equal(t, int64(1000000), *got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MaxSize)
 	require.NotNil(t, got.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
 	assert.Equal(t, 10.0, *got.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", got.Agent.BYOOOTelCollector.LogSampling.Mode)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *got.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.False(t, *got.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.Equal(t, "record", got.Agent.BYOOOTelCollector.LogSampling.AttributeSource)
+	assert.Equal(t, "log.id", got.Agent.BYOOOTelCollector.LogSampling.FromAttribute)
+	assert.Equal(t, "sampling.priority", got.Agent.BYOOOTelCollector.LogSampling.SamplingPriority)
 	require.NotNil(t, got.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
 	assert.Equal(t, 1.0, *got.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", got.Agent.BYOOOTelCollector.TraceSampling.Mode)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *got.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
+	assert.False(t, *got.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
 	assert.True(t, got.Agent.BYOODebugMode.Enabled)
 	assert.True(t, got.Agent.BYOOMetricSubset.Enabled)
 	assert.Contains(t, got.Agent.BYOOMetricSubset.FilterConfig, "metric.name")

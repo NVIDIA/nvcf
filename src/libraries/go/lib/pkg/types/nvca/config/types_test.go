@@ -194,6 +194,8 @@ func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
 	queueSize := int64(2048)
 	logSamplingPercentage := 10.0
 	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 	cfg := AgentConfig{
 		BYOOLogChunking: BYOOLogChunkingConfig{
 			Enabled: true,
@@ -214,11 +216,20 @@ func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
 					QueueSize: &queueSize,
 				},
 			},
-			LogSampling: BYOOOTelSamplingConfig{
+			LogSampling: BYOOOTelLogSamplingConfig{
 				SamplingPercentage: &logSamplingPercentage,
+				Mode:               "hash_seed",
+				HashSeed:           &samplingHashSeed,
+				FailClosed:         &samplingFailClosed,
+				AttributeSource:    "record",
+				FromAttribute:      "log.id",
+				SamplingPriority:   "sampling.priority",
 			},
 			TraceSampling: BYOOOTelSamplingConfig{
 				SamplingPercentage: &traceSamplingPercentage,
+				Mode:               "hash_seed",
+				HashSeed:           &samplingHashSeed,
+				FailClosed:         &samplingFailClosed,
 			},
 		},
 	}

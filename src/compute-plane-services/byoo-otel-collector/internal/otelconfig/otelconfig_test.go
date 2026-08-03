@@ -160,15 +160,28 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCF_WORKLOAD_TYPE":             "function",
 				"NVCT_TASK_ID":                   "task-123",
 				"NVCF_ZONE_NAME":                 "zone-1",
-				"BYOO_OTEL_COLLECTOR_CONFIG_B64": base64.StdEncoding.EncodeToString([]byte(`{"exporterHelper":{"timeout":"30s"},"logSampling":{"samplingPercentage":10},"traceSampling":{"samplingPercentage":1}}`)),
+				"BYOO_OTEL_COLLECTOR_CONFIG_B64": base64.StdEncoding.EncodeToString([]byte(`{"exporterHelper":{"timeout":"30s"},"logSampling":{"samplingPercentage":10,"mode":"hash_seed","hashSeed":1234,"failClosed":false,"attributeSource":"record","fromAttribute":"log.id","samplingPriority":"sampling.priority"},"traceSampling":{"samplingPercentage":1,"mode":"hash_seed","hashSeed":1234,"failClosed":false}}`)),
 			},
 			expectErr: false,
 			expect: func(t *testing.T, cfg TemplateConfig) {
 				assert.Equal(t, "30s", cfg.OTelCollector.ExporterHelper.Timeout)
 				require.NotNil(t, cfg.OTelCollector.LogSampling.SamplingPercentage)
 				assert.Equal(t, 10.0, *cfg.OTelCollector.LogSampling.SamplingPercentage)
+				assert.Equal(t, "hash_seed", cfg.OTelCollector.LogSampling.Mode)
+				require.NotNil(t, cfg.OTelCollector.LogSampling.HashSeed)
+				assert.Equal(t, uint32(1234), *cfg.OTelCollector.LogSampling.HashSeed)
+				require.NotNil(t, cfg.OTelCollector.LogSampling.FailClosed)
+				assert.False(t, *cfg.OTelCollector.LogSampling.FailClosed)
+				assert.Equal(t, "record", cfg.OTelCollector.LogSampling.AttributeSource)
+				assert.Equal(t, "log.id", cfg.OTelCollector.LogSampling.FromAttribute)
+				assert.Equal(t, "sampling.priority", cfg.OTelCollector.LogSampling.SamplingPriority)
 				require.NotNil(t, cfg.OTelCollector.TraceSampling.SamplingPercentage)
 				assert.Equal(t, 1.0, *cfg.OTelCollector.TraceSampling.SamplingPercentage)
+				assert.Equal(t, "hash_seed", cfg.OTelCollector.TraceSampling.Mode)
+				require.NotNil(t, cfg.OTelCollector.TraceSampling.HashSeed)
+				assert.Equal(t, uint32(1234), *cfg.OTelCollector.TraceSampling.HashSeed)
+				require.NotNil(t, cfg.OTelCollector.TraceSampling.FailClosed)
+				assert.False(t, *cfg.OTelCollector.TraceSampling.FailClosed)
 			},
 		},
 		{

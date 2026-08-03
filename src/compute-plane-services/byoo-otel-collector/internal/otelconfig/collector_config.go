@@ -31,7 +31,7 @@ type OTelCollectorConfig struct {
 	MemoryLimiter  MemoryLimiterConfig  `json:"memoryLimiter,omitempty"`
 	Batch          BatchConfig          `json:"batch,omitempty"`
 	LogBatch       BatchConfig          `json:"logBatch,omitempty"`
-	LogSampling    SamplingConfig       `json:"logSampling,omitempty"`
+	LogSampling    LogSamplingConfig    `json:"logSampling,omitempty"`
 	TraceSampling  SamplingConfig       `json:"traceSampling,omitempty"`
 }
 
@@ -48,13 +48,32 @@ func (c *OTelCollectorConfig) IsZero() bool {
 		c.TraceSampling.IsZero()
 }
 
-// SamplingConfig configures a BYOO collector probabilistic sampling processor.
+// SamplingConfig configures a BYOO collector trace probabilistic sampling processor.
 type SamplingConfig struct {
 	SamplingPercentage *float64 `json:"samplingPercentage,omitempty"`
+	Mode               string   `json:"mode,omitempty"`
+	HashSeed           *uint32  `json:"hashSeed,omitempty"`
+	FailClosed         *bool    `json:"failClosed,omitempty"`
 }
 
-// IsZero returns true when no sampling override is configured.
+// IsZero returns true when the trace sampling percentage is unset.
 func (c *SamplingConfig) IsZero() bool {
+	return c == nil || c.SamplingPercentage == nil
+}
+
+// LogSamplingConfig configures a BYOO collector log probabilistic sampling processor.
+type LogSamplingConfig struct {
+	SamplingPercentage *float64 `json:"samplingPercentage,omitempty"`
+	Mode               string   `json:"mode,omitempty"`
+	HashSeed           *uint32  `json:"hashSeed,omitempty"`
+	FailClosed         *bool    `json:"failClosed,omitempty"`
+	AttributeSource    string   `json:"attributeSource,omitempty"`
+	FromAttribute      string   `json:"fromAttribute,omitempty"`
+	SamplingPriority   string   `json:"samplingPriority,omitempty"`
+}
+
+// IsZero returns true when the log sampling percentage is unset.
+func (c *LogSamplingConfig) IsZero() bool {
 	return c == nil || c.SamplingPercentage == nil
 }
 
@@ -197,7 +216,7 @@ func applyOTelCollectorConfig(otelConfig *OpenTelemetryConfig, cfg OTelCollector
 	applyMemoryLimiterConfig(otelConfig, cfg.MemoryLimiter)
 	applyBatchConfig(otelConfig, "batch", cfg.Batch)
 	applyLogBatchConfig(otelConfig, cfg.LogBatch)
-	applySamplingConfig(otelConfig, "logs", "probabilistic_sampler/logs", cfg.LogSampling)
+	applyLogSamplingConfig(otelConfig, "probabilistic_sampler/logs", cfg.LogSampling)
 	applySamplingConfig(otelConfig, "traces", "probabilistic_sampler/traces", cfg.TraceSampling)
 }
 
@@ -205,14 +224,49 @@ func applySamplingConfig(otelConfig *OpenTelemetryConfig, pipelineID, processorI
 	if cfg.IsZero() {
 		return
 	}
+	processorConfig := map[string]interface{}{}
+	applySamplingSettings(processorConfig, cfg.SamplingPercentage, cfg.Mode, cfg.HashSeed, cfg.FailClosed)
+	applySamplingProcessor(otelConfig, pipelineID, processorID, processorConfig)
+}
+
+func applyLogSamplingConfig(otelConfig *OpenTelemetryConfig, processorID string, cfg LogSamplingConfig) {
+	if cfg.IsZero() {
+		return
+	}
+	processorConfig := map[string]interface{}{}
+	applySamplingSettings(processorConfig, cfg.SamplingPercentage, cfg.Mode, cfg.HashSeed, cfg.FailClosed)
+	if cfg.AttributeSource != "" {
+		processorConfig["attribute_source"] = cfg.AttributeSource
+	}
+	if cfg.FromAttribute != "" {
+		processorConfig["from_attribute"] = cfg.FromAttribute
+	}
+	if cfg.SamplingPriority != "" {
+		processorConfig["sampling_priority"] = cfg.SamplingPriority
+	}
+	applySamplingProcessor(otelConfig, "logs", processorID, processorConfig)
+}
+
+func applySamplingSettings(processorConfig map[string]interface{}, samplingPercentage *float64, mode string, hashSeed *uint32, failClosed *bool) {
+	processorConfig["sampling_percentage"] = *samplingPercentage
+	if mode != "" {
+		processorConfig["mode"] = mode
+	}
+	if hashSeed != nil {
+		processorConfig["hash_seed"] = *hashSeed
+	}
+	if failClosed != nil {
+		processorConfig["fail_closed"] = *failClosed
+	}
+}
+
+func applySamplingProcessor(otelConfig *OpenTelemetryConfig, pipelineID, processorID string, processorConfig map[string]interface{}) {
 	pipeline, ok := otelConfig.Service.Pipelines[pipelineID]
 	if !ok {
 		return
 	}
 
-	otelConfig.Processors[processorID] = map[string]interface{}{
-		"sampling_percentage": *cfg.SamplingPercentage,
-	}
+	otelConfig.Processors[processorID] = processorConfig
 	for i, existingProcessorID := range pipeline.Processors {
 		if existingProcessorID != "batch" && existingProcessorID != "batch/logs" {
 			continue

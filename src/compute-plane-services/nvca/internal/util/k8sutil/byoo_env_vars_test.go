@@ -32,12 +32,23 @@ import (
 func TestAddBYOOOTelCollectorEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) {
 	logSamplingPercentage := 10.0
 	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 	collectorConfig := nvcaconfig.BYOOOTelCollectorConfig{
-		LogSampling: nvcaconfig.BYOOOTelSamplingConfig{
+		LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
 			SamplingPercentage: &logSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+			AttributeSource:    "record",
+			FromAttribute:      "log.id",
+			SamplingPriority:   "sampling.priority",
 		},
 		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
 			SamplingPercentage: &traceSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
 		},
 	}
 	envs := append([]corev1.EnvVar{

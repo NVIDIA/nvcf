@@ -202,8 +202,21 @@ func assertBYOOOTelCollectorEnvVars(t *testing.T, envs []corev1.EnvVar) {
 	assert.Equal(t, "30s", collectorConfig.ExporterHelper.Timeout)
 	require.NotNil(t, collectorConfig.LogSampling.SamplingPercentage)
 	assert.Equal(t, 10.0, *collectorConfig.LogSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", collectorConfig.LogSampling.Mode)
+	require.NotNil(t, collectorConfig.LogSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *collectorConfig.LogSampling.HashSeed)
+	require.NotNil(t, collectorConfig.LogSampling.FailClosed)
+	assert.False(t, *collectorConfig.LogSampling.FailClosed)
+	assert.Equal(t, "record", collectorConfig.LogSampling.AttributeSource)
+	assert.Equal(t, "log.id", collectorConfig.LogSampling.FromAttribute)
+	assert.Equal(t, "sampling.priority", collectorConfig.LogSampling.SamplingPriority)
 	require.NotNil(t, collectorConfig.TraceSampling.SamplingPercentage)
 	assert.Equal(t, 1.0, *collectorConfig.TraceSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", collectorConfig.TraceSampling.Mode)
+	require.NotNil(t, collectorConfig.TraceSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *collectorConfig.TraceSampling.HashSeed)
+	require.NotNil(t, collectorConfig.TraceSampling.FailClosed)
+	assert.False(t, *collectorConfig.TraceSampling.FailClosed)
 	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOMetricSubsetEnabledEnv])
 	assert.Contains(t, envsByName[nvcaconfig.BYOOMetricSubsetFilterConfigEnv], "metric.name")
 	assert.Equal(t, "metric_subset_enabled,custom_label", envsByName[nvcaconfig.BYOOWorkloadMetricsDropLabelsEnv])
@@ -285,6 +298,8 @@ func TestReconcile_Function(t *testing.T) {
 	}
 	logSamplingPercentage := 10.0
 	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
 		Enabled:         true,
@@ -295,11 +310,20 @@ func TestReconcile_Function(t *testing.T) {
 		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
 			Timeout: "30s",
 		},
-		LogSampling: nvcaconfig.BYOOOTelSamplingConfig{
+		LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
 			SamplingPercentage: &logSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+			AttributeSource:    "record",
+			FromAttribute:      "log.id",
+			SamplingPriority:   "sampling.priority",
 		},
 		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
 			SamplingPercentage: &traceSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
 		},
 	}
 	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{
@@ -2213,6 +2237,8 @@ func TestReconcile_Task(t *testing.T) {
 
 	logSamplingPercentage := 10.0
 	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
 		Enabled:         true,
@@ -2223,11 +2249,20 @@ func TestReconcile_Task(t *testing.T) {
 		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
 			Timeout: "30s",
 		},
-		LogSampling: nvcaconfig.BYOOOTelSamplingConfig{
+		LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
 			SamplingPercentage: &logSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+			AttributeSource:    "record",
+			FromAttribute:      "log.id",
+			SamplingPriority:   "sampling.priority",
 		},
 		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
 			SamplingPercentage: &traceSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
 		},
 	}
 	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{

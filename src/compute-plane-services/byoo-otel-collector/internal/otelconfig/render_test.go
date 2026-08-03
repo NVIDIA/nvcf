@@ -602,6 +602,8 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 	logBatchSendMaxSize := int64(340)
 	logSamplingPercentage := 10.0
 	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 
 	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
 		Namespace: "test-namespace",
@@ -640,11 +642,20 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 				SendBatchSize:    &logBatchSendSize,
 				SendBatchMaxSize: &logBatchSendMaxSize,
 			},
-			LogSampling: SamplingConfig{
+			LogSampling: LogSamplingConfig{
 				SamplingPercentage: &logSamplingPercentage,
+				Mode:               "hash_seed",
+				HashSeed:           &samplingHashSeed,
+				FailClosed:         &samplingFailClosed,
+				AttributeSource:    "record",
+				FromAttribute:      "log.id",
+				SamplingPriority:   "sampling.priority",
 			},
 			TraceSampling: SamplingConfig{
 				SamplingPercentage: &traceSamplingPercentage,
+				Mode:               "hash_seed",
+				HashSeed:           &samplingHashSeed,
+				FailClosed:         &samplingFailClosed,
 			},
 		},
 	})
@@ -694,9 +705,18 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 	}, otelConfig.Processors["batch/logs"])
 	assert.Equal(t, map[string]interface{}{
 		"sampling_percentage": logSamplingPercentage,
+		"mode":                "hash_seed",
+		"hash_seed":           samplingHashSeed,
+		"fail_closed":         samplingFailClosed,
+		"attribute_source":    "record",
+		"from_attribute":      "log.id",
+		"sampling_priority":   "sampling.priority",
 	}, otelConfig.Processors["probabilistic_sampler/logs"])
 	assert.Equal(t, map[string]interface{}{
 		"sampling_percentage": traceSamplingPercentage,
+		"mode":                "hash_seed",
+		"hash_seed":           samplingHashSeed,
+		"fail_closed":         samplingFailClosed,
 	}, otelConfig.Processors["probabilistic_sampler/traces"])
 	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/logs", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
 	assert.Equal(t, []string{"memory_limiter", "filter/metrics", "resource", "metrics_transform", "batch"}, otelConfig.Service.Pipelines["metrics"].Processors)
