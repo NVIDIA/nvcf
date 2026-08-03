@@ -27,7 +27,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -41,6 +44,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/loadgen"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/profile"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/report"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/validate"
@@ -120,6 +124,7 @@ type runConfig struct {
 	skipLoad       bool
 	k3dCluster     string
 	importImages   bool
+	resultsDir     string
 }
 
 func newRunCmd() *cobra.Command {
@@ -155,6 +160,7 @@ reporting land in a later milestone.`,
 	cmd.Flags().BoolVar(&cfg.skipLoad, "skip-load", false, "deploy the collector and sink but do not drive load")
 	cmd.Flags().StringVar(&cfg.k3dCluster, "k3d-cluster", "byoo-perf", "name of the managed k3d cluster (k3d mode)")
 	cmd.Flags().BoolVar(&cfg.importImages, "import-images", false, "import the collector/sink/loadgen images from local Docker into the k3d cluster (k3d mode)")
+	cmd.Flags().StringVar(&cfg.resultsDir, "results-dir", "", "directory to write structured JSON results to (one file per shape and repetition)")
 	return cmd
 }
 
@@ -218,7 +224,7 @@ func runRun(stdout io.Writer, cfg runConfig) error {
 		return err
 	}
 
-	loadDuration := prof.Warmup + prof.MeasurementWindow
+	loadDuration := loadGenDuration(prof)
 	fmt.Fprintf(stdout, "mode=%s profile=%s warmup=%s window=%s reps=%d\n\n", cfg.mode, prof.Name, prof.Warmup, prof.MeasurementWindow, prof.Repetitions)
 
 	multi := len(shapes) > 1
@@ -229,9 +235,9 @@ func runRun(stdout io.Writer, cfg runConfig) error {
 	}
 
 	if cfg.skipLoad {
-		fmt.Fprintln(stdout, "note: --skip-load set; the collector and sink were deployed but no load was driven. Measurement and reporting land in a later milestone.")
+		fmt.Fprintln(stdout, "note: --skip-load set; the collector and sink were deployed but no load was driven and no baseline was measured.")
 	} else {
-		fmt.Fprintln(stdout, "note: load was driven end-to-end through the collector to the in-cluster sink. Measurement and reporting land in a later milestone.")
+		fmt.Fprintln(stdout, "note: load was driven end-to-end and a baseline was measured. There are no pass/fail thresholds yet; these numbers establish the reproducible baseline.")
 	}
 	return nil
 }
@@ -343,11 +349,15 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 	}
 	fmt.Fprintf(stdout, "  sink metrics    : %s\n", sinkDep.MetricsEndpoint)
 
-	// 3. Drive load through the collector.
+	// 3. Drive load through the collector and measure over the window.
 	if !cfg.skipLoad {
 		grpcEndpoint := dep.Endpoints["otlp-grpc"]
 		if grpcEndpoint == "" {
 			return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("collector has no otlp-grpc endpoint for %s shape", shape))
+		}
+		collectorMetricsPort, ok := containerPortByName(res.Collector, "metrics")
+		if !ok {
+			return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("collector container exposes no %q port for %s shape", "metrics", shape))
 		}
 		lgOpts := loadgen.Options{
 			Image:         cfg.loadgenImage,
@@ -357,12 +367,43 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 			LogsPerSec:    prof.LogRecordsPerSec,
 			MetricsPerSec: prof.MetricDataPointsPerSec,
 		}
-		jobs := loadgen.Jobs(ns, dep.PodName, lgOpts)
-		fmt.Fprintf(stdout, "[%s] driving load for %s (logs=%d/s metrics=%d/s) ...\n", shape, loadDuration, lgOpts.LogsPerSec, lgOpts.MetricsPerSec)
-		if err := client.RunLoad(ctx, ns, jobs, loadDuration+cfg.readyTimeout); err != nil {
-			return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("load generation failed for %s shape: %w", shape, err))
+		// Execute one load+measure cycle per repetition so a "baseline" run
+		// honors the profile's repetition count instead of collapsing to a
+		// single sample. A generator failure marks only that run invalid.
+		reports, err := runRepetitions(stdout, prof, shape,
+			func(run int) error {
+				jobs := loadgen.Jobs(ns, dep.PodName, lgOpts)
+				fmt.Fprintf(stdout, "[%s] driving load for %s (logs=%d/s metrics=%d/s) ...\n", shape, loadDuration, lgOpts.LogsPerSec, lgOpts.MetricsPerSec)
+				if err := client.StartLoad(ctx, ns, jobs); err != nil {
+					return fmt.Errorf("start load for %s shape (run %d): %w", shape, run, err)
+				}
+				// Wait for the generators to actually start before the
+				// measurement warmup so scheduling and image-pull latency do
+				// not consume part of the window.
+				if err := client.WaitLoadStarted(ctx, ns, jobs, cfg.readyTimeout); err != nil {
+					return fmt.Errorf("wait for load generators to start for %s shape (run %d): %w", shape, run, err)
+				}
+				return nil
+			},
+			func(run int) report.ShapeReport {
+				return measure(ctx, stdout, client, cfg, prof, shape, ns, dep.PodName, collectorMetricsPort)
+			},
+			func(run int) error {
+				return client.WaitLoad(ctx, ns, loadgen.Jobs(ns, dep.PodName, lgOpts), cfg.readyTimeout)
+			},
+		)
+		if err != nil {
+			return cleanupAfterErr(ctx, client, cfg, ns, err)
 		}
-		fmt.Fprintf(stdout, "[%s] load complete\n", shape)
+
+		for _, rep := range reports {
+			rep.WriteSummary(stdout)
+			if err := writeReport(cfg.resultsDir, shape, rep); err != nil {
+				fmt.Fprintf(stdout, "[%s] warning: could not persist results: %v\n", shape, err)
+			} else if cfg.resultsDir != "" {
+				fmt.Fprintf(stdout, "[%s] results written to %s\n", shape, filepath.Join(cfg.resultsDir, resultFileName(shape, rep)))
+			}
+		}
 	}
 
 	if cfg.retain {
@@ -377,10 +418,197 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 	return nil
 }
 
-// exportCredentials returns dummy bearer-token files for the OTEL_COLLECTOR
-// provider. The file names must match the launch-spec telemetry Names
-// ("perf-logs"/"perf-metrics") the collector config references via ${file:...};
-// the sink accepts any token, so the value is irrelevant.
+// measure samples the collector and sink metric endpoints across the profile's
+// measurement window (after a warmup) and computes the baseline. Scrapes are
+// best-effort: a failed scrape yields empty samples, which Build records as
+// missing rather than failing the run.
+func measure(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg runConfig, prof profile.Profile, shape spec.Shape, ns, collectorPod, collectorMetricsPort string) report.ShapeReport {
+	snap := func(label string) report.Snapshot {
+		s, collErr, sinkErr := takeSnapshot(
+			func() (report.Samples, error) {
+				return scrapeSamples(ctx, client, ns, collectorPod, collectorMetricsPort)
+			},
+			func() (report.Samples, error) {
+				return scrapeSamples(ctx, client, ns, sink.Name, strconv.Itoa(sink.MetricsPort))
+			},
+		)
+		if collErr != nil {
+			fmt.Fprintf(stdout, "[%s] warning: %s collector scrape failed: %v\n", shape, label, collErr)
+		}
+		if sinkErr != nil {
+			fmt.Fprintf(stdout, "[%s] warning: %s sink scrape failed: %v\n", shape, label, sinkErr)
+		}
+		return s
+	}
+
+	fmt.Fprintf(stdout, "[%s] warmup %s ...\n", shape, prof.Warmup)
+	sleep(ctx, prof.Warmup)
+	start := snap("start")
+	fmt.Fprintf(stdout, "[%s] measuring for %s ...\n", shape, prof.MeasurementWindow)
+	sleep(ctx, prof.MeasurementWindow)
+	end := snap("end")
+
+	health, healthErr := client.PodHealth(ctx, ns, collectorPod)
+	if healthErr != nil {
+		fmt.Fprintf(stdout, "[%s] warning: could not read pod health: %v\n", shape, healthErr)
+	}
+
+	return report.Build(report.Inputs{
+		Shape:         string(shape),
+		Profile:       prof.Name,
+		LogsPerSec:    prof.LogRecordsPerSec,
+		MetricsPerSec: prof.MetricDataPointsPerSec,
+		Window:        report.Window{Start: start, End: end},
+		Health:        health,
+		HealthErr:     healthErr,
+	})
+}
+
+// loadStartupMargin extends the generator run beyond warmup+window. The
+// generators start when their pods reach Running; measurement warmup only
+// begins after that, so without a margin the measurement window would extend
+// past the end of load generation and read a load-free tail (low throughput /
+// delivery). The margin absorbs the residual startup and warmup jitter so the
+// generators are still running when the window closes. It is a variable so
+// tests can adjust it.
+var loadStartupMargin = 30 * time.Second
+
+// loadGenDuration is how long the telemetrygen Jobs run: the full warmup plus
+// measurement window plus a startup margin, so the measurement window always
+// closes while load is still in flight.
+func loadGenDuration(prof profile.Profile) time.Duration {
+	return prof.Warmup + prof.MeasurementWindow + loadStartupMargin
+}
+
+// takeSnapshot scrapes the collector and sink concurrently and stamps
+// Snapshot.At only after both responses return, so a slow scrape cannot skew
+// the measurement window: the timestamp reflects when the samples were taken,
+// not when scraping began. Scrape errors are returned (not fatal) so the caller
+// can log them and Build can record the missing series.
+func takeSnapshot(scrapeCollector, scrapeSink func() (report.Samples, error)) (snap report.Snapshot, collErr, sinkErr error) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		s, err := scrapeCollector()
+		if err != nil {
+			collErr = err
+			return
+		}
+		snap.Collector = s
+	}()
+	go func() {
+		defer wg.Done()
+		s, err := scrapeSink()
+		if err != nil {
+			sinkErr = err
+			return
+		}
+		snap.Sink = s
+	}()
+	wg.Wait()
+	snap.At = time.Now()
+	return snap, collErr, sinkErr
+}
+
+// scrapeSamples fetches and parses a pod's Prometheus metrics endpoint.
+func scrapeSamples(ctx context.Context, client *deploy.Client, ns, pod, port string) (report.Samples, error) {
+	raw, err := client.ScrapePodMetrics(ctx, ns, pod, port, "/metrics")
+	if err != nil {
+		return report.Samples{}, err
+	}
+	return report.Parse(string(raw)), nil
+}
+
+// runRepetitions executes prof.Repetitions load+measure cycles, tagging each
+// resulting report with its run index. A startLoad error aborts and is returned
+// so the caller can clean up; a waitLoad error marks that single run invalid
+// (preserving whatever partial data was measured) but does not abort the rest.
+func runRepetitions(
+	stdout io.Writer,
+	prof profile.Profile,
+	shape spec.Shape,
+	startLoad func(run int) error,
+	measureOnce func(run int) report.ShapeReport,
+	waitLoad func(run int) error,
+) ([]report.ShapeReport, error) {
+	reps := prof.Repetitions
+	if reps < 1 {
+		reps = 1
+	}
+	reports := make([]report.ShapeReport, 0, reps)
+	for run := 1; run <= reps; run++ {
+		if reps > 1 {
+			fmt.Fprintf(stdout, "[%s] repetition %d/%d\n", shape, run, reps)
+		}
+		if err := startLoad(run); err != nil {
+			return reports, err
+		}
+		rep := measureOnce(run)
+		rep.Run = run
+		rep.Repetitions = reps
+		if err := waitLoad(run); err != nil {
+			rep.MarkInvalid(fmt.Sprintf("load generators did not complete cleanly: %v", err))
+			fmt.Fprintf(stdout, "[%s] run %d/%d warning: %v\n", shape, run, reps, err)
+		} else {
+			fmt.Fprintf(stdout, "[%s] run %d/%d load complete\n", shape, run, reps)
+		}
+		reports = append(reports, rep)
+	}
+	return reports, nil
+}
+
+// resultFileName is the per-run result file: <shape>.json for a single
+// repetition, <shape>-run<N>.json when a profile requests several so each run
+// is preserved as a distinct record.
+func resultFileName(shape spec.Shape, rep report.ShapeReport) string {
+	if rep.Repetitions > 1 {
+		return fmt.Sprintf("%s-run%d.json", shape, rep.Run)
+	}
+	return string(shape) + ".json"
+}
+
+// writeReport persists the report under dir (per resultFileName) when dir is set.
+func writeReport(dir string, shape spec.Shape, rep report.ShapeReport) error {
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := rep.JSON()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, resultFileName(shape, rep)), data, 0o644)
+}
+
+// containerPortByName returns the numeric container port with the given name as
+// a string, for API-proxy scraping.
+func containerPortByName(c corev1.Container, name string) (string, bool) {
+	for _, p := range c.Ports {
+		if p.Name == name {
+			return strconv.Itoa(int(p.ContainerPort)), true
+		}
+	}
+	return "", false
+}
+
+// sleep waits for d or until the context is cancelled.
+func sleep(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+}
+
+// exportCredentials returns the dummy accounts-secrets entries for the
+// OTEL_COLLECTOR provider. Keys must match the launch-spec telemetry Names
+// ("perf-logs"/"perf-metrics"); the collector's secrets-extractor turns each
+// into a token file the exporter config references via ${file:...}. The sink
+// accepts any token, so the values are irrelevant.
 func exportCredentials() map[string]string {
 	return map[string]string{
 		"perf-logs":    "perf",
