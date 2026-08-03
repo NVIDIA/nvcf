@@ -18,6 +18,7 @@ limitations under the License.
 package mscontroller
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice/chartcache"
 	nvcak8sutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
@@ -186,6 +188,7 @@ func TestDoStatus_BYOOSidecarUnhealthy(t *testing.T) {
 
 			if tt.wantErr {
 				require.Error(t, err)
+				assert.True(t, errors.Is(err, reconcile.TerminalError(nil)), "expected a terminal, non-retryable error")
 			} else {
 				require.NoError(t, err)
 			}
