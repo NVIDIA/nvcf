@@ -32,11 +32,19 @@ go_test(
     srcs = [
         "psattokenfetcher_test.go",
         "selfmanagedsecrets_test.go",
+        "tokenfetcher_metrics_test.go",
         "tokenfetcher_test.go",
     ],
     embed = [":auth"],
     deps = [
+        "//internal/metrics/clientmetrics",
+        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth",
+        "//vendor/github.com/prometheus/client_golang/prometheus",
+        "//vendor/github.com/prometheus/client_golang/prometheus/promhttp",
         "//vendor/github.com/stretchr/testify/assert",
         "//vendor/github.com/stretchr/testify/require",
+        "//vendor/go.opentelemetry.io/otel",
+        "//vendor/go.opentelemetry.io/otel/exporters/prometheus",
+        "//vendor/go.opentelemetry.io/otel/sdk/metric",
     ],
 )
