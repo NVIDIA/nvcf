@@ -5,7 +5,7 @@ go_library(
     srcs = ["configs.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/configs",
     visibility = ["//visibility:public"],
-    deps = ["//internal/types"],
+    deps = ["//src/compute-plane-services/worker-task/internal/types"],
 )
 
 alias(

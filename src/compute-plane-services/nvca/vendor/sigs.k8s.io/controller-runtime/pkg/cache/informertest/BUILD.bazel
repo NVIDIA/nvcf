@@ -7,13 +7,13 @@ go_library(
     importpath = "sigs.k8s.io/controller-runtime/pkg/cache/informertest",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/apimachinery/pkg/runtime",
-        "//vendor/k8s.io/apimachinery/pkg/runtime/schema",
-        "//vendor/k8s.io/client-go/kubernetes/scheme",
-        "//vendor/k8s.io/client-go/tools/cache",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/cache",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/client",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/controller/controllertest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/scheme",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/cache",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/controller/controllertest",
     ],
 )
 

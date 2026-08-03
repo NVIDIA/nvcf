@@ -9,9 +9,9 @@ go_library(
     importpath = "github.com/hashicorp/vault/sdk/helper/tokenutil",
     visibility = ["//visibility:public"],
     deps = [
-        "//sdk/framework",
-        "//sdk/helper/policyutil",
-        "//sdk/logical",
+        "//src/compute-plane-services/ess-agent/sdk/framework",
+        "//src/compute-plane-services/ess-agent/sdk/helper/policyutil",
+        "//src/compute-plane-services/ess-agent/sdk/logical",
         "@com_github_hashicorp_go_secure_stdlib_parseutil//:parseutil",
         "@com_github_hashicorp_go_secure_stdlib_strutil//:strutil",
         "@com_github_hashicorp_go_sockaddr//:go-sockaddr",

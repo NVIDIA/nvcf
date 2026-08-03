@@ -8,7 +8,7 @@ go_library(
     srcs = ["featureflag.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock",
     visibility = ["//visibility:public"],
-    deps = ["//pkg/featureflag"],
+    deps = ["//src/compute-plane-services/nvca/pkg/featureflag"],
 )
 
 alias(

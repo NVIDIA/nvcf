@@ -7,8 +7,8 @@ go_library(
     importpath = "golang.org/x/text/encoding",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/golang.org/x/text/encoding/internal/identifier",
-        "//vendor/golang.org/x/text/transform",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/text/encoding/internal/identifier",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/text/transform",
     ],
 )
 

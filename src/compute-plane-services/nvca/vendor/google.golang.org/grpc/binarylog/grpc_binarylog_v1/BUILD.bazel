@@ -7,10 +7,10 @@ go_library(
     importpath = "google.golang.org/grpc/binarylog/grpc_binarylog_v1",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/google.golang.org/protobuf/reflect/protoreflect",
-        "//vendor/google.golang.org/protobuf/runtime/protoimpl",
-        "//vendor/google.golang.org/protobuf/types/known/durationpb",
-        "//vendor/google.golang.org/protobuf/types/known/timestamppb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/reflect/protoreflect",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoimpl",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/durationpb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/timestamppb",
     ],
 )
 

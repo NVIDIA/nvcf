@@ -9,8 +9,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/profiling",
     visibility = ["//visibility:public"],
     deps = [
-        "//pkg/types",
-        "//vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
     ],
 )
 
@@ -25,8 +25,8 @@ go_test(
     srcs = ["allowlist_test.go"],
     embed = [":profiling"],
     deps = [
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/k8s.io/api/core/v1:core",
-        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
     ],
 )

@@ -10,11 +10,11 @@ go_library(
     importpath = "google.golang.org/grpc/health/grpc_health_v1",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/google.golang.org/grpc",
-        "//vendor/google.golang.org/grpc/codes",
-        "//vendor/google.golang.org/grpc/status",
-        "//vendor/google.golang.org/protobuf/reflect/protoreflect",
-        "//vendor/google.golang.org/protobuf/runtime/protoimpl",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/codes",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/status",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/reflect/protoreflect",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoimpl",
     ],
 )
 

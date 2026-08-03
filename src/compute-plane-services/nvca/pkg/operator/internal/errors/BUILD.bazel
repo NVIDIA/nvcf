@@ -10,14 +10,14 @@ go_library(
         "fatal.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors",
-    visibility = ["//pkg/operator:__subpackages__"],
-    deps = ["//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"],
+    visibility = ["//src/compute-plane-services/nvca/pkg/operator:__subpackages__"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":errors",
-    visibility = ["//pkg/operator:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/pkg/operator:__subpackages__"],
 )
 
 go_test(

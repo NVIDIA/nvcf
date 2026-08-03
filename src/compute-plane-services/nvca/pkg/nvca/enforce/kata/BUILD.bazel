@@ -9,11 +9,11 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kata",
     visibility = ["//visibility:public"],
     deps = [
-        "//internal/metrics",
-        "//pkg/nvca/health",
-        "//pkg/types",
-        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
-        "//vendor/k8s.io/client-go/kubernetes",
+        "//src/compute-plane-services/nvca/internal/metrics",
+        "//src/compute-plane-services/nvca/pkg/nvca/health",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
     ],
 )
 
@@ -28,10 +28,10 @@ go_test(
     srcs = ["kata_test.go"],
     embed = [":kata"],
     deps = [
-        "//pkg/types",
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/k8s.io/api/node/v1:node",
-        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
-        "//vendor/k8s.io/client-go/kubernetes/fake",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/node/v1:node",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
     ],
 )

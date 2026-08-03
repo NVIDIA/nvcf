@@ -9,9 +9,9 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/metrics",
     visibility = ["//visibility:public"],
     deps = [
-        "//pkg/operator/internal/context",
-        "//vendor/github.com/prometheus/client_golang/prometheus",
-        "//vendor/github.com/prometheus/client_golang/prometheus/promauto",
+        "//src/compute-plane-services/nvca/pkg/operator/internal/context",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promauto",
     ],
 )
 
@@ -26,7 +26,7 @@ go_test(
     srcs = ["metrics_test.go"],
     embed = [":metrics"],
     deps = [
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
     ],
 )

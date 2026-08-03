@@ -7,11 +7,11 @@ go_library(
     importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/signer/volc",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/volcengine/volc-sdk-golang/base",
-        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine",
-        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/credentials",
-        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/custom",
-        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/request",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volc-sdk-golang/base",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/credentials",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/custom",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/request",
     ],
 )
 

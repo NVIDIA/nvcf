@@ -22,11 +22,11 @@ go_library(
     importpath = "github.com/aws/aws-sdk-go/aws/request",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/aws/aws-sdk-go/aws",
-        "//vendor/github.com/aws/aws-sdk-go/aws/awserr",
-        "//vendor/github.com/aws/aws-sdk-go/aws/awsutil",
-        "//vendor/github.com/aws/aws-sdk-go/aws/client/metadata",
-        "//vendor/github.com/aws/aws-sdk-go/internal/sdkio",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/awserr",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/awsutil",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/client/metadata",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/internal/sdkio",
     ],
 )
 

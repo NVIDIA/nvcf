@@ -17,7 +17,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/encoding/xml",
     importpath = "github.com/aws/smithy-go/encoding/xml",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/aws/smithy-go/encoding"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/encoding"],
 )
 
 alias(

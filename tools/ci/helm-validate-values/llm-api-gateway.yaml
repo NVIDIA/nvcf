@@ -1,0 +1,7 @@
+# CI-only values for helm lint/template validation.
+llmApiGateway:
+  image:
+    registry: example.com
+    repository: foo/bar/lpu-nvcf-gateway
+  config:
+    requestRouterUrl: http://llm-request-router-headless.nvcf.svc.cluster.local:8000

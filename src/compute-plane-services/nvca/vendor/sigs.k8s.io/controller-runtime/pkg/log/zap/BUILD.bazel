@@ -11,13 +11,13 @@ go_library(
     importpath = "sigs.k8s.io/controller-runtime/pkg/log/zap",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/go-logr/logr",
-        "//vendor/github.com/go-logr/zapr",
-        "//vendor/go.uber.org/zap",
-        "//vendor/go.uber.org/zap/buffer",
-        "//vendor/go.uber.org/zap/zapcore",
-        "//vendor/k8s.io/apimachinery/pkg/api/meta",
-        "//vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/zapr",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/buffer",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/zapcore",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
     ],
 )
 

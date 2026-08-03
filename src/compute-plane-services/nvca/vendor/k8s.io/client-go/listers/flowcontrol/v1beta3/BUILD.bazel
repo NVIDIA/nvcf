@@ -11,10 +11,10 @@ go_library(
     importpath = "k8s.io/client-go/listers/flowcontrol/v1beta3",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/api/flowcontrol/v1beta3",
-        "//vendor/k8s.io/apimachinery/pkg/labels",
-        "//vendor/k8s.io/client-go/listers",
-        "//vendor/k8s.io/client-go/tools/cache",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/flowcontrol/v1beta3",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/labels",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
     ],
 )
 

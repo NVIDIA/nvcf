@@ -19,11 +19,11 @@ go_library(
     name = "ptr",
     srcs = ["ptr.go"],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":ptr",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
 )

@@ -9,7 +9,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-logr/logr/funcr",
     importpath = "github.com/go-logr/logr/funcr",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/go-logr/logr"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr"],
 )
 
 alias(
