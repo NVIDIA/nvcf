@@ -10,14 +10,14 @@ go_library(
     importpath = "github.com/prometheus/client_golang/prometheus/testutil",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/kylelemons/godebug/diff",
-        "//vendor/github.com/prometheus/client_golang/prometheus",
-        "//vendor/github.com/prometheus/client_golang/prometheus/internal",
-        "//vendor/github.com/prometheus/client_golang/prometheus/testutil/promlint",
-        "//vendor/github.com/prometheus/client_model/go",
-        "//vendor/github.com/prometheus/common/expfmt",
-        "//vendor/github.com/prometheus/common/model",
-        "//vendor/google.golang.org/protobuf/proto",
+        "//src/compute-plane-services/nvca/vendor/github.com/kylelemons/godebug/diff",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/internal",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/testutil/promlint",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_model/go",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/common/expfmt",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/common/model",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/proto",
     ],
 )
 

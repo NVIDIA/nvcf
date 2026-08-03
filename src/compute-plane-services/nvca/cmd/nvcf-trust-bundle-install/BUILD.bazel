@@ -6,7 +6,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvcf-trust-bundle-install",
     visibility = ["//visibility:private"],
     deps = [
-        "//internal/transporttls/trustbundle",
+        "//src/compute-plane-services/nvca/internal/transporttls/trustbundle",
     ],
 )
 
@@ -21,7 +21,7 @@ go_test(
     srcs = ["main_test.go"],
     embed = [":nvcf-trust-bundle-install_lib"],
     deps = [
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
     ],
 )

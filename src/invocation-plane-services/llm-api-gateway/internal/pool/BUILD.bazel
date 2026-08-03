@@ -19,12 +19,12 @@ go_library(
     name = "pool",
     srcs = ["pool.go"],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/pool",
-    visibility = ["//:__subpackages__"],
-    deps = ["//internal/must"],
+    visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
+    deps = ["//src/invocation-plane-services/llm-api-gateway/internal/must"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":pool",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
 )

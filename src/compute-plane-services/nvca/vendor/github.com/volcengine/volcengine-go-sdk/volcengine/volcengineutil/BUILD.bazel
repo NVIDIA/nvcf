@@ -15,7 +15,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineutil",
     importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/volcengineutil",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/jmespath/go-jmespath"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/jmespath/go-jmespath"],
 )
 
 alias(

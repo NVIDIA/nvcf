@@ -723,13 +723,6 @@ sigs.k8s.io/structured-merge-diff/v6/value
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
-# cloud.google.com/go => cloud.google.com/go v0.112.2
-# github.com/Masterminds/vcs => github.com/Masterminds/vcs v1.13.3
-# github.com/google/cel-go => github.com/google/cel-go v0.17.8
 # k8s.io/api => k8s.io/api v0.35.3
-# k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.35.3
 # k8s.io/apimachinery => k8s.io/apimachinery v0.35.3
-# k8s.io/apiserver => k8s.io/apiserver v0.35.3
 # k8s.io/client-go => k8s.io/client-go v0.35.3
-# k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.35.3
-# k8s.io/component-base => k8s.io/component-base v0.35.3

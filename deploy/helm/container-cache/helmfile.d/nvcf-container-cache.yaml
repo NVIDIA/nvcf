@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Minimal helmfile so generate-sbom can discover this chart in-repo (workspace
+# root is resolved via helmfile.d/). Chart has no external repo dependencies.
+releases:
+  - name: nvcf-container-cache
+    namespace: default
+    chart: ../deploy

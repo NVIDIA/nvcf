@@ -20,7 +20,7 @@ go_library(
     srcs = ["requestctx.go"],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx",
     visibility = ["//visibility:public"],
-    deps = ["//nvcf"],
+    deps = ["//src/invocation-plane-services/llm-api-gateway/nvcf"],
 )
 
 alias(

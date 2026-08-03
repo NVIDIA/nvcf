@@ -12,8 +12,8 @@ go_library(
     importpath = "github.com/hashicorp/vault/sdk/database/helper/connutil",
     visibility = ["//visibility:public"],
     deps = [
-        "//sdk/database/dbplugin",
-        "//sdk/database/helper/dbutil",
+        "//src/compute-plane-services/ess-agent/sdk/database/dbplugin",
+        "//src/compute-plane-services/ess-agent/sdk/database/helper/dbutil",
         "@com_github_hashicorp_errwrap//:errwrap",
         "@com_github_hashicorp_go_secure_stdlib_parseutil//:parseutil",
         "@com_github_mitchellh_mapstructure//:mapstructure",

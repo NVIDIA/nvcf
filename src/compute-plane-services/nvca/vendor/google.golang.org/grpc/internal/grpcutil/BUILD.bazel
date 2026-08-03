@@ -12,12 +12,12 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/grpcutil",
     importpath = "google.golang.org/grpc/internal/grpcutil",
-    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
-    deps = ["//vendor/google.golang.org/grpc/metadata"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
+    deps = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/metadata"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":grpcutil",
-    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
 )

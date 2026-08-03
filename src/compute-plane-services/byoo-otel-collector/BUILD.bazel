@@ -67,7 +67,7 @@ load("//rules/oci:transition.bzl", "multi_arch")
 go_oci_image(
     name = "nvcf-otel-collector-image",
     base = "@distroless_go",
-    binary = "//otelcol:otelcol-contrib-bin",
+    binary = "//src/compute-plane-services/byoo-otel-collector/otelcol:otelcol-contrib-bin",
     binary_path = "/otelcol-contrib",
     tags = ["nvcf-otel-collector"],
     visibility = ["//visibility:public"],
@@ -80,18 +80,18 @@ go_oci_image(
 # !365 and rules/oci/private/go.bzl.
 pkg_files(
     name = "byoo_wrapper_files",
-    srcs = ["//cmd/byoo-otel-collector:byoo-otel-collector"],
+    srcs = ["//src/compute-plane-services/byoo-otel-collector/cmd/byoo-otel-collector:byoo-otel-collector"],
     prefix = "/app",
-    renames = {"//cmd/byoo-otel-collector:byoo-otel-collector": "byoo-otel-collector"},
+    renames = {"//src/compute-plane-services/byoo-otel-collector/cmd/byoo-otel-collector:byoo-otel-collector": "byoo-otel-collector"},
     attributes = pkg_attributes(mode = "0755"),
     visibility = ["//visibility:private"],
 )
 
 pkg_files(
     name = "byoo_collector_files",
-    srcs = ["//otelcol:otelcol-contrib-bin"],
+    srcs = ["//src/compute-plane-services/byoo-otel-collector/otelcol:otelcol-contrib-bin"],
     prefix = "/app",
-    renames = {"//otelcol:otelcol-contrib-bin": "otelcol-contrib"},
+    renames = {"//src/compute-plane-services/byoo-otel-collector/otelcol:otelcol-contrib-bin": "otelcol-contrib"},
     attributes = pkg_attributes(mode = "0755"),
     visibility = ["//visibility:private"],
 )
@@ -148,7 +148,7 @@ oci_image_index(
 # pkg_tar layer and assert the entrypoint exists and is executable.
 sh_test(
     name = "nvcf-otel-collector-image_entrypoint_mode_test",
-    srcs = ["//tools/ci:image_entrypoint_mode_test.sh"],
+    srcs = ["//src/compute-plane-services/byoo-otel-collector/tools/ci:image_entrypoint_mode_test.sh"],
     args = [
         "$(location :nvcf-otel-collector-image_layer)",
         "/otelcol-contrib",
@@ -158,7 +158,7 @@ sh_test(
 
 sh_test(
     name = "byoo-otel-collector-image_entrypoint_mode_test",
-    srcs = ["//tools/ci:image_entrypoint_mode_test.sh"],
+    srcs = ["//src/compute-plane-services/byoo-otel-collector/tools/ci:image_entrypoint_mode_test.sh"],
     args = [
         "$(location :byoo_combined_layer)",
         "/app/byoo-otel-collector",
