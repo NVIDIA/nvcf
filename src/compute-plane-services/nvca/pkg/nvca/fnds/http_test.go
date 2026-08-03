@@ -18,7 +18,17 @@ limitations under the License.
 package fnds
 
 import (
+	"io"
+	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel"
+	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -103,5 +113,101 @@ func TestHTTPClient(t *testing.T) {
 	if assert.Error(t, err) {
 		assert.Contains(t, err.Error(), "circuit breaker is open")
 		assert.Nil(t, resp)
+	}
+}
+
+type fndsSentinelTransport struct{ inner http.RoundTripper }
+
+func (s *fndsSentinelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return s.inner.RoundTrip(req)
+}
+
+// TestNewHTTPClient_AppliesTransportWrappers verifies the wrapper hook is applied
+// as the outermost transport layer, which is how the FNDS client is instrumented.
+func TestNewHTTPClient_AppliesTransportWrappers(t *testing.T) {
+	var called bool
+	sentinel := &fndsSentinelTransport{}
+	c := NewHTTPClient(func(inner http.RoundTripper) http.RoundTripper {
+		called = true
+		sentinel.inner = inner
+		return sentinel
+	})
+	if !called {
+		t.Fatal("expected the transport wrapper to be invoked")
+	}
+	if c.Transport != http.RoundTripper(sentinel) {
+		t.Fatalf("expected the wrapper's return value to be the outermost transport, got %T", c.Transport)
+	}
+}
+
+// TestNewHTTPClient_NilWrapperIsIgnored keeps the no-wrapper path unchanged.
+func TestNewHTTPClient_NilWrapperIsIgnored(t *testing.T) {
+	plain := NewHTTPClient()
+	withNil := NewHTTPClient(nil)
+	if plain.Transport == nil || withNil.Transport == nil {
+		t.Fatal("transport must be set in both cases")
+	}
+	if _, ok := withNil.Transport.(*fndsSentinelTransport); ok {
+		t.Fatal("a nil wrapper must not wrap the transport")
+	}
+}
+
+// TestNewHTTPClient_NoDoubleCount pins the suppression contract: when a metrics
+// transport wrapper is installed, that wrapper is the single source for the
+// http.client.* family and otelhttp must not also emit into it. A live global
+// meter provider is installed so otelhttp would emit if suppression regressed.
+func TestNewHTTPClient_NoDoubleCount(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer backend.Close()
+
+	reg := prometheus.NewRegistry()
+	exporter, err := promexporter.New(promexporter.WithRegisterer(reg))
+	if err != nil {
+		t.Fatalf("exporter: %v", err)
+	}
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
+	prev := otel.GetMeterProvider()
+	otel.SetMeterProvider(mp)
+	t.Cleanup(func() { otel.SetMeterProvider(prev) })
+
+	rec, err := clientmetrics.NewRecorder(mp, nil)
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+
+	c := NewHTTPClient(func(inner http.RoundTripper) http.RoundTripper {
+		return clientmetrics.NewTransport(inner, rec, clientmetrics.PeerServiceFNDS)
+	})
+	resp, err := c.Get(backend.URL + "/v1/stages")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	srv := httptest.NewServer(promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	defer srv.Close()
+	s, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("scrape: %v", err)
+	}
+	body, _ := io.ReadAll(s.Body)
+	_ = s.Body.Close()
+	scrape := string(body)
+
+	const otelhttpScope = `otel_scope_name="go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"`
+	if strings.Contains(scrape, otelhttpScope) {
+		t.Fatalf("otelhttp emitted client metrics for the FNDS client: suppression regressed\n%s", scrape)
+	}
+
+	got := strings.Count(scrape, "\nhttp_client_request_duration_seconds_count{")
+	if got != 1 {
+		t.Fatalf("expected exactly 1 FNDS duration observation, got %d\n%s", got, scrape)
+	}
+	if !strings.Contains(scrape, `peer_service="fnds"`) {
+		t.Errorf("expected peer_service=fnds\n%s", scrape)
 	}
 }
