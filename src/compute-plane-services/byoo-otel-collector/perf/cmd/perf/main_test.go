@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/loadgen"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
 )
 
@@ -165,6 +167,9 @@ func TestRunCmdDefaults(t *testing.T) {
 		"namespace":     "byoo-perf",
 		"ready-timeout": "3m0s",
 		"retain":        "false",
+		"skip-load":     "false",
+		"sink-image":    sink.DefaultImage,
+		"loadgen-image": loadgen.DefaultImage,
 	}
 	for name, want := range defaults {
 		f := cmd.Flags().Lookup(name)
