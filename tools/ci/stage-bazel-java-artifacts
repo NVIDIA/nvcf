@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+subtree_id="${1:?usage: stage-bazel-java-artifacts SUBTREE_ID SUBTREE_PATH}"
+subtree_path="${2:?usage: stage-bazel-java-artifacts SUBTREE_ID SUBTREE_PATH}"
+artifact_root="${RUNNER_TEMP:?RUNNER_TEMP is required}/bazel-java-verification/${subtree_id}"
+generated_root="${artifact_root}/generated"
+testlogs_root="${artifact_root}/testlogs"
+
+mkdir -p "${generated_root}" "${testlogs_root}"
+
+source_testlogs="bazel-testlogs/${subtree_path}"
+if [[ -d "${source_testlogs}" ]]; then
+    cp -R -L "${source_testlogs}/." "${testlogs_root}/"
+fi
+
+source_outputs="bazel-bin/${subtree_path}"
+for filename in \
+    THIRD_PARTY_NOTICE \
+    runtime_inventory.json \
+    osrb_dependency_delta.json \
+    osrb_dependency_delta.md; do
+    if [[ -f "${source_outputs}/${filename}" ]]; then
+        cp -L "${source_outputs}/${filename}" "${generated_root}/${filename}"
+    fi
+done
+
+file_count="$(find "${artifact_root}" -type f | wc -l | tr -d ' ')"
+junit_count="$(find "${testlogs_root}" -name 'TEST-junit-jupiter.xml' -type f | wc -l | tr -d ' ')"
+jacoco_count="$(find "${testlogs_root}" -name 'jacoco.xml' -type f | wc -l | tr -d ' ')"
+
+echo "Staged ${file_count} files: ${junit_count} JUnit reports, ${jacoco_count} JaCoCo XML reports"
+find "${generated_root}" -type f -print | LC_ALL=C sort

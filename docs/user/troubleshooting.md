@@ -1090,7 +1090,7 @@ echo "=============================================="
 
 ```
 
-[force-cleanup-nvcf.sh](samples/scripts/force-cleanup-nvcf.sh)
+[force-cleanup-nvcf.sh](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/user/samples/scripts/force-cleanup-nvcf.sh)
 
 **Usage:**
 

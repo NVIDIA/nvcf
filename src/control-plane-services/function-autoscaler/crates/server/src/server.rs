@@ -131,7 +131,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
 
     tracing::info!("Initializing TimeseriesDb client (waiting with exponential backoff until up)");
-    let timeseries_db_credential_provider = if !config.timeseries_db.disable_auth {
+    let timeseries_db_credential_provider = if config.timeseries_db.effective_auth_mode()
+        == timeseries_db::TimeseriesDbAuthMode::Token
+    {
         tracing::info!("Initializing TimeseriesDb credentials provider for token generation");
         Some(Arc::new(
             timeseries_db::timeseries_db_client::AuthnCredentialProvider::new(
@@ -146,9 +148,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let timeseries_db_client =
-        startup::wait_for_timeseries_db(&config.timeseries_db, timeseries_db_credential_provider)
-            .await?;
+    let timeseries_db_client = startup::wait_for_timeseries_db(
+        &config.timeseries_db,
+        timeseries_db_credential_provider,
+        Some(secrets_file_watcher.clone()),
+    )
+    .await?;
 
     health
         .register_health_checker(timeseries_db_client.clone())

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-collectorName: nvcf-control-plane
+collectorName: nvcf-observability
 image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.129.1
 imagePullSecrets: []
 

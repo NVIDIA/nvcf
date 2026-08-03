@@ -190,6 +190,14 @@ func TestNewNVCFWorker_Normalization(t *testing.T) {
 		assert.Equal(t, "GFN", w.meteringConfig.Backend)
 	})
 
+	t.Run("nspect id is populated from environment for metering events", func(t *testing.T) {
+		t.Setenv(metering.EnvNspectId, "NSPECT-TEST-1234")
+		cfg := baseValidConfig(t)
+		w, err := NewNVCFWorker(context.Background(), newTestLogger(t), cfg)
+		require.NoError(t, err)
+		assert.Equal(t, "NSPECT-TEST-1234", w.meteringConfig.NspectId)
+	})
+
 	t.Run("inference ready timeout defaults when zero", func(t *testing.T) {
 		cfg := baseValidConfig(t)
 		cfg.InferenceReadyTimeout = 0

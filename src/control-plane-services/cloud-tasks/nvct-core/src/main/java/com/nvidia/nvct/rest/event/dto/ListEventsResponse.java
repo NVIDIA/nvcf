@@ -1,0 +1,35 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.nvidia.nvct.rest.event.dto;
+
+import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotNull;
+import java.util.List;
+import lombok.Builder;
+
+@Builder
+@Schema(description = "Response body containing list of task events")
+public record ListEventsResponse(
+        @Schema(description = "List of events")
+        @NotNull List<EventDto> events,
+
+        @Schema(description = "Pagination limit - Not included in the response for the last slice")
+        Integer limit,
+
+        @Schema(description = "Pagination cursor - Not included in the response for the last slice")
+        String cursor) {
+}

@@ -6,7 +6,7 @@ Public agent skills for users and developers working with NVIDIA Cloud Functions
 
 | Skill | Description |
 |-------|-------------|
-| [documentation-style](dev/skills/documentation-style/SKILL.md) | NVCF documentation conventions for public repo prose |
+| [documentation-style](dev/skills/documentation-style/SKILL.md) | Public docs, AGENTS, and skill-writing style |
 | [nvcf-explore-stack](dev/skills/nvcf-explore-stack/SKILL.md) | Navigate the self-hosted stack topology, helmfile dependency graph, chart ownership, and deployment order |
 | [nvcf-self-managed-installation](user/skills/nvcf-self-managed-installation/SKILL.md) | Install and deploy the nvcf-self-managed-stack helmfile bundle: installation, teardown, values overrides, pull secrets, debugging |
 | [nvcf-self-managed-cli](user/skills/nvcf-self-managed-cli/SKILL.md) | Standalone NVCF CLI (`nvcf-cli`) for self-managed/self-hosted deployments: install, status, add compute plane, teardown, function lifecycle, invocation, and API keys |

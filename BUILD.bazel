@@ -20,14 +20,33 @@ exports_files(
     visibility = ["//src/libraries/go/lib:__pkg__"],
 )
 
-# Phase 1 scope: only the native Go subtrees listed in go.work.bazel are
-# managed by Bazel.
-# Everything else is excluded so Gazelle does not descend into vendored
-# directories of upstream-owned subtrees. Their source is owned upstream, and
-# local-only changes would be clobbered by the next commit-pin refresh.
+package_group(
+    name = "java_notice_consumers",
+    packages = [
+        "//src/control-plane-services/...",
+        "//src/libraries/java/...",
+    ],
+)
+
+# Root module identity, third-party lock, and NOTICE index consumed by Java
+# NOTICE generation and verification under the stable Java component paths.
+exports_files(
+    [
+        "MODULE.bazel",
+        "NOTICE",
+        "maven_install.json",
+    ],
+    visibility = [":java_notice_consumers"],
+)
+
+# Gazelle manages only the native Go subtrees listed in go.work.bazel.
+# nv-boot-parent and Cloud Tasks are also owned by the root Bazel module, but
+# their checked-in Java BUILD files are maintained manually and remain outside
+# Gazelle's scope. Other upstream-owned subtrees stay excluded so Gazelle does
+# not descend into vendored directories.
 #
-# When promoting an upstream to native (Phase B), remove the corresponding
-# exclude line below and add a per-subtree BUILD.bazel with the right prefix.
+# When onboarding another subtree, remove only the exclusions needed by its
+# language-specific build integration.
 # gazelle:exclude .bazel-cache
 # gazelle:exclude .worktrees
 # gazelle:exclude .cursor
@@ -47,7 +66,17 @@ exports_files(
 # gazelle:exclude migrations
 # gazelle:exclude platforms
 # gazelle:exclude rules
-# gazelle:exclude src/compute-plane-services
+# src/compute-plane-services is excluded per-subtree rather than wholesale:
+# nvsnap is part of the root module and Gazelle must manage its BUILD files.
+# gazelle:exclude src/compute-plane-services/byoo-otel-collector
+# gazelle:exclude src/compute-plane-services/ess-agent
+# gazelle:exclude src/compute-plane-services/image-credential-helper
+# gazelle:exclude src/compute-plane-services/nvca
+# gazelle:exclude src/compute-plane-services/nvcf-unbound
+# gazelle:exclude src/compute-plane-services/worker-init
+# gazelle:exclude src/compute-plane-services/worker-llm-credentials
+# gazelle:exclude src/compute-plane-services/worker-task
+# gazelle:exclude src/compute-plane-services/worker-utils
 # gazelle:exclude src/control-plane-services
 # gazelle:exclude src/invocation-plane-services
 # gazelle:exclude src/libraries/python

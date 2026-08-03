@@ -21,6 +21,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -134,6 +135,11 @@ func TestNew_DefaultsSharedConfigDir(t *testing.T) {
 // subdirectory that does not yet exist, so os.Stat returns ErrNotExist and the
 // callback must create the directory tree before writing the token.
 func TestRun_CreatesMissingTokenDir(t *testing.T) {
+	// A restrictive umask must not strip the token's read bits: Run chmods the
+	// file after writing so the pylon sidecar can always read it.
+	oldUmask := syscall.Umask(0o077)
+	defer syscall.Umask(oldUmask)
+
 	addr := startMockNVCFServer(t)
 	tmpDir := t.TempDir()
 	// Nested, non-existent subdirectory of the temp dir.
@@ -197,6 +203,16 @@ func TestRun_CreatesMissingTokenDir(t *testing.T) {
 	}
 	if string(content) != testWorkerToken {
 		t.Fatalf("expected token %q, got %q", testWorkerToken, string(content))
+	}
+
+	// The token must be readable by the pylon sidecar, which runs as a
+	// different UID on the shared emptyDir.
+	tokenInfo, err := os.Stat(workerTokenPath)
+	if err != nil {
+		t.Fatalf("token file not found: %v", err)
+	}
+	if got := tokenInfo.Mode().Perm(); got != 0644 {
+		t.Fatalf("expected token file mode 0644, got %o", got)
 	}
 }
 

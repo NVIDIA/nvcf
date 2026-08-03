@@ -29,6 +29,7 @@ import (
 
 	"github.com/cucumber/godog"
 
+	"nvcf-bdd/dsl"
 	"nvcf-bdd/harness"
 	"nvcf-bdd/steps"
 )
@@ -462,6 +463,107 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 }
 
+// TestObservabilityControlFeatureFileWiresToSteps runs the live-install
+// observability-control feature against a fake runner. It checks the
+// single-cluster Helmfile path renders and verifies the profile-selected
+// shared releases and monitor resources through explicit local context calls.
+func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
+	const (
+		registryLoginCommand   = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
+		serviceMonitorsCommand = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics" +
+			" servicemonitor/nvcf-default-monitors-grpc-proxy" +
+			" servicemonitor/nvcf-default-monitors-llm-api-gateway" +
+			" servicemonitor/nvcf-default-monitors-invocation-service" +
+			" --namespace monitoring --context k3d-ncp-local"
+	)
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		registryLoginCommand:           {ExitCode: 0},
+		serviceMonitorsCommand:         {ExitCode: 0},
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
+			ExitCode: 0,
+			Stdout:   observabilityControlHelmListJSON(),
+		},
+		"kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'": {
+			ExitCode: 0,
+			Stdout:   "true",
+		},
+		"kubectl get servicemonitor nvcf-default-monitors-nvca -n monitoring --context k3d-ncp-local": {
+			ExitCode: 1,
+			Stderr:   "Error from server (NotFound): servicemonitors.monitoring.coreos.com \"nvcf-default-monitors-nvca\" not found\n",
+		},
+		"kubectl get podmonitor nvcf-default-monitors-dcgm -n monitoring --context k3d-ncp-local": {
+			ExitCode: 1,
+			Stderr:   "Error from server (NotFound): podmonitors.monitoring.coreos.com \"nvcf-default-monitors-dcgm\" not found\n",
+		},
+		"kubectl get podmonitor nvcf-default-monitors-worker -n monitoring --context k3d-ncp-local": {
+			ExitCode: 1,
+			Stderr:   "Error from server (NotFound): podmonitors.monitoring.coreos.com \"nvcf-default-monitors-worker\" not found\n",
+		},
+	}))
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "observability-control.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "observability-control-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	for _, command := range []string{
+		registryLoginCommand,
+		serviceMonitorsCommand,
+	} {
+		if !commandRanExactly(runs, command) {
+			t.Fatalf("exact command was never invoked: %s", command)
+		}
+	}
+	if !commandRanThatContains(runs, "install HELMFILE_ENV=local-bdd-observability-control") {
+		t.Fatal("control-profile Helmfile install command was never invoked")
+	}
+	environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd-observability-control.yaml")
+	chartVersion, found, err := dsl.ReadYAMLKey(environmentPath, "functionAutoscaler.chartVersion")
+	if err != nil {
+		t.Fatalf("read control-profile autoscaler chart version: %v", err)
+	}
+	if !found || chartVersion != "0.2.0" {
+		t.Fatalf("control-profile autoscaler chart version = %q, found = %t; want 0.2.0", chartVersion, found)
+	}
+	imageTag, found, err := dsl.ReadYAMLKey(environmentPath, "functionAutoscaler.image.tag")
+	if err != nil {
+		t.Fatalf("read control-profile autoscaler image tag: %v", err)
+	}
+	if !found || imageTag != "1.18.10" {
+		t.Fatalf("control-profile autoscaler image tag = %q, found = %t; want 1.18.10", imageTag, found)
+	}
+}
+
+func observabilityControlHelmListJSON() string {
+	return `[
+{"name":"prometheus-operator-crds","namespace":"monitoring","status":"deployed"},
+{"name":"opentelemetry-operator","namespace":"monitoring","status":"deployed"},
+{"name":"victoria-metrics","namespace":"monitoring","status":"deployed"},
+{"name":"otel-collector","namespace":"monitoring","status":"deployed"},
+{"name":"default-monitors","namespace":"monitoring","status":"deployed"}
+]`
+}
+
 // TestMultiClusterHelmfileFeatureFileWiresToSteps runs
 // multi-cluster-helmfile.feature against a fake runner. The same
 // fixture seeds and canned helm-list outputs cover the scenarios;
@@ -558,6 +660,151 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 }
 
+// TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
+// focused upstream-image feature against a fake runner. The seeded global
+// template contains the exact documentation blocks so the ledger-backed
+// substitutions exercise real file writes.
+func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	upstreamReloader := "docker.io/natsio/nats-server-config-reloader:0.23.0"
+	upstreamAlpine := "docker.io/alpine/k8s:1.36.1"
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+		"rg --fixed-strings 'docker.io/natsio/nats-server-config-reloader:0.23.0' deploy/stacks/self-managed/out -g '**/*-nats/**'": {
+			ExitCode: 0,
+			Stdout:   upstreamReloader,
+		},
+		"rg --fixed-strings 'nvcf-cassandra-migrations:' deploy/stacks/self-managed/out -g '**/*-cassandra/**'": {
+			ExitCode: 0,
+			Stdout:   "nvcf-cassandra-migrations:",
+		},
+		"rg --fixed-strings '# Source: helm-nvcf-nats/templates/nkey-secret.yaml' deploy/stacks/self-managed/out -g '**/*-nats/**'": {
+			ExitCode: 0,
+			Stdout:   "nkey-secret.yaml",
+		},
+		"rg --fixed-strings 'docker.io/alpine/k8s:1.36.1' deploy/stacks/self-managed/out -g '**/*-api/**'": {
+			ExitCode: 0,
+			Stdout:   upstreamAlpine,
+		},
+		"helm list --all-namespaces -o json": {
+			ExitCode: 0,
+			Stdout:   helmListAllNamespacesJSON(),
+		},
+		`kubectl get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'`: {
+			ExitCode: 0,
+			Stdout:   upstreamReloader,
+		},
+	}))
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	seedUpstreamImageStackInputs(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile-upstream-images.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "single-cluster-helmfile-upstream-images-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanThatContains(runs, "template HELMFILE_ENV=local-bdd") {
+		t.Fatal("helmfile template make target was never invoked")
+	}
+	for _, selector := range []string{
+		"HELMFILE_SELECTOR=release-group=dependencies",
+		"HELMFILE_SELECTOR=name=ess-api",
+		"HELMFILE_SELECTOR=name=nats-auth-callout-service",
+		"HELMFILE_SELECTOR=name=api",
+	} {
+		if !commandRanThatContains(runs, "install HELMFILE_ENV=local-bdd "+selector) {
+			t.Fatalf("helmfile install selector %q was never invoked", selector)
+		}
+	}
+}
+
+// TestObservabilityDisabledFeatureFileWiresToSteps runs the render-only
+// observability-disabled feature against a fake runner. The fixture setup
+// mirrors the local Helmfile inputs while the feature asserts disabled profile
+// renders omit observability resources from both stacks.
+func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	suite := newWiringSuite(t, newFakeRunner(nil))
+	t.Setenv("REPO_ROOT", suite.Config.RepoRoot)
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	seedObservabilityDisabledRegistrationValuesFixture(t, suite.Config.RepoRoot)
+	seedObservabilityDisabledRenderOutput(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "observability-disabled.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "observability-disabled-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanThatContains(runs, "deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-observability-disabled") {
+		t.Fatal("control-plane Helmfile template command was never invoked")
+	}
+	if !commandRanThatContains(runs, "deploy/stacks/nvcf-compute-plane template CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-observability-disabled") {
+		t.Fatal("compute-plane Helmfile template command was never invoked")
+	}
+}
+
+func seedObservabilityDisabledRegistrationValuesFixture(t *testing.T, repoRoot string) {
+	t.Helper()
+	fixturePath := filepath.Join("fixtures", "ncp-local-register-values.yaml")
+	body, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read registration fixture %s: %v", fixturePath, err)
+	}
+	writeFixture(t, repoRoot, "ncp-local-register-values.yaml", string(body))
+}
+
+func seedObservabilityDisabledRenderOutput(t *testing.T, repoRoot string) {
+	t.Helper()
+	for _, relativePath := range []string{
+		filepath.Join("control-plane", "api.yaml"),
+		filepath.Join("compute-plane", "nvca.yaml"),
+	} {
+		path := filepath.Join(repoRoot, "tests", "bdd", "out", "observability-disabled", relativePath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create rendered output directory: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("kind: Deployment\n"), 0o644); err != nil {
+			t.Fatalf("write rendered output %s: %v", relativePath, err)
+		}
+	}
+}
+
 // helmListAllNamespacesJSON returns canned helm-list output covering
 // every release the helmfile install scenario asserts.
 func helmListAllNamespacesJSON() string {
@@ -605,6 +852,47 @@ addons:
   llm:
     enabled: true
 `)
+}
+
+// seedUpstreamImageStackInputs writes the two stack files the focused
+// upstream-image feature copies and edits in its wiring test.
+func seedUpstreamImageStackInputs(t *testing.T, repoRoot string) {
+	t.Helper()
+	clusterSecretsDir := filepath.Join(repoRoot, "tools", "ncp-local-cluster", "secrets")
+	if err := os.MkdirAll(clusterSecretsDir, 0o755); err != nil {
+		t.Fatalf("mkdir cluster secrets dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(clusterSecretsDir, "docker-config.json"), []byte(`{
+  "auths": {
+    "nvcr.io": {}
+  }
+}`), 0o600); err != nil {
+		t.Fatalf("write docker config: %v", err)
+	}
+	stackDir := filepath.Join(repoRoot, "deploy", "stacks", "self-managed")
+	if err := os.MkdirAll(stackDir, 0o755); err != nil {
+		t.Fatalf("mkdir stack dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stackDir, "Makefile.dist"), []byte("template:\n\t@true\ninstall:\n\t@true\n"), 0o644); err != nil {
+		t.Fatalf("write Makefile.dist: %v", err)
+	}
+	global := `nats:
+  reloader:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
+      tag: "0.23.0"
+api:
+  accountBootstrap:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/alpine-k8s
+      tag: 1.36.1
+      pullPolicy: IfNotPresent
+`
+	if err := os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte(global), 0o644); err != nil {
+		t.Fatalf("write global template: %v", err)
+	}
 }
 
 // seedHelmfileLocalBDDMultiFixture writes the multi-cluster variant
@@ -984,6 +1272,33 @@ func TestSingleClusterHelmfile(t *testing.T) {
 	runLiveFeature(t, "single-cluster-helmfile.feature")
 }
 
+// TestObservabilityControl is the live entry point for the control
+// observability profile feature. Skipped under -short.
+func TestObservabilityControl(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "observability-control.feature")
+}
+
+// TestSingleClusterHelmfileUpstreamImages is the live entry point for the
+// focused Docker Hub supporting-image override feature. Skipped under -short.
+func TestSingleClusterHelmfileUpstreamImages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "single-cluster-helmfile-upstream-images.feature")
+}
+
+// TestObservabilityDisabled is the live entry point for the render-only
+// disabled observability profile feature. Skipped under -short.
+func TestObservabilityDisabled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "observability-disabled.feature")
+}
+
 // TestMultiClusterHelmfile is the live entry point for the
 // multi-cluster Helmfile feature: control-plane install on
 // k3d-ncp-local-cp followed by register + NVCA install on the
@@ -1064,6 +1379,15 @@ func runLiveFeatureTags(t *testing.T, feature, tags string) {
 func commandRanThatContains(runs []string, needle string) bool {
 	for _, run := range runs {
 		if strings.Contains(run, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func commandRanExactly(runs []string, want string) bool {
+	for _, run := range runs {
+		if run == want {
 			return true
 		}
 	}

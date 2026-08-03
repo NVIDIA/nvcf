@@ -5,7 +5,10 @@ The NVIDIA Cluster Agent (NVCA) connects GPU clusters to the NVCF control plane,
 For a fresh install, use the [Quickstart](../quickstart.md). The one-click CLI flow can register a GPU cluster as part of the install. Use this section for manual cluster registration, standalone NVCA installation, and day-two cluster configuration.
 
 <Warning>
-If you pin NVCA separately from the recommended compute-plane stack, check the current NVCA version before upgrading to NVCA 3.x. Clusters running NVCA 2.51.0 or earlier have version-specific upgrade guidance. See the [0.6.0 upgrade notes](../release-notes/0.6.0.md#upgrade-notes).
+If you pin NVCA separately from the recommended compute-plane stack, check the
+current NVCA version before upgrading to NVCA 3.x. Clusters running NVCA 2.51.0
+or earlier have version-specific upgrade guidance. See the
+[0.6.0 upgrade notes](https://docs.nvidia.com/nvcf/v0.6.0/0-6-0-release-notes#upgrade-notes).
 </Warning>
 
 After installing NVCA on a cluster:
@@ -29,7 +32,7 @@ After installing NVCA on a cluster:
 
     - If your cloud provider does not support the NVIDIA GPU Operator, [Manual Instance Configuration](./configuration.md) is possible, but not recommended due to lack of maintainability.
     - To get the most out of clusters with multi-node NVLink ([MNNVL](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html#dra-docs-compute-domains)) GPUs like [GB200](https://www.nvidia.com/en-us/data-center/gb200-nvl72/), the [NVIDIA GPU DRA driver](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-intro-install.html) must be installed. See the [nvlink-optimized-clusters](./configuration.md) for details.
-    - For development or testing environments without physical GPUs, install the [fake-gpu-operator](../fake-gpu-operator.md) instead.
+    - For development or testing environments without physical GPUs, install the [fake-gpu-operator](../fake-gpu-operator) instead.
 
 - Registering the cluster requires `kubectl` and `helm` installed.
 

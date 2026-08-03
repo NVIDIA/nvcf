@@ -778,6 +778,56 @@ func Test_translateFunctionLaunchSpecification(t *testing.T) {
 		assert.Equal(t, "128Gi", gotPod.Spec.Containers[0].Resources.Limits.StorageEphemeral().String())
 	}
 
+	llmLaunchSpecification := *cmContainer.LaunchSpecification
+	llmEnvironment, err := base64.StdEncoding.DecodeString(llmLaunchSpecification.EnvironmentB64)
+	require.NoError(t, err)
+	llmLaunchSpecification.EnvironmentB64 = base64.StdEncoding.EncodeToString(append(
+		llmEnvironment,
+		[]byte("\nLLM_REQUEST_ROUTER_ADDRESS=llm-request-router.example.com:50071")...,
+	))
+	llmDetails := cmContainer.Details
+	llmDetails.FunctionType = function.FunctionTypeLLM
+	reqLLM := reqContainer.DeepCopy()
+	reqLLM.Name = "sr-llm"
+	reqLLM.Spec.FunctionDetails = llmDetails
+	reqLLM.Spec.CreationMsgInfo.FunctionLaunchSpecification = &llmLaunchSpecification
+
+	gotArtifactsLLM, err := kc.translateFunctionLaunchSpecification(ctx, reqLLM)
+	require.NoError(t, err)
+	var llmPodArtifact function.LaunchArtifact
+	for _, artifact := range gotArtifactsLLM {
+		if artifact.Type == function.LaunchArtifactTypePod {
+			llmPodArtifact = artifact
+			break
+		}
+	}
+	require.NotEmpty(t, llmPodArtifact.Specification)
+	llmPodArtifactBytes, err := base64.StdEncoding.DecodeString(llmPodArtifact.Specification)
+	require.NoError(t, err)
+	llmPod := &corev1.Pod{}
+	require.NoError(t, json.Unmarshal(llmPodArtifactBytes, llmPod))
+	var llmWorker *corev1.Container
+	for i := range llmPod.Spec.Containers {
+		if llmPod.Spec.Containers[i].Name == function.LLMWorkerContainerName {
+			llmWorker = &llmPod.Spec.Containers[i]
+			break
+		}
+	}
+	require.NotNil(t, llmWorker)
+	var backendConnectivityArgs, initialInputTPSArgs []string
+	for _, arg := range llmWorker.Args {
+		if strings.HasPrefix(arg, "--backend-connectivity=") {
+			backendConnectivityArgs = append(backendConnectivityArgs, arg)
+		}
+		if strings.HasPrefix(arg, "--initial-input-tps=") {
+			initialInputTPSArgs = append(initialInputTPSArgs, arg)
+		}
+		assert.False(t, strings.HasPrefix(arg, "--reverse-tunnel"))
+		assert.False(t, strings.HasPrefix(arg, "--do-calibration"))
+	}
+	assert.Equal(t, []string{"--backend-connectivity=reverse"}, backendConnectivityArgs)
+	assert.Equal(t, []string{"--initial-input-tps=100"}, initialInputTPSArgs)
+
 	// Helm chart basic function.
 	msgMetaHelmChart := cmHelmChart.CreationQueueMessageMetadata
 	reqHelmChart := &nvcav2beta1.ICMSRequest{

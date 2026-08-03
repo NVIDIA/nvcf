@@ -1,0 +1,193 @@
+load("@rules_java//java:defs.bzl", "java_library")
+load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_workspace_runfiles")
+load("//rules/java:notice.bzl", "nvcf_notice", "nvcf_notice_delta")
+load("//rules/java:spring.bzl", "spring_boot_app")
+load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
+
+package(default_visibility = ["//visibility:public"])
+
+API_KEYS_SRCS = glob(["src/main/java/**/*.java"])
+
+API_KEYS_RESOURCES = glob(["src/main/resources/**"])
+
+API_KEYS_TEST_SRCS = glob(["src/test/java/**/*.java"])
+
+API_KEYS_TEST_RESOURCES = glob(["src/test/resources/**"])
+
+API_KEYS_DEPS = [
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-cassandra:nv_boot_starter_cassandra",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions:nv_boot_starter_exceptions",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-jwt:nv_boot_starter_jwt",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-observability:nv_boot_starter_observability",
+    "//src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties:nv_boot_starter_reloadable_properties",
+    "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",
+    "@nv_third_party_deps//:com_google_guava_guava",
+    "@nv_third_party_deps//:com_nimbusds_nimbus_jose_jwt",
+    "@nv_third_party_deps//:io_micrometer_micrometer_registry_prometheus",
+    "@nv_third_party_deps//:io_opentelemetry_opentelemetry_api",
+    "@nv_third_party_deps//:io_swagger_core_v3_swagger_annotations_jakarta",
+    "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
+    "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+    "@nv_third_party_deps//:org_apache_cassandra_java_driver_core",
+    "@nv_third_party_deps//:org_apache_cassandra_java_driver_metrics_micrometer",
+    "@nv_third_party_deps//:org_apache_commons_commons_collections4",
+    "@nv_third_party_deps//:org_apache_commons_commons_lang3",
+    "@nv_third_party_deps//:org_apache_commons_commons_pool2",
+    "@nv_third_party_deps//:org_bouncycastle_bcprov_jdk18on",
+    "@nv_third_party_deps//:org_jspecify_jspecify",
+    "@nv_third_party_deps//:org_slf4j_slf4j_api",
+    "@nv_third_party_deps//:org_springdoc_springdoc_openapi_starter_webmvc_api",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_actuator",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_jackson",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_security",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_validation",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_starter_bootstrap",
+    "@nv_third_party_deps//:org_springframework_data_spring_data_cassandra",
+    "@nv_third_party_deps//:org_springframework_data_spring_data_commons",
+    "@nv_third_party_deps//:org_springframework_retry_spring_retry",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_config",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_core",
+    "@nv_third_party_deps//:org_springframework_security_spring_security_web",
+    "@nv_third_party_deps//:org_springframework_spring_beans",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_spring_core",
+    "@nv_third_party_deps//:org_springframework_spring_web",
+    "@nv_third_party_deps//:org_springframework_spring_webmvc",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_core",
+    "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
+    "@nv_third_party_deps//:tools_jackson_module_jackson_module_blackbird",
+    ":provided_compile_deps",
+]
+
+filegroup(
+    name = "integration_local_env_files",
+    srcs = [
+        "local_env/docker-compose.test.yml",
+    ] + glob([
+        "local_env/cassandra/**",
+        "local_env/vault/**",
+    ]),
+)
+
+# Tests open local_env paths relative to the runfiles workspace root. Strip the
+# imported package prefix to preserve the standalone repository layout.
+nv_boot_workspace_runfiles(
+    name = "integration_local_env",
+    srcs = [":integration_local_env_files"],
+    strip_prefix = "src/control-plane-services/api-keys/",
+)
+
+java_library(
+    name = "provided_compile_deps",
+    exports = ["@nv_third_party_deps//:jakarta_servlet_jakarta_servlet_api"],
+    neverlink = True,
+    visibility = ["//visibility:private"],
+)
+
+nv_boot_library(
+    name = "app_classes",
+    srcs = API_KEYS_SRCS,
+    deps = API_KEYS_DEPS,
+    resource_strip_prefix = "src/control-plane-services/api-keys/src/main/resources",
+    resources = API_KEYS_RESOURCES,
+    runtime_deps = [
+        "@nv_third_party_deps//:com_jayway_jsonpath_json_path",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_jarmode_tools",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+spring_boot_app(
+    name = "app",
+    application = ":app_classes",
+    artifact_id = "nvcf-api-keys",
+    artifact_name = "NVCF API Keys Service OSS",
+    artifact_version = "0.0.1-SNAPSHOT",
+    description = "NVIDIA API Keys Service OSS executable",
+    group_id = "com.nvidia.apikeys",
+    main_class = "com.nvidia.apikeys.App",
+)
+
+nv_boot_library_test(
+    name = "tests",
+    coverage_library = ":app_classes",
+    srcs = API_KEYS_TEST_SRCS,
+    deps = API_KEYS_DEPS + [
+        ":app_classes",
+        "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
+        "@nv_third_party_deps//:com_datastax_cassandra_cassandra_driver_core",
+        "@nv_third_party_deps//:jakarta_servlet_jakarta_servlet_api",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_web_server",
+        "@nv_third_party_deps//:org_testcontainers_testcontainers",
+        "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
+        "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
+    ],
+    data = [":integration_local_env"],
+    resource_strip_prefix = "src/control-plane-services/api-keys/src/test/resources",
+    resources = API_KEYS_TEST_RESOURCES,
+    size = "large",
+    tags = [
+        "exclusive",
+        "requires-docker",
+    ],
+    timeout = "long",
+)
+
+exports_files([
+    "NOTICE",
+    "notice_metadata.json",
+])
+
+nvcf_notice(
+    checked_notice = ":NOTICE",
+    first_party_groups = ["com.nvidia.apikeys"],
+    inventory_name = "api_keys_runtime_inventory",
+    metadata = ":notice_metadata.json",
+    runtime_target = ":app",
+    shared_metadata = [
+        "//src/libraries/java/nv-boot-parent:notice_metadata.json",
+    ],
+)
+
+nvcf_notice_delta(
+    baseline_inventories = [
+        "//src/libraries/java/nv-boot-parent:runtime_inventory.json",
+    ],
+    inventory = ":runtime_inventory.json",
+)
+
+# Multi-arch OCI image, the Bazel equivalent of this service's Dockerfile.
+# jar_path, env and workdir mirror that Dockerfile exactly. The entrypoint comes
+# from the shared macro, which keeps the base's shelless_ulimit shim that
+# oci_image would otherwise silently replace.
+java_oci_image(
+    name = "api-keys-oss-image",
+    jar = ":app",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "",
+    },
+    workdir = "/home/app",
+)
+
+# The shared guard every Java service uses, so the runtime contract cannot drift
+# between services or between the architectures in the index.
+java_image_contract_test(
+    name = "image_contract_test",
+    image = ":api-keys-oss-image",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "",
+    },
+    workdir = "/home/app",
+)

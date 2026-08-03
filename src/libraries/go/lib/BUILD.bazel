@@ -27,6 +27,8 @@ load("@gazelle//:def.bzl", "gazelle_test")
 # rules with the same importpath (nverrors_go_proto and errors).
 # gazelle:resolve go github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1 //src/libraries/go/lib/pkg/nvkit/api/errors/v1:errors
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 gazelle_test(
     name = "gazelle_test",
     extra_args = ["src/libraries/go/lib"],

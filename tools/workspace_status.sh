@@ -44,6 +44,18 @@ echo "STABLE_BUILD_USER ${BUILD_USER}"
 echo "STABLE_GO_VERSION ${GO_VERSION}"
 echo "STABLE_OCI_TAG ${VERSION}-${COMMIT}${DIRTY}"
 
+# Java build metadata. The Spring Boot packaging macro (//rules/java:spring.bzl)
+# stamps git.properties / maven.properties from these keys. Empty values are
+# handled gracefully by the packaging rule.
+FULL_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_TAGS=$(git tag --points-at HEAD 2>/dev/null | paste -sd, - || true)
+CLOSEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+echo "STABLE_GIT_COMMIT_ID_FULL ${FULL_COMMIT}"
+echo "STABLE_GIT_COMMIT_ID_ABBREV ${COMMIT}"
+echo "STABLE_GIT_TAGS ${GIT_TAGS}"
+echo "STABLE_GIT_CLOSEST_TAG_NAME ${CLOSEST_TAG}"
+echo "STABLE_BUILD_VERSION ${NEXT_VERSION:-${VERSION}}"
+
 # Stack OCI refs for the nvcf-cli ldflag stamping. Set by CI at release
 # build time; empty string is the correct default for dev builds (users
 # must pass --control-plane-stack / --compute-plane-stack explicitly).

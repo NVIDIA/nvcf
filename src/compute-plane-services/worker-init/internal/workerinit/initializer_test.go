@@ -28,6 +28,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/configs"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/internal/downloader"
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metering"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
 )
 
@@ -76,6 +77,21 @@ func TestNewInitializerSelectsNvctAndAppliesOverrides(t *testing.T) {
 	require.Equal(t, "stage", nvct.config.ICMSEnvironment, "ICMSEnvironment is filled from SpotEnvironment")
 	require.Equal(t, "GFN", nvct.meteringConfg.Backend, "NGN is normalized to GFN in metering")
 	require.Equal(t, "nca-1", nvct.meteringConfg.BillingNcaId, "BillingNcaId defaults to NcaId")
+}
+
+func TestNewInitializerPropagatesNspectId(t *testing.T) {
+	// NspectId is sourced from the NVCF_NSPECT_ID env var and must propagate
+	// into the metering config so NVCF_Infrastructure init events carry nspect_id.
+	t.Setenv(metering.EnvNspectId, "NSPECT-INIT-1234")
+	c := validConfig()
+	c.NvcfWorkerToken = "tok"
+
+	init, err := NewInitializer(c)
+	require.NoError(t, err)
+
+	nvcf, ok := init.(*NvcfInitializer)
+	require.True(t, ok)
+	require.Equal(t, "NSPECT-INIT-1234", nvcf.meteringConfg.NspectId)
 }
 
 func TestNewInitializerInvalidOTELEndpoint(t *testing.T) {

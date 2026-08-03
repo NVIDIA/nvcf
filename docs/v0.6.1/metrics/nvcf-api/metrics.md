@@ -1,0 +1,6 @@
+# NVCF API Metrics
+
+| Metric name                                | Metric type | Source                                   | Description                                    | Unit (where applicable) | Interesting Labels                                                 | Required Filters (where applicable)                                                 |
+| ------------------------------------------ | ----------- | ---------------------------------------- | ---------------------------------------------- | ----------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| logback_events_total                       | Counter     | nvcf-api: nvcf-api-service:10083/metrics | Log event level counts                         |                         | level                                                              | service="strap-api"                                                                 |
+| http_server_request_duration_seconds_count | Counter     | nvcf-api: nvcf-api-service:10083/metrics | Response codes for various endpoints, nvcf api |                         | http_request_method, http_response_status_code, http_route, method | server_address="api.nvcf.nvidia.com", job="strap-api", namespace="gdn-strap-api-fp" |

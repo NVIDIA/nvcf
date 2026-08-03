@@ -31,7 +31,7 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 		return c.NoContent(http.StatusOK)
 	})
 
-	group := e.Group("")
+	group := e.Group("", rejectClientSuppliedPriority)
 	handlers.AsOpenAIChatHandlers().RegisterRoutes(group)
 	handlers.AsResponsesHandlers().RegisterRoutes(group)
 	// proxy handlers only contain embedding route for now, but could be extended to other routes in the future

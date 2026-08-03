@@ -1,21 +1,27 @@
 # Bazel in the NVCF monorepo
 
 This file is the contributor-facing guide for the Bazel build path in the
-NVCF umbrella repo. Bazel is the build engine for the native subtrees in
-Phase 1; upstream-owned subtrees keep their existing build paths until they go
-native.
+NVCF umbrella repository. Bazel is the build engine for onboarded subtrees;
+upstream-owned subtrees keep their existing build paths until they are
+explicitly integrated.
 
-## Phase 1 scope
+## Current Scope
 
 Bazel currently builds, tests, and packages:
 
 - `src/clis/nvcf-cli` (Go binary + multi-platform release matrix + OCI image)
 - `src/libraries/go/lib` (Go library, 92 targets)
+- `src/libraries/java/nv-boot-parent` (Java framework libraries and tests)
+- `src/control-plane-services/cloud-tasks` (Java libraries, tests, and Spring
+  Boot application)
+- `src/control-plane-services/notary` (Java libraries, tests, and Spring Boot
+  application)
+- `src/control-plane-services/api-keys` (Java tests and Spring Boot
+  application)
 
-Subtrees listed in `imports.yaml` with `authoritative_source: upstream` are
-intentionally excluded via
-`.bazelignore` and `# gazelle:exclude` directives in the root `BUILD.bazel`.
-They will be onboarded one at a time as Phase B in separate MRs.
+Other upstream-owned subtrees remain excluded until they are onboarded one at
+a time. `nv-boot-parent` and onboarded Java service directories are folded
+into the root Bazel module and are not nested Bazel workspaces.
 
 ## One-time setup
 
@@ -62,9 +68,204 @@ the cross-toolchain on first use.
 
 ### Common environment
 
-The repo expects Bazel 8.6.0 (pinned in `.bazelversion`). Bazelisk handles
+The repo expects Bazel 9.1.1 (pinned in `.bazelversion`). Bazelisk handles
 the download automatically; do not install Bazel via apt or brew directly,
 as that pins a different version.
+
+Java targets use Java 25 with the root `.bazelrc` setting
+`--java_runtime_version=local_jdk`. The pinned containerized CI image supplies
+Temurin 25 through `JAVA_HOME`. The Docker-host lane downloads and configures
+Temurin 25 through the workflow's `actions/setup-java@v4` step.
+
+For local Java work, install an organization-approved full JDK 25 and point
+`JAVA_HOME` at it:
+
+```bash
+export JAVA_HOME="<path-to-jdk-25>"
+export PATH="${JAVA_HOME}/bin:${PATH}"
+java --version
+```
+
+Java services with Testcontainers tests and the nv-boot Cassandra tests also
+require a running Docker daemon. Use Docker Desktop on macOS or Docker Engine
+on Linux.
+
+`bazel info java-home` reports the Java runtime used to run the Bazel server.
+That directory is not guaranteed to contain command-line tools such as
+`javac`, so it is not the right way to inspect the Java toolchains selected for
+build actions. Query those toolchains directly:
+
+```bash
+bazel cquery @bazel_tools//tools/jdk:current_java_runtime \
+  --output=starlark \
+  --starlark:expr='str(providers(target)["ToolchainInfo"].java_runtime.version)'
+
+bazel cquery @bazel_tools//tools/jdk:current_host_java_runtime \
+  --output=starlark \
+  --starlark:expr='str(providers(target)["ToolchainInfo"].java_runtime.version)'
+```
+
+Both commands must print `25`. The normal Java build then proves that the
+compiler toolchain works; a separate `javac` command under
+`bazel info java-home` is neither required nor expected.
+
+## Java In The Root Module
+
+`nv-boot-parent` and onboarded Java services are ordinary source directories
+inside the single root `nvcf` Bazel module. They do not have nested
+`MODULE.bazel`, `.bazelrc`, `.bazelversion`, downloader configuration, or
+dependency lockfiles. Run their Bazel commands from this repository root.
+
+For someone familiar with Maven, these root files divide responsibilities that
+often live in a parent POM, Maven settings, and the local repository:
+
+| Root file | Purpose |
+|---|---|
+| `.bazelversion` | Tells Bazelisk which Bazel release to run. |
+| `.bazelrc` | Supplies shared Bazel flags, Java 25 toolchain settings, and downloader configuration. |
+| `.bazel_downloader_config` | Redirects supported external downloads through approved mirrors. It does not declare dependencies. |
+| `MODULE.bazel` | Declares Bazel rule modules, BOM imports, and the roots of the shared third-party Java graph. |
+| `maven_install.json` | Locks resolved third-party Java artifacts, relationships, repositories, and checksums. Its name describes Maven-compatible coordinates; it does not run Maven. |
+| `MODULE.bazel.lock` | Locks Bzlmod modules and module-extension evaluation. It is separate from the Java artifact lock. |
+
+Commit changes to these files together when one dependency update affects more
+than one of them. Do not edit either lockfile manually.
+
+All Java components use the root-owned `@nv_third_party_deps` hub for external
+jars. The hub contains third-party artifacts only. `nv-boot-parent` and each
+service remain first-party source targets referenced with direct labels such
+as:
+
+```text
+//src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core
+//src/control-plane-services/<service-directory>/<module>:<target>
+```
+
+Set a portable output root once per local shell:
+
+```bash
+export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
+export JAVA_SERVICE_DIR="src/control-plane-services/<service-directory>"
+export JAVA_APP_MODULE="<spring-boot-app-module>"
+```
+
+Replace the angle-bracket placeholders with the service directory and its
+Spring Boot application module. The component's own `BAZEL.md` supplies its
+exact values and targets.
+
+Build or test the complete framework or one Java service:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build //src/libraries/java/nv-boot-parent/...
+
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  test //src/libraries/java/nv-boot-parent/... \
+  --cache_test_results=no \
+  --test_output=errors
+
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build "//${JAVA_SERVICE_DIR}/..."
+
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  test "//${JAVA_SERVICE_DIR}/..." \
+  --cache_test_results=no \
+  --test_output=errors
+```
+
+When the selected scope includes Testcontainers tests, the complete suite
+requires a running Docker daemon. `bazel test` automatically builds the code
+needed by the selected tests; a separate build is useful for compile-only
+feedback and for non-test products such as the Spring Boot app jar.
+
+Build the selected service's executable app jar with:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build "//${JAVA_SERVICE_DIR}/${JAVA_APP_MODULE}:app"
+```
+
+Its output is:
+
+```text
+bazel-bin/src/control-plane-services/<service-directory>/<spring-boot-app-module>/app.jar
+```
+
+Real Java test, JUnit, and JaCoCo outputs are under each target's
+`bazel-testlogs/<component>/<module>/tests/test.outputs` directory. The
+component guides provide commands for one module, class, or method and for
+NOTICE, OSRB, Docker, and Maven coexistence:
+
+```text
+src/libraries/java/nv-boot-parent/BAZEL.md
+src/control-plane-services/<service-directory>/BAZEL.md
+```
+
+When the shared third-party Java graph changes, repin it from the root:
+
+```bash
+REPIN=1 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  run @nv_third_party_deps//:pin
+```
+
+Java CI registration is component-local. Each component owns one
+`bazel-java-ci.json`; `.github/workflows/bazel.yml` discovers those files and
+derives shared-Java triggers, framework-to-service validation, CI execution
+environment, and artifact upload. Use `ci_lane: docker-host` when any component
+test requires Docker and `ci_lane: build-container` otherwise. Java root scope
+is implicit and is not a descriptor option. The detector supports
+dependency-aware selection, but current policy deliberately runs the full
+matrix on every PR and push for regression safety.
+
+The same descriptor also registers the component with the repository
+dependency collector. Every registered Java component must expose:
+
+```text
+//<component-directory>:runtime_inventory.json
+```
+
+The collector builds all registered inventories and merges the dependencies
+actually used by those runtime targets into root `dependencies.md`:
+
+```bash
+go run ./tools/collect-dependencies
+```
+
+This does not scan project POM files and does not list every artifact available
+in `maven_install.json`. The root lockfile keeps the complete shared Java graph;
+component runtime inventories identify the used subset. See
+`tools/collect-dependencies/README.md` for the complete model and prerequisites.
+
+## Regenerate `dependencies.md`
+
+Regenerate root `dependencies.md` when:
+
+- a component is added to or removed from the monorepo
+- a Go, Rust, Python, Java, or Helm dependency is added, removed, or upgraded
+- a Java BUILD target changes the component's runtime dependency graph
+- `MODULE.bazel` or `maven_install.json` changes the Java dependency graph
+
+Run this command from the repository root:
+
+```bash
+GITHUB_TOKEN="$(gh auth token)" \
+  go run ./tools/collect-dependencies
+```
+
+The GitHub token provides authenticated license metadata lookups and avoids
+low unauthenticated API limits. If `gh` is unavailable, omit the first line;
+generation still works but may be slower or leave some license metadata
+unresolved.
+
+Component discovery is automatic. Java components are found through
+`bazel-java-ci.json`; the other supported languages are found from their
+dependency manifests. The command may leave `dependencies.md` unchanged when a
+new component uses only dependencies already present in the repository-wide
+rollup.
+
+GitHub Actions regenerates the file and fails when the checked-in copy is
+stale. CI does not commit the update, so include a changed `dependencies.md` in
+the same commit as the dependency or component change.
 
 ## Day-to-day commands
 
@@ -135,7 +336,7 @@ bazel run //:gazelle
 bazel mod tidy
 ```
 
-Gazelle is configured to skip everything outside Phase 1 scope, so it will
+Gazelle is configured to skip everything outside the current native scope, so it will
 not touch upstream-owned subtrees or vendored directories.
 
 #### Rust equivalent
@@ -282,12 +483,38 @@ build).
 
 ## CI
 
-Two Bazel-aware jobs in the root `.gitlab-ci.yml`:
+Every workflow that needs the Bazel toolchain runs in the `bazel-ci` job
+container, sourced from the repository variable `BAZEL_CI_IMAGE` (currently
+`ghcr.io/nvidia/nvcf/bazel-ci`). Each workflow carries the current pin as a
+`||` fallback so CI still runs when the variable is unavailable, for example on
+a fork.
 
-- `bazel-ci-image`: rebuilds `ci/Dockerfile.bazel` via buildah and pushes
-  to `${CI_REGISTRY_IMAGE}/bazel-ci:<ref-slug>`. Triggers only when
-  `ci/Dockerfile.bazel` or `.bazelversion` changes (or when a web pipeline
-  is run with `$REBUILD_BAZEL_IMAGE` set).
+That image is built in the internal
+[`nvcf/bazel-ci-templates`](https://gitlab-master.nvidia.com/nvcf/bazel-ci-templates)
+project, stamped with a version, and mirrored to GHCR. The mirror is currently
+manual; automation is planned. To change the image's Bazel, Java, or operating
+system tooling, update the internal template first, publish and mirror a new
+tag, then update the `BAZEL_CI_IMAGE` repository variable. Do not hardcode the
+tag per workflow: it drifted to three different versions across workflows and
+this document before the variable was introduced.
+
+The root `ci/Dockerfile.bazel` and `.github/workflows/bazel-ci-image.yml` were a
+stale, divergent copy (no Java, older Bazel) and have been removed. The image is
+built in `nvcf/bazel-ci-templates` and mirrored to ghcr (see above); this repo
+does not build it.
+
+The detect job also enforces the single-module import boundary:
+
+```bash
+bash tools/ci/check-java-import-boundaries
+```
+
+Run this after refreshing `nv-boot-parent` or an onboarded Java service. It
+fails when a standalone Bazel root file, lockfile, workspace file, or migration
+directory is reintroduced under an imported subtree.
+
+The existing internal Bazel jobs include:
+
 - `bazel-smoke`: pulls the image, runs `bazel info release`, then
   `bazel build --config=remote //src/libraries/go/lib/...
   //src/clis/nvcf-cli:image_index` and `bazel mod graph`. It does not
@@ -328,7 +555,7 @@ build).
 
 ## Adding a new Go module
 
-For native subtrees outside Phase 1 scope today:
+For native subtrees outside the current scope:
 
 1. Add the module path to `go.work.bazel` under `use (...)`.
 2. Add or update its `go.mod`.
@@ -339,9 +566,13 @@ For native subtrees outside Phase 1 scope today:
 5. Run `bazel run //:gazelle` then `bazel mod tidy`.
 6. `bazel build //path/to/subtree/...` to validate.
 
-For upstream-owned subtrees (`authoritative_source: upstream` in
-`imports.yaml`), Bazel files belong upstream so they survive the next commit-pin
-refresh.
+The public checkout does not contain the internal source-mirroring
+configuration. For an upstream-owned subtree, distinguish between source files
+that continue to mirror from the standalone repository and monorepo-native
+Bazel overlays. The import process must exclude standalone `MODULE.bazel`,
+lockfiles, `.bazelrc`, `.bazelversion`, downloader config, dependency hub,
+and `bazel-enablement` content. Root-module BUILD adaptations and monorepo
+agent/documentation overlays must be preserved during refreshes.
 
 ## Per-service publish cadence
 
@@ -414,7 +645,7 @@ maintainers; centralising it would couple unrelated release decisions.
 - `bazel info release` blocks for >30 s on first run: it is downloading the
   pinned Bazel binary. One-time cost.
 
-## Phase B status
+## Additional Subtree Rollout
 
 Per-service rollout state for upstream-owned subtrees is tracked in an internal
 plan that references upstream GitLab URLs and per-service rollout state that
@@ -422,7 +653,7 @@ does not belong in the public mirror, including which upstream MRs are open,
 which are merged, and which umbrella `imports.yaml` bumps have landed. Update
 that internal plan as each service moves through the playbook.
 
-## Out of scope (Phase B and later)
+## Out of scope (Later Phase)
 
 - Wiring upstream-owned subtrees listed in `imports.yaml`. One MR per upstream
   owner. See the tracker.
@@ -430,7 +661,7 @@ that internal plan as each service moves through the playbook.
   (archive/package/publish/ngc-push) onto Bazel-native equivalents (e.g.
   `pkg_tar`, `oci_push`, custom rules for NGC). Today the artifact
   contracts are preserved via copy-from-bazel-bin shims in CI.
-- Coverage report generation in CI. `bazel coverage` works locally; CI
-  parsing of coverage output is deferred.
+- Go coverage report publication in CI. Java JUnit and JaCoCo reports are
+  already generated and uploaded by their component lanes.
 - Lint integration. `golangci-lint` still runs as a separate job and is
   not yet wrapped into a Bazel rule.

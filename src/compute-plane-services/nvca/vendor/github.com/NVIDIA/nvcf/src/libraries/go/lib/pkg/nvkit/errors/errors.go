@@ -35,7 +35,7 @@ import (
 var (
 	ErrBadConfig                 = fmt.Errorf("bad config")
 	ErrInvalidConfig             = fmt.Errorf("invalid config")
-	ErrUninitializedConfig       = fmt.Errorf("unintialized config")
+	ErrUninitializedConfig       = fmt.Errorf("uninitialized config")
 	ErrBadCerts                  = fmt.Errorf("bad certs")
 	ErrCertAndKeyRequired        = fmt.Errorf("missing cert or key file when tls is enabled")
 	ErrCertOrKeyFileMissing      = fmt.Errorf("either both tls cert path and tls key path should be provided or none")

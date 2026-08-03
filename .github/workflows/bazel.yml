@@ -3,23 +3,25 @@
 #
 # Bazel build + test on the public NVIDIA/nvcf mirror.
 #
-# Change-aware: a cheap detect job diffs the push/PR and expands the
-# build matrix to only the subtrees whose files changed. A docs-only
-# mirror sync spawns zero build jobs instead of twelve, keeping the
-# org-shared hosted-runner queue clear. workflow_dispatch, changes to
-# this workflow file, and any diff that cannot be computed safely fall
-# back to the full matrix.
+# The detect job computes dependency-aware subtree selection, including shared
+# Java triggers and framework-to-service reverse dependencies. A change is
+# scheduled only for the subtrees it touches: each subtree is an isolated Bazel
+# module, so a change under one service cannot break another. workflow_dispatch,
+# a change to this workflow, and unsafe/unknown diffs (unreadable or rewritten
+# history, a new branch) fall back to the full matrix so an untrustworthy
+# changeset is never under-tested.
 #
 # Matrix entries reference subtrees that have their Bazel scaffold
 # mirrored to GitHub (each subtree's upstream .oss-allowlist controls
-# whether BUILD.bazel files reach this mirror). Add a row to the ROWS
-# table in the detect job when a new subtree's OSS-flip MR merges
-# upstream.
+# whether BUILD.bazel files reach this mirror). Add a static ROWS entry when a
+# non-Java subtree's OSS-flip MR merges upstream. Java components are
+# discovered from component-local bazel-java-ci.json files.
 #
-# Image push targets, internal NGC registry pulls, and the nvcfbarn
-# remote cache are all internal-only; this workflow runs build + test
-# only. It pulls the same bazel-ci toolchain image the GitLab pipeline
-# uses, mirrored to ghcr.io by the bazel-ci-image workflow.
+# Image push targets and internal NGC registry pulls are internal-only; this
+# workflow runs build + test only, using the public EC2 Buildbarn remote cache
+# reachable from GitHub-hosted runners. The bazel-ci image is built by the
+# internal nvcf/bazel-ci-templates project and mirrored to GHCR for this
+# public workflow.
 
 name: bazel
 
@@ -50,13 +52,19 @@ concurrency:
   group: bazel-${{ github.ref }}
   cancel-in-progress: true
 
-# NOTE: keep the bazel-ci image tag as a string literal in
-# container.image and any tag-bump bookkeeping. GitHub Actions
-# evaluates job-level `container.image` before the workflow-level
-# `env:` context is reliably available, so referencing
-# `${{ env.BAZEL_CI_IMAGE }}` here causes the matrix to expand to
-# zero jobs on push events (validated empirically; PR-event runs
-# happen to work). The duplication is intentional.
+# The bazel-ci job container comes from the repository variable
+# BAZEL_CI_IMAGE, so the image is bumped in one place (repo settings) instead
+# of being edited in every workflow that runs in it.
+#
+# It must be `vars`, NOT `env`. GitHub Actions evaluates job-level
+# `container.image` before the workflow-level `env:` context is reliably
+# available, so `${{ env.BAZEL_CI_IMAGE }}` made the matrix expand to zero jobs
+# on push events (validated empirically; PR-event runs happened to work). The
+# `vars` context does not have that ordering problem.
+#
+# The `||` fallback keeps CI working if the variable is unset or unavailable
+# (for example on a fork). Keep the fallback in step with the variable; it is a
+# safety net, not the source of truth.
 
 jobs:
   detect:
@@ -64,25 +72,39 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.detect.outputs.matrix }}
+      matrix_docker: ${{ steps.detect.outputs.matrix_docker }}
       any: ${{ steps.detect.outputs.any }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Check Java import boundaries
+        run: bash tools/ci/check-java-import-boundaries
+
+      # Behavioral tests for the CI shell this workflow depends on. actionlint
+      # covers syntax; these cover the decisions.
+      - name: Test CI shell helpers
+        run: |
+          bash tools/ci/test-bazel-cache-upload-mode
+          bash tools/ci/test-bazel-remote-probe
+
       - name: Compute changed subtrees
         id: detect
         env:
           EVENT: ${{ github.event_name }}
           BEFORE_SHA: ${{ github.event.before }}
+          # merge_group has no `before`; its payload carries the queue base.
+          MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.sha }}
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           # id|path|tests_skip. tests_skip notes:
-          #  umbrella-phase1: //src/libraries/go/lib test issues
-          #    (icms-translate env-flaky, core_test goroutine leak) -- nvcf-go
-          #    team owns the test-layer cleanup.
+          #  root: tests run. The few go-lib targets that fail in CI (a stale
+          #    Gazelle BUILD check and the icms-translate tests) are quarantined
+          #    per-target via .github/bazel-root-test-quarantine.txt rather than
+          #    skipping the whole row; nvcf-go owns the fix (NVIDIA/nvcf#284).
           #  nvca: tests run. The failures tracked in NVIDIA/nvcf#238 were all
           #    test-layer and are fixed: the vendored dra-driver version stamp
           #    (x_defs on vendor/.../internal/info, mirroring the module
@@ -90,13 +112,25 @@ jobs:
           #    rendered template assets (empty-YAML-doc skip + stripSPDXHeaders
           #    in golden comparisons), and the version-adaptive completeJob for
           #    envtest Job completion.
-          #  nvsnap (src/compute-plane-services/nvsnap): intentionally NOT a
-          #    matrix row. It is a self-contained Bazel module whose OCI base is
-          #    its own private agent image (not publicly pullable), so it is not
-          #    externally buildable and is built only by its own internal CI.
-          #    Excluded from the public build pending a public base (NVIDIA/nvcf#39).
-          ROWS='umbrella-phase1|.|true
-          grpc-proxy|src/invocation-plane-services/grpc-proxy|false
+            #  nvsnap (src/compute-plane-services/nvsnap): a root-module row.
+            #    Previously excluded on the grounds that its OCI base was a
+            #    private image; that is no longer true, its bases are public
+            #    and digest-pinned. It builds from the repository root scoped
+            #    to its own subtree, the same shape as the Java components.
+            #    Without a row, a change touching only nvsnap selects no row
+            #    and runs no Bazel, which is how its build stayed broken for
+            #    twelve days.
+          # Row fields:
+          #   id|path|tests_skip|component_kind|ci_lane
+          # Static non-Java rows use only the first three fields.
+          # Order matters: rows are dispatched top-down and max-parallel caps
+          # how many run at once, so a long row placed late waits for a slot
+          # before it even starts. byoo-otel-collector is the longest row (its
+          # collector genrule dominates the build), so it leads. Keep the
+          # longest-first ordering when adding rows.
+          ROWS='byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false
+          root|.|false
+          grpc-proxy|src/invocation-plane-services/grpc-proxy|false|service|docker-host
           nats-auth-callout|src/control-plane-services/nats-auth-callout|false
           ratelimiter|src/invocation-plane-services/ratelimiter|false
           http-invocation|src/invocation-plane-services/http-invocation|false
@@ -105,11 +139,52 @@ jobs:
           nvca|src/compute-plane-services/nvca|false
           ess-agent|src/compute-plane-services/ess-agent|false
           image-credential-helper|src/compute-plane-services/image-credential-helper|false
+          nvcf-unbound|src/compute-plane-services/nvcf-unbound|false
+          worker-init|src/compute-plane-services/worker-init|false
+          worker-llm-credentials|src/compute-plane-services/worker-llm-credentials|false
+          worker-task|src/compute-plane-services/worker-task|false
+          worker-utils|src/compute-plane-services/worker-utils|false
           function-autoscaler|src/control-plane-services/function-autoscaler|false
-          helm-reval|src/control-plane-services/helm-reval|false'
-          # Paths that affect the umbrella-phase1 workspace build (native
-          # Phase 1 roots plus the shared Bazel scaffold).
-          UMBRELLA_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/)
+          helm-reval|src/control-plane-services/helm-reval|false
+          stargate|src/libraries/rust/stargate|false
+          nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container'
+
+          # Java rows are discovered from component-local bazel-java-ci.json
+          # descriptors. The descriptor's parent directory is the component
+          # path, so adding a Java service never requires editing this workflow.
+          # jq validates every field before the row reaches matrix generation.
+          while IFS= read -r manifest; do
+            path="${manifest%/bazel-java-ci.json}"
+            for forbidden in \
+              MODULE.bazel MODULE.bazel.lock maven_install.json \
+              .bazelrc .bazelversion .bazel_downloader_config \
+              WORKSPACE WORKSPACE.bazel bazel-enablement bazel-migration; do
+              if [ -e "${path}/${forbidden}" ]; then
+                echo "::error file=${path}/${forbidden}::Java components use root Bazel state; remove imported standalone file"
+                exit 1
+              fi
+            done
+            id="$(jq -er '.id | select(test("^[a-z0-9][a-z0-9-]*$"))' "$manifest")"
+            tests_skip="$(jq -er '.tests_skip | if type == "boolean" then tostring else error("tests_skip must be boolean") end' "$manifest")"
+            component_kind="$(jq -er '.component_kind | select(. == "java-framework" or . == "java-service")' "$manifest")"
+            ci_lane="$(jq -er '.ci_lane | select(. == "build-container" or . == "docker-host")' "$manifest")"
+            ROWS="${ROWS}
+          ${id}|${path}|${tests_skip}|${component_kind}|${ci_lane}"
+          done < <(find src -name bazel-java-ci.json -type f -print | LC_ALL=C sort)
+
+          # Every discovered Java component belongs to the root `nvcf` Bazel
+          # module; it does not own a nested MODULE.bazel. Its lane therefore
+          # invokes Bazel from the repository root and scopes work to
+          # //<component-path>/... . Descriptor component_kind and ci_lane
+          # fields derive shared triggers, framework-consumer validation,
+          # execution-environment routing, and artifact upload; do not maintain
+          # separate component-name lists for those behaviors.
+          # Paths that affect the root-module workspace build (native root
+          # subtrees plus the shared Bazel scaffold). Java and stargate no longer
+          # ride the root row: discovered Java components and stargate have
+          # their own scoped rows, so src/libraries/ is narrowed to
+          # src/libraries/go/.
+          ROOT_GLOBS=(MODULE.bazel .bazelignore .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
@@ -118,6 +193,24 @@ jobs:
             pull_request)
               if ! changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" 2>/dev/null); then
                 echo "diff vs origin/${BASE_REF} failed; running full matrix"
+                run_all=true
+              fi
+              ;;
+            merge_group)
+              # `github.event.before` does not exist on merge_group, so without
+              # this branch every queue entry fell through to the default arm
+              # and rebuilt all 24 rows regardless of what the pull request
+              # touched. The queue head is the base plus the queued commits, so
+              # diffing from base_sha yields exactly those changes (and, for a
+              # batched entry, every pull request in the batch).
+              if [ -z "${MERGE_BASE_SHA}" ]; then
+                echo "merge_group base_sha missing; running full matrix"
+                run_all=true
+              elif ! git rev-parse --verify -q "${MERGE_BASE_SHA}^{commit}" >/dev/null 2>&1; then
+                echo "merge_group base ${MERGE_BASE_SHA} not in history; running full matrix"
+                run_all=true
+              elif ! changed=$(git diff --name-only "${MERGE_BASE_SHA}...${HEAD_SHA}" 2>/dev/null); then
+                echo "diff ${MERGE_BASE_SHA}...${HEAD_SHA} failed; running full matrix"
                 run_all=true
               fi
               ;;
@@ -130,42 +223,160 @@ jobs:
               fi
               ;;
           esac
+          # Change-aware scheduling. Each subtree is an isolated Bazel module, so
+          # a change under src/<service> only affects that service's own //...
+          # build+test and can never break another module. Select only the
+          # subtrees a change actually touches (path prefix), plus the
+          # reverse-dependency edges below (shared Java config -> every Java row;
+          # a Java framework -> every Java service) and ROOT_GLOBS -> root row. A
+          # docs-only or helm-only change touches no subtree and runs nothing.
+          # The full-matrix fallbacks stay in the case above (workflow_dispatch,
+          # an unreadable or rewritten diff, a new branch) so an untrustworthy
+          # changeset is never under-tested.
+          #
           # A change to this workflow itself revalidates everything.
-          if printf '%s\n' "$changed" | grep -q '^\.github/workflows/bazel\.yml$'; then
+          if grep -q '^\.github/workflows/bazel\.yml$' <<<"$changed"; then
             run_all=true
           fi
 
+          # Reverse-dependency edge. A discovered Java framework change
+          # validates every discovered java-service row.
+          java_framework_changed=false
+          if [ "$run_all" != "true" ]; then
+            while IFS='|' read -r _id path _tests_skip component_kind _ci_lane; do
+              component_kind="$(echo "$component_kind" | xargs)"
+              if [ "$component_kind" = "java-framework" ] && grep -q "^${path}/" <<<"$changed"; then
+                java_framework_changed=true
+                break
+              fi
+            done <<< "$ROWS"
+          fi
+
+          # Root-owned Java dependencies and reusable Java rules/tools affect
+          # every root-scoped Java component even though the changed path is
+          # outside that component's subtree, so a change to any of them schedules
+          # every Java row (edge applied below).
+          JAVA_SHARED_GLOBS=(
+            MODULE.bazel
+            MODULE.bazel.lock
+            maven_install.json
+            .bazelrc
+            .bazelversion
+            .bazel_downloader_config
+            rules/java/
+            tools/bazel/java/
+            tools/ci/stage-bazel-java-artifacts
+          )
+          java_shared_changed=false
+          if [ "$run_all" != "true" ]; then
+            for g in "${JAVA_SHARED_GLOBS[@]}"; do
+              if printf '%s\n' "$changed" | awk -v p="$g" 'index($0, p) == 1 { f = 1 } END { exit !f }'; then
+                java_shared_changed=true
+                break
+              fi
+            done
+          fi
+
+          # Rows with ci_lane=docker-host own requires-docker (Testcontainers)
+          # tests. They run directly on the GitHub host where a Docker daemon is
+          # available, executing their FULL suite with no tag filter. Such a row
+          # is not also placed in the build-container matrix.
+          # grpc-proxy owns a requires-docker test (proxy/geo:geo_test) and runs in
+          # this docker-host lane (NVIDIA/nvcf#396).
           include="[]"
-          while IFS='|' read -r id path tests_skip; do
+          include_docker="[]"
+          while IFS='|' read -r id path tests_skip component_kind ci_lane; do
             id="$(echo "$id" | xargs)"; [ -z "$id" ] && continue
+            component_kind="$(echo "$component_kind" | xargs)"
+            ci_lane="$(echo "$ci_lane" | xargs)"
+            # Components that belong to the root module build from the
+            # repository root and scope to their own subtree. That was
+            # Java-only until nvsnap joined the root module; the discriminator
+            # is module membership, not language. Nested modules keep their
+            # module-local behavior.
+            case "$component_kind" in
+              java-*|go-root) workdir="."; scope="//${path}/..."; scoped="root" ;;
+              *)              workdir="$path"; scope="//..."; scoped="" ;;
+            esac
             hit=false
             if [ "$run_all" = "true" ]; then
               hit=true
             elif [ "$path" = "." ]; then
-              for g in "${UMBRELLA_GLOBS[@]}"; do
+              # Root is glob-gated on PRs and merges alike: it runs only when a
+              # ROOT_GLOB file changed (a docs- or helm-only change never triggers
+              # it). When it does run on a main push it uploads (CACHE_UPLOAD),
+              # warming the cache; the rings do not evict, so a later root PR reads
+              # that warm closure.
+              for g in "${ROOT_GLOBS[@]}"; do
                 # Fixed-string, start-of-line prefix test via awk index()==1:
                 # avoids treating the dots in .bazelrc/MODULE.bazel as regex
                 # wildcards and avoids any shell glob expansion of the token.
                 if printf '%s\n' "$changed" | awk -v p="$g" 'index($0, p) == 1 { f = 1 } END { exit !f }'; then hit=true; break; fi
               done
+              # Root-level *.bzl files have no fixed path prefix, so the awk
+              # prefix test above cannot match them. The target-selection logic
+              # treats them as full-build triggers, so gate root on them
+              # explicitly; otherwise a root-global .bzl change selects zero rows
+              # and passes without running Bazel.
+              if [ "$hit" != "true" ] && grep -qE '^[^/]+\.bzl$' <<<"$changed"; then hit=true; fi
             else
-              if printf '%s\n' "$changed" | grep -q "^${path}/"; then hit=true; fi
+              if grep -q "^${path}/" <<<"$changed"; then hit=true; fi
+            fi
+            # A framework change schedules every registered Java service.
+            if [ "$hit" != "true" ] && [ "$java_framework_changed" = "true" ] && [ "$component_kind" = "java-service" ]; then
+              hit=true
+            fi
+            # Shared Java configuration, dependency locks, rules, and tools
+            # schedule every Java row, not merely the root row.
+            if [ "$hit" != "true" ] && [ "$java_shared_changed" = "true" ]; then
+              case "$component_kind" in java-*) hit=true ;; esac
             fi
             if [ "$hit" = "true" ]; then
-              include=$(printf '%s' "$include" | jq -c --arg id "$id" --arg path "$path" --argjson ts "$tests_skip" '. + [{id:$id, path:$path, tests_skip:$ts}]')
+              entry=$(jq -cn --arg id "$id" --arg path "$path" --argjson ts "$tests_skip" --arg wd "$workdir" --arg sc "$scope" --arg sm "$scoped" --arg ck "$component_kind" --arg cl "$ci_lane" '{id:$id, path:$path, tests_skip:$ts, workdir:$wd, scope:$sc, scoped:$sm, component_kind:$ck, ci_lane:$cl}')
+              case "$ci_lane" in
+                docker-host) include_docker=$(printf '%s' "$include_docker" | jq -c --argjson e "$entry" '. + [$e]') ;;
+                *)           include=$(printf '%s' "$include" | jq -c --argjson e "$entry" '. + [$e]') ;;
+              esac
             fi
           done <<< "$ROWS"
 
           count=$(printf '%s' "$include" | jq 'length')
-          echo "selected ${count} subtree(s): $(printf '%s' "$include" | jq -r '[.[].id] | join(", ")')"
+          count_docker=$(printf '%s' "$include_docker" | jq 'length')
+          total=$((count + count_docker))
+          echo "selected ${total} subtree(s): build-container=[$(printf '%s' "$include" | jq -r '[.[].id] | join(", ")')] docker-host=[$(printf '%s' "$include_docker" | jq -r '[.[].id] | join(", ")')]"
           echo "matrix=${include}" >> "$GITHUB_OUTPUT"
-          if [ "$count" -gt 0 ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
+          echo "matrix_docker=${include_docker}" >> "$GITHUB_OUTPUT"
+          if [ "$total" -gt 0 ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
 
   bazel:
     name: bazel (${{ matrix.subtree.id }})
     needs: detect
-    if: needs.detect.outputs.any == 'true'
-    runs-on: ubuntu-latest
+    # Guard on THIS lane's matrix, not the combined `any`. A change touching
+    # only docker-host subtrees leaves this matrix empty while `any` is still
+    # true; GitHub cannot create a job from an empty matrix vector and resolves
+    # it to `failure`, not `skipped`, which failed the required check on PRs
+    # that had nothing wrong with them. bazel-docker already guards this way.
+    if: needs.detect.outputs.matrix != '[]'
+    # NVIDIA self-hosted runners (nv-cpu-general), not GitHub-hosted. Access is
+    # granted per repository in nv-gha-runners/enterprise-runner-configuration
+    # and expires, so it must be renewed there.
+    #
+    # This is a capacity change, not a tuning one. On GitHub-hosted runners a
+    # merge-queue entry saw twelve rows start immediately and the rest wait 26
+    # to 31 minutes for a runner, against a slowest row of ~650s: the wall clock
+    # was queueing, not work. cpu16 is also 4x the cores of the hosted runner,
+    # so it shortens the critical path as well as the wait, which matters
+    # because the row is a Bazel build that parallelises well.
+    # NVIDIA policy blocks `pull_request` events on self-hosted runners, since a
+    # fork's pull request could otherwise execute untrusted code inside the
+    # network: the job is accepted and then killed at setup with "Workflows
+    # triggered by pull_request events are not allowed to run on self-hosted
+    # runners". Pull requests therefore stay on GitHub-hosted capacity.
+    #
+    # merge_group and push run trusted, already-reviewed code, and the merge
+    # queue is where the starvation actually hurt: twelve rows waited 26 to 31
+    # minutes for a runner against a slowest row of ~650s.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'linux-amd64-cpu16' }}
     # Public EC2 Buildbarn cache (grpcs, bearer-token gated). The token is a
     # repo secret, so fork PRs (which never receive secrets) fall back to a
     # cacheless build automatically. The CA cert is a repo variable (public).
@@ -173,16 +384,31 @@ jobs:
       CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
       CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.8.0
+      # This pinned image is built in the internal nvcf/bazel-ci-templates
+      # project and mirrored to GHCR. It supplies Temurin 25 at JAVA_HOME;
+      # Bazelisk then selects the root .bazelversion release. Update this tag
+      # only after the corresponding internal image has been published and
+      # mirrored.
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.14.0' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
+      # Cap concurrent rows. A full matrix otherwise starts ~20 jobs at once,
+      # and every runner pulls actions/checkout from codeload.github.com in the
+      # same instant, tripping GitHub's action-download rate limit (HTTP 429 in
+      # "Set up job"). Batching keeps the download burst under that limit;
+      # change-aware scheduling already keeps most PRs well below the cap.
+      max-parallel: 8
       matrix:
         subtree: ${{ fromJSON(needs.detect.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the root row can diff a PR against its base to
+          # compute affected targets (see "Determine build targets").
+          fetch-depth: 0
 
       # A subtree can be selected but not yet have its Bazel scaffold on
       # the mirror (its upstream OSS-flip MR is still open, or the
@@ -190,7 +416,7 @@ jobs:
       - name: Skip if subtree has no MODULE.bazel yet
         id: precheck
         run: |
-          if [ ! -f "${{ matrix.subtree.path }}/MODULE.bazel" ]; then
+          if [ "${{ matrix.subtree.scoped }}" != "root" ] && [ ! -f "${{ matrix.subtree.path }}/MODULE.bazel" ]; then
             echo "no MODULE.bazel at ${{ matrix.subtree.path }} -- skipping"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
@@ -200,7 +426,7 @@ jobs:
       # bazelisk is preinstalled in the bazel-ci image as `bazel`.
       - name: bazel version
         if: steps.precheck.outputs.skip == 'false'
-        working-directory: ${{ matrix.subtree.path }}
+        working-directory: ${{ matrix.subtree.workdir }}
         run: bazel version
 
       - name: Cache Bazel repository + disk caches
@@ -210,14 +436,30 @@ jobs:
           path: |
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
-          key: bazel-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.path), format('{0}/.bazelversion', matrix.subtree.path)) }}
+          key: bazel-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
           restore-keys: |
             bazel-${{ matrix.subtree.id }}-
 
-      # Decide the remote cache to use. The internal nvcfbarn Buildbarn
-      # (the .bazelrc `--config=remote` default) is unreachable from
-      # GitHub-hosted runners; the public EC2 Buildbarn is reachable over
-      # grpcs with a bearer token. When the token secret is present
+      # byoo-otel-collector's binary is built by a no-sandbox genrule that shells
+      # out to `go build` (ocb-generated source) and fetches the whole otel
+      # collector module graph from GOPROXY. That download is outside Bazel's
+      # dependency graph and the Bazel cache above, so cache the genrule's Go
+      # module + build cache separately, keyed on the collector go.sum, so cold
+      # runners restore it instead of re-downloading. See NVIDIA/nvcf#373.
+      - name: Cache byoo-otel-collector Go module cache
+        if: matrix.subtree.id == 'byoo-otel-collector' && steps.precheck.outputs.skip == 'false'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/byoo-gomodcache
+            ${{ runner.temp }}/byoo-gocache
+          key: byoo-gomod-${{ hashFiles('src/compute-plane-services/byoo-otel-collector/otelcol/go.sum') }}
+          restore-keys: |
+            byoo-gomod-
+
+      # Decide the remote cache to use. The public EC2 Buildbarn is reachable
+      # from GitHub-hosted runners over grpcs with a bearer token. When the
+      # token secret is present
       # (same-repo PRs and main pushes; never fork PRs), materialize the
       # CA cert and enable the cache; otherwise build cacheless.
       #
@@ -235,28 +477,163 @@ jobs:
       - name: Prepare remote cache
         if: steps.precheck.outputs.skip == 'false'
         run: |
+          upload=false
           if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
             printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
-            # Upload results only from main pushes; every other trigger
-            # (PRs) is read-only so it can never poison the cache.
-            if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-              echo "CACHE_UPLOAD=true" >> "$GITHUB_ENV"
+            # Who may write to the shared cache lives in a script so it is
+            # testable and stated once; see tools/ci/bazel-cache-upload-mode
+            # and its test for the rationale and the full event matrix.
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
+            echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
+            # Make the mode visible in the log so a missing warm-write is never
+            # a silent guess: read-only PRs show upload=false, merge-queue runs
+            # and main pushes true.
+            if [ "$upload" = "true" ]; then
+              echo "remote cache ready: read-write (warming; upload=true)"
             else
-              echo "CACHE_UPLOAD=false" >> "$GITHUB_ENV"
+              echo "remote cache ready: read-only (upload=false)"
             fi
           else
             echo "CACHE_READY=0" >> "$GITHUB_ENV"
+            echo "remote cache unavailable (no token/endpoint): cacheless build"
           fi
 
-      - name: bazel build //...
+      # Write the target patterns to build/test into $RUNNER_TEMP/targets.txt.
+      # Default is the whole workspace (//...). On a PR, the root row -- which
+      # builds the full ~7k-target closure -- narrows to just the targets a
+      # modified Go source affects, so a PR touching a sliver of src/libraries
+      # does not rebuild everything even on a cold cache.
+      #
+      # Safety: narrow ONLY when every change is a modification (status M) to an
+      # existing .go file. Any add/delete/rename, any global file (MODULE.bazel,
+      # .bazelrc, *.bzl, go.work, ...), any non-Go file, or any query failure
+      # falls back to //.... The rdeps query runs WITHOUT --keep_going so an
+      # unresolvable label forces the full build instead of silently dropping a
+      # target. This can over-build (safe) but never under-build.
+      - name: Determine build targets
+        id: targets
         if: steps.precheck.outputs.skip == 'false'
-        working-directory: ${{ matrix.subtree.path }}
+        working-directory: ${{ matrix.subtree.workdir }}
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          SUBTREE_PATH: ${{ matrix.subtree.path }}
+          SCOPE: ${{ matrix.subtree.scope }}
         run: |
+          set -uo pipefail
+          tfile="$RUNNER_TEMP/targets.txt"
+          # SCOPE is //... for standalone-module rows, and //<path>/...
+          # for a root-scoped lane so it builds only its own targets out of the
+          # shared root module.
+          full() { printf '%s\n' "$SCOPE" > "$tfile"; echo "targets: $SCOPE (full build)"; }
+
+          # Only the root row on a pull_request is a narrowing candidate. Every
+          # other trigger (main push warms + uploads the whole closure; dispatch
+          # and schedule are full by intent) and every per-service row build the
+          # whole workspace.
+          if [ "$EVENT" != "pull_request" ] || [ "$SUBTREE_PATH" != "." ]; then
+            full; exit 0
+          fi
+
+          # Diff against the PR base commit SHA. The base commit is present in
+          # history because the bazel-job checkout uses fetch-depth: 0. The
+          # symbolic origin/<branch> ref is not reliably created inside the
+          # container checkout, so resolve against the SHA directly.
+          base="$BASE_SHA"
+          if [ -z "$base" ] || ! git rev-parse --verify "$base^{commit}" >/dev/null 2>&1; then
+            echo "base sha unavailable; full build"; full; exit 0
+          fi
+          if ! ns=$(git diff --name-status "$base...HEAD" 2>/dev/null); then
+            echo "diff vs base failed; full build"; full; exit 0
+          fi
+          if [ -z "$ns" ]; then
+            echo "no changes vs base; nothing to build"; : > "$tfile"; exit 0
+          fi
+
+          labels=()
+          while IFS=$'\t' read -r status path _rest; do
+            [ -z "$status" ] && continue
+            # Anything other than a plain modification is structural (add,
+            # delete, rename, copy, type-change) -- fall back to full.
+            if [ "$status" != "M" ]; then
+              echo "non-modify change ($status $path); full build"; full; exit 0
+            fi
+            case "$path" in
+              MODULE.bazel|MODULE.bazel.lock|.bazelrc|.bazelversion|WORKSPACE|WORKSPACE.bazel|go.work|go.work.bazel|*.bzl)
+                echo "global file changed ($path); full build"; full; exit 0 ;;
+              *.go)
+                dir=$(dirname "$path"); bn=$(basename "$path")
+                if [ "$dir" = "." ]; then labels+=("//:$bn"); else labels+=("//$dir:$bn"); fi ;;
+              *)
+                echo "non-Go modification ($path); full build"; full; exit 0 ;;
+            esac
+          done <<< "$ns"
+
+          if [ "${#labels[@]}" -eq 0 ]; then
+            echo "no buildable changes; nothing to build"; : > "$tfile"; exit 0
+          fi
+
+          # Strict (no --keep_going): if any changed-file label does not resolve
+          # to a known source, the query fails and we fall back to full.
+          if ! affected=$(bazel query --noshow_progress --output=label \
+              "rdeps(//..., set(${labels[*]}))" 2>/dev/null); then
+            echo "rdeps query failed (unresolved label?); full build"; full; exit 0
+          fi
+          if [ -z "$affected" ]; then
+            echo "no affected targets; nothing to build"; : > "$tfile"; exit 0
+          fi
+          printf '%s\n' "$affected" > "$tfile"
+          echo "targets: $(printf '%s\n' "$affected" | grep -c .) affected (narrowed from //...)"
+
+      - name: bazel build
+        if: steps.precheck.outputs.skip == 'false'
+        working-directory: ${{ matrix.subtree.workdir }}
+        run: |
+          if [ ! -s "$RUNNER_TEMP/targets.txt" ]; then
+            echo "no targets to build; skipping"; exit 0
+          fi
           # COMMON holds non-cache flags shared by both the cached attempt and
           # the cacheless retry, so any future non-cache flag is applied to both.
           # CACHE holds only the cache-specific flags.
           COMMON=()
+          if [ "${{ matrix.subtree.id }}" = "byoo-otel-collector" ]; then
+            # --jobs=1 is a memory guard, not a throughput setting. The
+            # collector genrule is analysed in three configurations (host,
+            # //platforms:linux_x86_64, //platforms:linux_arm64) and each
+            # `go build` of the otelcol module peaks at ~6 GB RSS, so two
+            # concurrent instances would not fit a 16 GB runner. Bazel has no
+            # per-action memory throttle for genrules ("resources:memory:N"
+            # and "cpu:N" execution requirements are ignored outside tests,
+            # and so is "exclusive"), so capping Bazel-side concurrency is the
+            # only lever. Per-build parallelism is set inside the genrule
+            # instead (go build -p $(nproc)), which is ~3x faster on a 4-vCPU
+            # runner at the same peak RSS. Nothing else in this module is
+            # expensive (the row's other ~380 actions are cache hits), so the
+            # cap costs nothing elsewhere.
+            COMMON+=(--jobs=1)
+            # Persist the collector genrule's Go module + build cache across CI
+            # runs so cold runners restore instead of re-downloading the whole
+            # otel module graph. The genrule is no-sandbox and honours these via
+            # --action_env; paths sit under RUNNER_TEMP so the byoo cache step can
+            # save/restore them. Must match on build AND test or Bazel re-runs the
+            # genrule cacheless. See NVIDIA/nvcf#373.
+            COMMON+=(--action_env="GOMODCACHE=$RUNNER_TEMP/byoo-gomodcache"
+                     --action_env="GOCACHE=$RUNNER_TEMP/byoo-gocache"
+                     --action_env="GOPATH=$RUNNER_TEMP/byoo-gopath")
+            # Bind the collector genrule's remote-cache key to the host Go
+            # toolchain. The genrule shells out to the image's `go`, which is
+            # not a declared Bazel input, so without this a toolchain bump in
+            # the bazel-ci image would keep serving collector binaries built by
+            # the previous compiler -- including across a Go security patch.
+            # --action_env values are part of the action key, so feeding the
+            # version string through it turns a toolchain change into a cache
+            # miss and a rebuild. Must match on build AND test.
+            byoo_go="$(command -v go || echo /usr/local/go/bin/go)"
+            byoo_go_ver="$("$byoo_go" version 2>/dev/null || echo unknown)"
+            echo "byoo collector toolchain: $byoo_go_ver"
+            COMMON+=(--action_env="BYOO_GO_TOOLCHAIN=$byoo_go_ver")
+          fi
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
             CACHE=(--remote_cache="$CACHE_ENDPOINT"
@@ -264,8 +641,18 @@ jobs:
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression
                    --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
-            [ "$CACHE_UPLOAD" = "true" ] || CACHE+=(--remote_upload_local_results=false)
+                   --remote_timeout=600 --remote_retries=5)
+            # Force the upload flag explicitly. The root module's .bazelrc pins
+            # --config=remote, which sets --remote_upload_local_results=false
+            # (internal read-only dev cache). Without overriding it back to true
+            # on main pushes, root never warms the public cache, so every root
+            # build is cold forever. Service modules do not set --config=remote,
+            # so they are unaffected either way.
+            if [ "$CACHE_UPLOAD" = "true" ]; then
+              CACHE+=(--remote_upload_local_results=true)
+            else
+              CACHE+=(--remote_upload_local_results=false)
+            fi
           fi
           # Rock-solid cache: if the cached build fails for any cache-related
           # reason -- the TLS/GetCapabilities handshake, UNAVAILABLE, or a 502
@@ -273,10 +660,11 @@ jobs:
           # --remote_download_all or --remote_local_fallback cover -- retry once
           # with the cache fully off (same COMMON flags). A real build break
           # fails both attempts, so this never hides one.
-          if ! bazel build "${COMMON[@]}" "${CACHE[@]}" //...; then
+          TARGETS=(--target_pattern_file="$RUNNER_TEMP/targets.txt")
+          if ! bazel build "${COMMON[@]}" "${CACHE[@]}" "${TARGETS[@]}"; then
             [ "${CACHE_READY:-0}" = "1" ] || exit 1
             echo "::warning::remote cache build failed; retrying cacheless (local)"
-            bazel build "${COMMON[@]}" --remote_cache= //...
+            bazel build "${COMMON[@]}" --remote_cache= "${TARGETS[@]}"
           fi
 
       - name: bazel test //...
@@ -285,9 +673,76 @@ jobs:
         # but tests fail with an environment delta from GitLab CI (per the
         # documented build-only policy). Default is to run tests.
         if: steps.precheck.outputs.skip == 'false' && !matrix.subtree.tests_skip
-        working-directory: ${{ matrix.subtree.path }}
+        working-directory: ${{ matrix.subtree.workdir }}
         run: |
-          COMMON=(--flaky_test_attempts=3)
+          if [ ! -s "$RUNNER_TEMP/targets.txt" ]; then
+            echo "no targets to test; skipping"; exit 0
+          fi
+          # Resolve the test targets to run. A full build pattern (//...) filters
+          # to tests automatically. A narrowed set is specific non-test labels, so
+          # select the test targets among them with tests(set(...)); a query
+          # failure falls back to the full test set (correctness over speed), and
+          # an empty result means the change affects no tests.
+          ttfile="$RUNNER_TEMP/test-targets.txt"
+          if grep -qx '//\.\.\.' "$RUNNER_TEMP/targets.txt"; then
+            cp "$RUNNER_TEMP/targets.txt" "$ttfile"
+          else
+            patterns=$(tr '\n' ' ' < "$RUNNER_TEMP/targets.txt")
+            # Exclude requires-docker tests from the resolved set: they run in the
+            # Docker-host lane, not here. Naming them explicitly and then
+            # running `bazel test --test_tag_filters=-requires-docker` fails with
+            # "No test targets were found, yet testing was requested" (exit 4) when
+            # a scope's only tests are requires-docker. Filtering
+            # them in the query lets such a scope resolve to empty and skip cleanly,
+            # matching the tag filter applied to the run below.
+            tests=$(bazel query --noshow_progress --output=label \
+              "tests(set($patterns)) except attr(tags, 'requires-docker', set($patterns))" 2>/dev/null) || tests="__QFAIL__"
+            if [ "$tests" = "__QFAIL__" ]; then
+              echo "tests() query failed; falling back to full test set"
+              printf '//...\n' > "$ttfile"
+            elif [ -z "$tests" ]; then
+              # Not a coverage gap: requires-docker tests are excluded here (the
+              # container has no Docker daemon) and run in the bazel-integration
+              # lane instead. A scope whose only tests are requires-docker
+              # resolves empty here and is covered there.
+              echo "no non-docker test targets in scope; requires-docker tests run in the Docker-host lane"; exit 0
+            else
+              printf '%s\n' "$tests" > "$ttfile"
+              echo "tests: $(grep -c . "$ttfile") affected test target(s)"
+            fi
+          fi
+          # Root test quarantine: subtract known-flaky packages (nvcf-go owns the
+          # test-layer fix; see the file header and NVIDIA/nvcf#284) from the root
+          # row's test set. Negative patterns are appended after the positive
+          # patterns so Bazel removes them from the resolved set. The file lives at
+          # the repo root, so it is present only for the root row (whose working
+          # directory is the repo root); other rows have no such file.
+          qfile=".github/bazel-root-test-quarantine.txt"
+          if [ -f "$qfile" ]; then
+            n=$(grep -cE '^[[:space:]]*-//' "$qfile" || true)
+            grep -E '^[[:space:]]*-//' "$qfile" | sed -E 's/^[[:space:]]+//' >> "$ttfile"
+            echo "quarantine: subtracted ${n:-0} pattern(s) from the root test set"
+          fi
+          # requires-docker tests (Testcontainers/DinD) run in the dedicated
+          # Docker-host lane, not here; this matrix has no Docker daemon.
+          # They still compile in the build step; only their execution is
+          # deferred to that lane (see the bazel-integration job).
+          COMMON=(--flaky_test_attempts=3 --test_tag_filters=-requires-docker)
+          if [ "${{ matrix.subtree.id }}" = "byoo-otel-collector" ]; then
+            # Memory guard, not throughput. See the build step for the full
+            # rationale (~6 GB peak RSS per collector build, no per-action
+            # memory throttle for genrules).
+            COMMON+=(--jobs=1)
+            # Match the build step's --action_env so the collector genrule reuses
+            # the cached Go module/build cache instead of re-running (see #373),
+            # and so the two steps compute the same action key.
+            COMMON+=(--action_env="GOMODCACHE=$RUNNER_TEMP/byoo-gomodcache"
+                     --action_env="GOCACHE=$RUNNER_TEMP/byoo-gocache"
+                     --action_env="GOPATH=$RUNNER_TEMP/byoo-gopath")
+            byoo_go="$(command -v go || echo /usr/local/go/bin/go)"
+            byoo_go_ver="$("$byoo_go" version 2>/dev/null || echo unknown)"
+            COMMON+=(--action_env="BYOO_GO_TOOLCHAIN=$byoo_go_ver")
+          fi
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
             CACHE=(--remote_cache="$CACHE_ENDPOINT"
@@ -295,21 +750,212 @@ jobs:
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression
                    --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
-            [ "$CACHE_UPLOAD" = "true" ] || CACHE+=(--remote_upload_local_results=false)
+                   --remote_timeout=600 --remote_retries=5)
+            # Force the upload flag explicitly. The root module's .bazelrc pins
+            # --config=remote, which sets --remote_upload_local_results=false
+            # (internal read-only dev cache). Without overriding it back to true
+            # on main pushes, root never warms the public cache, so every root
+            # build is cold forever. Service modules do not set --config=remote,
+            # so they are unaffected either way.
+            if [ "$CACHE_UPLOAD" = "true" ]; then
+              CACHE+=(--remote_upload_local_results=true)
+            else
+              CACHE+=(--remote_upload_local_results=false)
+            fi
           fi
           # Same cacheless retry as the build step: cache flakiness must never
           # fail the matrix (see the build step for the rationale). COMMON keeps
           # the non-cache flags (--flaky_test_attempts) on both attempts.
-          if ! bazel test "${COMMON[@]}" "${CACHE[@]}" //...; then
+          TARGETS=(--target_pattern_file="$ttfile")
+          if ! bazel test "${COMMON[@]}" "${CACHE[@]}" "${TARGETS[@]}"; then
             [ "${CACHE_READY:-0}" = "1" ] || exit 1
             echo "::warning::remote cache test failed; retrying cacheless (local)"
-            bazel test "${COMMON[@]}" --remote_cache= //...
+            bazel test "${COMMON[@]}" --remote_cache= "${TARGETS[@]}"
           fi
 
+      - name: Stage Java verification artifacts
+        if: ${{ always() && startsWith(matrix.subtree.component_kind, 'java-') }}
+        working-directory: ${{ matrix.subtree.workdir }}
+        run: |
+          bash tools/ci/stage-bazel-java-artifacts \
+            "${{ matrix.subtree.id }}" \
+            "${{ matrix.subtree.path }}"
+
+      - name: Upload Java verification artifacts
+        if: ${{ always() && startsWith(matrix.subtree.component_kind, 'java-') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bazel-${{ matrix.subtree.id }}-verification-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bazel-java-verification/${{ matrix.subtree.id }}
+          if-no-files-found: error
+          retention-days: 14
+
+  # Docker-host lane. Each subtree that owns requires-docker
+  # (Testcontainers) tests runs its FULL suite (unit + Testcontainers) here, in
+  # its own visibly-named lane, with no tag filter -- so no test a subtree owns
+  # is filtered out or deferred, and a green lane means that service's tests ran.
+  # Runs on the bare ubuntu-latest runner (not the bazel-ci container) because
+  # that runner ships a running Docker daemon, so Testcontainers uses the host
+  # daemon directly -- no DinD, no host-override networking. These subtrees are
+  # excluded from the build-container matrix, so they never produce a
+  # zero-test lane.
+  # bazelisk reads .bazelversion for the pinned Bazel.
+  bazel-docker:
+    name: bazel (${{ matrix.subtree.id }})
+    needs: detect
+    if: needs.detect.outputs.matrix_docker != '[]'
+    runs-on: ubuntu-latest
+    # Same public EC2 Buildbarn remote cache the container matrix uses, sourced
+    # from a repo secret/var. Bare runners reach it over grpcs with a bearer
+    # token; fork PRs have no secret and fall back to cacheless automatically.
+    env:
+      CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
+      CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
+      # Passed as an env var, never interpolated inline into a run: script, so
+      # its contents can never be parsed as shell (zizmor template-injection).
+      CACHE_CA: ${{ vars.BAZEL_REMOTE_CACHE_CA }}
+    strategy:
+      fail-fast: false
+      # Cap concurrency here too (see the bazel job) so the docker-host rows
+      # do not add to the simultaneous actions/checkout burst.
+      max-parallel: 4
+      matrix:
+        subtree: ${{ fromJson(needs.detect.outputs.matrix_docker) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The Java tree builds with local_jdk (root .bazelrc). Unlike the fast
+      # matrix, this lane runs on a bare runner rather than the bazel-ci image,
+      # so provide JDK 25 explicitly for the Java requires-docker tests.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install bazelisk
+        run: |
+          sudo curl -fsSLo /usr/local/bin/bazel \
+            https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64
+          sudo chmod +x /usr/local/bin/bazel
+          bazel version
+      # Cache Bazel's install base + repository cache (external deps: Maven
+      # artifacts, toolchains) across runs. Compiled action outputs come from
+      # the remote cache below.
+      - name: Cache Bazel repository + disk caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel/*/install
+            ~/.cache/bazel/*/cache
+          key: bazel-docker-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
+          restore-keys: |
+            bazel-docker-${{ matrix.subtree.id }}-
+      # Enable the public EC2 Buildbarn remote cache when the token+endpoint are
+      # present. Upload only on main pushes so PRs are read-only and cannot
+      # poison the shared cache.
+      - name: Prepare remote cache
+        run: |
+          if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ] && [ -n "$CACHE_CA" ]; then
+            printf '%s\n' "$CACHE_CA" > "$RUNNER_TEMP/cache-ca.pem"
+            echo "CACHE_READY=1" >> "$GITHUB_ENV"
+            upload=false
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
+            echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
+            echo "remote cache ready (upload=$upload)"
+          else
+            echo "CACHE_READY=0" >> "$GITHUB_ENV"
+            echo "remote cache unavailable: cacheless build"
+          fi
+      - name: bazel build (${{ matrix.subtree.id }})
+        working-directory: ${{ matrix.subtree.workdir }}
+        run: |
+          CACHE=(--remote_cache=)
+          if [ "${CACHE_READY:-0}" = "1" ]; then
+            CACHE=(--remote_cache="$CACHE_ENDPOINT"
+                   --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+                   --remote_header="authorization=Bearer $CACHE_TOKEN"
+                   --remote_cache_compression --remote_download_all
+                   --remote_timeout=600 --remote_retries=5)
+            if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
+              CACHE+=(--remote_upload_local_results=true)
+            else
+              CACHE+=(--remote_upload_local_results=false)
+            fi
+          fi
+          # Capture output so a remote-cache transport error is told apart from a
+          # genuine build failure: retry cacheless only on the former, otherwise
+          # every broken PR builds twice (CodeRabbit review on #399). The grep is
+          # broad on purpose -- a false positive only costs a second attempt (the
+          # old always-retry behavior), a false negative never hides a real break.
+          set +e
+          bazel build "${CACHE[@]}" ${{ matrix.subtree.scope }} 2>&1 | tee "$RUNNER_TEMP/bazel-build.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ] && [ "${CACHE_READY:-0}" = "1" ] && grep -qiE \
+              'remote (cache|spawn)|StatusRuntimeException|UNAVAILABLE|DEADLINE_EXCEEDED|Bad Gateway|502|lost inputs|BulkTransfer|Failed to (query remote|init TLS)' \
+              "$RUNNER_TEMP/bazel-build.log"; then
+            echo "::warning::remote cache error (exit $rc); retrying cacheless"
+            bazel build --remote_cache= ${{ matrix.subtree.scope }}
+            rc=$?
+          fi
+          exit "$rc"
+      - name: bazel test (${{ matrix.subtree.id }})
+        working-directory: ${{ matrix.subtree.workdir }}
+        # Full suite, NO tag filter: unit AND requires-docker (Testcontainers)
+        # tests against the host Docker daemon. bazel exit 4 (no test targets in
+        # scope) is treated as success.
+        run: |
+          CACHE=(--remote_cache=)
+          if [ "${CACHE_READY:-0}" = "1" ]; then
+            CACHE=(--remote_cache="$CACHE_ENDPOINT"
+                   --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+                   --remote_header="authorization=Bearer $CACHE_TOKEN"
+                   --remote_cache_compression --remote_download_all
+                   --remote_timeout=600 --remote_retries=5)
+            if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
+              CACHE+=(--remote_upload_local_results=true)
+            else
+              CACHE+=(--remote_upload_local_results=false)
+            fi
+          fi
+          set +e
+          bazel test "${CACHE[@]}" ${{ matrix.subtree.scope }} \
+            --test_output=errors --flaky_test_attempts=2 2>&1 | tee "$RUNNER_TEMP/bazel-test.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          [ "$rc" -eq 4 ] && { echo "::warning::${{ matrix.subtree.id }}: no test targets in scope"; exit 0; }
+          # Retry cacheless only on a remote-cache transport error, never on a
+          # genuine test failure (exit 3) or build failure (1); see the build
+          # step above for the rationale.
+          if [ "$rc" -ne 0 ] && [ "${CACHE_READY:-0}" = "1" ] && grep -qiE \
+              'remote (cache|spawn)|StatusRuntimeException|UNAVAILABLE|DEADLINE_EXCEEDED|Bad Gateway|502|lost inputs|BulkTransfer|Failed to (query remote|init TLS)' \
+              "$RUNNER_TEMP/bazel-test.log"; then
+            echo "::warning::remote cache error (exit $rc); retrying cacheless"
+            set +e; bazel test --remote_cache= ${{ matrix.subtree.scope }} --test_output=errors --flaky_test_attempts=2; rc=$?; set -e
+            [ "$rc" -eq 4 ] && exit 0
+          fi
+          exit "$rc"
+
+      - name: Stage Java verification artifacts
+        if: ${{ always() && startsWith(matrix.subtree.component_kind, 'java-') }}
+        working-directory: ${{ matrix.subtree.workdir }}
+        run: |
+          bash tools/ci/stage-bazel-java-artifacts \
+            "${{ matrix.subtree.id }}" \
+            "${{ matrix.subtree.path }}"
+
+      - name: Upload Java verification artifacts
+        if: ${{ always() && startsWith(matrix.subtree.component_kind, 'java-') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bazel-${{ matrix.subtree.id }}-verification-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bazel-java-verification/${{ matrix.subtree.id }}
+          if-no-files-found: error
+          retention-days: 14
+
   bazel-verification:
-    name: bazel verification
-    needs: [detect, bazel]
+    name: bazel required checks
+    needs: [detect, bazel, bazel-docker]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -317,6 +963,7 @@ jobs:
         env:
           DETECT_RESULT: ${{ needs.detect.result }}
           BAZEL_RESULT: ${{ needs.bazel.result }}
+          DOCKER_RESULT: ${{ needs.bazel-docker.result }}
           BAZEL_ANY: ${{ needs.detect.outputs.any }}
         run: |
           set -euo pipefail
@@ -335,7 +982,19 @@ jobs:
             exit 0
           fi
 
-          if [ "${BAZEL_RESULT}" != "success" ]; then
-            echo "one or more Bazel matrix rows failed, were cancelled, or were skipped"
+          # `skipped` is legitimate here and means the build-container matrix was
+          # empty, i.e. every selected subtree runs in the docker-host lane. The
+          # job's `if` is tied to that matrix being non-empty, so skipped can
+          # only mean "nothing for this lane to do" -- it cannot hide a row that
+          # should have run. The BAZEL_ANY check above already catches the case
+          # where no subtree was selected at all.
+          if [ "${BAZEL_RESULT}" != "success" ] && [ "${BAZEL_RESULT}" != "skipped" ]; then
+            echo "one or more Bazel matrix rows failed or were cancelled"
+            exit 1
+          fi
+
+          echo "bazel-docker result: ${DOCKER_RESULT}"
+          if [ "${DOCKER_RESULT}" != "success" ] && [ "${DOCKER_RESULT}" != "skipped" ]; then
+            echo "one or more bazel docker (per-service Testcontainers) lanes failed or were cancelled"
             exit 1
           fi

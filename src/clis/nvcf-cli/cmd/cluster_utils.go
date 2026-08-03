@@ -30,25 +30,17 @@ import (
 
 // buildKubectlCommand builds a kubectl command with proper kubeconfig handling
 func buildKubectlCommand(config *client.Config, args []string) *exec.Cmd {
-	// Start with kubectl
-	cmdArgs := []string{"kubectl"}
-
-	// Add kubeconfig if specified
+	// kubectl global flags must precede the subcommand arguments.
+	var cmdArgs []string
+	if config.KubeContext != "" {
+		cmdArgs = append(cmdArgs, "--context", config.KubeContext)
+	}
 	if config.KubeconfigPath != "" {
 		cmdArgs = append(cmdArgs, "--kubeconfig", config.KubeconfigPath)
 	}
-
-	// Add the actual command arguments
 	cmdArgs = append(cmdArgs, args...)
 
-	// Create the command
-	cmd := exec.Command("kubectl", args...)
-	if config.KubeconfigPath != "" {
-		cmd.Args = append(cmd.Args[:1], append([]string{"--kubeconfig", config.KubeconfigPath}, cmd.Args[1:]...)...)
-	}
-	if config.KubeContext != "" {
-		cmd.Args = append(cmd.Args[:1], append([]string{"--context", config.KubeContext}, cmd.Args[1:]...)...)
-	}
+	cmd := exec.Command("kubectl", cmdArgs...)
 
 	if config.Debug {
 		logging.Debug("Executing kubectl command: %s", strings.Join(cmd.Args, " "))

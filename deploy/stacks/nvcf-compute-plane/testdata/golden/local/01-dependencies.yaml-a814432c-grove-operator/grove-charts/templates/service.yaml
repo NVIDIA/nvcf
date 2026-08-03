@@ -1,0 +1,29 @@
+---
+# Source: grove-charts/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: grove-operator
+  namespace: grove-system
+  labels:
+    chart: "grove-charts-v0.1.0-alpha.9"
+    release: "grove-operator"
+    app.kubernetes.io/component: operator-service
+    app.kubernetes.io/name: grove-operator
+    app.kubernetes.io/part-of: grove
+spec:
+  type: ClusterIP
+  selector:
+    
+    app.kubernetes.io/component: operator-deployment
+    app.kubernetes.io/name: grove-operator
+    app.kubernetes.io/part-of: grove
+  ports:
+    - name: metrics
+      protocol: TCP
+      port: 9445
+      targetPort: 9445
+    - name: webhooks
+      protocol: TCP
+      port: 9443
+      targetPort: 9443

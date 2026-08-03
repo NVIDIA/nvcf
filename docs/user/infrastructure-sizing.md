@@ -7,8 +7,8 @@ types and storage classes are AWS examples. For another cloud service provider
 storage classes that provide at least the listed vCPU, memory, storage, zone
 spread, and GPU compatibility characteristics. Actual requirements depend on
 workload characteristics, function count, and request concurrency. Use the
-[self-managed-grpc-load-test](./grpc-load-testing.md) and
-[self-managed-http-load-test](./http-load-testing.md) guides to validate
+[self-managed-grpc-load-test](../g-rpc-load-testing) and
+[self-managed-http-load-test](../http-load-testing) guides to validate
 throughput and tune your control plane accordingly.
 
 </Info>
@@ -56,7 +56,7 @@ For local development of the stack or functions, CI pipelines, or quick demos,
 you can run the entire NVCF stack on a single machine using k3d. This setup
 uses a single Cassandra replica, fake GPUs, and ephemeral `local-path` storage.
 
-See [local-development](./local-development.md) for full step-by-step instructions.
+See [local-development](../local-development) for full step-by-step instructions.
 
 ### Staging / Demo
 
@@ -80,7 +80,7 @@ Use this tier for:
 
 <Tip>
 You can also run the full stack on your laptop using Kind or k3d. See
-[local-development](./local-development.md) for instructions.
+[local-development](../local-development) for instructions.
 
 </Tip>
 
@@ -153,7 +153,7 @@ GPU requirements:
 - Physical GPU hardware on worker nodes
 
 For development and testing environments without GPUs, install the fake GPU
-operator to simulate GPU resources. See [fake-gpu-operator](./fake-gpu-operator.md) for
+operator to simulate GPU resources. See [fake-gpu-operator](../fake-gpu-operator) for
 instructions.
 
 ## Storage Recommendations
@@ -180,8 +180,8 @@ The default control-plane resource sizing shipped with the helmfile stack is
 designed to handle approximately 100 concurrent users. If you need higher
 throughput:
 
-1. Benchmark your deployment using the [self-managed-grpc-load-test](./grpc-load-testing.md)
-   or [self-managed-http-load-test](./http-load-testing.md) guide. Start with
+1. Benchmark your deployment using the [self-managed-grpc-load-test](../g-rpc-load-testing)
+   or [self-managed-http-load-test](../http-load-testing) guide. Start with
    `--vus 100` and increase gradually.
 2. Scale node pools independently. Cassandra, OpenBao, and control-plane
    pools can each be scaled without affecting the others.
@@ -191,7 +191,7 @@ throughput:
 
 <Note>
 - [Quickstart](./quickstart.md): One-click fresh installation walkthrough
-- [self-managed-grpc-load-test](./grpc-load-testing.md): Validate control-plane throughput
-- [self-managed-http-load-test](./http-load-testing.md): Validate HTTP invocation throughput
+- [self-managed-grpc-load-test](../g-rpc-load-testing): Validate control-plane throughput
+- [self-managed-http-load-test](../http-load-testing): Validate HTTP invocation throughput
 
 </Note>

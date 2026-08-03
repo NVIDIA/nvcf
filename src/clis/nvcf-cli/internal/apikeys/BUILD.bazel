@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "apikeys",
@@ -21,4 +21,14 @@ go_library(
     importpath = "nvcf-cli/internal/apikeys",
     visibility = ["//src/clis/nvcf-cli:__subpackages__"],
     deps = ["//src/clis/nvcf-cli/internal/logging"],
+)
+
+go_test(
+    name = "apikeys_test",
+    srcs = ["client_test.go"],
+    embed = [":apikeys"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )

@@ -90,6 +90,21 @@ func TestNewBearerTokenCredentialsError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestCloseTwice(t *testing.T) {
+	dir := t.TempDir()
+	secretsPath := filepath.Join(dir, "test-secrets.json")
+	tokenKey := "test_api_token"
+
+	err := writeSecretsFile(secretsPath, tokenKey, "token-value")
+	require.NoError(t, err)
+
+	creds, err := NewBearerTokenCredentials(secretsPath, tokenKey, true)
+	require.NoError(t, err)
+
+	assert.NoError(t, creds.Close())
+	assert.NoError(t, creds.Close())
+}
+
 func writeSecretsFile(path, tokenKey, tokenValue string) error {
 	secrets := map[string]any{
 		tokenKey: tokenValue,

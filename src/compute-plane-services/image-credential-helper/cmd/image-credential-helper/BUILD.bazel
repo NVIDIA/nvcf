@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//rules/oci:defs.bzl", "go_oci_image")
 

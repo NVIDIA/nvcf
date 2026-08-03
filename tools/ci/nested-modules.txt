@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Every nested MODULE.bazel in the repository, classified. tools/ci/check-nested-modules
+# fails if a nested module exists that is not listed here, and fails if an entry
+# here no longer exists. Both directions matter: the first stops new nested
+# modules appearing by accident, the second stops this file drifting into
+# fiction as migration proceeds.
+#
+# Format: <category> <path-to-directory-containing-MODULE.bazel>
+#
+# Categories, in the sense docs/dev/bazel-consolidation.md gives them:
+#
+#   vendored     Third-party source vendored into the tree. Never in scope for
+#                consolidation, excluded from the count outright, and carries no
+#                exception contract because it is not ours to converge.
+#
+#   scaffolding  Exists to support the migration and is deleted when its
+#                consumers no longer need it. Not a service, so it is not
+#                counted as a module that must converge.
+#
+#   ledger       A first-party service module that has not migrated yet. This is
+#                the migration backlog. Entries leave this file entirely when the
+#                service moves to the root module. An entry here is a statement
+#                that the work is outstanding, not that it is excused.
+#
+#   exception    A first-party service that will keep its own module
+#                permanently. This is the only category that carries the
+#                exception contract in the plan: a recorded owner, a rationale,
+#                and the residual correctness risk in writing. Adding an entry
+#                here reduces the number of modules the end state converges, so
+#                it is a deliberate scope change, not a way to silence this
+#                check.
+
+vendored     src/compute-plane-services/nvca/vendor/cel.dev/expr
+
+scaffolding  rules/oci-destinations
+
+ledger       src/compute-plane-services/byoo-otel-collector
+ledger       src/compute-plane-services/ess-agent
+ledger       src/compute-plane-services/image-credential-helper
+ledger       src/compute-plane-services/nvca
+ledger       src/compute-plane-services/nvcf-unbound
+ledger       src/compute-plane-services/worker-init
+ledger       src/compute-plane-services/worker-llm-credentials
+ledger       src/compute-plane-services/worker-task
+ledger       src/compute-plane-services/worker-utils
+ledger       src/control-plane-services/function-autoscaler
+ledger       src/control-plane-services/helm-reval
+ledger       src/control-plane-services/nats-auth-callout
+ledger       src/invocation-plane-services/grpc-proxy
+ledger       src/invocation-plane-services/http-invocation
+ledger       src/invocation-plane-services/llm-api-gateway
+ledger       src/invocation-plane-services/ratelimiter
+ledger       src/invocation-plane-services/vanity-gateway
+ledger       src/libraries/rust/stargate
+
+# No permanent exceptions today. nvsnap was the open question in Phase 1 and it
+# migrated in NVIDIA/nvcf#471, so it is absent from this file entirely, which is
+# what a completed migration looks like here.

@@ -13,22 +13,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-set -e
+set -euo pipefail
 
 # take in one command argument for the org id
-ORG_ID=$1
+ORG_ID=${1:-}
 
 # check to see if the org id is provided
 if [ -z "$ORG_ID" ]; then
     echo "org id is required"
-    exit
+    exit 1
 fi
 
 # check to see if the ngc cli is installed
 if ! command -v ngc &> /dev/null
 then
     echo "ngc cli could not be found - please install it from https://org.ngc.nvidia.com/setup/installers/cli"
-    exit
+    exit 1
 fi
 
 # get the number of tasks in the org in json format

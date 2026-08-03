@@ -8,7 +8,7 @@ go_library(
     srcs = [
         "affinity.go",
         "annotations.go",
-        "byoo_log_chunking.go",
+        "byoo_env_vars.go",
         "clientshim.go",
         "customization.go",
         "encoding.go",
@@ -61,7 +61,7 @@ go_test(
     name = "k8sutil_test",
     srcs = [
         "annotations_test.go",
-        "byoo_log_chunking_test.go",
+        "byoo_env_vars_test.go",
         "clientshim_test.go",
         "encoding_test.go",
         "errors_test.go",

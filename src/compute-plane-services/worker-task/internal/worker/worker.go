@@ -125,6 +125,7 @@ func NewNVCTWorker(ctx context.Context, zapLogger *logs.ZapLogger, config config
 		Backend:                config.CloudProvider,
 		NcaId:                  config.NcaId,
 		BillingNcaId:           billingNcaId,
+		NspectId:               metering.NspectIdFromEnv(),
 		InstanceId:             config.InstanceId,
 		InstanceType:           config.InstanceType,
 		ICMSEnvironment:        config.ICMSEnvironment,

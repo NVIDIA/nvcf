@@ -16,11 +16,11 @@
 | `--compute-plane-stack=…` | Compute-plane bundle source: local path, git URL, or `oci://` URL | embedded OCI URL pinned by CLI version |
 | `--env=local\|prd\|…` | Helmfile environment name | `local` for dev builds, `prd` for releases |
 | `--non-interactive` | Disable all stdin prompts | `false` |
-| `--token=$JWT` | Admin JWT, overrides stored session | — |
-| `--no-apply` | `install` only — emit YAML only, don't kubectl apply | `false` |
+| `--token=$JWT` | Admin JWT, overrides stored session | - |
+| `--no-apply` | `install` only - emit YAML, do not kubectl apply | `false` |
 | `--output=text\|json` | Legacy alias for `--json` (deprecated, removed in next major) | `text` |
 | `--plain` | Force plain streaming output | auto-detect |
-| `--wait DURATION` | `check` only; block until pass | — |
+| `--wait DURATION` | `check` only; block until pass | - |
 | `--control-plane-context CTX` | kubectl context for control plane (REQ-20) | current context |
 | `--compute-plane-context CTX` | kubectl context for compute plane (REQ-20) | current context |
 | `--icms-url URL` | Public ICMS URL; required when contexts differ | derived from `base_http_url` |
@@ -30,7 +30,7 @@
 
 | Flag | Purpose | Default |
 |---|---|---|
-| `--cluster-name NAME` | ICMS cluster row identifier (required) | — |
+| `--cluster-name NAME` | ICMS cluster row identifier (required) | - |
 | `--nca-id ID` | NCA account ID | `nvcf-default` |
 | `--region REGION` | Cluster region | `us-west-1` |
 | `--plan-only` | Dry-run; emit phase plan + ETAs without changes | `false` |
@@ -39,23 +39,21 @@
 
 | Flag | Purpose | Default |
 |---|---|---|
-| `--cluster-name NAME` | Limit to one compute plane | — (control + all clusters) |
+| `--cluster-name NAME` | Limit to one compute plane | - (control + all clusters) |
 | `--watch` | Live re-render | `false` |
 | `--watch-interval DUR` | `--watch` cadence | `5s` |
 | `--component NAME` | Filter components panel | all |
-| `--show-events DUR` | Recent events window | `5m` |
 | `--no-events` | Skip events panel | `false` |
 
 ## `cluster register`-specific
 
 | Flag | Purpose | Default |
 |---|---|---|
-| `--name NAME` | Cluster name (required) | — |
-| `--nca-id ID` | NCA ID (required) | — |
-| `--region REGION` | Region (required, non-empty) | — |
+| `--name NAME` | Cluster name (required) | - |
+| `--nca-id ID` | NCA ID (required) | - |
+| `--region REGION` | Region | `us-west-1` |
 | `--icms-url URL` | ICMS endpoint | from config |
 | `--ignore-existing` | Match-or-create instead of fail-on-exists | `false` |
-| `--identity-source psat\|spire` | Identity source | `psat` |
 
 ## `api-key generate`-specific
 
@@ -83,9 +81,9 @@ Extended duration units: `s` (seconds), `m` (minutes), `h` (hours), `d` (days), 
 | `--helm-chart CHART` | Helm chart URL or OCI reference. Can be used with `--function-type=LLM` for chart-packaged LLM workloads. | - |
 | `--helm-chart-service NAME` | Kubernetes Service name exposed by the chart. Required when `--helm-chart` is set. | - |
 | `--models NAME:VERSION:URI` | Standard model artifact; repeatable | - |
-| `--llm-model SPEC` | LLM model config; format `name=<model>,uris=<uri>|<uri>,routingMethod=<round_robin|power_of_two|random>,tokenRateLimit=<limit>`; repeatable. Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use input JSON for combined token limits because inline specs use commas as field separators. | - |
+| `--llm-model SPEC` | LLM model config; format `name=<model>,uris=<uri>\|<uri>,routingMethod=<method>,tokenRateLimit=<limit>`; repeatable. Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use input JSON for combined token limits because inline specs use commas as field separators. | - |
 
-In JSON, LLM functions set `functionType: "LLM"` and model routing metadata under `models[].llmConfig`. `llmConfig.uris` declares the OpenAI-compatible upstream paths exposed by the model. Current supported paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`. `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, or `random`.
+In JSON and inline specs, LLM functions set `functionType: "LLM"` and model routing metadata under `models[].llmConfig`. `llmConfig.uris` declares the OpenAI-compatible upstream paths exposed by the model. Current supported paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`. `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
 `llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use distinct units when combining limits, for example `1000-S,5000-M,100000-H,500000-D,1000000-W` in input JSON.
 
 Helm chart packaging is independent of `functionType`. For a Helm-chart backed LLM function, set `functionType: "LLM"`, `helmChart`, `helmChartServiceName`, and `models[].llmConfig` in the same create request. `inferencePort` must be the Kubernetes Service port exposed by `helmChartServiceName`.
@@ -97,7 +95,7 @@ LLM invocation requests use `model: "<function-id>/<model-name>"`. The function 
 | Flag | Purpose | Default |
 |---|---|---|
 | `--tags TAG[,TAG]` | Replace function tags | - |
-| `--llm-model-update SPEC` | LLM model update; format `name=<model>,routingMethod=<round_robin|power_of_two|random>,tokenRateLimit=<limit>`; repeatable. Token limit example: `1000-S`. Use input JSON for combined token limits. | - |
+| `--llm-model-update SPEC` | LLM model update; format `name=<model>,routingMethod=<method>,tokenRateLimit=<limit>`; repeatable. Routing methods match `--llm-model`. Token limit example: `1000-S`. Use input JSON for combined token limits. | - |
 
 In JSON, `function update` accepts `modelUpdates[]` entries with `modelName` and `llmConfig.routingMethod` and/or `llmConfig.tokenRateLimit`. `uris` are create-time model metadata and are not part of model updates.
 
@@ -107,12 +105,12 @@ In JSON, `function update` accepts `modelUpdates[]` entries with `modelName` and
 
 | Flag | Purpose | Default |
 |---|---|---|
-| `--function-id ID` | Function ID (required) | — |
+| `--function-id ID` | Function ID (required) | - |
 | `--gpu NAME` | GPU family | `H100` |
 | `--instance-type TYPE` | SKU | `NCP.GPU.H100_1x` |
 | `--min-instances N` | Min replicas | `1` |
 | `--max-instances N` | Max replicas | `1` |
-| `--max-request-concurrency N` | Concurrency | `10` |
+| `--max-request-concurrency N` | Concurrency | `0` (unset; server default applies) |
 | `--clusters NAME[,NAME]` | Target specific compute clusters | (any matching SKU) |
 
 ## `task create`-specific
@@ -127,22 +125,21 @@ In JSON, `function update` accepts `modelUpdates[]` entries with `modelName` and
 | `--image IMAGE` | Container image | Mutually exclusive with `--helm-chart` |
 | `--helm-chart CHART` | Helm chart URL or OCI reference | Mutually exclusive with `--image` |
 | `--input-file FILE` | JSON task spec file | CLI flags override JSON values when both are set |
-| `--backend BACKEND` | Backend / CSP | — |
+| `--backend BACKEND` | Backend / CSP | - |
 | `--clusters NAME[,NAME]` | Specific clusters within the instance | Comma-separated |
 | `--container-args ARGS` | Args passed when launching the container | Single string, e.g. `"--epochs 10 --batch-size 32"` |
-| `--container-env NAME=value` | Container environment variable; repeatable | — |
-| `--secrets NAME=value` | Secret environment variable; repeatable; encrypted at rest | — |
+| `--container-env NAME=value` | Container environment variable; repeatable | - |
+| `--secrets NAME=value` | Secret environment variable; repeatable; encrypted at rest | - |
 | `--max-runtime DURATION` | Max wall-clock run time (ISO 8601, e.g. `PT4H`) | No default; omit for no time limit |
 | `--max-queued DURATION` | Max time in queue before cancellation (ISO 8601) | Server default `PT72H` |
 | `--termination-grace DURATION` | Grace period after stop signal (ISO 8601) | Server default `PT1H` |
-| `--result-strategy UPLOAD\|NONE` | How to handle task output artifacts | — |
-| `--results-location LOCATION` | Result upload target, format `org-name/[team-name/]model-name`; required when `--result-strategy=UPLOAD` | — |
-| `--models NAME:VERSION:URI` | Model artifact; repeatable | — |
-| `--resources NAME:VERSION:URI` | Resource artifact; repeatable | — |
+| `--result-strategy UPLOAD\|NONE` | How to handle task output artifacts | - |
+| `--results-location LOCATION` | Result upload target, format `org-name/[team-name/]model-name`; required when `--result-strategy=UPLOAD` | - |
+| `--models NAME:VERSION:URI` | Model artifact; repeatable | - |
+| `--resources NAME:VERSION:URI` | Resource artifact; repeatable | - |
 | `--tags TAG[,TAG]` | Task tags | Comma-separated |
-| `--description TEXT` | Task description | — |
-| `--logs-telemetry-id UUID` | Logs telemetry endpoint ID | — |
-| `--metrics-telemetry-id UUID` | Metrics telemetry endpoint ID | — |
-| `--traces-telemetry-id UUID` | Traces telemetry endpoint ID | — |
-
+| `--description TEXT` | Task description | - |
+| `--logs-telemetry-id UUID` | Logs telemetry endpoint ID | - |
+| `--metrics-telemetry-id UUID` | Metrics telemetry endpoint ID | - |
+| `--traces-telemetry-id UUID` | Traces telemetry endpoint ID | - |
 

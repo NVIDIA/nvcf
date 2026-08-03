@@ -2837,9 +2837,31 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 				},
 			},
 			BYOOLogChunking: nvcaconfig.BYOOLogChunkingConfig{
-				MaxBodyBytes:              983040,
-				DryRun:                    true,
-				ExporterBatchMaxSizeBytes: ptr.To[int64](1000000),
+				Enabled:         true,
+				MaxPayloadBytes: 983040,
+				DryRun:          true,
+			},
+			BYOOOTelCollector: nvcaconfig.BYOOOTelCollectorConfig{
+				ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
+					Timeout: "30s",
+					SendingQueue: nvcaconfig.BYOOOTelSendingQueueConfig{
+						Batch: nvcaconfig.BYOOOTelSendingQueueBatchConfig{
+							Sizer:   "bytes",
+							MinSize: ptr.To[int64](1000000),
+							MaxSize: ptr.To[int64](1000000),
+						},
+					},
+				},
+			},
+			BYOODebugMode: nvcaconfig.BYOODebugModeConfig{
+				Enabled: true,
+			},
+			BYOOMetricSubset: nvcaconfig.BYOOMetricSubsetConfig{
+				Enabled:      true,
+				FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
+			},
+			BYOOWorkloadMetrics: nvcaconfig.BYOOWorkloadMetricsConfig{
+				DropLabels: []string{"metric_subset_enabled", "custom_label"},
 			},
 		},
 	}
@@ -2853,10 +2875,18 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 	fluentBitRequests := corev1.ResourceList(got.Agent.BYOOFluentBitResources.Requests)
 	assert.True(t, byooLimits.Memory().Equal(resource.MustParse("2Gi")))
 	assert.True(t, fluentBitRequests.Cpu().Equal(resource.MustParse("100m")))
-	assert.Equal(t, int64(983040), got.Agent.BYOOLogChunking.MaxBodyBytes)
+	assert.True(t, got.Agent.BYOOLogChunking.Enabled)
+	assert.Equal(t, int64(983040), got.Agent.BYOOLogChunking.MaxPayloadBytes)
 	assert.True(t, got.Agent.BYOOLogChunking.DryRun)
-	require.NotNil(t, got.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
-	assert.Equal(t, int64(1000000), *got.Agent.BYOOLogChunking.ExporterBatchMaxSizeBytes)
+	assert.Equal(t, "30s", got.Agent.BYOOOTelCollector.ExporterHelper.Timeout)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MinSize)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MaxSize)
+	assert.Equal(t, int64(1000000), *got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MinSize)
+	assert.Equal(t, int64(1000000), *got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MaxSize)
+	assert.True(t, got.Agent.BYOODebugMode.Enabled)
+	assert.True(t, got.Agent.BYOOMetricSubset.Enabled)
+	assert.Contains(t, got.Agent.BYOOMetricSubset.FilterConfig, "metric.name")
+	assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, got.Agent.BYOOWorkloadMetrics.DropLabels)
 }
 
 func TestAgentHostOverrideConfig_ClearsReValHostForSelfHostedColocatedService(t *testing.T) {
@@ -4649,7 +4679,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv_OAuthAuth(t *testing.T) {
 			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorOAuth2Client,
 		},
 		{
-			name: "Vault disabled - service API key bearer token authentication with placeholder OAuth env vars",
+			name: "Vault disabled - service API key bearer token authentication with empty OAuth client ID",
 			nb: &nvidiaiov1.NVCFBackend{
 				Spec: nvidiaiov1.NVCFBackendSpec{
 					NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
@@ -4665,7 +4695,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv_OAuthAuth(t *testing.T) {
 				},
 			},
 			envType:                 nvidiaiov1.EnvTypeProd,
-			expectedOAuthClientID:   NVCAOTelCollectorOAuthPlaceholderClientID,
+			expectedOAuthClientID:   "",
 			expectedOAuthSecretFile: "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
 			expectedOAuthTokenURL:   "",
 			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorBearerTokenAuth,

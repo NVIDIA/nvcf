@@ -13,10 +13,6 @@ navigation:
     contents:
       - page: Release Notes Overview
         path: ../../docs/user/release-notes/index.md
-      - page: "0.6.0 Release Notes"
-        path: ../../docs/user/release-notes/0.6.0.md
-      - page: "0.5.0 to 0.6.0 Upgrade"
-        path: ../../docs/user/release-notes/0.5.0-to-0.6.0-upgrade.md
 
   - section: Before You Deploy
     skip-slug: true
@@ -37,6 +33,8 @@ navigation:
         path: ../../docs/user/helmfile-installation.md
       - page: gRPC Invocation Enablement
         path: ../../docs/user/grpc-invocation-enablement.md
+      - page: CSP End-to-End Example
+        path: ../../docs/user/csp-end-to-end-example-installation.md
 
   - section: GPU Cluster Setup
     skip-slug: true
@@ -55,6 +53,8 @@ navigation:
         path: ../../docs/user/optional-enhancements.md
       - page: LLM Function Enablement
         path: ../../docs/user/llm-function-enablement.md
+      - page: LLM Request Router Load Balancing
+        path: ../../docs/user/llm-request-router-load-balancing.md
       - page: Gateway Routing
         path: ../../docs/user/gateway-routing.md
       - page: Third-Party Registries

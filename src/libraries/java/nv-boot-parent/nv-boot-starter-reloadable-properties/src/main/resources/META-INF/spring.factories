@@ -1,0 +1,3 @@
+# EnvironmentPostProcessor for reloadable properties (loads before PropertySourceLocators)
+org.springframework.boot.EnvironmentPostProcessor=\
+com.nvidia.boot.properties.env.ReloadablePropertiesEnvironmentPostProcessor

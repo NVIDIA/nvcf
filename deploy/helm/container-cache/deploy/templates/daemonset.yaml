@@ -21,6 +21,10 @@ metadata:
     app: {{ $.Release.Name }}
     {{ include "nvcf-container-cache.labels" . | nindent 4 }}
 spec:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ $.Values.updateStrategy.rollingUpdate.maxUnavailable | default 1 }}
   selector:
     matchLabels:
       name: configure-containerd

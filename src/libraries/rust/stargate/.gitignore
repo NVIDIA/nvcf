@@ -14,6 +14,12 @@
 # limitations under the License.
 
 target
+
+# Bazel (nested module). Convenience symlinks + local caches/overrides.
+bazel-*
+.bazel-cache/
+user.bazelrc
+
 .coverage/
 .desloppify/
 mutants.out/

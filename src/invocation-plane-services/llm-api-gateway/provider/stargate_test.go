@@ -910,6 +910,174 @@ func TestStargateProviderProxyForwardsRoutingMethod(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.StatusCode)
 }
 
+func TestStargateProviderNewOutboundRequestForwardsPriority(t *testing.T) {
+	t.Parallel()
+
+	request := &NormalizedRequest{
+		ChatRequest: &models.ChatCompletionRequest{
+			Model: "upstream-model",
+			Messages: &[]models.ChatMessage{
+				{
+					Role:    models.ChatCompletionRoleUser,
+					Content: models.SingleTextContent("hello"),
+				},
+			},
+		},
+		InputTokens: 3,
+	}
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+
+	// A resolved priority is forwarded as the header value.
+	resolved, err := provider.newOutboundRequest(
+		&requestctx.RequestContext{RoutingKey: "fn-abc", Priority: ptr.To(uint32(3))},
+		request,
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "3", resolved.Header.Get(headerPriority))
+
+	// An explicit zero (highest priority) is forwarded, distinct from unset.
+	zero, err := provider.newOutboundRequest(
+		&requestctx.RequestContext{RoutingKey: "fn-abc", Priority: ptr.To(uint32(0))},
+		request,
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "0", zero.Header.Get(headerPriority))
+
+	// Unset priority omits the header entirely.
+	unset, err := provider.newOutboundRequest(
+		&requestctx.RequestContext{RoutingKey: "fn-abc"},
+		request,
+		false,
+	)
+	require.NoError(t, err)
+	require.Empty(t, unset.Header.Get(headerPriority))
+}
+
+func TestStargateProviderProxyForwardsPriority(t *testing.T) {
+	t.Parallel()
+
+	reqCtx := &requestctx.RequestContext{
+		RequestID:  "req-proxy",
+		RoutingKey: "fn-proxy",
+		Model:      "proxy-model",
+		Priority:   ptr.To(uint32(7)),
+	}
+	request := &ProxyRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/embeddings",
+		Body:   io.NopCloser(strings.NewReader(`{"model":"proxy-model","input":"hello"}`)),
+		// A client-supplied X-Priority survives the header clone; the resolved
+		// value must replace it, not append to it.
+		Header: http.Header{headerPriority: []string{"9"}},
+	}
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Helper()
+
+		require.Equal(t, []string{"7"}, r.Header.Values(headerPriority))
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				headerContentType: []string{contentTypeJSON},
+			},
+			Body:    io.NopCloser(strings.NewReader(`{"object":"list","data":[]}`)),
+			Request: r,
+		}, nil
+	})}
+
+	response, err := provider.Proxy(context.Background(), reqCtx, request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+
+	require.Equal(t, http.StatusOK, response.StatusCode)
+}
+
+func TestStargateProviderProxyStripsClientSuppliedPriorityWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	reqCtx := &requestctx.RequestContext{
+		RequestID:  "req-proxy",
+		RoutingKey: "fn-proxy",
+		Model:      "proxy-model",
+	}
+	request := &ProxyRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/embeddings",
+		Body:   io.NopCloser(strings.NewReader(`{"model":"proxy-model","input":"hello"}`)),
+		// A client-supplied X-Priority survives the header clone; with no
+		// resolved priority it must be stripped, not forwarded.
+		Header: http.Header{headerPriority: []string{"9"}},
+	}
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Helper()
+
+		require.Empty(t, r.Header.Values(headerPriority))
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				headerContentType: []string{contentTypeJSON},
+			},
+			Body:    io.NopCloser(strings.NewReader(`{"object":"list","data":[]}`)),
+			Request: r,
+		}, nil
+	})}
+
+	response, err := provider.Proxy(context.Background(), reqCtx, request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+
+	require.Equal(t, http.StatusOK, response.StatusCode)
+}
+
+func TestStargateProviderProxyOmitsPriorityWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	reqCtx := &requestctx.RequestContext{
+		RequestID:  "req-proxy",
+		RoutingKey: "fn-proxy",
+		Model:      "proxy-model",
+	}
+	request := &ProxyRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/embeddings",
+		Body:   io.NopCloser(strings.NewReader(`{"model":"proxy-model","input":"hello"}`)),
+	}
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Helper()
+
+		require.Empty(t, r.Header.Values(headerPriority))
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				headerContentType: []string{contentTypeJSON},
+			},
+			Body:    io.NopCloser(strings.NewReader(`{"object":"list","data":[]}`)),
+			Request: r,
+		}, nil
+	})}
+
+	response, err := provider.Proxy(context.Background(), reqCtx, request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+
+	require.Equal(t, http.StatusOK, response.StatusCode)
+}
+
 func sseChatBody(t *testing.T, chunks ...models.ChatCompletionChunk) string {
 	t.Helper()
 

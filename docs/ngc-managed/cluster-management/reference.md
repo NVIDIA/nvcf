@@ -201,6 +201,6 @@ Only used when `ngcConfig.clusterSource: "helm-managed"`.
 
 ## Related Documentation
 
-- [NVCA Configuration](nvca-configuration) — how to use these values to configure specific features (caching, network policies, manual instance config, etc.)
-- [Helm-Managed Clusters](helm-managed-config) — switching to and from helm-managed mode
-- [Agent config merging](nvca-agent-config) — using `agentConfig.mergeConfig` for runtime config overrides
+- [NVCA Configuration](./configuration.md), how to use these values to configure specific features (caching, network policies, manual instance config, etc.)
+- [Helm-Managed Clusters](./helm-managed.md), switching to and from helm-managed mode
+- [Agent Config Merging](./configuration.md#agent-config-merging), using `agentConfig.mergeConfig` for runtime config overrides

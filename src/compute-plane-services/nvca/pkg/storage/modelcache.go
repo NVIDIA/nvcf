@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -582,6 +583,260 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 
 var accessModesRO = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
 
+// provisionerDefaultMountOptions returns the mount options required by the
+// provisioner of the model cache storage class, taken from the mount option
+// ConfigMap. It reports false when the provisioner has no entry, in which case
+// the configured mount options are used as-is.
+//
+// The decision cannot be taken from the reconcile path: doModelCacheNVMesh also
+// serves requests with an empty backend, whose storage class need not be
+// provisioned by NVMesh at all. It is instead resolved from the storage class
+// named by DefaultModelCacheStorageClassName, or the override.
+//
+// The provisioner is resolved once, as a one time init: a StorageClass
+// provisioner is immutable, so it cannot change while the class exists. The
+// ConfigMap is read on each call so that an operator editing it takes effect
+// without restarting the agent.
+//
+// A failed lookup is deliberately not remembered, so a storage class created
+// after the agent starts is picked up on a later reconcile rather than being
+// written off forever.
+func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]string, bool) {
+	log := logf.FromContext(ctx)
+
+	provisioner, ok := r.modelCacheProvisionerName(ctx)
+	if !ok {
+		return nil, false
+	}
+
+	cmName := r.cacheMountOptionsConfigMap
+	if cmName == "" {
+		cmName = DefaultCacheMountOptionsConfigMapName
+	}
+	// The ConfigMap is created once at agent start-up by
+	// EnsureCacheMountOptionsConfigMap, so failing to read it is an error state
+	// rather than a statement about this provisioner. Fall back to the built-in
+	// defaults where they exist, otherwise a provisioner that needs specific
+	// options would silently get a volume without them.
+	cm := &corev1.ConfigMap{}
+	if err := r.Client.Get(ctx,
+		client.ObjectKey{Name: cmName, Namespace: ModelCacheInitNamespace}, cm); err != nil {
+		if defaults, ok := builtinProvisionerMountOptions(provisioner); ok {
+			log.Info("Cache mount option defaults unreadable, falling back to the built-in defaults",
+				"configmap", cmName, "namespace", ModelCacheInitNamespace,
+				"provisioner", provisioner, "reason", err.Error())
+			return defaults, true
+		}
+		log.V(1).Info("Could not read the cache mount option defaults, using configured mount options",
+			"configmap", cmName, "namespace", ModelCacheInitNamespace, "reason", err.Error())
+		return nil, false
+	}
+
+	raw, found := cm.Data[provisioner]
+	if !found {
+		return nil, false
+	}
+
+	return splitMountOptions(raw), true
+}
+
+// splitMountOptions parses a comma separated mount option list, dropping empty
+// entries and surrounding whitespace.
+func splitMountOptions(raw string) []string {
+	var options []string
+	for _, opt := range strings.Split(raw, ",") {
+		if opt = strings.TrimSpace(opt); opt != "" {
+			options = append(options, opt)
+		}
+	}
+
+	return options
+}
+
+// builtinProvisionerMountOptions returns the mount options compiled into NVCA
+// for a provisioner whose requirements are known.
+//
+// These are a last resort, used only when the ConfigMap cannot be read at all.
+// A volume must never be created without options its mount depends on just
+// because start-up could not seed the ConfigMap or someone deleted it. When the
+// ConfigMap is readable it stays the source of truth, so an operator editing or
+// removing an entry is respected.
+func builtinProvisionerMountOptions(provisioner string) ([]string, bool) {
+	if provisioner != NVMeshStorageClassProvisioner {
+		return nil, false
+	}
+
+	return splitMountOptions(NVMeshCacheMountOptions), true
+}
+
+// modelCacheStorageClassName returns the storage class NVCA uses for model cache
+// volumes: the configured override when set, otherwise the default. NVCA owns
+// this choice rather than taking it from the request spec, so every model cache
+// volume in a cluster lands on the same class and its provisioner is the one
+// the mount option defaults were resolved from.
+func (r *Reconciler) modelCacheStorageClassName() string {
+	if r.modelCacheStorageClass != "" {
+		return r.modelCacheStorageClass
+	}
+
+	return DefaultModelCacheStorageClassName
+}
+
+// applyModelCacheStorageClass puts the configured storage class on a model cache
+// PVC, replacing whatever the request spec carried. NVCA owns this choice so
+// every model cache volume lands on the class whose provisioner the mount option
+// defaults were resolved from, instead of varying per request.
+//
+// Encryption overrides the result afterwards with its own per-NCA class, which
+// is created for that request.
+func (r *Reconciler) applyModelCacheStorageClass(ctx context.Context, pvc *corev1.PersistentVolumeClaim) {
+	scName := r.modelCacheStorageClassName()
+	if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == scName {
+		return
+	}
+
+	if pvc.Spec.StorageClassName != nil {
+		logf.FromContext(ctx).V(1).Info("Overriding the model cache storage class from the request spec",
+			"pvc", pvc.Name, "spec", *pvc.Spec.StorageClassName, "configured", scName)
+	}
+	pvc.Spec.StorageClassName = &scName
+}
+
+// modelCacheProvisionerName returns the provisioner of the model cache storage
+// class. This is the one time init: the value is read from the cluster on first
+// use and kept, because a StorageClass provisioner is immutable.
+func (r *Reconciler) modelCacheProvisionerName(ctx context.Context) (string, bool) {
+	if cached := r.modelCacheProvisioner.Load(); cached != nil {
+		return *cached, true
+	}
+
+	log := logf.FromContext(ctx)
+	scName := r.modelCacheStorageClassName()
+
+	sc := &storagev1.StorageClass{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: scName}, sc); err != nil {
+		log.V(1).Info("Could not resolve the model cache storage class, using configured mount options",
+			"storageclass", scName, "reason", err.Error())
+		return "", false
+	}
+
+	r.modelCacheProvisioner.Store(&sc.Provisioner)
+	log.Info("Resolved the model cache storage class provisioner",
+		"storageclass", scName, "provisioner", sc.Provisioner)
+
+	return sc.Provisioner, true
+}
+
+// redactMountOptionValues hides the value of any key=value mount option while
+// keeping the key, so a log line stays useful for debugging without echoing
+// operator supplied values. Mount options are free form and can carry
+// credentials, a CIFS password being the obvious case.
+func redactMountOptionValues(opts []string) []string {
+	redacted := make([]string, 0, len(opts))
+	for _, opt := range opts {
+		if key, _, ok := strings.Cut(opt, "="); ok {
+			redacted = append(redacted, key+"=<redacted>")
+			continue
+		}
+		redacted = append(redacted, opt)
+	}
+
+	return redacted
+}
+
+// negatesMountOption reports whether configured would cancel out required, so a
+// configured rw is not handed to the driver alongside a required ro. Kubernetes
+// does not validate mount options before they reach the mount call, which would
+// otherwise leave the outcome to the mount implementation.
+func negatesMountOption(required, configured string) bool {
+	switch {
+	case required == "ro" && configured == "rw":
+		return true
+	case required == "rw" && configured == "ro":
+		return true
+	case strings.HasPrefix(required, "no") && required[2:] == configured:
+		return true
+	case strings.HasPrefix(configured, "no") && configured[2:] == required:
+		return true
+	}
+
+	return false
+}
+
+// resolveCacheMountOptions returns the mount options for a read-only model cache
+// PV. When the storage class provisioner has defaults, the volume always
+// receives them, with configured options appended except where they would negate
+// a default. Otherwise the configured options are used unchanged.
+func (r *Reconciler) resolveCacheMountOptions(ctx context.Context, pv *corev1.PersistentVolume) []string {
+	defaults, found := r.provisionerDefaultMountOptions(ctx)
+	if !found {
+		return r.csiVolumeMountOptions
+	}
+
+	log := logf.FromContext(ctx)
+	configured := make([]string, 0, len(r.csiVolumeMountOptions))
+	for _, opt := range r.csiVolumeMountOptions {
+		if i := slices.IndexFunc(defaults, func(d string) bool { return negatesMountOption(d, opt) }); i >= 0 {
+			log.Info("Ignoring configured cache mount option that conflicts with a provisioner default",
+				"pv", pv.Name,
+				"ignored", redactMountOptionValues([]string{opt}),
+				"required", redactMountOptionValues([]string{defaults[i]}))
+			continue
+		}
+		configured = append(configured, opt)
+	}
+
+	return mergeMountOptions(defaults, configured)
+}
+
+// mergeMountOptions concatenates the given option lists, preserving order and
+// dropping duplicates so the result is stable enough to compare against a PV.
+func mergeMountOptions(lists ...[]string) []string {
+	merged := []string{}
+	seen := sets.New[string]()
+	for _, list := range lists {
+		for _, opt := range list {
+			if seen.Has(opt) {
+				continue
+			}
+			seen.Insert(opt)
+			merged = append(merged, opt)
+		}
+	}
+	return merged
+}
+
+// reconcileSecondaryPVMountOptions patches a secondary PV whose mount options no
+// longer match what the current configuration requires. CSI drivers read mount
+// options when the volume is mounted, so a patch applies to the next mount and
+// leaves volumes that are already mounted untouched.
+func (r *Reconciler) reconcileSecondaryPVMountOptions(ctx context.Context,
+	secondaryPV *corev1.PersistentVolume,
+) error {
+	log := logf.FromContext(ctx)
+
+	want := r.resolveCacheMountOptions(ctx, secondaryPV)
+	if slices.Equal(secondaryPV.Spec.MountOptions, want) {
+		return nil
+	}
+
+	secondaryPVOld := secondaryPV.DeepCopy()
+	secondaryPV.Spec.MountOptions = want
+	if err := nvcaotel.InvokeWithSpan(ctx, modelCacheTracer, "nvca.modelcache.reconcile_mount_options",
+		func(ctx context.Context) error {
+			return r.Client.Patch(ctx, secondaryPV, client.MergeFrom(secondaryPVOld))
+		},
+		oteltrace.WithAttributes(otelattr.String("nvcf.modelcache.pv", secondaryPV.Name)),
+	); err != nil {
+		return fmt.Errorf("patch secondary PV mount options: %w", err)
+	}
+	log.Info("Reconciled secondary PV mount options", "pv", secondaryPV.Name,
+		"from", redactMountOptionValues(secondaryPVOld.Spec.MountOptions),
+		"to", redactMountOptionValues(want))
+
+	return nil
+}
+
 func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 	st nvcav1new.StorageRequest, stCopy *nvcav1new.StorageRequest,
 	icmsReq *nvcav2beta1.ICMSRequest,
@@ -609,6 +864,8 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 	if err != nil {
 		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("find and decode artifacts: %w", err))
 	}
+
+	r.applyModelCacheStorageClass(ctx, rwPVC)
 
 	if enc := stCopy.Spec.ModelCache.Encryption; enc != nil {
 		scName, err := r.doEncryptedStorageClassNVMesh(ctx, stCopy, icmsReq.Spec.CreationMsgInfo.NCAID)
@@ -703,7 +960,7 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		}
 		maps.Copy(secondaryPV.Labels, getClusterWideResourceLabels(stCopy))
 		secondaryPV.Spec.AccessModes = accessModesRO
-		secondaryPV.Spec.MountOptions = r.csiVolumeMountOptions
+		secondaryPV.Spec.MountOptions = r.resolveCacheMountOptions(ctx, secondaryPV)
 		secondaryPV.Spec.ClaimRef = &corev1.ObjectReference{
 			APIVersion: "v1",
 			Kind:       "PersistentVolumeClaim",
@@ -726,6 +983,17 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		log.Info("Secondary PV created", "pv", secondaryPV.Name)
 	} else {
 		log.V(1).Info("Secondary PV already exists, checking status", "pv", secondaryPV.Name)
+		// Mount options are mutable via NGC/NVCFBackend, so an existing PV can be
+		// left behind when the configuration changes.
+		if err := r.reconcileSecondaryPVMountOptions(ctx, secondaryPV); err != nil {
+			if k8sutil.IsTransientK8sError(err) {
+				log.V(1).Info("Transient error reconciling secondary PV mount options, will retry",
+					"pv", secondaryPV.Name)
+				return reconcile.Result{Requeue: true}, nil
+			}
+			log.Error(err, "Failed to reconcile secondary PV mount options", "pv", secondaryPV.Name)
+			return reconcile.Result{}, err
+		}
 	}
 	// Next the RO PVC.
 	roPVC := &corev1.PersistentVolumeClaim{}
@@ -1458,11 +1726,11 @@ func isInitJobPodProgressing(pod *corev1.Pod, k8sTimeConfig *k8sutil.TimeConfig)
 	case corev1.PodPending, corev1.PodUnknown:
 		if k8sutil.IsPodScheduled(ps) {
 			if k8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.MaxImagePullErrorThreshold) {
-				if _, _, hasIssues := k8sutil.ImagePullIssuesReported(ps); hasIssues {
+				if _, hasIssues := k8sutil.ImagePullIssuesReported(ps); hasIssues {
 					return "image pull issues", false
 				}
 			}
-			stuck, _ := k8sutil.IsPodStuckInitializing(pod, k8sTimeConfig)
+			_, stuck := k8sutil.IsPodStuckInitializing(pod, k8sTimeConfig)
 			if stuck {
 				return "init stuck initializing", false
 			}

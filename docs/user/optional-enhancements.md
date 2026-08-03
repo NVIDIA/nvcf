@@ -32,6 +32,18 @@ invocation, LLM invocation, and gRPC routes do not require it. See
 [Gateway Routing](./gateway-routing.md#vanity-gateway-optional) for routing and
 verification details.
 
+## NVCF UI
+
+NVCF UI is an optional addon that deploys a customer-facing NVCF admin-panel UI. 
+It is available only in stack packages that include the
+NVCF UI addon. Older packages do not contain the `nvcf-ui` release
+or route values.
+
+When the addon is present and enabled, it is deployed as the `nvcf-ui`
+service and exposed through the Gateway API route `nvcf-ui.<domain>` by default.
+See [Gateway Routing](./gateway-routing.md#nvcf-ui-optional) for routing and
+verification details.
+
 ## Physical Simulation Caches
 
 For an overview refer to [self-hosted-caches](./caches.md)

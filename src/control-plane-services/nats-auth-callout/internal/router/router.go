@@ -156,7 +156,6 @@ func (r *Router) setupRoutes() {
 
 	// Swagger documentation
 	r.engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
-
 }
 
 // handlePing handle ping endpoint

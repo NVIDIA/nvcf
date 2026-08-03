@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# OCI image helpers.
+# cacerts target can be added here later if using scratch/distroless bases.

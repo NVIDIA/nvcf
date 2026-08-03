@@ -5,7 +5,6 @@
 ```
 nvcf-self-managed-stack/
 |-- helmfile.d/
-|   |-- 000-prepare.yaml.gotmpl      # Validation hooks
 |   |-- 01-dependencies.yaml.gotmpl  # NATS, Cassandra, OpenBao
 |   |-- 02-core.yaml.gotmpl          # NVCF services + ingress
 |   `-- 03-observability.yaml.gotmpl # Observability stack (optional)
@@ -183,17 +182,6 @@ addons:
       metrics:
         serviceMonitor:
           enabled: false
-      loadBalancer:
-        config: |
-          {
-            "default": "power-of-two",
-            "request_algorithms": {
-              "power-of-two": "power-of-two",
-              "round-robin": "round-robin",
-              "random": "random",
-              "groq-multiregion": "groq-multiregion"
-            }
-          }
 
 agentConfig:
   mergeConfig: |
@@ -210,10 +198,10 @@ configuration. `addons.llm.gateway.auth.grpcInsecure` and
 `workload.stargateQUICInsecure` enable plaintext transports. Do not use them in
 production.
 
-The request-router configuration uses hyphenated algorithm IDs, while function
-models use underscored `routingMethod` values. Include every non-default
-algorithm used by a function in `request_algorithms`, or invocation can fail
-with HTTP `400` before a backend is selected.
+The request router uses `power-of-two` when no load-balancer configuration is
+set. Configure other routing methods with the
+[LLM Request Router Load Balancing](https://github.com/NVIDIA/nvcf/blob/main/docs/user/llm-request-router-load-balancing.md)
+guide.
 
 If the sidecar image is mirrored outside the stack's default image registry and
 repository, set the generated worker sidecar image explicitly:
@@ -243,7 +231,8 @@ redeploy those functions after the compute-plane refresh. Verify the control
 plane, route, and worker sidecar:
 
 ```bash
-kubectl get deploy -n nvcf llm-api-gateway llm-request-router
+kubectl get deploy -n nvcf llm-api-gateway
+kubectl get statefulset -n nvcf llm-request-router
 kubectl get pods -n nvcf | grep -E 'llm-api-gateway|llm-request-router'
 kubectl get httproute -A | grep llm
 kubectl -n nvcf-backend get pod <function-pod> \
@@ -253,18 +242,8 @@ kubectl -n nvcf-backend get pod <function-pod> \
 For local plaintext clusters, the `llm-worker` args must include
 `--quic-insecure`.
 
-For sticky LLM routing, `addons.llm.requestRouter.loadBalancer.config` can embed
-Stargate JSON. The public gateway header is `x-multi-turn-session-id`, but
-Stargate only consumes the internal `x-cache-affinity-key`. Sticky backend
-selection requires a cache-affinity-aware algorithm: `groq-multiregion` with
-`cache_affinity_backend_selection_count > 0`, or `pulsar` with backend KV
-metrics and capacity values. `power-of-two`, `round-robin`, and `random` do not
-provide multi-turn session stickiness.
-
-If a model config sets `require_cache_affinity_key: true`, direct router
-validation calls must include `x-cache-affinity-key`. Gateway clients should
-still use only `x-multi-turn-session-id`; the gateway supplies the router
-affinity header.
+For load-balancer schema and algorithm behavior, see the
+[Stargate configuration guide](https://github.com/NVIDIA/nvcf/blob/main/src/libraries/rust/stargate/docs/load-balancer-configuration.md).
 
 ## Helmfile Selectors
 

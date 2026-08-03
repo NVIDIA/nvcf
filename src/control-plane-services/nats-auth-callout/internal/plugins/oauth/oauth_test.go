@@ -22,9 +22,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/oauth/test_helpers"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types"
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zaptest"
 )
 

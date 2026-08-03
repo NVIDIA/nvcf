@@ -69,6 +69,30 @@ func TestDeepCopy_AgentConfig_Nil(t *testing.T) {
 	assert.Nil(t, out)
 }
 
+func TestDeepCopy_BYOOMetricSubsetConfig(t *testing.T) {
+	orig := &BYOOMetricSubsetConfig{
+		Enabled:      true,
+		FilterConfig: "error_mode: ignore",
+	}
+	out := orig.DeepCopy()
+	require.NotNil(t, out)
+	assert.NotSame(t, orig, out)
+	assert.Equal(t, orig.Enabled, out.Enabled)
+	assert.Equal(t, orig.FilterConfig, out.FilterConfig)
+}
+
+func TestDeepCopy_BYOOWorkloadMetricsConfig(t *testing.T) {
+	orig := &BYOOWorkloadMetricsConfig{
+		DropLabels: []string{"metric_subset_enabled", "custom_label"},
+	}
+	out := orig.DeepCopy()
+	require.NotNil(t, out)
+	assert.Equal(t, orig.DropLabels, out.DropLabels)
+
+	orig.DropLabels[0] = "changed"
+	assert.Equal(t, "metric_subset_enabled", out.DropLabels[0])
+}
+
 func TestDeepCopy_AllowedExtraKubernetesTypeConfig(t *testing.T) {
 	orig := &AllowedExtraKubernetesTypeConfig{Group: "apps", Version: "v1", Kind: "Deployment", Resource: "deployments"}
 	out := orig.DeepCopy()

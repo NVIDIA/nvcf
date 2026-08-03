@@ -23,18 +23,25 @@ navbar-links:
   value: https://github.com/NVIDIA/nvcf
 
 versions:
-- display-name: "Latest (0.6.0)"
-  path: versions/v0.6.0.yml
+- display-name: "Latest (0.6.1)"
+  path: versions/v0.6.1.yml
   slug: ""
 - display-name: dev
   path: versions/dev.yml
   slug: dev
+- display-name: "0.6.1"
+  path: versions/v0.6.1.yml
+  slug: "v0.6.1"
 - display-name: "0.6.0"
   path: versions/v0.6.0.yml
   slug: "v0.6.0"
 - display-name: "0.5.0"
   path: versions/v0.5.yml
   slug: "v0.5"
+
+check:
+  rules:
+    broken-links: error
 
 redirects:
   - source: "/nvcf/index.html"
@@ -47,5 +54,43 @@ redirects:
     destination: "/nvcf/v0.6.0/"
   - source: "/nvcf/v0.6.0/index.html"
     destination: "/nvcf/v0.6.0/"
+  - source: "/nvcf/v0.6.1-rc/index.html"
+    destination: "/nvcf/v0.6.1/"
+  - source: "/nvcf/v0.6.1/index.html"
+    destination: "/nvcf/v0.6.1/"
   - source: "/nvcf/v0.5/index.html"
     destination: "/nvcf/v0.5/"
+  - source: "/nvcf/dev/0-6-1-release-notes"
+    destination: "/nvcf/v0.6.1/0-6-1-release-notes"
+  - source: "/nvcf/dev/0-6-0-to-0-6-1-upgrade"
+    destination: "/nvcf/v0.6.1/0-6-0-to-0-6-1-upgrade"
+  - source: "/nvcf/dev/0-6-0-release-notes"
+    destination: "/nvcf/v0.6.0/0-6-0-release-notes"
+  - source: "/nvcf/dev/0-5-0-to-0-6-0-upgrade"
+    destination: "/nvcf/v0.6.0/0-5-0-to-0-6-0-upgrade"
+  - source: "/nvcf/dev/function-autoscaling-overview"
+    destination: "/nvcf/function-autoscaling-overview"
+  - source: "/nvcf/dev/function-lifecycle"
+    destination: "/nvcf/function-lifecycle"
+  - source: "/nvcf/dev/generic-http-function-invocation"
+    destination: "/nvcf/generic-http-function-invocation"
+  - source: "/nvcf/dev/g-rpc-load-test-sli-guide"
+    destination: "/nvcf/g-rpc-load-test-sli-guide"
+  - source: "/nvcf/dev/http-load-testing"
+    destination: "/nvcf/http-load-testing"
+  - source: "/nvcf/dev/http-load-test-sli-guide"
+    destination: "/nvcf/http-load-test-sli-guide"
+  - source: "/nvcf/dev/llm-api-gateway"
+    destination: "/nvcf/llm-api-gateway"
+  - source: "/nvcf/dev/llm-function-invocation-metrics-report"
+    destination: "/nvcf/llm-function-invocation-metrics-report"
+  - source: "/nvcf/dev/llm-request-router"
+    destination: "/nvcf/llm-request-router"
+  - source: "/nvcf/dev/managed-observability"
+    destination: "/nvcf/managed-observability"
+  - source: "/nvcf/dev/monitoring"
+    destination: "/nvcf/monitoring"
+  - source: "/nvcf/dev/operations"
+    destination: "/nvcf/operations"
+  - source: "/nvcf/dev/registry-allowlist"
+    destination: "/nvcf/registry-allowlist"

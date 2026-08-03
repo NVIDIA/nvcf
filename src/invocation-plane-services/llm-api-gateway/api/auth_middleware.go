@@ -133,6 +133,7 @@ func applyInvocationAuth(
 		reqCtx.RoutingKey = authRoutingKey
 	}
 	reqCtx.ModelSpecs = authResponse.ModelSpecs
+	reqCtx.Priority = authResponse.Priority
 
 	return nil
 }

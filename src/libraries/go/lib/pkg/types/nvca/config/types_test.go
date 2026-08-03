@@ -16,11 +16,14 @@
 package nvcaconfig
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -84,6 +87,152 @@ func TestAgentConfig_Complete(t *testing.T) {
 		completed := cfg.Complete(EnvironmentProduction)
 		assert.Equal(t, "https://icms.example.com", completed.ICMSURL)
 	})
+}
+
+func TestBYOOLogChunkingConfig_Complete(t *testing.T) {
+	t.Run("disabled does not add defaults", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{}.Complete()
+		assert.False(t, completed.Enabled)
+		assert.Zero(t, completed.MaxPayloadBytes)
+		assert.False(t, completed.DryRun)
+	})
+
+	t.Run("enabled does not add collector defaults", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{Enabled: true}.Complete()
+		assert.True(t, completed.Enabled)
+		assert.Zero(t, completed.MaxPayloadBytes)
+		assert.False(t, completed.DryRun)
+	})
+
+	t.Run("enabled preserves explicit values", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{
+			Enabled:         true,
+			MaxPayloadBytes: 131072,
+			DryRun:          true,
+		}.Complete()
+		assert.Equal(t, int64(131072), completed.MaxPayloadBytes)
+		assert.True(t, completed.DryRun)
+	})
+
+	t.Run("deprecated max body bytes populates max payload bytes", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{
+			MaxBodyBytes: 131072,
+		}.Complete()
+		assert.Equal(t, int64(131072), completed.MaxPayloadBytes)
+	})
+
+	t.Run("max payload bytes takes precedence over deprecated max body bytes", func(t *testing.T) {
+		completed := BYOOLogChunkingConfig{
+			MaxPayloadBytes: 262144,
+			MaxBodyBytes:    131072,
+		}.Complete()
+		assert.Equal(t, int64(262144), completed.MaxPayloadBytes)
+	})
+}
+
+func TestBYOOLogChunkingConfig_EnvVarsUsesMaxPayloadBytes(t *testing.T) {
+	cfg := BYOOLogChunkingConfig{
+		Enabled:         true,
+		MaxPayloadBytes: 262144,
+		DryRun:          true,
+	}
+
+	assert.Equal(t, []corev1.EnvVar{
+		{Name: BYOOLogChunkingEnabledEnv, Value: "true"},
+		{Name: BYOOLogChunkMaxPayloadBytesEnv, Value: "262144"},
+		{Name: BYOOLogChunkDryRunEnv, Value: "true"},
+	}, cfg.EnvVars())
+}
+
+func TestBYOOLogChunkingConfig_EnvVarsAcceptsDeprecatedMaxBodyBytes(t *testing.T) {
+	cfg := BYOOLogChunkingConfig{
+		MaxPayloadBytes: 262144,
+		MaxBodyBytes:    131072,
+	}
+
+	assert.Equal(t, []corev1.EnvVar{{
+		Name:  BYOOLogChunkMaxPayloadBytesEnv,
+		Value: "262144",
+	}}, cfg.EnvVars())
+
+	cfg = BYOOLogChunkingConfig{MaxBodyBytes: 131072}
+	assert.Equal(t, []corev1.EnvVar{{
+		Name:  BYOOLogChunkMaxPayloadBytesEnv,
+		Value: "131072",
+	}}, cfg.EnvVars())
+}
+
+func TestBYOODebugModeConfig_IsZero(t *testing.T) {
+	assert.True(t, BYOODebugModeConfig{}.IsZero())
+	assert.False(t, BYOODebugModeConfig{Enabled: true}.IsZero())
+}
+
+func TestBYOOMetricSubsetConfig_EnvVars(t *testing.T) {
+	cfg := BYOOMetricSubsetConfig{
+		Enabled:      true,
+		FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
+	}
+
+	assert.Equal(t, []corev1.EnvVar{
+		{Name: BYOOMetricSubsetEnabledEnv, Value: "true"},
+		{Name: BYOOMetricSubsetFilterConfigEnv, Value: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n"},
+	}, cfg.EnvVars())
+}
+
+func TestBYOOWorkloadMetricsConfig_EnvVars(t *testing.T) {
+	cfg := BYOOWorkloadMetricsConfig{
+		DropLabels: []string{"metric_subset_enabled", "custom_label"},
+	}
+	assert.Equal(t, []corev1.EnvVar{{
+		Name:  BYOOWorkloadMetricsDropLabelsEnv,
+		Value: "metric_subset_enabled,custom_label",
+	}}, cfg.EnvVars())
+	assert.Nil(t, BYOOWorkloadMetricsConfig{}.EnvVars())
+}
+
+func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
+	queueSize := int64(2048)
+	cfg := AgentConfig{
+		BYOOLogChunking: BYOOLogChunkingConfig{
+			Enabled: true,
+		},
+		BYOODebugMode: BYOODebugModeConfig{
+			Enabled: true,
+		},
+		BYOOMetricSubset: BYOOMetricSubsetConfig{
+			Enabled: true,
+		},
+		BYOOWorkloadMetrics: BYOOWorkloadMetricsConfig{
+			DropLabels: []string{"metric_subset_enabled"},
+		},
+		BYOOOTelCollector: BYOOOTelCollectorConfig{
+			ExporterHelper: BYOOOTelExporterHelperConfig{
+				Timeout: "30s",
+				SendingQueue: BYOOOTelSendingQueueConfig{
+					QueueSize: &queueSize,
+				},
+			},
+		},
+	}
+
+	envsByName := map[string]string{}
+	for _, env := range cfg.BYOOOTelCollectorEnvVars() {
+		envsByName[env.Name] = env.Value
+	}
+
+	assert.Equal(t, "true", envsByName[BYOOLogChunkingEnabledEnv])
+	assert.Equal(t, "true", envsByName[BYOODebugModeEnv])
+	assert.Equal(t, "true", envsByName[BYOOMetricSubsetEnabledEnv])
+	assert.Equal(t, "metric_subset_enabled", envsByName[BYOOWorkloadMetricsDropLabelsEnv])
+	assert.NotContains(t, envsByName, "BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES")
+
+	decodedConfig, ok := envsByName[BYOOOTelCollectorConfigEnv]
+	require.True(t, ok)
+	decodedBytes, err := base64.StdEncoding.DecodeString(decodedConfig)
+	require.NoError(t, err)
+	var got BYOOOTelCollectorConfig
+	require.NoError(t, json.Unmarshal(decodedBytes, &got))
+	assert.Equal(t, cfg.BYOOOTelCollector, got)
 }
 
 func TestAgentTimeConfig_Complete(t *testing.T) {

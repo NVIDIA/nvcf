@@ -629,7 +629,7 @@ also match.
 | Goal | Setup | Command |
 |------|-------|---------|
 | Topology cleanup wipes stale single-cluster before multi-cluster install | `TestSingleClusterUp` left ncp-local running | `BDD_CLEANUP_MODE=topology-multi go test -run '^TestMultiClusterUp$' -timeout 60m -v` |
-| Topology cleanup wipes stale multi-cluster before single-cluster install | `TestMultiClusterUp` left ncp-local-cp + compute-1 running | `BDD_CLEANUP_MODE=topology-single go test -run '^TestSingleClusterUp$' -timeout 30m -v` |
+| Topology cleanup wipes stale multi-cluster before single-cluster install | `TestMultiClusterUp` left ncp-local-cp + compute-1 running | `BDD_CLEANUP_MODE=topology-multi go test -run '^TestSingleClusterUp$' -timeout 30m -v` |
 | Stack cleanup allows install-method swap on a retained cluster | `TestSingleClusterUp` left CLI install on ncp-local | `BDD_CLEANUP_MODE=stack-single NGC_API_KEY=... SAMPLE_NGC_ORG=... SAMPLE_NGC_TEAM=... go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v` |
 | Stack cleanup on multi-cluster, retains `eg` in `envoy-gateway-system` | `TestMultiClusterUp` left CLI install on cp+compute | `BDD_CLEANUP_MODE=stack-multi NGC_API_KEY=... SAMPLE_NGC_ORG=... SAMPLE_NGC_TEAM=... go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v` |
 | Invalid mode fails suite immediately | none | `BDD_CLEANUP_MODE=stack_single go test -run '^TestSingleClusterUp$' -v` expect: `NewSuite` error citing the valid set |

@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+SERVICE_PATH="src/compute-plane-services/byoo-otel-collector"
+VERSION_FILE="${SERVICE_PATH}/VERSION"
+
+is_zero_sha() {
+    [[ "$1" =~ ^0+$ ]]
+}
+
+changed_files() {
+    if [ "$#" -gt 0 ]; then
+        printf "%s\n" "$@"
+        return
+    fi
+
+    local event="${EVENT:-${GITHUB_EVENT_NAME:-}}"
+    local base_ref="${BASE_REF:-${GITHUB_BASE_REF:-}}"
+    local base_sha="${BASE_SHA:-}"
+    local before_sha="${BEFORE_SHA:-${GITHUB_EVENT_BEFORE:-}}"
+    local head_sha="${HEAD_SHA:-${GITHUB_SHA:-HEAD}}"
+    local merge_group_base_sha="${MERGE_GROUP_BASE_SHA:-}"
+
+    case "$event" in
+        pull_request)
+            if [ -n "$base_sha" ] && git diff --name-only "${base_sha}...HEAD" 2>/dev/null; then
+                return
+            fi
+            if [ -n "$base_ref" ] && git diff --name-only "origin/${base_ref}...HEAD" 2>/dev/null; then
+                return
+            fi
+            git diff --name-only HEAD^..HEAD
+            ;;
+        push)
+            if [ -n "$before_sha" ] && ! is_zero_sha "$before_sha" && git diff --name-only "${before_sha}..${head_sha}" 2>/dev/null; then
+                return
+            fi
+            git diff --name-only HEAD^..HEAD
+            ;;
+        merge_group)
+            if [ -n "$merge_group_base_sha" ] && git diff --name-only "${merge_group_base_sha}...HEAD" 2>/dev/null; then
+                return
+            fi
+            if [ -n "$base_sha" ] && git diff --name-only "${base_sha}...HEAD" 2>/dev/null; then
+                return
+            fi
+            git diff --name-only HEAD^..HEAD
+            ;;
+        *)
+            git diff --name-only HEAD^..HEAD
+            ;;
+    esac
+}
+
+changed="$(changed_files "$@" | sed '/^[[:space:]]*$/d')"
+if [ -z "$changed" ]; then
+    echo "No changed files detected."
+    exit 0
+fi
+
+version_changed=false
+collector_changed=false
+collector_files=()
+
+while IFS= read -r path; do
+    if [[ "$path" != "${SERVICE_PATH}/"* ]]; then
+        continue
+    fi
+    if [ "$path" = "$VERSION_FILE" ]; then
+        version_changed=true
+        continue
+    fi
+    collector_changed=true
+    collector_files+=("$path")
+done <<< "$changed"
+
+if [ "$collector_changed" != "true" ]; then
+    echo "No BYOO OTel collector changes requiring ${VERSION_FILE}."
+    exit 0
+fi
+
+if [ "$version_changed" = "true" ]; then
+    echo "${VERSION_FILE} changed with BYOO OTel collector files."
+    exit 0
+fi
+
+{
+    echo "::error file=${VERSION_FILE}::Update ${VERSION_FILE} whenever files under ${SERVICE_PATH}/ change."
+    echo "Changed BYOO OTel collector files:"
+    printf "  %s\n" "${collector_files[@]}"
+} >&2
+exit 1

@@ -88,7 +88,6 @@ The following tables list the complete artifact inventory.
 | `helm-nvcf-rate-limiter` | `1.0.3` | Optional | Deploys request rate limiting for supported invocation paths. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-rate-limiter:1.0.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/ratelimiter) |
 | `helm-nvcf-sis` | `1.18.3` | Required | Deploys the Spot Instance Service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-sis:1.18.3` |  |
 | `helm-nvcf-state-metrics` | `1.0.1` | Optional | Deploys NVCF state metrics for observability. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-state-metrics:1.0.1` |  |
-| `helm-nvcf-vanity-gateway` | `0.1.0-nvcf-10204.1` | Optional | Deploys the optional vanity hostname gateway. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-vanity-gateway:0.1.0-nvcf-10204.1` |  |
 | `helm-reval` | `1.3.8` | Required | Deploys the function revalidation service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-reval:1.3.8` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/helm-reval) |
 | `nvcf-example-dashboards` | `1.6.0` | Optional | Deploys example Grafana dashboards for NVCF telemetry. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-example-dashboards:1.6.0` |  |
 | `nvcf-gateway-routes` | `1.14.0` | Optional | Deploys Gateway API routes for the reference architecture. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes:1.14.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/gateway-routes) |

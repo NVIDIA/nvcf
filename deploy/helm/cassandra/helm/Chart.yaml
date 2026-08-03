@@ -24,10 +24,4 @@ description: >
 type: application
 
 version: 0.8.0
-appVersion: 5.0.6-nv-1
-
-dependencies:
-  # note: this is explicitly excluded from renovate
-  - name: cassandra
-    version: 12.3.5
-    repository: oci://registry-1.docker.io/bitnamicharts
+appVersion: 5.0.8-nv-0

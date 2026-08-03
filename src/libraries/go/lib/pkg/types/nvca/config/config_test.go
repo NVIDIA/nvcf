@@ -196,6 +196,29 @@ agent:
 	assert.Equal(t, cfg, gotDecodedCfg)
 }
 
+func TestConfig_EncodeDecode_BYOOConfigSwitches(t *testing.T) {
+	cfg, err := DecodeConfig([]byte(`
+agent:
+  byooLogChunking:
+    enabled: true
+    maxBodyBytes: 131072
+    maxPayloadBytes: 262144
+  byooDebugMode:
+    enabled: true
+  byooOtelCollector:
+    exporterHelper:
+      timeout: 30s
+`))
+	require.NoError(t, err)
+
+	completed := cfg.Complete()
+	assert.True(t, completed.Agent.BYOOLogChunking.Enabled)
+	assert.Equal(t, int64(262144), completed.Agent.BYOOLogChunking.MaxPayloadBytes)
+	assert.Equal(t, int64(131072), completed.Agent.BYOOLogChunking.MaxBodyBytes)
+	assert.True(t, completed.Agent.BYOODebugMode.Enabled)
+	assert.Equal(t, "30s", completed.Agent.BYOOOTelCollector.ExporterHelper.Timeout)
+}
+
 func TestConfig_EncodeDecode_Tolerations(t *testing.T) {
 	cfg := Config{
 		Agent: AgentConfig{
@@ -395,6 +418,27 @@ agent:
 		require.NoError(t, err)
 		assert.Equal(t, "debug", cfg.Agent.LogLevel)
 		assert.Equal(t, ":8080", cfg.Agent.SvcAddress)
+	})
+
+	t.Run("byoo_metric_subset", func(t *testing.T) {
+		data := []byte(`
+agent:
+  byooMetricSubset:
+    enabled: true
+    filterConfig: |
+      error_mode: ignore
+      metric_conditions:
+        - 'metric.name == "drop"'
+  byooWorkloadMetrics:
+    dropLabels:
+      - metric_subset_enabled
+      - custom_label
+`)
+		cfg, err := DecodeConfig(data)
+		require.NoError(t, err)
+		assert.True(t, cfg.Agent.BYOOMetricSubset.Enabled)
+		assert.Contains(t, cfg.Agent.BYOOMetricSubset.FilterConfig, "metric.name")
+		assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.Agent.BYOOWorkloadMetrics.DropLabels)
 	})
 
 	t.Run("duration_parsing", func(t *testing.T) {

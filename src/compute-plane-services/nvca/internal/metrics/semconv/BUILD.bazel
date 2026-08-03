@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "semconv",
+    srcs = ["semconv.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv",
+    visibility = ["//:__subpackages__"],
+    deps = ["//vendor/go.opentelemetry.io/otel/attribute"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":semconv",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "semconv_test",
+    srcs = ["semconv_test.go"],
+    embed = [":semconv"],
+)

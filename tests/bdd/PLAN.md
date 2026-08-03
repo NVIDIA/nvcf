@@ -104,6 +104,7 @@ refactor in every consumer; that is a feature.
 | `And I copy the file {string} to {string}` | Both paths are repo-relative. |
 | `And I update yaml file {string} with keys:` (two-column table of dotted-path and value) | Path supports dotted notation and `[n]` indices (e.g. `global.imagePullSecrets[0].name`). Missing intermediate maps and missing list indices are upserted: writing `global.imagePullSecrets[0].name` against a file that has neither `global.imagePullSecrets` nor any list entry creates both. Existing scalars at intermediate positions cause the step to fail rather than silently overwrite a non-map. Value cells expand `${VAR}` from `os.Environ`. |
 | `And I substitute {string} in file {string} with base64 of {string}` | Used for credential rendering; the third arg expands `${VAR}` then base64-encodes. The handler never logs the substituted value. |
+| `And I substitute a block in file {string}:` (docstring) | The docstring contains an old block and replacement block separated by exactly one `---` line. `${VAR}` interpolation applies before an exact, ledger-backed replacement. Missing or malformed old blocks fail. |
 
 ### Command execution (When)
 
@@ -129,6 +130,8 @@ refactor in every consumer; that is a feature.
 | `Then yaml file {string} should contain:` (docstring) | Subset variant: every key in expected must exist in actual with the same value; extra keys in actual are allowed. Use this when the file has dynamic or future-additive fields. `${VAR}` expansion applies. |
 | `Then yaml file {string} key {string} should contain:` (docstring) | Subset semantics scoped to the subtree at the dotted key path. |
 | `Then the json output should contain rows:` (table) | Parses the last command's stdout as JSON (expected: array of objects). For each table row, asserts an object matching every column value exists in the array. Extra objects are allowed; ordering is not asserted. |
+| `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
+| `Then these ServiceMonitors should exist in namespace {string} using context {string}:` (table) | Requires a `name` header and one or more names. Runs one `kubectl get` with every named ServiceMonitor; exit code 0 proves every listed resource exists. |
 
 #### YAML comparison semantics
 
@@ -441,6 +444,14 @@ func SubstituteFile(path, placeholder, replacement string) error
 // row map asserts that an object matching every (key, value) pair
 // exists in the array. Extra objects in the array are fine.
 func JSONContainsRows(raw string, rows []map[string]string) error
+
+// FilesDoNotContain recursively inspects regular files under root and
+// fails if any interpolated fixed string appears.
+func FilesDoNotContain(root string, needles []string) error
+
+// ServiceMonitorExistenceCommand builds one kubectl get command whose
+// successful exit proves every named ServiceMonitor exists.
+func ServiceMonitorExistenceCommand(namespace, kubeContext string, names []string) (string, error)
 ```
 
 #### steps package

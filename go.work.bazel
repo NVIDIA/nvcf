@@ -19,15 +19,17 @@
 //   - src/clis/nvcf-cli
 //   - src/libraries/go/lib
 //   - src/libraries/go/worker
+//   - src/compute-plane-services/nvsnap
 //
 // The repo also has a generated go.work (gitignored) used by the existing
 // non-Bazel CI for license/dependency checks across all 31 go.mod files.
 // Bazel deliberately uses a narrower scope to avoid pulling in deps for
 // upstream-owned subtrees that are out of scope for Phase 1.
-go 1.25.0
+go 1.26.5
 
 use (
 	./src/clis/nvcf-cli
 	./src/libraries/go/lib
 	./src/libraries/go/worker
+	./src/compute-plane-services/nvsnap
 )

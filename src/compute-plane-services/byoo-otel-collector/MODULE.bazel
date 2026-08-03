@@ -40,6 +40,8 @@ module(
 # ============================================================================
 # OCI containers (multi-arch). Mirrors the canonical Phase B scaffold.
 # ============================================================================
+# Bazel 9 no longer provides sh_test as a native global.
+bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_oci", version = "2.2.7")
 bazel_dep(name = "rules_pkg", version = "1.2.0")
@@ -83,6 +85,7 @@ use_repo(
     "com_github_kelseyhightower_envconfig",
     "com_github_open_telemetry_opentelemetry_collector_contrib_exporter_azuremonitorexporter",
     "com_github_open_telemetry_opentelemetry_collector_contrib_exporter_datadogexporter",
+    "com_github_open_telemetry_opentelemetry_collector_contrib_exporter_prometheusexporter",
     "com_github_open_telemetry_opentelemetry_collector_contrib_exporter_prometheusremotewriteexporter",
     "com_github_open_telemetry_opentelemetry_collector_contrib_exporter_splunkhecexporter",
     "com_github_open_telemetry_opentelemetry_collector_contrib_extension_basicauthextension",

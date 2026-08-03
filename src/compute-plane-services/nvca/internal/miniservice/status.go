@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 	translateutil "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
 	"github.com/google/go-cmp/cmp"
 	appsv1 "k8s.io/api/apps/v1"
@@ -48,6 +49,7 @@ import (
 	nvcainternaltranslate "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/translate"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
@@ -121,39 +123,34 @@ func filterEventsForObject(ctx context.Context, sch *runtime.Scheme, events []co
 type checkStatusFunc func(context.Context, client.Object, *nvcav2beta1.ICMSRequest) (ObjectStatus, error)
 
 //nolint:gocyclo
-func (r *Reconciler) doStatus(
+func (r *Reconciler) collectObjectStatuses(
 	ctx context.Context,
 	ms *v1alpha1.MiniService,
 	icmsReq *nvcav2beta1.ICMSRequest,
-) (reconcile.Result, error) {
+) (ObjectStatuses, []error, error) {
 	log := logf.FromContext(ctx)
 
 	objsData, isRendered, err := r.getRenderedData(ctx, ms)
 	if err != nil {
-		return reconcile.Result{}, err
+		return nil, nil, err
 	}
 	if !isRendered {
 		if objsData, err = r.render(ctx, ms, icmsReq); err != nil {
-			return reconcile.Result{}, err
+			return nil, nil, err
 		}
 		if err := r.saveRenderedData(ctx, ms, objsData); err != nil {
-			return reconcile.Result{}, err
+			return nil, nil, err
 		}
 	}
 
-	objs, resources, err := decodeObjects(ctx, r.Decoder, objsData)
+	objs, resources, _, err := decodeObjects(ctx, r.Decoder, objsData)
 	if err != nil {
-		return reconcile.Result{}, err
+		return nil, nil, err
 	}
 	updateResourcesStatus(ms, resources)
 
-	// Check utils pod too.
-	utilsPod := &corev1.Pod{}
-	utilsPod.Name = common.UtilsPodName
-	objs = append(objs, utilsPod)
-
 	var (
-		errs     []error
+		serrs    []error
 		statuses ObjectStatuses
 	)
 
@@ -165,7 +162,7 @@ func (r *Reconciler) doStatus(
 	// The list functions will transparently return cached data when statusContext is in context.
 	ctx, err = r.buildStatusContext(ctx, ms.Spec.Namespace)
 	if err != nil {
-		return reconcile.Result{}, err
+		return nil, nil, err
 	}
 
 	// Use the main client for type info since impersonated clients will not have access
@@ -174,25 +171,24 @@ func (r *Reconciler) doStatus(
 
 	// Observe the status of only rendered objects. Owned objects created by controllers
 	// will be retrieved by owner reference.
-	utilsPodFound := false
 	// Track pods that have explicit status checks so they are skipped in the general pod check below.
-	// Let StorageRequest controller handle the SMB pod.
-	seenPods := sets.New(nvcastorage.SMBServerPodName)
+	// Let StorageRequest controller handle the SMB pod, and caller handle the utils pod.
+	seenPods := sets.New(common.UtilsPodName, nvcastorage.SMBServerPodName)
 	for _, o := range objs {
 		gvk, err := r.getObjectGVK(ctx, o)
 		if err != nil {
-			return reconcile.Result{}, reconcile.TerminalError(err)
+			return nil, serrs, reconcile.TerminalError(err)
 		}
 
 		if isNamespaced, err := apiutil.IsGVKNamespaced(gvk, rm); isNamespaced {
 			o.SetNamespace(ms.Spec.Namespace)
 		} else if err != nil {
 			log.Error(err, "Failed to check if object is namespaced")
-			return reconcile.Result{}, reconcile.TerminalError(err)
+			return nil, serrs, reconcile.TerminalError(err)
 		}
 
 		if err := checkPermissions(ctx, r.Client, gvk, o.GetNamespace()); err != nil {
-			return reconcile.Result{}, err
+			return nil, serrs, err
 		}
 
 		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(o), o); err != nil {
@@ -203,7 +199,7 @@ func (r *Reconciler) doStatus(
 					TerminalBad: true,
 				})
 			} else {
-				errs = append(errs, err)
+				serrs = append(serrs, err)
 				log.Error(err, "Failed to get live object from rendered")
 			}
 			continue
@@ -223,18 +219,13 @@ func (r *Reconciler) doStatus(
 		}
 		objStatus, err := check(ctx, o, icmsReq)
 		if err != nil {
-			errs = append(errs, err)
+			serrs = append(serrs, err)
 			continue
 		}
 		statuses = append(statuses, objStatus)
 
 		if pod, ok := o.(*corev1.Pod); ok {
-			// The utils pod status is added above.
 			seenPods.Insert(pod.Name)
-			if nvcak8sutil.IsUtilsPod(pod) {
-				utilsPodFound = true
-				utilsPod = pod
-			}
 		}
 	}
 
@@ -242,7 +233,7 @@ func (r *Reconciler) doStatus(
 	// for awhile by their owning object.
 	allPods, err := r.listPods(ctx, ms.Spec.Namespace)
 	if err != nil {
-		return reconcile.Result{}, err
+		return nil, serrs, err
 	}
 	for _, pod := range allPods {
 		if seenPods.Has(pod.Name) || nvcatypes.IsInfraOwnedObject(pod) {
@@ -250,12 +241,61 @@ func (r *Reconciler) doStatus(
 		}
 		podStatus, err := r.checkPodStatus(ctx, pod, icmsReq)
 		if err != nil {
-			errs = append(errs, err)
+			serrs = append(serrs, err)
 			continue
 		}
 		switch podStatus.Status {
 		case podFailedImagePullIssues, podFailedContainerStuck, podFailedInitContainerStuck:
 			statuses = append(statuses, podStatus)
+		}
+	}
+
+	return statuses, serrs, nil
+}
+
+func (r *Reconciler) doStatus(
+	ctx context.Context,
+	ms *v1alpha1.MiniService,
+	icmsReq *nvcav2beta1.ICMSRequest,
+) (reconcile.Result, error) {
+	// The workload feature-flags ConfigMap may opt a workload into worker-readiness-based
+	// status, which only considers worker container readiness rather than aggressively
+	// accounting for the health of all workload objects.
+	if ms.Spec.WorkloadConfig.IsFeatureFlagEnabled(featureflag.StatusByWorkerReadiness) {
+		return r.doStatusByWorkerReadiness(ctx, ms, icmsReq)
+	}
+	return r.doStatusAggressive(ctx, ms, icmsReq)
+}
+
+// doStatusAggressive checks the status of all workload objects and the utils pod.
+// If any object has a terminal bad status, the function will return a terminal error.
+func (r *Reconciler) doStatusAggressive(
+	ctx context.Context,
+	ms *v1alpha1.MiniService,
+	icmsReq *nvcav2beta1.ICMSRequest,
+) (reconcile.Result, error) {
+	log := logf.FromContext(ctx)
+
+	statuses, serrs, err := r.collectObjectStatuses(ctx, ms, icmsReq)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	// Check utils pod too.
+	utilsPodFound := true
+	utilsPod := &corev1.Pod{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: ms.Spec.Namespace, Name: common.UtilsPodName}, utilsPod); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, err
+		}
+		utilsPodFound = false
+	}
+	if utilsPodFound {
+		utilsStatus, err := r.checkPodStatus(ctx, utilsPod, icmsReq)
+		if err != nil {
+			serrs = append(serrs, err)
+		} else {
+			statuses = append(statuses, utilsStatus)
 		}
 	}
 
@@ -275,7 +315,7 @@ func (r *Reconciler) doStatus(
 			Message: "Infrastructure objects not found",
 		})
 
-		if err := errors.Join(errs...); err != nil {
+		if err := errors.Join(serrs...); err != nil {
 			log.Error(err, "Errors were encountered while checking object status")
 		}
 	case statuses.AnyTerminal():
@@ -289,7 +329,7 @@ func (r *Reconciler) doStatus(
 			meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
 				Type:    v1alpha1.MiniServiceConditionObjectsHealthy,
 				Status:  metav1.ConditionFalse,
-				Reason:  v1alpha1.MiniServiceStatusReasonDegradedWorkerPods,
+				Reason:  v1alpha1.MiniServiceStatusReasonDegradedWorker,
 				Message: writeObjectStatuses(ctx, r.Client.Scheme(), statuses, filterTerminal),
 			})
 			rerr = reconcile.TerminalError(fmt.Errorf("at least one object is degraded"))
@@ -331,7 +371,7 @@ func (r *Reconciler) doStatus(
 			}
 		}
 
-		if err := errors.Join(errs...); err != nil {
+		if err := errors.Join(serrs...); err != nil {
 			log.Error(err, "Errors were encountered while checking object status")
 		}
 	case statuses.AnyPending():
@@ -372,11 +412,11 @@ func (r *Reconciler) doStatus(
 			// Requeue at least once after the scheduling timeout has passed in case no progress is made.
 			res.RequeueAfter = getPodSchedulingTimeout(ctx, icmsReq, r.K8sTimeConfig)
 		}
-		if err := errors.Join(errs...); err != nil {
+		if err := errors.Join(serrs...); err != nil {
 			log.Error(err, "Errors were encountered while checking object status")
 		}
 	default:
-		if rerr = errors.Join(errs...); rerr != nil {
+		if rerr = errors.Join(serrs...); rerr != nil {
 			log.Error(rerr, "Found errors while collecting object statuses")
 			meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
 				Type:    v1alpha1.MiniServiceConditionObjectsHealthy,
@@ -393,6 +433,174 @@ func (r *Reconciler) doStatus(
 				Reason: "ObjectsReady",
 			})
 		}
+	}
+
+	return res, rerr
+}
+
+func (r *Reconciler) doStatusByWorkerReadiness(
+	ctx context.Context,
+	ms *v1alpha1.MiniService,
+	icmsReq *nvcav2beta1.ICMSRequest,
+) (res reconcile.Result, rerr error) {
+	log := logf.FromContext(ctx)
+
+	statuses, serrs, err := r.collectObjectStatuses(ctx, ms, icmsReq)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	// Handle all non-worker objects separately from the worker pod, in all cases.
+	// Health does not depend on these object's statuses, so they are purely informational.
+	// NVCA will report the condition's message to ICMS for users to debug.
+	{
+		anyObjectsNotReady := false
+		objectStatusMsg := writeObjectStatuses(ctx, r.Client.Scheme(), statuses, func(os ObjectStatus) bool {
+			v := os.TerminalBad || os.Scheduling || os.Pending
+			anyObjectsNotReady = anyObjectsNotReady || v
+			return v
+		})
+		if anyObjectsNotReady {
+			meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
+				Type:    v1alpha1.MiniServiceConditionObjectsHealthy,
+				Status:  metav1.ConditionFalse,
+				Reason:  v1alpha1.MiniServiceStatusReasonWaitingObjectReadiness,
+				Message: objectStatusMsg,
+			})
+		} else {
+			meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
+				Type:   v1alpha1.MiniServiceConditionObjectsHealthy,
+				Status: metav1.ConditionTrue,
+				Reason: "ObjectsReady",
+			})
+		}
+	}
+
+	// Below here, only the worker pod's status is checked for MiniService health.
+
+	utilsPod := &corev1.Pod{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: ms.Spec.Namespace, Name: common.UtilsPodName}, utilsPod); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, err
+		}
+		// By the time doStatus* functions are called, the utils pod must exist.
+		rerr = reconcile.TerminalError(fmt.Errorf("utils pod not found"))
+		log.Error(rerr, "Workload is unhealthy")
+		meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
+			Type:    v1alpha1.MiniServiceConditionWorkersHealthy,
+			Status:  metav1.ConditionFalse,
+			Reason:  "WorkerNotFound",
+			Message: "Worker pod not found",
+		})
+
+		if err := errors.Join(serrs...); err != nil {
+			log.Error(err, "Errors were encountered while checking object statuses")
+		}
+		return reconcile.Result{}, rerr
+	}
+
+	utilsStatus, err := r.checkPodStatus(ctx, utilsPod, icmsReq)
+	if err != nil {
+		return reconcile.Result{}, errors.Join(append(serrs, err)...)
+	}
+
+	workerContainerStatus, statusPresent, err := getFunctionWorkerContainerStatus(utilsPod)
+	if err != nil || !statusPresent {
+		// Utils pod events will requeue this once container statuses are present.
+		return reconcile.Result{}, err
+	}
+
+	// If the worker container is ready, then the miniservice is running.
+	/*
+		TODO:
+		* only use utils container readiness
+		* fail on utils container restart count > 3
+	*/
+	if workerContainerStatus.Ready {
+		ms.Status.Phase = v1alpha1.MiniServiceRunning
+		meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
+			Type:   v1alpha1.MiniServiceConditionWorkersHealthy,
+			Status: metav1.ConditionTrue,
+			Reason: "WorkersReady",
+		})
+		return reconcile.Result{}, nil
+	}
+
+	// The worker container is either progressing towards a ready state, or is in a terminal bad state.
+
+	var workerIssueReasons []string
+	if utilsStatus.AdditionalPodStatus != nil {
+		aps := utilsStatus.AdditionalPodStatus
+		// Check if the worker container is degraded.
+		if aps.Degraded != nil && slices.ContainsFunc(aps.Degraded.Containers, func(cd nvcak8sutil.ContainerDegraded) bool {
+			return isWorkerContainerName(cd.Name)
+		}) {
+			workerIssueReasons = append(workerIssueReasons, v1alpha1.MiniServiceStatusReasonDegradedWorker)
+		}
+		// Check if the worker container is stuck initializing.
+		if aps.StuckInitializing != nil && slices.ContainsFunc(aps.StuckInitializing.Containers, func(csi nvcak8sutil.ContainerStuckInitializing) bool {
+			return isWorkerContainerName(csi.Name)
+		}) {
+			workerIssueReasons = append(workerIssueReasons, "WorkerStuckInitializing")
+		}
+		// Check if the worker container has image pull issues.
+		if aps.ImagePullIssues != nil && slices.ContainsFunc(aps.ImagePullIssues, func(cips nvcak8sutil.ContainerImagePullIssues) bool {
+			return isWorkerContainerName(cips.Name)
+		}) {
+			workerIssueReasons = append(workerIssueReasons, "WorkerImagePullIssues")
+		}
+	}
+
+	workersHealthyCond := meta.FindStatusCondition(ms.Status.Conditions, v1alpha1.MiniServiceConditionWorkersHealthy)
+	workerStatusMsg := writeObjectStatuses(ctx, r.Client.Scheme(), []ObjectStatus{utilsStatus}, nil)
+
+	if len(workerIssueReasons) > 0 {
+		rerr = reconcile.TerminalError(fmt.Errorf("worker container is in a terminal bad state"))
+		meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
+			Type:    v1alpha1.MiniServiceConditionWorkersHealthy,
+			Status:  metav1.ConditionFalse,
+			Reason:  "WorkerTerminalBadState",
+			Message: workerStatusMsg,
+		})
+		log.Error(rerr, "Worker container is in a terminal bad state",
+			"workerIssueReasons", workerIssueReasons,
+			"workerStatus", workerStatusMsg)
+	} else if workersHealthyCond != nil && workersHealthyCond.Status != metav1.ConditionTrue &&
+		workersHealthyCond.LastTransitionTime.Add(r.K8sTimeConfig.MaxRunningTimeout).Before(r.now()) {
+		meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
+			Type:    v1alpha1.MiniServiceConditionWorkersHealthy,
+			Status:  metav1.ConditionFalse,
+			Reason:  v1alpha1.MiniServiceStatusReasonPendingTimeout,
+			Message: workerStatusMsg,
+		})
+		rerr = reconcile.TerminalError(fmt.Errorf("worker did not become ready within %s", r.K8sTimeConfig.MaxRunningTimeout))
+		log.Error(rerr, "Pending worker timeout reached",
+			"workerStatus", workerStatusMsg)
+	} else {
+		var message string
+		if utilsStatus.Scheduling {
+			// Once the worker pod is scheduled after installation, the miniservice can transition to Starting.
+			if ms.Status.Phase != v1alpha1.MiniServiceRunning {
+				ms.Status.Phase = v1alpha1.MiniServiceStarting
+			}
+			message = "Worker pod is scheduled, waiting on readiness"
+		} else {
+			log.V(1).Info("Waiting on worker pod to schedule")
+			message = "Worker pod is not scheduled"
+		}
+		meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
+			Type:    v1alpha1.MiniServiceConditionWorkersHealthy,
+			Status:  metav1.ConditionFalse,
+			Reason:  v1alpha1.MiniServiceStatusReasonWaitingObjectReadiness,
+			Message: fmt.Sprintf("%s\n%s", message, workerStatusMsg),
+		})
+		log.V(1).Info(message)
+
+		// Requeue at least once after the scheduling timeout has passed in case no progress is made.
+		res.RequeueAfter = getPodSchedulingTimeout(ctx, icmsReq, r.K8sTimeConfig)
+	}
+	if err := errors.Join(serrs...); err != nil {
+		log.Error(err, "Errors were encountered while checking object status")
 	}
 
 	return res, rerr
@@ -450,7 +658,7 @@ func (r *Reconciler) doTerminalTaskStatus(
 		message = fmt.Sprintf("max runtime duration %s has been exceeded", mrd)
 	case statuses.OnlyTerminalDegraded():
 		// If the only reason is worker degradation, set a condition and let the agent handle cleanup.
-		reason = v1alpha1.MiniServiceStatusReasonDegradedWorkerPods
+		reason = v1alpha1.MiniServiceStatusReasonDegradedWorker
 		rerr = reconcile.TerminalError(fmt.Errorf("at least one object is degraded"))
 	default:
 		// Check if there is an existing MiniServiceConditionObjectsHealthy to
@@ -497,6 +705,27 @@ func (r *Reconciler) doTerminalTaskStatus(
 	return res, rerr
 }
 
+// getFunctionWorkerContainerStatus returns the worker container's status from the utils pod for the given MiniService,
+// either utils for normal functions/tasks or the llm worker (pylon) for LLM-type functions.
+func getFunctionWorkerContainerStatus(utilsPod *corev1.Pod) (corev1.ContainerStatus, bool, error) {
+	for _, cs := range utilsPod.Status.ContainerStatuses {
+		if isWorkerContainerName(cs.Name) {
+			return cs, true, nil
+		}
+	}
+	// The container statuses are not yet available, indicating the pod hasn't been initialized by kubelet yet.
+	for _, c := range utilsPod.Spec.Containers {
+		if isWorkerContainerName(c.Name) {
+			return corev1.ContainerStatus{}, false, nil
+		}
+	}
+	return corev1.ContainerStatus{}, false, reconcile.TerminalError(fmt.Errorf("worker container not found"))
+}
+
+func isWorkerContainerName(name string) bool {
+	return name == common.UtilsContainerName || name == function.LLMWorkerContainerName
+}
+
 func (r *Reconciler) makeStatusCheckers() map[schema.GroupVersionKind]checkStatusFunc {
 	return map[schema.GroupVersionKind]checkStatusFunc{
 		podGVK:         r.checkPodStatus,
@@ -534,6 +763,14 @@ type ObjectStatus struct {
 	// Some of these event types indicate a terminal status, based on truthiness of parseErrorEventMessage;
 	// all others should only be reported when the object is terminal from conditions/phase.
 	AbnormalEvents []corev1.Event
+	// AdditionalPodStatus contains additional status data for the pod, if any.
+	AdditionalPodStatus *AdditionalPodStatus
+}
+
+type AdditionalPodStatus struct {
+	Degraded          *nvcak8sutil.PodDegraded
+	StuckInitializing *nvcak8sutil.PodStuckInitializing
+	ImagePullIssues   []nvcak8sutil.ContainerImagePullIssues
 }
 
 func (s ObjectStatus) toTerminalEventStatus() (cs ObjectStatus) {
@@ -623,19 +860,25 @@ func getPodStatus(pod *corev1.Pod, k8sTimeConfig *nvcak8sutil.TimeConfig, schedu
 	case corev1.PodPending, corev1.PodUnknown, "":
 		isScheduled := nvcak8sutil.IsPodScheduled(ps)
 		if isScheduled {
-			if _, state, imgIssues := nvcak8sutil.ImagePullIssuesReported(ps); imgIssues &&
+			if imgPullIssues, imgIssues := nvcak8sutil.ImagePullIssuesReported(ps); imgIssues &&
 				nvcak8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.MaxImagePullErrorThreshold) {
 				return ObjectStatus{
 					Status:      podFailedImagePullIssues,
-					Reason:      state.Reason,
+					Reason:      "ImagePullIssues",
 					TerminalBad: true,
+					AdditionalPodStatus: &AdditionalPodStatus{
+						ImagePullIssues: imgPullIssues,
+					},
 				}
 			}
-			if stuck, reason := nvcak8sutil.IsPodStuckInitializing(pod, k8sTimeConfig); stuck {
+			if podStuckInitializing, stuck := nvcak8sutil.IsPodStuckInitializing(pod, k8sTimeConfig); stuck {
 				return ObjectStatus{
 					Status:      podFailedContainerStuck,
-					Reason:      reason,
+					Reason:      podStuckInitializing.Reason,
 					TerminalBad: true,
+					AdditionalPodStatus: &AdditionalPodStatus{
+						StuckInitializing: &podStuckInitializing,
+					},
 				}
 			}
 			if nvcak8sutil.IsTimeSincePodLaunchedLaterThan(pod, k8sTimeConfig.PodLaunchThresholdMinutesOnInitFailure) {
@@ -671,18 +914,24 @@ func getPodStatus(pod *corev1.Pod, k8sTimeConfig *nvcak8sutil.TimeConfig, schedu
 				Status: statusRunning,
 			}
 		}
-		if stuck, reason := nvcak8sutil.IsPodStuckInitializing(pod, k8sTimeConfig); stuck {
+		if podStuckInitializing, stuck := nvcak8sutil.IsPodStuckInitializing(pod, k8sTimeConfig); stuck {
 			return ObjectStatus{
 				Status:      podFailedContainerStuck,
-				Reason:      reason,
+				Reason:      podStuckInitializing.Reason,
 				TerminalBad: true,
+				AdditionalPodStatus: &AdditionalPodStatus{
+					StuckInitializing: &podStuckInitializing,
+				},
 			}
 		}
-		if degraded, reason := nvcak8sutil.IsPodDegraded(pod, k8sTimeConfig); degraded {
+		if degradedStatus, degraded := nvcak8sutil.IsPodDegraded(pod, k8sTimeConfig); degraded {
 			return ObjectStatus{
 				Status:      statusDegradedWorker,
-				Reason:      reason,
+				Reason:      degradedStatus.Reason,
 				TerminalBad: true,
+				AdditionalPodStatus: &AdditionalPodStatus{
+					Degraded: &degradedStatus,
+				},
 			}
 		}
 		return ObjectStatus{
@@ -1177,11 +1426,11 @@ func writeObjectStatuses(ctx context.Context, sch *runtime.Scheme, objStatuses O
 	messageBuilder := &strings.Builder{}
 	for _, objStatus := range objStatuses {
 		// Let top-level object determine whether children may be in filtered state.
-		if !filter(objStatus) {
+		if filter != nil && !filter(objStatus) {
 			continue
 		}
 		objStatus.Visit(func(os *ObjectStatus) {
-			if filter(*os) {
+			if filter == nil || filter(*os) {
 				writeObjectStatus(ctx, sch, messageBuilder, *os)
 				messageBuilder.WriteByte('\n')
 			}

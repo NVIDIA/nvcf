@@ -31,3 +31,7 @@ data:
 {{ .Files.Get "files/lua/lua-gen-key.lua" | nindent 4 }}
   lua-ssl.lua: |-
 {{ .Files.Get "files/lua/lua-ssl.lua" | nindent 4 }}
+{{- if (.Values.consistentHashRouting).enabled }}
+  cc-route.lua: |-
+{{ .Files.Get "files/lua/cc-route.lua" | nindent 4 }}
+{{- end }}

@@ -34,8 +34,8 @@ spec:
     scheme: http
   - interval: 15s
     params:
-    format:
-      - prometheus
+      format:
+        - prometheus
     path: /metrics
     port: logger-metrics
     scheme: http

@@ -113,7 +113,7 @@ type TokenFetcher interface {
 // TokenKubeConfigurator implements KubeConfigurator by building
 // rest.Config use the bear token retrieved from a tokenFetcher. It
 // checks token update at given `Interval`, and only sends new
-// kubeconfig down to the channel if cached token get's changed.
+// kubeconfig down to the channel if cached token gets changed.
 type TokenKubeConfigurator struct {
 	masterURL string
 	fetcher   TokenFetcher

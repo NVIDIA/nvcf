@@ -177,7 +177,7 @@ test_root_license_file_is_not_treated_as_repo_notice() {
     assert_not_contains "app/LICENSE" "${rendered}" "rendered NOTICE should not list a top-level LICENSE file"
 }
 
-test_non_import_roots_are_still_scanned() {
+test_directories_outside_imports_yaml_are_still_scanned() {
     local tmpdir
     tmpdir="$(make_tempdir)"
 
@@ -288,7 +288,7 @@ main() {
     test_root_notice_and_vendor_license_are_both_listed
     test_vendored_paths_are_not_deduped_by_content
     test_root_license_file_is_not_treated_as_repo_notice
-    test_non_import_roots_are_still_scanned
+    test_directories_outside_imports_yaml_are_still_scanned
     test_generated_root_notice_is_not_reingested
     test_git_ignored_vendor_paths_are_skipped
     test_paths_are_sorted_case_insensitively

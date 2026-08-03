@@ -71,12 +71,19 @@ OpenTelemetry Bazel community. The genrule trades Bazel's per-package
 dep tracking for forward progress: the binary lives inside Bazel's
 output graph and flows through to `oci_image` + `oci_push` cleanly.
 
-Cache contract: Bazel rebuilds the genrule when any input
-(`otelcol/**/*.go`, `go.mod`, `go.sum`) changes. The genrule uses
-`local = True` + `tags = ["no-sandbox"]` so it can resolve `go` from
-`$PATH` and write to the standard Go module cache. The wrapper
+Cache contract: Bazel rebuilds the genrule when any declared input
+(`otelcol/**/*.go`, `otelcol/go.mod`, `otelcol/go.sum`) changes; the
+glob is `**/*.go` so a new subpackage is picked up automatically. The genrule is tagged
+`no-sandbox` + `no-remote-exec` so it can resolve `go` from `$PATH` and
+write to the standard Go module cache, while remaining eligible for the
+build cache. It is deliberately not `local = True`: that tag also stops
+the result being reused from the disk or remote cache, which made the
+collector recompile on every CI run. Because the action shells out to a
+host `go` that Bazel does not track, CI binds the toolchain into the
+action key with `--action_env=BYOO_GO_TOOLCHAIN`, so a Go bump in the CI
+image cannot serve binaries built by the previous compiler. The wrapper
 binary, in contrast, is a regular `go_binary` and benefits from full
-Bazel hermeticity + nvcfbarn remote-cache reuse.
+Bazel hermeticity + remote-cache reuse.
 
 A containerized Go application that provides a complete observability solution by orchestrating three functional components: it generates OpenTelemetry Collector configurations, extracts and manages secrets from ESS (Encrypted Secret Store), and runs a custom-built OpenTelemetry Collector binary.
 
@@ -104,6 +111,7 @@ Exposed Ports:
 - 14358: OTLP HTTP receiver
 - 13133: `/health?verbose` endpoint to get detailed health status of collector (healthcheck v2 extension)
 - 19090: `/metrics` endpoint for the byoo-otel-collector metrics
+- 19091: `/metrics` endpoint for optional metric subset user metrics
 
 ### nvcf-otel-collector Image
 
@@ -121,13 +129,19 @@ The configuration produced by otelconfig-generator guarantees that only `otlp` t
 
 ### 🧩 Oversized Log Chunking
 
-Some telemetry backends reject a single log entry when its body is larger than the backend's per-entry size limit. The BYOO collector can insert a custom `logchunk/byoo` processor into the logs pipeline to split oversized UTF-8 string log bodies into correlated chunks before export.
+Some telemetry backends reject a single log entry when its body and attributes are larger than the backend's per-entry size limit. The BYOO collector can insert a custom `logchunk/byoo` processor into the logs pipeline to split oversized log bodies and attributes into correlated chunks before export. Maps and slices are traversed recursively, their string and byte leaves can be split, and each emitted fragment keeps the original partial map or slice type. Scalar values remain atomic.
 
 Chunking is disabled by default. Configure it with:
 
-- `BYOO_LOG_CHUNK_MAX_BODY_BYTES`: maximum log body size in bytes before chunking. `0` disables the processor. Enabled values must be at least `4` bytes so chunks can preserve UTF-8 rune boundaries. Use `983040` bytes for normal BYOO deployments to leave room for log attributes and exporter envelope overhead under a `1000000` byte backend entry limit.
+- `BYOO_LOG_CHUNKING_ENABLED`: enables the `logchunk/byoo` processor. When enabled without overrides, the collector uses `262144` bytes for `max_payload_bytes` and `false` for dry-run.
+- `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES`: maximum combined log body and attribute payload size in bytes before chunking. `0` uses the enabled-mode default when `BYOO_LOG_CHUNKING_ENABLED=true`. Explicit enabled values must be at least `4` bytes so chunks can preserve UTF-8 rune boundaries.
+- `BYOO_LOG_CHUNK_MAX_BODY_BYTES`: deprecated alias for `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES`. When both are set, `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES` wins.
 - `BYOO_LOG_CHUNK_DRY_RUN`: records oversized-log metrics and warnings without mutating log payloads. Dry-run metric datapoints use `mode=dry_run`.
-- `BYOO_LOG_EXPORTER_BATCH_MAX_SIZE_BYTES`: serialized log export request batch size used for exporterhelper byte splitting. `0` or unset uses the default `1000000` bytes.
+- `BYOO_DEBUG_MODE`: enables collector debug logging and adds the `debug` exporter to every generated pipeline.
+- `BYOO_OTEL_COLLECTOR_CONFIG_B64`: optional base64-encoded JSON for advanced collector rendering overrides, such as exporterhelper timeout, retry, sending queue, sending queue batch, memory limiter, batch, and log batch settings.
+- `BYOO_METRIC_SUBSET_ENABLED`: enables an additional OTLP-only metrics pipeline that exposes filtered user metrics through a Prometheus exporter on port `19091`. Disabled by default.
+- `BYOO_METRIC_SUBSET_FILTER_CONFIG`: optional YAML filter processor config for the metric subset pipeline. If unset, the default drops every metric except `BpsInstrument`, `FpsInstrument`, `RtdInstrument`, and `StageOpenDuration`, and drops datapoints/resources explicitly labeled `metric_subset_enabled=false`.
+- `BYOO_WORKLOAD_METRICS_DROP_LABELS`: comma-separated resource attribute names removed from the generated workload `metrics` pipeline. If unset, defaults to `metric_subset_enabled` only when the metric subset pipeline is enabled.
 
 When chunking is enabled, each emitted chunk preserves the original log metadata and adds these attributes so chunks can be grouped in the backend:
 
@@ -137,10 +151,13 @@ When chunking is enabled, each emitted chunk preserves the original log metadata
 - `log.chunk.offset_bytes`
 - `log.chunk.original_size_bytes`
 - `log.chunk.final`
+- `log.chunk.structured_paths` when a chunk contains map or slice fragments
 
-The processor emits `otelcol_processor_logchunk_*` metrics for oversized records, original bytes, emitted chunks, output bytes, and errors. The metric `mode` attribute distinguishes active chunking (`mode=chunk`) from dry run (`mode=dry_run`).
+`log.chunk.structured_paths` contains escaped JSON Pointer paths such as `/attributes/payload/messages/0/content`. Consumers can merge partial maps and slices by path in chunk-index order, concatenating repeated string or byte leaves.
 
-The generated exporter configuration also uses exporterhelper byte batching with `sending_queue.batch.sizer=bytes` and configurable `min_size=max_size` where applicable. That exporter-side split limits serialized request size, but it cannot split a single oversized log record; the log chunk processor handles the per-record body limit.
+The processor emits `otelcol_processor_logchunk_*` metrics for oversized records, original payload bytes, emitted chunks, and errors. The metric `mode` attribute distinguishes active chunking (`mode=chunk`) from dry run (`mode=dry_run`).
+
+Advanced collector config can enable exporterhelper byte batching with `sending_queue.batch.sizer=bytes` and configurable `min_size=max_size` where applicable. That exporter-side split limits serialized request size, but it cannot split a single oversized log record; the log chunk processor handles the per-record body limit.
 
 ### 🔐 Secrets Management
 
@@ -207,7 +224,7 @@ Use `make validate-otelconfig` to validate generated configurations against the 
 go build -o bin/byoo-otel-collector ./cmd/byoo-otel-collector
 
 # Build Docker image
-docker build --build-arg OTEL_BUILDER_VERSION=v0.153.0 \
+docker build --build-arg OTEL_BUILDER_VERSION=v0.157.0 \
   -f ./Dockerfile -t byoo-otel-collector:latest .
 
 # Run the collector
@@ -250,7 +267,7 @@ Otel Collector core is built from source to enable healthcheck v2 extension supp
 
 ```bash
 # Install otel collector builder
-go install go.opentelemetry.io/collector/cmd/builder@v0.153.0
+go install go.opentelemetry.io/collector/cmd/builder@v0.157.0
 
 # Build collector
 builder --config=./otel-collector-build.yaml
@@ -265,7 +282,7 @@ The output binary will be generated under the `./output` folder.
 The BYOO otel collector container can be built directly without a GitLab access token.
 
 ```bash
-docker build --build-arg OTEL_BUILDER_VERSION=v0.153.0 \
+docker build --build-arg OTEL_BUILDER_VERSION=v0.157.0 \
   -t YOUR_REGISTRY/byoo-otel-collector:latest .
 ```
 

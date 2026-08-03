@@ -7,9 +7,13 @@ cluster. NVCF Workloads deployed will be automatically BinPacked upon this clust
 **KAI Scheduler Installation**
 
 <Note>
-Upgrade to latest [KAI Scheduler release](https://github.com/kai-scheduler/KAI-Scheduler/releases) is recommended to get latest fixes and security patches
+    Upgrade to latest [KAI Scheduler release](https://github.com/kai-scheduler/KAI-Scheduler/releases) is recommended to get latest fixes and security patches
 
 </Note>
+
+When you enable `addons.kaiScheduler.enabled` in the `nvcf-compute-plane` Helmfile stack, the stack installs KAI Scheduler for you (release and namespace `kai-scheduler`). Enable that flag whenever you enable Grove or Dynamo. Skip the manual install below in that case.
+
+Use the manual install when you need KAI without the compute-plane add-on, for example when enabling only the NVCA `KAIScheduler` feature gate.
 
 NVCA's KAI scheduler integration expects default queues to exist with names `default-parent-queue` (parent) and `default-queue` (child);
 other queues may exist in the cluster.

@@ -103,6 +103,10 @@ test-coverage:
 test-server:
 	go test -v ./internal/server
 
+# Run checkpoint unit tests only
+test-checkpoint:
+	go test -v ./internal/checkpointstore
+
 # Download dependencies
 deps:
 	go mod download

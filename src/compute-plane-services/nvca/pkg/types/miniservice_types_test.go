@@ -51,7 +51,7 @@ func TestMiniserviceMetadata_ToConfigMapData_Roundtrip(t *testing.T) {
 			{Name: "EXTRA_ENV", Value: "extra-value"},
 		},
 		OTelCollectorEnvVars: []corev1.EnvVar{
-			{Name: "BYOO_LOG_CHUNK_MAX_BODY_BYTES", Value: "983040"},
+			{Name: "BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES", Value: "983040"},
 		},
 		NodeAffinityKey:               "nvca.nvcf.nvidia.io/instance-type",
 		NodeAffinityValue:             "ON-PREM.GPU.A100x2",

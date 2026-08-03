@@ -191,7 +191,7 @@ Environment configuration files define how NVCF is deployed in your specific env
 Set `HELMFILE_ENV` to your environment name and copy the base configuration.
 The filename must match `HELMFILE_ENV` because Helmfile uses it to select the
 environment file. The template below shows the values to configure for Amazon
-EKS ([cp-env-eks-example.yaml](samples/configs/cp-env-eks-example.yaml)).
+EKS ([cp-env-eks-example.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/user/samples/configs/cp-env-eks-example.yaml)).
 
 ```bash
 cd path/to/nvcf-self-managed-stack
@@ -586,7 +586,7 @@ These credentials will then be used for function deployments. Note that if the r
 Copy the secrets template using the same `HELMFILE_ENV` value from Step 2. The
 filename must match `HELMFILE_ENV` because Helmfile loads the corresponding
 secrets file. The example below shows the required structure
-([example-secrets.yaml](samples/configs/cp-example-secrets.yaml)). You must
+([example-secrets.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/user/samples/configs/cp-example-secrets.yaml)). You must
 replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your
 actual base64-encoded registry credentials.
 
@@ -701,6 +701,16 @@ printf '%s' "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 | tr -d '\n'
 
 </Tabs>
 
+Set kubectl to the control-plane cluster context before proceeding. Steps 4
+and 5 run kubectl and helmfile commands that target the current context. In a
+multi-cluster setup, verify the context is the control-plane cluster to avoid
+installing to the wrong cluster.
+
+```bash
+kubectl config use-context <control-plane-context>
+kubectl config current-context
+```
+
 ### Step 4. Configure image pull secrets (conditional)
 
 <Note>
@@ -721,7 +731,7 @@ registry.
 If your `image` registry is private and your cluster nodes do not have built-in credential helpers, you must create Kubernetes `docker-registry` secrets in each NVCF namespace and configure the helmfile to reference them.
 
 1. Create the pull secret in each NVCF namespace
-   ([create-nvcr-pull-secrets.sh](samples/scripts/create-nvcr-pull-secrets.sh)):
+   ([create-nvcr-pull-secrets.sh](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/user/samples/scripts/create-nvcr-pull-secrets.sh)):
 
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"
@@ -758,7 +768,8 @@ This replaces any need for a separate admission controller or policy engine to i
 
 ### Step 5. Deploy the NVCF control plane components
 
-Set kubectl context to your cluster.
+Confirm your kubectl context is still set to the control-plane cluster (see
+above).
 
 <Info>
 Ensure your local environment is authenticated to the container registry where
@@ -1036,6 +1047,72 @@ kubectl get httproute -A | grep -i vanity
 curl -H "Host: vanity.<domain>" "http://<gateway-address>/health"
 ```
 
+#### Enabling NVCF UI
+
+NVCF UI is optional and disabled by default. It is available only in
+stack packages that include the NVCF UI addon. If your extracted stack
+package does not contain a `nvcf-ui` release and `nvcfUi` route
+values, skip this section until you use a stack package that includes them.
+
+Enable it only when you need a customer-facing NVCF admin-panel UI
+
+<Warning>
+The NVCF UI admin panel is currently unauthenticated. Do not expose it to the
+public internet. Restrict access to a trusted network, VPN, or an
+authenticating proxy in front of the `nvcf-ui` route.
+</Warning>
+
+In stack packages that include the addon, set the value shape in your
+environment file:
+
+```yaml
+addons:
+  nvcfUi:
+    enabled: true
+```
+
+Configure the conditional image pull secret. nvcf-ui runs in its own
+`nvcf-ui` namespace, which is separate from the other namespaces
+covered in
+[Step 4. Configure image pull secrets (conditional)](#step-4-configure-image-pull-secrets-conditional).
+If your `image` registry is private and your cluster nodes do not have
+built-in credential helpers, Kubernetes needs a `docker-registry` type secret in
+the `nvcf-ui` namespace to pull the nvcf-ui image. Skip this step if you
+mirrored NVCF artifacts to a CSP-managed registry with built-in credential
+helpers, as described in [Step 4](#step-4-configure-image-pull-secrets-conditional).
+
+```bash
+export NGC_API_KEY="<your-ngc-api-key>"
+
+kubectl create namespace nvcf-ui --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret docker-registry nvcr-pull-secret \
+  --docker-server=nvcr.io \
+  --docker-username='$oauthtoken' \
+  --docker-password="$NGC_API_KEY" \
+  --namespace=nvcf-ui \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+By default, the route host is `nvcf-ui.<domain>` and the backend is
+`nvcf-ui.nvcf-ui:8300`.
+
+After confirming your stack package includes the `nvcf-ui` release,
+preview and apply the service plus gateway routes:
+
+```bash
+HELMFILE_ENV=<environment-name> helmfile --selector name=nvcf-ui template
+HELMFILE_ENV=<environment-name> helmfile --selector name=nvcf-ui sync
+HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress sync
+```
+
+Verify only when the addon is present and enabled:
+
+```bash
+kubectl get deploy,svc -n nvcf-ui
+kubectl get httproute -A | grep -i nvcf-ui
+curl -i -H "Host: nvcf-ui.<domain>" "http://<gateway-address>/status"
+```
+
 #### Recovering from Gateway Address Changes
 
 If your Gateway or its underlying load balancer was deleted and recreated (e.g., due to a TCPRoute misconfiguration or infrastructure change), the external address will change. Services that depend on the `domain` value -- including Gateway API routes, SIS cluster registration, API hostname resolution, and the optional Vanity Gateway route -- will break until the new address is propagated.
@@ -1193,7 +1270,7 @@ cluster identity values that the operator chart consumes.
 Use `KUBECONFIG_FILE` for multi-cluster installs. It makes both registration and
 Helmfile target the GPU cluster instead of the control-plane cluster.
 For a complete Amazon EKS example, see the
-[CSP End-to-End Example](https://docs.nvidia.com/nvcf/v0.6.0/csp-end-to-end-example).
+[CSP End-to-End Example](./csp-end-to-end-example-installation.md).
 
 The compute-plane Makefile runs `nvcf-cli init` before `cluster register`. Point
 `NVCF_CLI_CONFIG` at a CLI config that can reach the control-plane gateway.
@@ -1293,7 +1370,7 @@ After `helmfile destroy` completes, clean up the namespaces:
 ```bash
 # Delete NVCF namespaces
 kubectl delete namespace cassandra-system nats-system vault-system \
-  nvcf api-keys ess sis \
+  nvcf api-keys ess sis nvcf-ui \
   --ignore-not-found
 ```
 
