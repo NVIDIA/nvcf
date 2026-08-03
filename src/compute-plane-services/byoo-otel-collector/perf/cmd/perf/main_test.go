@@ -180,6 +180,8 @@ func TestRunCmdDefaults(t *testing.T) {
 		"skip-load":     "false",
 		"sink-image":    sink.DefaultImage,
 		"loadgen-image": loadgen.DefaultImage,
+		"k3d-cluster":   "byoo-perf",
+		"import-images": "false",
 	}
 	for name, want := range defaults {
 		f := cmd.Flags().Lookup(name)

@@ -37,6 +37,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/deploy"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/k3d"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/loadgen"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/profile"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
@@ -117,6 +118,8 @@ type runConfig struct {
 	readyTimeout   time.Duration
 	retain         bool
 	skipLoad       bool
+	k3dCluster     string
+	importImages   bool
 }
 
 func newRunCmd() *cobra.Command {
@@ -128,7 +131,11 @@ func newRunCmd() *cobra.Command {
 deploys an in-cluster OTLP sink, deploys the authentic BYOO collector pointed at
 that sink, waits for both to become ready, and drives telemetrygen load at the
 selected profile's rates. It cleans up afterward unless --retain is set.
-Measurement and reporting land in a later milestone.`,
+
+With --mode k3d (the default) it provisions a dedicated local k3d cluster, runs
+against it, and deletes it afterward (unless --retain). With --mode remote it
+uses the ambient kubeconfig (or --kubeconfig/--context). Measurement and
+reporting land in a later milestone.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRun(cmd.OutOrStdout(), cfg)
@@ -136,16 +143,18 @@ Measurement and reporting land in a later milestone.`,
 	}
 	cmd.Flags().StringVar(&cfg.shape, "shape", "both", `deployment shape: "container", "helm", or "both"`)
 	cmd.Flags().StringVar(&cfg.profile, "profile", "dev", `execution profile: "dev" or "baseline"`)
-	cmd.Flags().StringVar(&cfg.mode, "mode", "k3d", `deployment mode: "k3d" or "remote"`)
+	cmd.Flags().StringVar(&cfg.mode, "mode", "k3d", `deployment mode: "k3d" (managed local cluster) or "remote" (ambient kubeconfig)`)
 	cmd.Flags().StringVar(&cfg.collectorImage, "collector-image", spec.DefaultCollectorImage, "BYOO collector image reference")
 	cmd.Flags().StringVar(&cfg.sinkImage, "sink-image", sink.DefaultImage, "OTLP sink (collector-contrib) image reference")
 	cmd.Flags().StringVar(&cfg.loadgenImage, "loadgen-image", loadgen.DefaultImage, "telemetrygen load generator image reference")
 	cmd.Flags().StringVar(&cfg.namespace, "namespace", "byoo-perf", "base namespace for deployed resources")
-	cmd.Flags().StringVar(&cfg.kubeconfig, "kubeconfig", "", "path to kubeconfig (defaults to in-cluster or $KUBECONFIG)")
-	cmd.Flags().StringVar(&cfg.kubeContext, "context", "", "kubeconfig context to use")
+	cmd.Flags().StringVar(&cfg.kubeconfig, "kubeconfig", "", "path to kubeconfig (remote mode; defaults to in-cluster or $KUBECONFIG)")
+	cmd.Flags().StringVar(&cfg.kubeContext, "context", "", "kubeconfig context to use (remote mode)")
 	cmd.Flags().DurationVar(&cfg.readyTimeout, "ready-timeout", 3*time.Minute, "how long to wait for the collector and sink to become ready")
-	cmd.Flags().BoolVar(&cfg.retain, "retain", false, "retain deployed resources instead of cleaning up after the run")
+	cmd.Flags().BoolVar(&cfg.retain, "retain", false, "retain deployed resources (and the managed k3d cluster) instead of cleaning up")
 	cmd.Flags().BoolVar(&cfg.skipLoad, "skip-load", false, "deploy the collector and sink but do not drive load")
+	cmd.Flags().StringVar(&cfg.k3dCluster, "k3d-cluster", "byoo-perf", "name of the managed k3d cluster (k3d mode)")
+	cmd.Flags().BoolVar(&cfg.importImages, "import-images", false, "import the collector/sink/loadgen images from local Docker into the k3d cluster (k3d mode)")
 	return cmd
 }
 
@@ -189,12 +198,26 @@ func runRun(stdout io.Writer, cfg runConfig) error {
 		return err
 	}
 
-	client, err := newDeployClient(cfg.kubeconfig, cfg.kubeContext)
+	ctx := context.Background()
+
+	// In managed k3d mode the suite owns the cluster lifecycle: provision it
+	// up front and tear it down at the end (unless --retain). In remote mode it
+	// uses the ambient kubeconfig/context.
+	kubeconfig, kubeContext := cfg.kubeconfig, cfg.kubeContext
+	if cfg.mode == "k3d" {
+		cluster, teardown, err := ensureK3dCluster(ctx, stdout, cfg)
+		if err != nil {
+			return err
+		}
+		defer teardown()
+		kubeconfig, kubeContext = "", cluster.Context
+	}
+
+	client, err := newDeployClient(kubeconfig, kubeContext)
 	if err != nil {
 		return err
 	}
 
-	ctx := context.Background()
 	loadDuration := prof.Warmup + prof.MeasurementWindow
 	fmt.Fprintf(stdout, "mode=%s profile=%s warmup=%s window=%s reps=%d\n\n", cfg.mode, prof.Name, prof.Warmup, prof.MeasurementWindow, prof.Repetitions)
 
@@ -211,6 +234,42 @@ func runRun(stdout io.Writer, cfg runConfig) error {
 		fmt.Fprintln(stdout, "note: load was driven end-to-end through the collector to the in-cluster sink. Measurement and reporting land in a later milestone.")
 	}
 	return nil
+}
+
+// ensureK3dCluster provisions (or reuses) the managed k3d cluster and returns a
+// teardown function that deletes it after the run unless --retain is set.
+func ensureK3dCluster(ctx context.Context, stdout io.Writer, cfg runConfig) (*k3d.Cluster, func(), error) {
+	if err := k3d.EnsureInstalled(ctx); err != nil {
+		return nil, nil, err
+	}
+	fmt.Fprintf(stdout, "provisioning managed k3d cluster %q ...\n", cfg.k3dCluster)
+	cluster, err := k3d.Create(ctx, k3d.DefaultOptions(cfg.k3dCluster))
+	if err != nil {
+		return nil, nil, err
+	}
+	if cfg.importImages {
+		images := []string{cfg.collectorImage, cfg.sinkImage, cfg.loadgenImage}
+		fmt.Fprintf(stdout, "importing images into k3d cluster %q: %s\n", cfg.k3dCluster, strings.Join(images, ", "))
+		if err := k3d.ImportImages(ctx, cluster.Name, images...); err != nil {
+			if !cfg.retain {
+				_ = k3d.Delete(ctx, cfg.k3dCluster)
+			}
+			return nil, nil, err
+		}
+	}
+	fmt.Fprintf(stdout, "using kube context %q\n\n", cluster.Context)
+
+	teardown := func() {
+		if cfg.retain {
+			fmt.Fprintf(stdout, "retaining managed k3d cluster %q (--retain); delete with: k3d cluster delete %s\n", cfg.k3dCluster, cfg.k3dCluster)
+			return
+		}
+		fmt.Fprintf(stdout, "deleting managed k3d cluster %q ...\n", cfg.k3dCluster)
+		if err := k3d.Delete(ctx, cfg.k3dCluster); err != nil {
+			fmt.Fprintf(stdout, "warning: failed to delete k3d cluster %q: %v\n", cfg.k3dCluster, err)
+		}
+	}
+	return cluster, teardown, nil
 }
 
 // runShape deploys the sink and collector for one shape, drives load, and cleans

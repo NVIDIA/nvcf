@@ -5,10 +5,11 @@ exercises the collector under controlled telemetry load using the same workload
 shape produced in production, by rendering through the shared translation
 library (`icms-translate`) rather than hand-written collector manifests.
 
-> Status: `render` (translate + validate, no cluster), `run` (deploy an
-> in-cluster OTLP sink + the authentic collector pointed at it, then drive
-> telemetrygen load), and `cleanup` are implemented. Measurement and reporting
-> land in the next milestone.
+> Status: `render` (translate + validate, no cluster), `run` (provision a
+> managed k3d cluster or use a remote one, deploy an in-cluster OTLP sink + the
+> authentic collector pointed at it, then drive telemetrygen load), and
+> `cleanup` are implemented. Measurement and reporting land in the next
+> milestone.
 
 ## Why translation-driven
 
@@ -39,6 +40,7 @@ what the suite measures.
   volume with export credentials, waits for readiness, runs the load, and tears
   everything down.
 - `pkg/labels`: the shared labels every object carries so cleanup is scoped.
+- `pkg/k3d`: provisions/tears down the managed local k3d cluster (`k3d` mode).
 - `pkg/profile` — `dev` and `baseline` execution profiles.
 
 This is a standalone Go module, deliberately kept out of the collector
@@ -102,21 +104,36 @@ multi-document stream (`---`-separated) and `json` emits an array, so
 4. drives telemetrygen load at the profile's rates for `warmup + window`;
 5. cleans up afterward unless `--retain` is set.
 
-It reads the ambient kubeconfig (or `--kubeconfig`/`--context`). When more than
-one shape is deployed, each gets its own suffixed namespace (e.g.
+The target cluster depends on `--mode`:
+
+- `--mode k3d` (default): the suite provisions a dedicated local **k3d** cluster
+  (`--k3d-cluster`, default `byoo-perf`), runs against it, and deletes it
+  afterwards — unless `--retain`, which keeps both the resources and the
+  cluster. An existing cluster of the same name is reused. Requires the `k3d`
+  CLI (and Docker). Use `--import-images` to load the collector/sink/loadgen
+  images from local Docker into the cluster (for locally built or non-pullable
+  images).
+- `--mode remote`: uses the ambient kubeconfig (or `--kubeconfig`/`--context`).
+
+When more than one shape is deployed, each gets its own suffixed namespace (e.g.
 `byoo-perf-container`) so their resources never collide.
 
 ```bash
-# Deploy sink + container-shape collector, drive dev-profile load, clean up.
+# Managed k3d: provision a cluster, deploy sink + container collector, drive
+# dev-profile load, then delete the cluster.
 GOWORK=off go run ./cmd/perf run --shape container
 
-# Deploy both shapes and keep them for inspection (no load).
-GOWORK=off go run ./cmd/perf run --shape both --skip-load --retain
+# Managed k3d with locally built images imported into the cluster.
+GOWORK=off go run ./cmd/perf run --shape container --import-images
+
+# Remote cluster; keep resources for inspection (no load).
+GOWORK=off go run ./cmd/perf run --mode remote --shape both --skip-load --retain
 ```
 
 Flags: `--shape`, `--profile`, `--mode` (`k3d`/`remote`), `--collector-image`,
 `--sink-image`, `--loadgen-image`, `--namespace`, `--kubeconfig`, `--context`,
-`--ready-timeout` (`3m`), `--retain`, `--skip-load`.
+`--ready-timeout` (`3m`), `--retain`, `--skip-load`, `--k3d-cluster`,
+`--import-images`.
 
 > Measurement is not wired yet: `run` drives load end-to-end but does not yet
 > collect or report throughput/resource metrics. The sink already exposes its
@@ -146,9 +163,18 @@ Each profile also carries default load rates (`dev`: 1k logs/s + 1k metrics/s;
 
 ## Cluster requirements
 
-`run` deploys to whatever cluster the ambient kubeconfig points at (there is no
-managed k3d provisioning yet). The collector, sink, and telemetrygen images must
-be pullable from the target cluster, so on a private/offline cluster pre-load
-them (e.g. `k3d image import`). Only the collector image ships from NVIDIA; the
-sink and load generator are stock upstream images and are overridable via
-`--sink-image` / `--loadgen-image`.
+In `k3d` mode the suite manages the cluster for you (requires the `k3d` CLI and
+Docker). In `remote` mode it deploys to whatever cluster the ambient kubeconfig
+points at.
+
+The collector, sink, and telemetrygen images must be reachable from the target
+cluster. Only the collector image ships from NVIDIA; the sink and load generator
+are stock upstream images (overridable via `--sink-image` / `--loadgen-image`).
+For a private/offline cluster pre-load them — in managed k3d mode pass
+`--import-images` to import them from local Docker.
+
+## Sub-packages `pkg/k3d`
+
+`pkg/k3d` wraps the `k3d` CLI (create/delete/list/image-import). Its command
+runner is injectable so the argument construction is unit-tested without a real
+k3d binary.
