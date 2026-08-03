@@ -579,6 +579,29 @@ func TestJSONOutputContainsRowsAssertion(t *testing.T) {
 	}
 }
 
+func TestRenderedManifestsShouldNotContainAcceptsExplicitMarkers(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	renderDir := filepath.Join(sc.Suite.Config.RepoRoot, "out", "rendered", "control-plane")
+	if err := os.MkdirAll(renderDir, 0o755); err != nil {
+		t.Fatalf("create render directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(renderDir, "api.yaml"), []byte("kind: Deployment\n"), 0o644); err != nil {
+		t.Fatalf("write rendered manifest: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"text"},
+		{"kind: ServiceMonitor"},
+		{"kind: PodMonitor"},
+	})
+
+	if err := sc.renderedManifestsShouldNotContain("out/rendered", table); err != nil {
+		t.Fatalf("assert rendered manifests: %v", err)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
+	}
+}
+
 // docTable builds a godog.Table from a slice of rows. The Picker rows
 // type matches what godog hands to step handlers at runtime.
 func docTable(t *testing.T, rows [][]string) *godog.Table {
