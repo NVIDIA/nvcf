@@ -18,6 +18,7 @@ limitations under the License.
 package steps
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -42,6 +43,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should contain:$`, sc.yamlFileKeyShouldContain)
 	ctx.Step(`^the json output should contain rows:$`, sc.jsonOutputShouldContainRows)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
+	ctx.Step(`^these ServiceMonitors should exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.serviceMonitorsShouldExist)
 }
 
 func (sc *ScenarioContext) commandExitCodeShouldBe(expected int) error {
@@ -174,6 +176,21 @@ func tableToSingleColumn(table *godog.Table, header string) ([]string, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+func (sc *ScenarioContext) serviceMonitorsShouldExist(ctx context.Context, namespace, kubeContext string, table *godog.Table) error {
+	names, err := tableToSingleColumn(table, "name")
+	if err != nil {
+		return err
+	}
+	command, err := dsl.ServiceMonitorExistenceCommand(namespace, kubeContext, names)
+	if err != nil {
+		return err
+	}
+	if err := sc.runAndRecordWith(ctx, command, sc.Suite.Runner.Run); err != nil {
+		return err
+	}
+	return sc.commandExitCodeShouldBe(0)
 }
 
 // tableToJSONRows converts a header-first Godog table into a slice of
