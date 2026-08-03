@@ -274,6 +274,7 @@
       "url": "https://github.com/swagger-api/swagger-core"
     },
     "jakarta.servlet:jakarta.servlet-api:6.1.0": {
+      "designated_license": "EPL-2.0",
       "licenses": [
         "EPL 2.0",
         "GPL2 w/ CPE"
@@ -317,6 +318,7 @@
       "url": "http://nexus.sonatype.org/oss-repository-hosting.html"
     },
     "net.logstash.logback:logstash-logback-encoder:8.1": {
+      "designated_license": "Apache-2.0",
       "licenses": [
         "Apache License, Version 2.0",
         "MIT License"
@@ -430,6 +432,7 @@
       "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
     },
     "org.javassist:javassist:3.28.0-GA": {
+      "designated_license": "Apache-2.0",
       "licenses": [
         "MPL 1.1",
         "LGPL 2.1",
@@ -460,6 +463,7 @@
       "url": "http://mapstruct.org/mapstruct/"
     },
     "org.reflections:reflections:0.10.2": {
+      "designated_license": "Apache-2.0",
       "licenses": [
         "WTFPL",
         "The Apache Software License, Version 2.0"

@@ -569,6 +569,7 @@ def update_metadata(
     maven_install,
     existing_metadata,
     shared_metadata=None,
+    aliases=None,
 ):
     resolver = PomMetadataResolver(maven_install)
     artifacts = dict(existing_metadata.get("artifacts", {}))
@@ -591,6 +592,7 @@ def update_metadata(
         existing = artifacts.get(versioned, {})
         if "designated_license" in existing:
             updated_entry["designated_license"] = existing["designated_license"]
+        designated_license(updated_entry, aliases or {})
         artifacts[versioned] = updated_entry
     return {
         "generated_by": "tools/bazel/java/generate_notice.py --update-metadata",
@@ -701,21 +703,23 @@ def main():
     else:
         raise ValueError("At least one --root-manifest or --runtime-jar is required")
 
+    aliases = load_license_aliases(
+        pathlib.Path(args.license_aliases) if args.license_aliases else None
+    )
+
     if args.update_metadata:
         primary_metadata = update_metadata(
             coordinates,
             maven_install,
             primary_metadata,
             shared_metadata,
+            aliases,
         )
         metadata_path.write_text(
             json.dumps(primary_metadata, indent=2, sort_keys=True) + "\n"
         )
         metadata = merge_metadata(shared_documents, primary_metadata)
 
-    aliases = load_license_aliases(
-        pathlib.Path(args.license_aliases) if args.license_aliases else None
-    )
     notice = generated_notice(coordinates, maven_install, metadata, aliases)
     output_path = pathlib.Path(args.output) if args.output else notice_path
     diff = compare_or_write(notice, output_path, args.write and not args.check)

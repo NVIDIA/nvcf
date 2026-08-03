@@ -123,13 +123,56 @@ class NoticeMetadataTest(unittest.TestCase):
             generate_notice, "PomMetadataResolver", return_value=resolver
         ):
             result = generate_notice.update_metadata(
-                ["g:a"], maven_install, existing
+                ["g:a"],
+                maven_install,
+                existing,
+                aliases={"Apache License, Version 2.0": "Apache-2.0"},
             )
 
         self.assertEqual(
             "Apache-2.0",
             result["artifacts"]["g:a:1"]["designated_license"],
         )
+
+    def test_update_metadata_rejects_removed_designated_license(self):
+        maven_install = {
+            "artifacts": {"g:a": {"version": "1"}},
+            "dependencies": {},
+            "repositories": [],
+        }
+        existing = {
+            "artifacts": {
+                "g:a:1": {
+                    "licenses": ["Apache License, Version 2.0"],
+                    "designated_license": "Apache-2.0",
+                    "name": "Old name",
+                    "url": "",
+                }
+            }
+        }
+
+        resolver = generate_notice.PomMetadataResolver(maven_install)
+        resolver.resolve = lambda group_id, artifact_id, version: {
+            "licenses": ["MIT License"],
+            "name": "Updated name",
+            "url": "https://example.invalid",
+        }
+
+        with mock.patch.object(
+            generate_notice, "PomMetadataResolver", return_value=resolver
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "not one of the upstream licenses"
+            ):
+                generate_notice.update_metadata(
+                    ["g:a"],
+                    maven_install,
+                    existing,
+                    aliases={
+                        "Apache License, Version 2.0": "Apache-2.0",
+                        "MIT License": "MIT",
+                    },
+                )
 
     def test_delta_uses_exact_versioned_coordinates(self):
         current = {
