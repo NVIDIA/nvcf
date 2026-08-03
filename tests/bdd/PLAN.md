@@ -131,6 +131,7 @@ refactor in every consumer; that is a feature.
 | `Then yaml file {string} key {string} should contain:` (docstring) | Subset semantics scoped to the subtree at the dotted key path. |
 | `Then the json output should contain rows:` (table) | Parses the last command's stdout as JSON (expected: array of objects). For each table row, asserts an object matching every column value exists in the array. Extra objects are allowed; ordering is not asserted. |
 | `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
+| `Then these ServiceMonitors should exist in namespace {string} using context {string}:` (table) | Requires a `name` header and one or more names. Runs one `kubectl get` with every named ServiceMonitor; exit code 0 proves every listed resource exists. |
 
 #### YAML comparison semantics
 
@@ -447,6 +448,10 @@ func JSONContainsRows(raw string, rows []map[string]string) error
 // FilesDoNotContain recursively inspects regular files under root and
 // fails if any interpolated fixed string appears.
 func FilesDoNotContain(root string, needles []string) error
+
+// ServiceMonitorExistenceCommand builds one kubectl get command whose
+// successful exit proves every named ServiceMonitor exists.
+func ServiceMonitorExistenceCommand(namespace, kubeContext string, names []string) (string, error)
 ```
 
 #### steps package

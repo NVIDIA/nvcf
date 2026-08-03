@@ -155,7 +155,7 @@ When chunking is enabled, each emitted chunk preserves the original log metadata
 
 `log.chunk.structured_paths` contains escaped JSON Pointer paths such as `/attributes/payload/messages/0/content`. Consumers can merge partial maps and slices by path in chunk-index order, concatenating repeated string or byte leaves.
 
-The processor emits `otelcol_processor_logchunk_*` metrics for oversized records, original bytes, emitted chunks, output bytes, and errors. The metric `mode` attribute distinguishes active chunking (`mode=chunk`) from dry run (`mode=dry_run`).
+The processor emits `otelcol_processor_logchunk_*` metrics for oversized records, original payload bytes, emitted chunks, and errors. The metric `mode` attribute distinguishes active chunking (`mode=chunk`) from dry run (`mode=dry_run`).
 
 Advanced collector config can enable exporterhelper byte batching with `sending_queue.batch.sizer=bytes` and configurable `min_size=max_size` where applicable. That exporter-side split limits serialized request size, but it cannot split a single oversized log record; the log chunk processor handles the per-record body limit.
 
