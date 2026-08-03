@@ -36,7 +36,8 @@ tracing:
 
 # Targets the mock JWKS started by `make mock-jwks` (token at /tmp/reval-test-token).
 auth:
-  enabled: true
-  jwk-set-url: "http://localhost:8888/jwks.json"
-  validate-required-scopes: "helmreval:validate"
-  render-required-scopes: "helmreval:render"
+  jwt:
+    enabled: true
+    jwk-set-url: "http://localhost:8888/jwks.json"
+    validate-required-scopes: "helmreval:validate"
+    render-required-scopes: "helmreval:render"

@@ -14,8 +14,8 @@
 # limitations under the License.
 
 # Default values for the reval-service chart.
-# Set serviceConfig.auth.enabled=true and serviceConfig.auth.jwkSetUrl before
-# installing; the server refuses to start otherwise.
+# Set serviceConfig.auth.jwt.enabled=true and serviceConfig.auth.jwt.jwkSetUrl
+# to enable local JWT authentication.
 reval:
   image:
     registry: ""
@@ -101,10 +101,11 @@ reval:
       zapConfiguration: "production"
 
     auth:
-      enabled: false
-      jwkSetUrl: ""
-      validateRequiredScopes: ""
-      renderRequiredScopes: ""
+      jwt:
+        enabled: false
+        jwkSetUrl: ""
+        validateRequiredScopes: ""
+        renderRequiredScopes: ""
       oidc:
         enabled: false
         introspectUrl: ""
