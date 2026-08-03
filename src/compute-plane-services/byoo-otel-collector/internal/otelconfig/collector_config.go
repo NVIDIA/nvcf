@@ -236,10 +236,10 @@ func normalizeSamplingPercentage(pipeline string, samplingPercentage *float64) *
 	}
 
 	if logger.Logger != nil {
-		logger.Logger.Warnf(
-			"BYOO OTel collector %s sampling percentage %v is invalid; sampler disabled",
-			pipeline,
-			*samplingPercentage,
+		logger.Logger.Warnw(
+			"BYOO OTel collector sampling percentage is invalid; sampler disabled",
+			"pipeline", pipeline,
+			"samplingPercentage", *samplingPercentage,
 		)
 	}
 	return nil
