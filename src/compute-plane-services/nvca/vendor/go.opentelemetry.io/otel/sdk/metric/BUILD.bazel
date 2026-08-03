@@ -1,0 +1,51 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "metric",
+    srcs = [
+        "aggregation.go",
+        "cache.go",
+        "config.go",
+        "doc.go",
+        "env.go",
+        "exemplar.go",
+        "exporter.go",
+        "instrument.go",
+        "instrumentkind_string.go",
+        "manual_reader.go",
+        "meter.go",
+        "periodic_reader.go",
+        "pipeline.go",
+        "provider.go",
+        "reader.go",
+        "splitmetrics.go",
+        "version.go",
+        "view.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric",
+    importpath = "go.opentelemetry.io/otel/sdk/metric",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/go.opentelemetry.io/otel",
+        "//vendor/go.opentelemetry.io/otel/attribute",
+        "//vendor/go.opentelemetry.io/otel/internal/global",
+        "//vendor/go.opentelemetry.io/otel/metric",
+        "//vendor/go.opentelemetry.io/otel/metric/embedded",
+        "//vendor/go.opentelemetry.io/otel/metric/noop",
+        "//vendor/go.opentelemetry.io/otel/sdk/instrumentation",
+        "//vendor/go.opentelemetry.io/otel/sdk/metric/exemplar",
+        "//vendor/go.opentelemetry.io/otel/sdk/metric/internal",
+        "//vendor/go.opentelemetry.io/otel/sdk/metric/internal/aggregate",
+        "//vendor/go.opentelemetry.io/otel/sdk/metric/internal/observ",
+        "//vendor/go.opentelemetry.io/otel/sdk/metric/internal/x",
+        "//vendor/go.opentelemetry.io/otel/sdk/metric/metricdata",
+        "//vendor/go.opentelemetry.io/otel/sdk/resource",
+        "//vendor/go.opentelemetry.io/otel/semconv/v1.41.0:v1_41_0",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":metric",
+    visibility = ["//visibility:public"],
+)
