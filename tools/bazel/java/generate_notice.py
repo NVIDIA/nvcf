@@ -131,6 +131,32 @@ def normalized_licenses(licenses, aliases):
     return sorted({aliases.get(license_name, license_name) for license_name in licenses})
 
 
+def designated_license(entry, aliases):
+    designation = entry.get("designated_license")
+    if designation is None:
+        return ""
+    if not isinstance(designation, str) or not designation.strip():
+        raise ValueError("designated_license must be a non-empty string")
+
+    normalized_designation = aliases.get(designation, designation)
+    declared = normalized_licenses(entry.get("licenses", []), aliases)
+    if normalized_designation not in declared:
+        raise ValueError(
+            f"Designated license {designation!r} is not one of the upstream "
+            f"licenses: {', '.join(declared) or 'none'}"
+        )
+    return normalized_designation
+
+
+def notice_license_text(entry, aliases):
+    designation = designated_license(entry, aliases)
+    if not designation:
+        return " ".join(f"({license_name})" for license_name in entry.get("licenses", []))
+
+    declared = " OR ".join(normalized_licenses(entry.get("licenses", []), aliases))
+    return f"(Designated: {designation}; upstream: {declared})"
+
+
 def load_root_manifests(paths):
     roots = []
     for path in paths:
@@ -235,7 +261,7 @@ def runtime_jar_coordinates(paths, maven_install, first_party_groups):
     return sorted(coordinates)
 
 
-def generated_notice(coordinates, maven_install, metadata):
+def generated_notice(coordinates, maven_install, metadata, aliases):
     lines = ["", f"Lists of {len(coordinates)} third-party dependencies."]
     missing = []
     incomplete = []
@@ -254,7 +280,7 @@ def generated_notice(coordinates, maven_install, metadata):
         if not licenses or "UNKNOWN" in licenses:
             incomplete.append(versioned)
             continue
-        license_text = " ".join(f"({license_name})" for license_name in licenses)
+        license_text = notice_license_text(entry, aliases)
         name = entry.get("name") or artifact_id
         url = entry.get("url") or ""
         lines.append(f"     {license_text} {name} ({versioned} - {url})")
@@ -292,14 +318,18 @@ def generated_inventory(coordinates, maven_install, metadata, aliases):
         entry = metadata_artifacts(metadata).get(coordinate)
         if not entry:
             raise ValueError(f"Missing NOTICE metadata for {coordinate}")
-        dependencies.append(
-            {
-                "coordinate": coordinate,
-                "licenses": normalized_licenses(entry.get("licenses", []), aliases),
-                "name": entry.get("name") or artifact_id,
-                "url": entry.get("url") or "",
-            }
-        )
+        declared = normalized_licenses(entry.get("licenses", []), aliases)
+        designation = designated_license(entry, aliases)
+        dependency = {
+            "coordinate": coordinate,
+            "licenses": [designation] if designation else declared,
+            "name": entry.get("name") or artifact_id,
+            "url": entry.get("url") or "",
+        }
+        if designation:
+            dependency["declared_licenses"] = declared
+            dependency["designated_license"] = designation
+        dependencies.append(dependency)
     return {
         "generated_by": "tools/bazel/java/generate_notice.py",
         "dependencies": dependencies,
@@ -553,11 +583,15 @@ def update_metadata(
         if versioned in shared_artifacts:
             continue
         resolved = resolver.resolve(group_id, artifact_id, version)
-        artifacts[versioned] = {
+        updated_entry = {
             "licenses": resolved["licenses"],
             "name": resolved["name"],
             "url": resolved["url"],
         }
+        existing = artifacts.get(versioned, {})
+        if "designated_license" in existing:
+            updated_entry["designated_license"] = existing["designated_license"]
+        artifacts[versioned] = updated_entry
     return {
         "generated_by": "tools/bazel/java/generate_notice.py --update-metadata",
         "artifacts": {key: artifacts[key] for key in sorted(artifacts)},
@@ -679,7 +713,10 @@ def main():
         )
         metadata = merge_metadata(shared_documents, primary_metadata)
 
-    notice = generated_notice(coordinates, maven_install, metadata)
+    aliases = load_license_aliases(
+        pathlib.Path(args.license_aliases) if args.license_aliases else None
+    )
+    notice = generated_notice(coordinates, maven_install, metadata, aliases)
     output_path = pathlib.Path(args.output) if args.output else notice_path
     diff = compare_or_write(notice, output_path, args.write and not args.check)
     if diff:
@@ -695,11 +732,7 @@ def main():
             coordinates,
             maven_install,
             metadata,
-            load_license_aliases(
-                pathlib.Path(args.license_aliases)
-                if args.license_aliases
-                else None
-            ),
+            aliases,
         )
         pathlib.Path(args.inventory_output).write_text(
             json.dumps(inventory, indent=2, sort_keys=True) + "\n"
