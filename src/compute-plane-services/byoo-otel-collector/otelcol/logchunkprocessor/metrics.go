@@ -28,7 +28,6 @@ type processorMetrics struct {
 	oversizeRecords metric.Int64Counter
 	chunks          metric.Int64Counter
 	originalBytes   metric.Int64Counter
-	outputBytes     metric.Int64Counter
 	errors          metric.Int64Counter
 }
 
@@ -60,15 +59,6 @@ func newProcessorMetrics(meter metric.Meter) (processorMetrics, error) {
 		return processorMetrics{}, err
 	}
 
-	outputBytes, err := meter.Int64Counter(
-		"otelcol_processor_logchunk_output_bytes_total",
-		metric.WithDescription("Bytes emitted across chunked log body and attribute payloads."),
-		metric.WithUnit("By"),
-	)
-	if err != nil {
-		return processorMetrics{}, err
-	}
-
 	errors, err := meter.Int64Counter(
 		"otelcol_processor_logchunk_errors_total",
 		metric.WithDescription("Errors encountered while chunking oversized log records."),
@@ -82,7 +72,6 @@ func newProcessorMetrics(meter metric.Meter) (processorMetrics, error) {
 		oversizeRecords: oversizeRecords,
 		chunks:          chunks,
 		originalBytes:   originalBytes,
-		outputBytes:     outputBytes,
 		errors:          errors,
 	}, nil
 }
@@ -99,10 +88,9 @@ func (m processorMetrics) recordOversize(ctx context.Context, mode string, origi
 	m.originalBytes.Add(ctx, originalBytes, opts)
 }
 
-func (m processorMetrics) recordChunks(ctx context.Context, mode string, count int64, outputBytes int64) {
+func (m processorMetrics) recordChunks(ctx context.Context, mode string, count int64) {
 	opts := logChunkMetricAttributes(mode)
 	m.chunks.Add(ctx, count, opts)
-	m.outputBytes.Add(ctx, outputBytes, opts)
 }
 
 func (m processorMetrics) recordError(ctx context.Context, mode string, reason string) {
