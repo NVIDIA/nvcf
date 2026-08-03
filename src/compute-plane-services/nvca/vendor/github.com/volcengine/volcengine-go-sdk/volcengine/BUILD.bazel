@@ -19,11 +19,11 @@ go_library(
     importpath = "github.com/volcengine/volcengine-go-sdk/volcengine",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/volcengine/volcengine-go-sdk/internal/sdkio",
-        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/credentials",
-        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/custom",
-        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/endpoints",
-        "//vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/internal/sdkio",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/credentials",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/custom",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/endpoints",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/volcengineerr",
     ],
 )
 

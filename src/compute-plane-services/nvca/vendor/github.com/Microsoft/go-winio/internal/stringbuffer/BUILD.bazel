@@ -5,11 +5,11 @@ go_library(
     srcs = ["wstring.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio/internal/stringbuffer",
     importpath = "github.com/Microsoft/go-winio/internal/stringbuffer",
-    visibility = ["//vendor/github.com/Microsoft/go-winio:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":stringbuffer",
-    visibility = ["//vendor/github.com/Microsoft/go-winio:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio:__subpackages__"],
 )

@@ -13,11 +13,11 @@ go_library(
     importpath = "oras.land/oras-go/v2/registry/remote/auth",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/oras.land/oras-go/v2/errdef",
-        "//vendor/oras.land/oras-go/v2/internal/syncutil",
-        "//vendor/oras.land/oras-go/v2/registry",
-        "//vendor/oras.land/oras-go/v2/registry/remote/internal/errutil",
-        "//vendor/oras.land/oras-go/v2/registry/remote/retry",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/errdef",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/syncutil",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote/internal/errutil",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote/retry",
     ],
 )
 

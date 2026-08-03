@@ -28,7 +28,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/nats-io/jwt/v2",
     importpath = "github.com/nats-io/jwt/v2",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/nats-io/nkeys"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/nats-io/nkeys"],
 )
 
 alias(

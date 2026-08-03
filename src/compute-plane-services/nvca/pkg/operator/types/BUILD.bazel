@@ -8,7 +8,7 @@ go_library(
     srcs = ["types.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types",
     visibility = ["//visibility:public"],
-    deps = ["//pkg/apis/nvcf/v1:nvcf"],
+    deps = ["//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf"],
 )
 
 alias(
@@ -21,5 +21,5 @@ go_test(
     name = "types_test",
     srcs = ["types_test.go"],
     embed = [":types"],
-    deps = ["//vendor/github.com/stretchr/testify/assert"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert"],
 )

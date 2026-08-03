@@ -16,12 +16,12 @@ go_library(
     importpath = "golang.org/x/crypto/chacha20poly1305",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/golang.org/x/crypto/chacha20",
-        "//vendor/golang.org/x/crypto/internal/alias",
-        "//vendor/golang.org/x/crypto/internal/poly1305",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/crypto/chacha20",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/crypto/internal/alias",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/crypto/internal/poly1305",
     ] + select({
         "@rules_go//go/platform:amd64": [
-            "//vendor/golang.org/x/sys/cpu",
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/cpu",
         ],
         "//conditions:default": [],
     }),

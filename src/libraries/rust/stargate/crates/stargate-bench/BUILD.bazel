@@ -8,10 +8,10 @@ load("@rules_rust//rust:defs.bzl", "rust_binary")
 
 # Workspace-local Cargo deps (own-workspace `workspace = true`).
 _WORKSPACE_DEPS = [
-    "//crates/proto:stargate-proto",
-    "//crates/protocol:stargate-protocol",
-    "//crates/stargate:stargate_lib",
-    "//crates/stargate-tls:stargate-tls",
+    "//src/libraries/rust/stargate/crates/proto:stargate-proto",
+    "//src/libraries/rust/stargate/crates/protocol:stargate-protocol",
+    "//src/libraries/rust/stargate/crates/stargate:stargate_lib",
+    "//src/libraries/rust/stargate/crates/stargate-tls:stargate-tls",
 ]
 
 rust_binary(

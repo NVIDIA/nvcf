@@ -200,24 +200,18 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
+// Only modules this service actually compiles are pinned here. Twelve further
+// replaces (cloud.google.com/go, Masterminds/vcs, google/cel-go,
+// google/gnostic-models, go.yaml.in/yaml/v2, go.yaml.in/yaml/v3,
+// k8s.io/apiextensions-apiserver, k8s.io/apiserver, k8s.io/cluster-bootstrap,
+// k8s.io/component-base, k8s.io/kube-openapi, sigs.k8s.io/yaml) were dropped:
+// nothing here imports them, so they pinned nothing locally, but a replace is
+// not scoped to its own module once the module joins the root go.work. They
+// re-pinned the whole workspace to versions no go.sum covers, and the shared
+// build failed in unrelated subtrees with "No sum for
+// cloud.google.com/go@v0.112.2".
 replace (
-	// Resolves https://github.com/aws-observability/aws-otel-collector/issues/926#issuecomment-1263065587
-	cloud.google.com/go => cloud.google.com/go v0.112.2
-	github.com/Masterminds/vcs => github.com/Masterminds/vcs v1.13.3
-	github.com/google/cel-go => github.com/google/cel-go v0.17.8
-	github.com/google/gnostic-models => github.com/google/gnostic-models v0.6.9
-
-	go.yaml.in/yaml/v2 => go.yaml.in/yaml/v2 v2.4.2
-	go.yaml.in/yaml/v3 => go.yaml.in/yaml/v3 v3.0.3
-
 	k8s.io/api => k8s.io/api v0.33.3
-	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.33.3
 	k8s.io/apimachinery => k8s.io/apimachinery v0.33.3
-	k8s.io/apiserver => k8s.io/apiserver v0.33.3
 	k8s.io/client-go => k8s.io/client-go v0.33.3
-	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.33.3
-	k8s.io/component-base => k8s.io/component-base v0.33.3
-	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff
-
-	sigs.k8s.io/yaml => sigs.k8s.io/yaml v1.5.0
 )

@@ -5,12 +5,12 @@ go_library(
     srcs = ["env.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/trace/internal/env",
     importpath = "go.opentelemetry.io/otel/sdk/trace/internal/env",
-    visibility = ["//vendor/go.opentelemetry.io/otel/sdk/trace:__subpackages__"],
-    deps = ["//vendor/go.opentelemetry.io/otel/internal/global"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/trace:__subpackages__"],
+    deps = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/internal/global"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":env",
-    visibility = ["//vendor/go.opentelemetry.io/otel/sdk/trace:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/trace:__subpackages__"],
 )

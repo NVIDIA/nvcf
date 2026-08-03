@@ -11,12 +11,12 @@ go_library(
     importpath = "k8s.io/klog/v2/textlogger",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/go-logr/logr",
-        "//vendor/k8s.io/klog/v2/internal/buffer",
-        "//vendor/k8s.io/klog/v2/internal/serialize",
-        "//vendor/k8s.io/klog/v2/internal/severity",
-        "//vendor/k8s.io/klog/v2/internal/sloghandler",
-        "//vendor/k8s.io/klog/v2/internal/verbosity",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2/internal/buffer",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2/internal/serialize",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2/internal/severity",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2/internal/sloghandler",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2/internal/verbosity",
     ],
 )
 

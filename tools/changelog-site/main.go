@@ -271,11 +271,20 @@ func buildReleases(repoDir string, tagPrefixes []string, pathFilter, commitBase 
 	}
 	sort.SliceStable(svs, func(i, j int) bool { return less(svs[i], svs[j]) })
 
+	svs, aliases := dedupeByVersion(svs)
+
 	var releases []release
 	for i, sv := range svs {
 		origin := "gitlab"
 		if originFor != nil {
 			origin = originFor(sv.tag)
+			// A release tagged under both the legacy and the path-scoped
+			// prefix is still one release, and it may be carried by a
+			// different host under each name. Fold the dropped tags in so it
+			// is not reported as living on only one of them.
+			for _, alias := range aliases[sv.version] {
+				origin = mergeOrigin(origin, originFor(alias))
+			}
 		}
 		rel := release{Version: sv.version, Tag: sv.tag, Origin: origin}
 		if d, err := git(repoDir, "log", "-1", "--pretty=format:%cI", sv.tag); err == nil {
@@ -313,6 +322,48 @@ func buildReleases(repoDir string, tagPrefixes []string, pathFilter, commitBase 
 		releases = append(releases, rel)
 	}
 	return releases, nil
+}
+
+// dedupeByVersion collapses tags that carry the same semantic version into a
+// single entry, returning the surviving tags and, per version, the tag names
+// that were dropped.
+//
+// A service can have two live tag prefixes for one release line: the legacy
+// flat prefix (nvcf-<svc>-v) and the current path-scoped one
+// (<path>/v). The same release is then tagged twice under different names, and
+// emitting both produced two entries with an identical Version string. The UI
+// keys its from/to pickers by version and defaults them to the last two
+// entries, so when a service's two newest entries were the same release both
+// pickers resolved to the same index and the diff came out empty. The page
+// looked broken while the data behind it was merely duplicated.
+//
+// tagPrefixesForRelease returns the canonical prefix before the legacy one and
+// the caller's sort is stable, so the first occurrence of a version is the
+// canonical tag. Keeping it also keeps the commit ranges anchored to the tag
+// scheme currently in use.
+func dedupeByVersion(svs []semver) ([]semver, map[string][]string) {
+	aliases := map[string][]string{}
+	out := svs[:0:0]
+	seen := map[string]struct{}{}
+	for _, sv := range svs {
+		if _, ok := seen[sv.version]; ok {
+			aliases[sv.version] = append(aliases[sv.version], sv.tag)
+			continue
+		}
+		seen[sv.version] = struct{}{}
+		out = append(out, sv)
+	}
+	return out, aliases
+}
+
+// mergeOrigin combines two host labels for what is now known to be a single
+// release. A release tagged on GitLab under one name and on GitHub under
+// another is carried by both, even though neither tag alone says so.
+func mergeOrigin(a, b string) string {
+	if a == b {
+		return a
+	}
+	return "both"
 }
 
 // sortReleases sorts a merged release list ascending by semantic version.

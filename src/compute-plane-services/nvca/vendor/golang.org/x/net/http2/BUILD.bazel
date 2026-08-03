@@ -38,11 +38,11 @@ go_library(
     importpath = "golang.org/x/net/http2",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/golang.org/x/net/http/httpguts",
-        "//vendor/golang.org/x/net/http2/hpack",
-        "//vendor/golang.org/x/net/idna",
-        "//vendor/golang.org/x/net/internal/httpcommon",
-        "//vendor/golang.org/x/net/internal/httpsfv",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/net/http/httpguts",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/net/http2/hpack",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/net/idna",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/net/internal/httpcommon",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/net/internal/httpsfv",
     ],
 )
 

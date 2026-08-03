@@ -11,12 +11,12 @@ go_library(
     importpath = "k8s.io/client-go/kubernetes/typed/resource/v1alpha3/fake",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/api/resource/v1alpha3",
-        "//vendor/k8s.io/client-go/applyconfigurations/resource/v1alpha3",
-        "//vendor/k8s.io/client-go/gentype",
-        "//vendor/k8s.io/client-go/kubernetes/typed/resource/v1alpha3",
-        "//vendor/k8s.io/client-go/rest",
-        "//vendor/k8s.io/client-go/testing",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/resource/v1alpha3",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/resource/v1alpha3",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/gentype",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/resource/v1alpha3",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/testing",
     ],
 )
 

@@ -11,20 +11,20 @@ go_library(
         "tokenfetcher.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
     deps = [
-        "//pkg/nvca/health",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret",
+        "//src/compute-plane-services/nvca/pkg/nvca/health",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":auth",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )
 
 go_test(
@@ -37,14 +37,14 @@ go_test(
     ],
     embed = [":auth"],
     deps = [
-        "//internal/metrics/clientmetrics",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth",
-        "//vendor/github.com/prometheus/client_golang/prometheus",
-        "//vendor/github.com/prometheus/client_golang/prometheus/promhttp",
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
-        "//vendor/go.opentelemetry.io/otel",
-        "//vendor/go.opentelemetry.io/otel/exporters/prometheus",
-        "//vendor/go.opentelemetry.io/otel/sdk/metric",
+        "//src/compute-plane-services/nvca/internal/metrics/clientmetrics",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promhttp",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/prometheus",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric",
     ],
 )
