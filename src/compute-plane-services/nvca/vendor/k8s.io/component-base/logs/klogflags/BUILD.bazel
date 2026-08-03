@@ -6,7 +6,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/component-base/logs/klogflags",
     importpath = "k8s.io/component-base/logs/klogflags",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/k8s.io/klog/v2:klog"],
+    deps = ["//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog"],
 )
 
 alias(

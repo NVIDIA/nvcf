@@ -10,6 +10,6 @@ exports_files([
 
 alias(
     name = "rs-autoscaler",
-    actual = "//crates/server:server",
+    actual = "//src/control-plane-services/function-autoscaler/crates/server:server",
     visibility = ["//visibility:public"],
 )

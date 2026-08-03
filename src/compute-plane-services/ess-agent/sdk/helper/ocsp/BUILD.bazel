@@ -9,7 +9,7 @@ go_library(
     importpath = "github.com/hashicorp/vault/sdk/helper/ocsp",
     visibility = ["//visibility:public"],
     deps = [
-        "//sdk/helper/certutil",
+        "//src/compute-plane-services/ess-agent/sdk/helper/certutil",
         "@com_github_hashicorp_go_hclog//:go-hclog",
         "@com_github_hashicorp_go_retryablehttp//:go-retryablehttp",
         "@com_github_hashicorp_golang_lru//:golang-lru",

@@ -20,7 +20,7 @@ go_library(
     srcs = ["config.go"],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config",
     visibility = ["//visibility:public"],
-    deps = ["//internal/servicetier"],
+    deps = ["//src/invocation-plane-services/llm-api-gateway/internal/servicetier"],
 )
 
 alias(
@@ -33,5 +33,5 @@ go_test(
     name = "config_test",
     srcs = ["config_test.go"],
     embed = [":config"],
-    deps = ["//internal/servicetier"],
+    deps = ["//src/invocation-plane-services/llm-api-gateway/internal/servicetier"],
 )

@@ -47,9 +47,9 @@ go_library(
         "ratelimiter.version": "{STABLE_VERSION}",
     },
     deps = [
-        "//credentials",
-        "//nvcf/pb",
-        "//pb",
+        "//src/invocation-plane-services/ratelimiter/credentials",
+        "//src/invocation-plane-services/ratelimiter/nvcf/pb",
+        "//src/invocation-plane-services/ratelimiter/pb",
         "@com_github_auth0_go_jwt_middleware_v2//jwks",
         "@com_github_auth0_go_jwt_middleware_v2//validator",
         "@com_github_carlmjohnson_versioninfo//:versioninfo",
@@ -104,7 +104,7 @@ go_test(
     ],
     embed = [":ratelimiter"],
     deps = [
-        "//nvcf/pb",
+        "//src/invocation-plane-services/ratelimiter/nvcf/pb",
         "@com_github_carlmjohnson_versioninfo//:versioninfo",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

@@ -10,8 +10,8 @@ go_library(
     importpath = "k8s.io/client-go/util/flowcontrol",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/golang.org/x/time/rate",
-        "//vendor/k8s.io/utils/clock",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/time/rate",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/utils/clock",
     ],
 )
 

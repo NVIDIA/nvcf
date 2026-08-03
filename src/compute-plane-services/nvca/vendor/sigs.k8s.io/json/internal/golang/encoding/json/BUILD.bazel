@@ -15,11 +15,11 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/json/internal/golang/encoding/json",
     importpath = "sigs.k8s.io/json/internal/golang/encoding/json",
-    visibility = ["//vendor/sigs.k8s.io/json:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/json:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":json",
-    visibility = ["//vendor/sigs.k8s.io/json:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/json:__subpackages__"],
 )

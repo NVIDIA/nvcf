@@ -27,7 +27,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry",
     visibility = ["//visibility:public"],
     deps = [
-        "//internal/must",
+        "//src/invocation-plane-services/llm-api-gateway/internal/must",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
         "@com_github_olric_data_olric//:olric",
         "@com_github_olric_data_olric//stats",
@@ -39,7 +39,7 @@ go_library(
         "@io_opentelemetry_go_otel//:otel",
         "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel//propagation",
-        "@io_opentelemetry_go_otel//semconv/v1.40.0:v1_40_0",
+        "@io_opentelemetry_go_otel//semconv/v1.41.0:v1_41_0",
         "@io_opentelemetry_go_otel_exporters_otlp_otlpmetric_otlpmetricgrpc//:otlpmetricgrpc",
         "@io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracegrpc//:otlptracegrpc",
         "@io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracehttp//:otlptracehttp",

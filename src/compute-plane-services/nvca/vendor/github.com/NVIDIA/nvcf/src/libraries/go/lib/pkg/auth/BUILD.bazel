@@ -7,10 +7,10 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret",
-        "//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
-        "//vendor/go.opentelemetry.io/otel/metric/noop",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric/noop",
     ],
 )
 
