@@ -634,6 +634,75 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 	}
 }
 
+// TestObservabilityDisabledFeatureFileWiresToSteps runs the render-only
+// observability-disabled feature against a fake runner. The fixture setup
+// mirrors the local Helmfile inputs while the feature asserts disabled profile
+// renders omit observability resources from both stacks.
+func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	suite := newWiringSuite(t, newFakeRunner(nil))
+	t.Setenv("REPO_ROOT", suite.Config.RepoRoot)
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	seedObservabilityDisabledRegistrationValuesFixture(t, suite.Config.RepoRoot)
+	seedObservabilityDisabledRenderOutput(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "observability-disabled.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "observability-disabled-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanThatContains(runs, "deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-observability-disabled") {
+		t.Fatal("control-plane Helmfile template command was never invoked")
+	}
+	if !commandRanThatContains(runs, "deploy/stacks/nvcf-compute-plane template CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-observability-disabled") {
+		t.Fatal("compute-plane Helmfile template command was never invoked")
+	}
+}
+
+func seedObservabilityDisabledRegistrationValuesFixture(t *testing.T, repoRoot string) {
+	t.Helper()
+	fixturePath := filepath.Join("fixtures", "ncp-local-register-values.yaml")
+	body, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read registration fixture %s: %v", fixturePath, err)
+	}
+	writeFixture(t, repoRoot, "ncp-local-register-values.yaml", string(body))
+}
+
+func seedObservabilityDisabledRenderOutput(t *testing.T, repoRoot string) {
+	t.Helper()
+	for _, relativePath := range []string{
+		filepath.Join("control-plane", "api.yaml"),
+		filepath.Join("compute-plane", "nvca.yaml"),
+	} {
+		path := filepath.Join(repoRoot, "tests", "bdd", "out", "observability-disabled", relativePath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create rendered output directory: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("kind: Deployment\n"), 0o644); err != nil {
+			t.Fatalf("write rendered output %s: %v", relativePath, err)
+		}
+	}
+}
+
 // helmListAllNamespacesJSON returns canned helm-list output covering
 // every release the helmfile install scenario asserts.
 func helmListAllNamespacesJSON() string {
@@ -1108,6 +1177,15 @@ func TestSingleClusterHelmfileUpstreamImages(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "single-cluster-helmfile-upstream-images.feature")
+}
+
+// TestObservabilityDisabled is the live entry point for the render-only
+// disabled observability profile feature. Skipped under -short.
+func TestObservabilityDisabled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "observability-disabled.feature")
 }
 
 // TestMultiClusterHelmfile is the live entry point for the
