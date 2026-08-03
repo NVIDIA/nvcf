@@ -458,25 +458,15 @@ func (r *Reconciler) saveWorkloadConfig(
 		return nil
 	}
 
-	base := &v1alpha1.MiniService{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: v1alpha1.SchemeGroupVersion.String(),
-			Kind:       "MiniService",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            ms.Name,
-			ResourceVersion: ms.ResourceVersion,
-		},
-		Spec: v1alpha1.MiniServiceSpec{
-			WorkloadConfig: desired.DeepCopy(),
-		},
-	}
-	if err := r.Client.Patch(ctx, base, client.Apply, client.ForceOwnership, client.FieldOwner(managedByValue)); err != nil {
+	original := ms.DeepCopy()
+	updated := original.DeepCopy()
+	updated.Spec.WorkloadConfig = desired.DeepCopy()
+	if err := r.Client.Patch(ctx, updated, client.MergeFrom(original)); err != nil {
 		return fmt.Errorf("patch miniservice %s workload config: %w", ms.Name, err)
 	}
 
-	ms.Spec.WorkloadConfig = desired
-	ms.ResourceVersion = base.ResourceVersion
+	ms.Spec.WorkloadConfig = updated.Spec.WorkloadConfig
+	ms.ResourceVersion = updated.ResourceVersion
 	return nil
 }
 

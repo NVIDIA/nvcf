@@ -5418,3 +5418,42 @@ func TestPatchMiniService(t *testing.T) {
 		})
 	}
 }
+
+func TestSaveWorkloadConfigPreservesExistingSpec(t *testing.T) {
+	ctx := newTestContext()
+	stored := baseMiniServiceForPatchTest()
+	patchType := client.Apply.Type()
+	var patchData []byte
+	crClient, _ := newFakeClientWithInterceptors(
+		mgrScheme,
+		interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				patchType = patch.Type()
+				var err error
+				patchData, err = patch.Data(obj)
+				require.NoError(t, err)
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		},
+		stored,
+	)
+	r := &Reconciler{Client: crClient}
+
+	ms := &v1alpha1.MiniService{}
+	require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), ms))
+	wantSpec := ms.Spec.DeepCopy()
+	desired := &v1alpha1.WorkloadConfig{
+		FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+	}
+
+	require.NoError(t, r.saveWorkloadConfig(ctx, ms, desired))
+
+	got := &v1alpha1.MiniService{}
+	require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), got))
+	assert.Equal(t, client.Merge.Type(), patchType)
+	assert.Contains(t, string(patchData), `"workloadConfig":{"featureFlags":{"StatusByWorkerReadiness":true}}`)
+	assert.Equal(t, wantSpec.Namespace, got.Spec.Namespace)
+	assert.Equal(t, wantSpec.ICMSRequestName, got.Spec.ICMSRequestName)
+	assert.Empty(t, cmp.Diff(wantSpec.HelmChartConfig, got.Spec.HelmChartConfig))
+	assert.Empty(t, cmp.Diff(desired, got.Spec.WorkloadConfig))
+}
