@@ -15,10 +15,10 @@ cassandra:
   migrations:
     image:
       registry: nvcr.io
-      repository: 0651155215864979/ncp-dev/nvcf-cassandra-migrations
+      repository: <your-org>/nvcf-cassandra-migrations
   image:
     registry: nvcr.io
-    repository: 0651155215864979/ncp-dev/cassandra
+    repository: <your-org>/cassandra
 ```
 
 ## Prerequisites
