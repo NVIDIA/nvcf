@@ -19,6 +19,7 @@ package otelconfig
 
 import (
 	"encoding/base64"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -356,4 +357,75 @@ func TestGetTemplateConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOTelCollectorConfig_NormalizeSamplingDisablesInvalidSampling(t *testing.T) {
+	tests := []struct {
+		name               string
+		samplingPercentage float64
+	}{
+		{name: "NaN", samplingPercentage: math.NaN()},
+		{name: "positive infinity", samplingPercentage: math.Inf(1)},
+		{name: "negative infinity", samplingPercentage: math.Inf(-1)},
+		{name: "negative", samplingPercentage: -1},
+		{name: "below precision floor", samplingPercentage: minSamplingPercentage / 2},
+		{name: "exceeds float32", samplingPercentage: float64(math.MaxFloat32) * 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			samplingPercentage := tt.samplingPercentage
+			config := OTelCollectorConfig{
+				LogSampling:   LogSamplingConfig{SamplingPercentage: &samplingPercentage},
+				TraceSampling: SamplingConfig{SamplingPercentage: &samplingPercentage},
+			}
+
+			config.normalizeSampling()
+
+			assert.Nil(t, config.LogSampling.SamplingPercentage)
+			assert.Nil(t, config.TraceSampling.SamplingPercentage)
+			assert.True(t, config.IsZero())
+		})
+	}
+}
+
+func TestDecodeOTelCollectorConfigDisablesInvalidSampling(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(`{
+        "exporterHelper": {"timeout": "30s"},
+        "logSampling": {"samplingPercentage": -1, "mode": "hash_seed"},
+        "traceSampling": {"samplingPercentage": 0.000000000000001, "mode": "hash_seed"}
+    }`))
+
+	config, err := decodeOTelCollectorConfig(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, "30s", config.ExporterHelper.Timeout)
+	assert.Nil(t, config.LogSampling.SamplingPercentage)
+	assert.Nil(t, config.TraceSampling.SamplingPercentage)
+}
+
+func TestApplyOTelCollectorConfigDisablesInvalidSampling(t *testing.T) {
+	invalidSamplingPercentage := -1.0
+	config := OTelCollectorConfig{
+		LogSampling:   LogSamplingConfig{SamplingPercentage: &invalidSamplingPercentage},
+		TraceSampling: SamplingConfig{SamplingPercentage: &invalidSamplingPercentage},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+	otelConfig.Service.Pipelines["logs"] = struct {
+		Receivers  []string `yaml:"receivers"`
+		Exporters  []string `yaml:"exporters"`
+		Processors []string `yaml:"processors"`
+	}{Processors: []string{"batch/logs"}}
+	otelConfig.Service.Pipelines["traces"] = struct {
+		Receivers  []string `yaml:"receivers"`
+		Exporters  []string `yaml:"exporters"`
+		Processors []string `yaml:"processors"`
+	}{Processors: []string{"batch"}}
+
+	applyOTelCollectorConfig(otelConfig, config)
+
+	assert.NotContains(t, otelConfig.Processors, "probabilistic_sampler/logs")
+	assert.NotContains(t, otelConfig.Processors, "probabilistic_sampler/traces")
+	assert.Equal(t, []string{"batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
+	assert.Equal(t, []string{"batch"}, otelConfig.Service.Pipelines["traces"].Processors)
 }

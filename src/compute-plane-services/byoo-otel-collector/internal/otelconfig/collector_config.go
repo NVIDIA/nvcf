@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
 )
@@ -34,6 +35,8 @@ type OTelCollectorConfig struct {
 	LogSampling    LogSamplingConfig    `json:"logSampling,omitempty"`
 	TraceSampling  SamplingConfig       `json:"traceSampling,omitempty"`
 }
+
+const minSamplingPercentage = 100.0 / (1 << 56)
 
 // IsZero returns true when no collector rendering overrides are configured.
 func (c *OTelCollectorConfig) IsZero() bool {
@@ -205,10 +208,12 @@ func decodeOTelCollectorConfig(encoded string) (OTelCollectorConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return OTelCollectorConfig{}, fmt.Errorf("decode json: %w", err)
 	}
+	cfg.normalizeSampling()
 	return cfg, nil
 }
 
 func applyOTelCollectorConfig(otelConfig *OpenTelemetryConfig, cfg OTelCollectorConfig) {
+	cfg.normalizeSampling()
 	if cfg.IsZero() {
 		return
 	}
@@ -218,6 +223,34 @@ func applyOTelCollectorConfig(otelConfig *OpenTelemetryConfig, cfg OTelCollector
 	applyLogBatchConfig(otelConfig, cfg.LogBatch)
 	applyLogSamplingConfig(otelConfig, "probabilistic_sampler/logs", cfg.LogSampling)
 	applySamplingConfig(otelConfig, "traces", "probabilistic_sampler/traces", cfg.TraceSampling)
+}
+
+func (c *OTelCollectorConfig) normalizeSampling() {
+	c.LogSampling.SamplingPercentage = normalizeSamplingPercentage("logs", c.LogSampling.SamplingPercentage)
+	c.TraceSampling.SamplingPercentage = normalizeSamplingPercentage("traces", c.TraceSampling.SamplingPercentage)
+}
+
+func normalizeSamplingPercentage(pipeline string, samplingPercentage *float64) *float64 {
+	if samplingPercentage == nil || isValidSamplingPercentage(*samplingPercentage) {
+		return samplingPercentage
+	}
+
+	if logger.Logger != nil {
+		logger.Logger.Warnf(
+			"BYOO OTel collector %s sampling percentage %v is invalid; sampler disabled",
+			pipeline,
+			*samplingPercentage,
+		)
+	}
+	return nil
+}
+
+func isValidSamplingPercentage(samplingPercentage float64) bool {
+	return !math.IsNaN(samplingPercentage) &&
+		!math.IsInf(samplingPercentage, 0) &&
+		samplingPercentage >= 0 &&
+		samplingPercentage <= math.MaxFloat32 &&
+		(samplingPercentage == 0 || samplingPercentage >= minSamplingPercentage)
 }
 
 func applySamplingConfig(otelConfig *OpenTelemetryConfig, pipelineID, processorID string, cfg SamplingConfig) {

@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -252,6 +253,49 @@ func TestAgentConfig_BYOOOTelCollectorEnvVars(t *testing.T) {
 	var got BYOOOTelCollectorConfig
 	require.NoError(t, json.Unmarshal(decodedBytes, &got))
 	assert.Equal(t, cfg.BYOOOTelCollector, got)
+}
+
+func TestBYOOOTelCollectorConfig_EnvVarsDisablesInvalidSampling(t *testing.T) {
+	tests := []struct {
+		name               string
+		samplingPercentage float64
+	}{
+		{name: "NaN", samplingPercentage: math.NaN()},
+		{name: "positive infinity", samplingPercentage: math.Inf(1)},
+		{name: "negative infinity", samplingPercentage: math.Inf(-1)},
+		{name: "negative", samplingPercentage: -1},
+		{name: "below precision floor", samplingPercentage: byooOTelMinSamplingPercentage / 2},
+		{name: "exceeds float32", samplingPercentage: float64(math.MaxFloat32) * 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			samplingPercentage := tt.samplingPercentage
+			config := BYOOOTelCollectorConfig{
+				ExporterHelper: BYOOOTelExporterHelperConfig{Timeout: "30s"},
+				LogSampling: BYOOOTelLogSamplingConfig{
+					SamplingPercentage: &samplingPercentage,
+					Mode:               "hash_seed",
+				},
+				TraceSampling: BYOOOTelSamplingConfig{
+					SamplingPercentage: &samplingPercentage,
+					Mode:               "hash_seed",
+				},
+			}
+
+			envs := config.EnvVars()
+			require.Len(t, envs, 1)
+			assert.Equal(t, BYOOOTelCollectorConfigEnv, envs[0].Name)
+
+			data, err := base64.StdEncoding.DecodeString(envs[0].Value)
+			require.NoError(t, err)
+			var got BYOOOTelCollectorConfig
+			require.NoError(t, json.Unmarshal(data, &got))
+			assert.Equal(t, "30s", got.ExporterHelper.Timeout)
+			assert.Nil(t, got.LogSampling.SamplingPercentage)
+			assert.Nil(t, got.TraceSampling.SamplingPercentage)
+		})
+	}
 }
 
 func TestAgentTimeConfig_Complete(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -196,6 +197,8 @@ type BYOOOTelCollectorConfig struct {
 	TraceSampling  BYOOOTelSamplingConfig       `mapstructure:"traceSampling" yaml:"traceSampling,omitempty" json:"traceSampling,omitempty"`
 }
 
+const byooOTelMinSamplingPercentage = 100.0 / (1 << 56)
+
 // IsZero returns true when no collector rendering overrides are configured.
 func (c BYOOOTelCollectorConfig) IsZero() bool {
 	return c.ExporterHelper.IsZero() &&
@@ -208,6 +211,7 @@ func (c BYOOOTelCollectorConfig) IsZero() bool {
 
 // EnvVars returns the BYOO collector env vars for the structured config.
 func (c BYOOOTelCollectorConfig) EnvVars() []corev1.EnvVar {
+	c.normalizeSampling()
 	if c.IsZero() {
 		return nil
 	}
@@ -219,6 +223,31 @@ func (c BYOOOTelCollectorConfig) EnvVars() []corev1.EnvVar {
 		Name:  BYOOOTelCollectorConfigEnv,
 		Value: base64.StdEncoding.EncodeToString(data),
 	}}
+}
+
+func (c *BYOOOTelCollectorConfig) normalizeSampling() {
+	c.LogSampling.SamplingPercentage = normalizeBYOOOTelSamplingPercentage("logs", c.LogSampling.SamplingPercentage)
+	c.TraceSampling.SamplingPercentage = normalizeBYOOOTelSamplingPercentage("traces", c.TraceSampling.SamplingPercentage)
+}
+
+func normalizeBYOOOTelSamplingPercentage(pipeline string, samplingPercentage *float64) *float64 {
+	if samplingPercentage == nil || isValidBYOOOTelSamplingPercentage(*samplingPercentage) {
+		return samplingPercentage
+	}
+
+	logrus.WithFields(logrus.Fields{
+		"pipeline":            pipeline,
+		"sampling_percentage": *samplingPercentage,
+	}).Warn("Ignoring invalid BYOO OTel sampling percentage; sampler disabled")
+	return nil
+}
+
+func isValidBYOOOTelSamplingPercentage(samplingPercentage float64) bool {
+	return !math.IsNaN(samplingPercentage) &&
+		!math.IsInf(samplingPercentage, 0) &&
+		samplingPercentage >= 0 &&
+		samplingPercentage <= math.MaxFloat32 &&
+		(samplingPercentage == 0 || samplingPercentage >= byooOTelMinSamplingPercentage)
 }
 
 // BYOOOTelSamplingConfig configures the BYOO collector trace probabilistic sampling processor.
