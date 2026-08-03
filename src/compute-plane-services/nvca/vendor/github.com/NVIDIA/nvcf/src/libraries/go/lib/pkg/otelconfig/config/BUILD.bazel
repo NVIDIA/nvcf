@@ -10,8 +10,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig",
-        "//vendor/gopkg.in/yaml.v3:yaml_v3",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig",
+        "//src/compute-plane-services/nvca/vendor/gopkg.in/yaml.v3:yaml_v3",
     ],
 )
 

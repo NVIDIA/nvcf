@@ -9,12 +9,12 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # `workspace = true` references against own-workspace members are not in
 # that set).
 _WORKSPACE_DEPS = [
-    "//crates/proto:stargate-proto",
-    "//crates/protocol:stargate-protocol",
-    "//crates/stargate-auth:stargate-auth",
-    "//crates/stargate-runtime:stargate-runtime",
-    "//crates/stargate-telemetry:stargate-telemetry",
-    "//crates/stargate-tls:stargate-tls",
+    "//src/libraries/rust/stargate/crates/proto:stargate-proto",
+    "//src/libraries/rust/stargate/crates/protocol:stargate-protocol",
+    "//src/libraries/rust/stargate/crates/stargate-auth:stargate-auth",
+    "//src/libraries/rust/stargate/crates/stargate-runtime:stargate-runtime",
+    "//src/libraries/rust/stargate/crates/stargate-telemetry:stargate-telemetry",
+    "//src/libraries/rust/stargate/crates/stargate-tls:stargate-tls",
 ]
 
 rust_library(

@@ -4,13 +4,13 @@ go_library(
     name = "cli",
     srcs = ["cli.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/cli",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
     deps = [
-        "//internal/logger",
-        "//internal/metrics",
-        "//internal/otelcollector",
-        "//internal/otelconfig",
-        "//internal/secrets",
+        "//src/compute-plane-services/byoo-otel-collector/internal/logger",
+        "//src/compute-plane-services/byoo-otel-collector/internal/metrics",
+        "//src/compute-plane-services/byoo-otel-collector/internal/otelcollector",
+        "//src/compute-plane-services/byoo-otel-collector/internal/otelconfig",
+        "//src/compute-plane-services/byoo-otel-collector/internal/secrets",
         "@com_github_spf13_cobra//:cobra",
         "@com_github_spf13_pflag//:pflag",
     ],
@@ -19,7 +19,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":cli",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
 )
 
 go_test(
@@ -27,7 +27,7 @@ go_test(
     srcs = ["cli_test.go"],
     embed = [":cli"],
     deps = [
-        "//internal/logger",
+        "//src/compute-plane-services/byoo-otel-collector/internal/logger",
         "@org_uber_go_zap//:zap",
         "@org_uber_go_zap//zapcore",
         "@org_uber_go_zap//zaptest/observer",

@@ -29,8 +29,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses",
     visibility = ["//visibility:public"],
     deps = [
-        "//internal/ptr",
-        "//mcp",
+        "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
+        "//src/invocation-plane-services/llm-api-gateway/mcp",
         "@com_jetify_go_sse//:sse",
     ],
 )
@@ -51,7 +51,7 @@ go_test(
     data = glob(["testdata/**"]),
     embed = [":openairesponses"],
     deps = [
-        "//internal/ptr",
+        "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@tools_gotest_v3//golden",

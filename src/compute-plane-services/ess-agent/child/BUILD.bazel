@@ -14,7 +14,7 @@ go_library(
     ],
     importpath = "github.com/hashicorp/consul-template/child",
     visibility = ["//visibility:public"],
-    deps = ["//signals"],
+    deps = ["//src/compute-plane-services/ess-agent/signals"],
 )
 
 alias(
@@ -35,7 +35,7 @@ go_test(
     args = ["-test.skip=TestReload_noSignal"],
     embed = [":child"],
     deps = [
-        "//signals",
+        "//src/compute-plane-services/ess-agent/signals",
         "@com_github_hashicorp_go_gatedio//:go-gatedio",
         "@com_github_hashicorp_go_hclog//:go-hclog",
         "@org_golang_x_sys//unix",

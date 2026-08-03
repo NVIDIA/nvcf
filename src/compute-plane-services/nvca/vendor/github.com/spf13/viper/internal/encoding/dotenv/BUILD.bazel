@@ -8,15 +8,15 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spf13/viper/internal/encoding/dotenv",
     importpath = "github.com/spf13/viper/internal/encoding/dotenv",
-    visibility = ["//vendor/github.com/spf13/viper:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/spf13/viper:__subpackages__"],
     deps = [
-        "//vendor/github.com/spf13/cast",
-        "//vendor/github.com/subosito/gotenv",
+        "//src/compute-plane-services/nvca/vendor/github.com/spf13/cast",
+        "//src/compute-plane-services/nvca/vendor/github.com/subosito/gotenv",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":dotenv",
-    visibility = ["//vendor/github.com/spf13/viper:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/spf13/viper:__subpackages__"],
 )

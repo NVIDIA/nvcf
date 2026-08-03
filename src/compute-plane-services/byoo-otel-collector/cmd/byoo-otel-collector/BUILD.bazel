@@ -6,8 +6,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/cmd/byoo-otel-collector",
     visibility = ["//visibility:private"],
     deps = [
-        "//internal/cli",
-        "//internal/logger",
+        "//src/compute-plane-services/byoo-otel-collector/internal/cli",
+        "//src/compute-plane-services/byoo-otel-collector/internal/logger",
     ],
 )
 

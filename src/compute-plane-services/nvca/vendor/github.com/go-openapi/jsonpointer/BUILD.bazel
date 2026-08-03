@@ -9,7 +9,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/jsonpointer",
     importpath = "github.com/go-openapi/jsonpointer",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/go-openapi/swag/jsonname"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/jsonname"],
 )
 
 alias(

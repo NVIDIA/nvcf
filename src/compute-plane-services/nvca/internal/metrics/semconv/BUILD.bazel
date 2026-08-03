@@ -5,7 +5,7 @@ go_library(
     srcs = ["semconv.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv",
     visibility = ["//:__subpackages__"],
-    deps = ["//vendor/go.opentelemetry.io/otel/attribute"],
+    deps = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute"],
 )
 
 alias(

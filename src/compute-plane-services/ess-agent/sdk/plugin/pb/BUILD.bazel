@@ -13,9 +13,9 @@ go_library(
     importpath = "github.com/hashicorp/vault/sdk/plugin/pb",
     visibility = ["//visibility:public"],
     deps = [
-        "//sdk/helper/errutil",
-        "//sdk/helper/wrapping",
-        "//sdk/logical",
+        "//src/compute-plane-services/ess-agent/sdk/helper/errutil",
+        "//src/compute-plane-services/ess-agent/sdk/helper/wrapping",
+        "//src/compute-plane-services/ess-agent/sdk/logical",
         "@com_github_golang_protobuf//ptypes",
         "@com_github_hashicorp_go_secure_stdlib_parseutil//:parseutil",
         "@org_golang_google_grpc//:grpc",
@@ -38,8 +38,8 @@ go_test(
     srcs = ["translation_test.go"],
     embed = [":pb"],
     deps = [
-        "//sdk/helper/errutil",
-        "//sdk/helper/wrapping",
-        "//sdk/logical",
+        "//src/compute-plane-services/ess-agent/sdk/helper/errutil",
+        "//src/compute-plane-services/ess-agent/sdk/helper/wrapping",
+        "//src/compute-plane-services/ess-agent/sdk/logical",
     ],
 )

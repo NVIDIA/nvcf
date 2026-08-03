@@ -5,5 +5,5 @@ exports_files(
     [
         "image_entrypoint_mode_test.sh",
     ],
-    visibility = ["//:__pkg__"],
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__pkg__"],
 )
