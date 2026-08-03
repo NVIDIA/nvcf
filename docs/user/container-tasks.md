@@ -164,7 +164,7 @@ Field requirements:
 | Field | Required | Description |
 | --- | --- | --- |
 | `taskId` | Yes | Task ID from `NVCT_TASK_ID` |
-| `percentComplete` | Yes | Integer 1-100; must be monotonically increasing |
+| `percentComplete` | Yes | Integer 1-100; must be non-decreasing (equal values are permitted) |
 | `name` | Yes | Name of the current result; 1-190 characters, allowed characters: letters, digits, `!`, `-`, `_`, `.`, `*`, `'`, `(`, `)`, no `./` or `../` prefix |
 | `metadata` | No | Arbitrary key-value pairs surfaced in task details |
 | `lastUpdatedAt` | Yes | RFC3339Nano timestamp; must be refreshed at least every 3 minutes |
@@ -177,9 +177,11 @@ write transitions the task to `COMPLETED`. A container that exits without
 writing `100` will not reach `COMPLETED`.
 
 **Intermediate results:** For checkpoints or partial outputs, write
-`percentComplete` between 1 and 99 with a unique `name` for each checkpoint.
-Do not write to a result directory after updating `name` to a new value in the
-progress file.
+`percentComplete` between 1 and 99 with a `name` for each checkpoint. When
+using `UPLOAD`, each checkpoint name must be unique and you must not write to
+a result directory after updating `name` to a new value, since the system reads
+`resultsDir` to upload files by name. With `NONE`, there is no write-ordering
+constraint on the results directory.
 
 **Atomic writes:** Write to a temporary file and rename it over
 `NVCT_PROGRESS_FILE_PATH` to avoid the task system reading a partial file.

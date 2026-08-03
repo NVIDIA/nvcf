@@ -80,7 +80,7 @@ progress file schema and heartbeat requirements.
 Because Kubernetes may restart containers, use a Job with `backoffLimit: 0` and
 `restartPolicy: Never` for the workload container. A restarted container that
 writes a lower `percentComplete` than a previous write causes a task failure --
-the value must always increase toward 100.
+the value must be non-decreasing across all writes.
 
 ```yaml
 apiVersion: batch/v1
