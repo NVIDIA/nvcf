@@ -4,15 +4,16 @@ set -euo pipefail
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d)"
 cluster_name="observability-profile-test-$$"
-registration_values="$stack_dir/out/$cluster_name-register-values.yaml"
-trap 'rm -rf "$work_dir"; rm -f "$registration_values"' EXIT
+output_dir="$work_dir/render-output"
+registration_values="$output_dir/$cluster_name-register-values.yaml"
+trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
   echo "observability-profile: $*" >&2
   exit 1
 }
 
-mkdir -p "$stack_dir/out"
+mkdir -p "$output_dir"
 cp "$stack_dir/testdata/registration/ncp-local-register-values.yaml" \
   "$registration_values"
 
@@ -29,10 +30,11 @@ render_values() {
   HELMFILE_ENV=base \
     CLUSTER_NAME="$cluster_name" \
     NCA_ID=nvcf-default \
+    OUTPUT_DIR="$output_dir" \
     helmfile \
       --file "$stack_dir/helmfile.d/02-nvca.yaml.gotmpl" \
       --environment default \
-      "${profile_args[@]}" \
+      "${profile_args[@]+"${profile_args[@]}"}" \
       "$@" \
       --selector name=nvca-operator \
       write-values \

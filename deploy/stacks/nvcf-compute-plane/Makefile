@@ -222,7 +222,7 @@ help:
 	@echo "  KUBECONFIG_FILE    Path to kubeconfig file (pass to all targets in"
 	@echo "                     multi-cluster setups so registration reads JWKS"
 	@echo "                     from the correct cluster)"
-	@echo "  OUTPUT_DIR         Output directory for template (default: ./out)"
+	@echo "  OUTPUT_DIR         Output and Helmfile handoff directory (default: ./out)"
 	@echo "  NCA_ID             NCA identifier (default: $(NCA_ID))"
 	@echo "  CLUSTER_REGION     Cluster region (default: $(CLUSTER_REGION))"
 	@echo "  ICMS_URL           ICMS endpoint (default: $(ICMS_URL))"
