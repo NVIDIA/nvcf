@@ -9,11 +9,11 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio/internal/socket",
     importpath = "github.com/Microsoft/go-winio/internal/socket",
-    visibility = ["//vendor/github.com/Microsoft/go-winio:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio:__subpackages__"],
     deps = select({
         "@rules_go//go/platform:windows": [
-            "//vendor/github.com/Microsoft/go-winio/pkg/guid",
-            "//vendor/golang.org/x/sys/windows",
+            "//src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio/pkg/guid",
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/windows",
         ],
         "//conditions:default": [],
     }),
@@ -22,5 +22,5 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":socket",
-    visibility = ["//vendor/github.com/Microsoft/go-winio:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio:__subpackages__"],
 )

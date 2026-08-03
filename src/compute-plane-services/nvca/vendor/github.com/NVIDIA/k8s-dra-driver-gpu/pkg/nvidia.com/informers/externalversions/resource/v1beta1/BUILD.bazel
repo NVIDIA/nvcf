@@ -10,14 +10,14 @@ go_library(
     importpath = "github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/resource/v1beta1",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1",
-        "//vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/clientset/versioned",
-        "//vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/internalinterfaces",
-        "//vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/listers/resource/v1beta1",
-        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
-        "//vendor/k8s.io/apimachinery/pkg/runtime",
-        "//vendor/k8s.io/apimachinery/pkg/watch",
-        "//vendor/k8s.io/client-go/tools/cache",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/clientset/versioned",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/informers/externalversions/internalinterfaces",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/k8s-dra-driver-gpu/pkg/nvidia.com/listers/resource/v1beta1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
     ],
 )
 

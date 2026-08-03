@@ -7,8 +7,8 @@ go_library(
     importpath = "k8s.io/apimachinery/pkg/util/uuid",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/google/uuid",
-        "//vendor/k8s.io/apimachinery/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/uuid",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
     ],
 )
 

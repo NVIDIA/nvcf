@@ -5,7 +5,7 @@ go_library(
     srcs = ["gateway_config.go"],
     importpath = "ai-api-gateway-service/gateway_config",
     visibility = ["//visibility:public"],
-    deps = ["//internal/reloadableconfig"],
+    deps = ["//src/invocation-plane-services/vanity-gateway/internal/reloadableconfig"],
 )
 
 alias(

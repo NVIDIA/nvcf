@@ -7,8 +7,8 @@ go_library(
     importpath = "github.com/go-openapi/jsonreference",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/go-openapi/jsonpointer",
-        "//vendor/github.com/go-openapi/jsonreference/internal",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-openapi/jsonpointer",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-openapi/jsonreference/internal",
     ],
 )
 

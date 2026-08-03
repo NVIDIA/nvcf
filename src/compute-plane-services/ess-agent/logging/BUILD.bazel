@@ -13,7 +13,7 @@ go_library(
     importpath = "github.com/hashicorp/consul-template/logging",
     visibility = ["//visibility:public"],
     deps = [
-        "//config",
+        "//src/compute-plane-services/ess-agent/config",
         "@com_github_hashicorp_go_syslog//:go-syslog",
         "@com_github_hashicorp_logutils//:logutils",
     ],
@@ -39,7 +39,7 @@ go_test(
     tags = ["manual"],
     embed = [":logging"],
     deps = [
-        "//config",
+        "//src/compute-plane-services/ess-agent/config",
         "@com_github_hashicorp_go_syslog//:go-syslog",
         "@com_github_hashicorp_logutils//:logutils",
         "@com_github_stretchr_testify//require",

@@ -33,7 +33,7 @@ go_library(
     x_defs = {
         "github.com/NVIDIA/nvcf/src/libraries/go/worker/utils.Version": "{STABLE_VERSION}",
     },
-    deps = ["//service"],
+    deps = ["//src/compute-plane-services/worker-init/service"],
 )
 
 go_binary(
@@ -47,7 +47,7 @@ go_oci_image(
     base = "@distroless_go",
     binary = ":worker-init",
     # SetupEssAgent reads these files when a function uses secrets.
-    extra_layers = ["//pkg/ess:ess_config_layer"],
+    extra_layers = ["//src/compute-plane-services/worker-init/pkg/ess:ess_config_layer"],
     tags = ["nvcf-worker-init"],
     visibility = ["//visibility:public"],
 )

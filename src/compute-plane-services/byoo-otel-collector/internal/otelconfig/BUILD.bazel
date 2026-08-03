@@ -17,10 +17,10 @@ go_library(
         "templates/config-vm-helm.yaml.tmpl",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelconfig",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
     deps = [
-        "//internal/logger",
-        "//internal/metrics",
+        "//src/compute-plane-services/byoo-otel-collector/internal/logger",
+        "//src/compute-plane-services/byoo-otel-collector/internal/metrics",
         "@com_github_kelseyhightower_envconfig//:envconfig",
         "@in_gopkg_yaml_v3//:yaml_v3",
     ],
@@ -29,7 +29,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":otelconfig",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
 )
 
 go_test(
@@ -50,7 +50,7 @@ go_test(
     # still exercises this test.
     tags = ["manual"],
     deps = [
-        "//internal/logger",
+        "//src/compute-plane-services/byoo-otel-collector/internal/logger",
         "@com_github_stretchr_testify//assert",
         "@in_gopkg_yaml_v3//:yaml_v3",
     ],

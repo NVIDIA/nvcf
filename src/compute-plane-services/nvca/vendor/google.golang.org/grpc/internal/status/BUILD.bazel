@@ -5,18 +5,18 @@ go_library(
     srcs = ["status.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/status",
     importpath = "google.golang.org/grpc/internal/status",
-    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
     deps = [
-        "//vendor/google.golang.org/genproto/googleapis/rpc/status",
-        "//vendor/google.golang.org/grpc/codes",
-        "//vendor/google.golang.org/protobuf/proto",
-        "//vendor/google.golang.org/protobuf/protoadapt",
-        "//vendor/google.golang.org/protobuf/types/known/anypb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/rpc/status",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/codes",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/proto",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/protoadapt",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/anypb",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":status",
-    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
 )

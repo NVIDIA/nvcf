@@ -8,7 +8,7 @@ go_library(
     srcs = ["locks.go"],
     importpath = "github.com/hashicorp/vault/sdk/helper/locksutil",
     visibility = ["//visibility:public"],
-    deps = ["//sdk/helper/cryptoutil"],
+    deps = ["//src/compute-plane-services/ess-agent/sdk/helper/cryptoutil"],
 )
 
 alias(

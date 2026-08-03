@@ -7,13 +7,13 @@ go_library(
     importpath = "github.com/google/cel-go/common/decls",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/google/cel-go/checker/decls",
-        "//vendor/github.com/google/cel-go/common",
-        "//vendor/github.com/google/cel-go/common/functions",
-        "//vendor/github.com/google/cel-go/common/operators",
-        "//vendor/github.com/google/cel-go/common/types",
-        "//vendor/github.com/google/cel-go/common/types/ref",
-        "//vendor/google.golang.org/genproto/googleapis/api/expr/v1alpha1",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/checker/decls",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/functions",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/operators",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/ref",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/api/expr/v1alpha1",
     ],
 )
 

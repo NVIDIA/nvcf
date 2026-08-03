@@ -9,7 +9,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/httpapi",
     visibility = ["//visibility:public"],
     deps = [
-        "//pkg/telemetry/tracing",
+        "//src/control-plane-services/helm-reval/pkg/telemetry/tracing",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/zapotelspan",
         "@org_uber_go_zap//:zap",
     ],
