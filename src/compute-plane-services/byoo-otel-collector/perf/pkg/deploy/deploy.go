@@ -40,6 +40,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/labels"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/report"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
 )
@@ -351,21 +352,66 @@ func (c *Client) DeploySink(ctx context.Context, namespace string, opts sink.Opt
 	}, nil
 }
 
-// RunLoad creates the telemetrygen Jobs and blocks until they all complete or
-// the timeout elapses. Existing Jobs with the same names are replaced first so
-// a rerun does not stack load.
-func (c *Client) RunLoad(ctx context.Context, namespace string, jobs []*batchv1.Job, timeout time.Duration) error {
+// StartLoad creates the telemetrygen Jobs without waiting. Existing Jobs with
+// the same names are replaced first so a rerun does not stack load. Splitting
+// start from wait lets the caller sample metrics while load is in flight.
+func (c *Client) StartLoad(ctx context.Context, namespace string, jobs []*batchv1.Job) error {
 	for _, j := range jobs {
 		if err := c.applyJob(ctx, namespace, j); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// WaitLoad blocks until every load Job completes or the timeout elapses.
+func (c *Client) WaitLoad(ctx context.Context, namespace string, jobs []*batchv1.Job, timeout time.Duration) error {
 	for _, j := range jobs {
 		if err := c.waitJobComplete(ctx, namespace, j.Name, timeout); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// RunLoad starts the load Jobs and blocks until they all complete.
+func (c *Client) RunLoad(ctx context.Context, namespace string, jobs []*batchv1.Job, timeout time.Duration) error {
+	if err := c.StartLoad(ctx, namespace, jobs); err != nil {
+		return err
+	}
+	return c.WaitLoad(ctx, namespace, jobs, timeout)
+}
+
+// ScrapePodMetrics fetches a pod's Prometheus endpoint through the API server
+// proxy. This works without a metrics-server, an ingress, or port-forwarding,
+// and is the only cross-namespace-safe way to read in-cluster endpoints from
+// outside the cluster.
+func (c *Client) ScrapePodMetrics(ctx context.Context, namespace, pod, port, path string) ([]byte, error) {
+	raw, err := c.cs.CoreV1().Pods(namespace).ProxyGet("http", pod, port, path, nil).DoRaw(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("scrape %s/%s:%s%s: %w", namespace, pod, port, path, err)
+	}
+	return raw, nil
+}
+
+// PodHealth reports the collector pod's phase, aggregate restart count, and
+// whether any container was OOM killed.
+func (c *Client) PodHealth(ctx context.Context, namespace, pod string) (report.PodHealth, error) {
+	p, err := c.cs.CoreV1().Pods(namespace).Get(ctx, pod, metav1.GetOptions{})
+	if err != nil {
+		return report.PodHealth{}, fmt.Errorf("get pod %q: %w", pod, err)
+	}
+	h := report.PodHealth{Phase: string(p.Status.Phase)}
+	for _, cs := range p.Status.ContainerStatuses {
+		h.Restarts += cs.RestartCount
+		if term := cs.LastTerminationState.Terminated; term != nil && term.Reason == "OOMKilled" {
+			h.OOMKilled = true
+		}
+		if term := cs.State.Terminated; term != nil && term.Reason == "OOMKilled" {
+			h.OOMKilled = true
+		}
+	}
+	return h, nil
 }
 
 func (c *Client) applyJob(ctx context.Context, namespace string, job *batchv1.Job) error {
