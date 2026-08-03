@@ -182,7 +182,6 @@ func TestDryRunMetricsUseModeAttribute(t *testing.T) {
 	originalBytes := requireInt64MetricDataPoint(t, metrics, "otelcol_processor_logchunk_original_bytes_total", "dry_run")
 	require.Equal(t, int64(6), originalBytes.Value)
 	requireNoMetric(t, metrics, "otelcol_processor_logchunk_chunks_total")
-	requireNoMetric(t, metrics, "otelcol_processor_logchunk_output_bytes_total")
 }
 
 func TestChunkMetricsUseModeAttribute(t *testing.T) {
@@ -203,10 +202,10 @@ func TestChunkMetricsUseModeAttribute(t *testing.T) {
 
 	oversize := requireInt64MetricDataPoint(t, metrics, "otelcol_processor_logchunk_oversize_records_total", "chunk")
 	require.Equal(t, int64(1), oversize.Value)
+	originalBytes := requireInt64MetricDataPoint(t, metrics, "otelcol_processor_logchunk_original_bytes_total", "chunk")
+	require.Equal(t, int64(6), originalBytes.Value)
 	chunks := requireInt64MetricDataPoint(t, metrics, "otelcol_processor_logchunk_chunks_total", "chunk")
 	require.Equal(t, int64(2), chunks.Value)
-	outputBytes := requireInt64MetricDataPoint(t, metrics, "otelcol_processor_logchunk_output_bytes_total", "chunk")
-	require.Equal(t, int64(6), outputBytes.Value)
 }
 
 func TestChunksOversizedStringBody(t *testing.T) {
