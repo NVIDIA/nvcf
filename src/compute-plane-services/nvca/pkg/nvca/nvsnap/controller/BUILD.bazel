@@ -1,0 +1,44 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "controller",
+    srcs = [
+        "controller.go",
+        "metrics.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/nvsnap/controller",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/nvca/nvsnap/reconciler",
+        "//vendor/github.com/prometheus/client_golang/prometheus",
+        "//vendor/github.com/prometheus/client_golang/prometheus/promauto",
+        "//vendor/github.com/sirupsen/logrus",
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/client-go/informers",
+        "//vendor/k8s.io/client-go/kubernetes",
+        "//vendor/k8s.io/client-go/listers/core/v1:core",
+        "//vendor/k8s.io/client-go/tools/cache",
+        "//vendor/k8s.io/client-go/util/workqueue",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":controller",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "controller_test",
+    srcs = [
+        "controller_test.go",
+        "metrics_test.go",
+    ],
+    embed = [":controller"],
+    deps = [
+        "//pkg/nvca/nvsnap/reconciler",
+        "//vendor/github.com/prometheus/client_model/go",
+        "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+    ],
+)
