@@ -172,15 +172,14 @@ jobs:
             find src -maxdepth 4 -name MODULE.bazel -printf '  %h\n' 2>/dev/null | sort >&2
             exit 1
           fi
-          if [ -f "$SVC_PATH/MODULE.bazel" ]; then
+          if [ "$SVC_PATH" = "src/compute-plane-services/nvca" ]; then
+            echo "workdir=." >> "$GITHUB_OUTPUT"
+            echo "scope=//$SVC_PATH/cmd/nvca:image_index" >> "$GITHUB_OUTPUT"
+            echo "layout: root module, scoped to the NVCA agent image"
+          elif [ -f "$SVC_PATH/MODULE.bazel" ]; then
             echo "workdir=$SVC_PATH" >> "$GITHUB_OUTPUT"
-            if [ "$SVC_PATH" = "src/compute-plane-services/nvca" ]; then
-              echo "scope=//cmd/nvca:image_index" >> "$GITHUB_OUTPUT"
-              echo "layout: standalone NVCA module, scoped to the agent image"
-            else
-              echo "scope=//..." >> "$GITHUB_OUTPUT"
-              echo "layout: standalone module rooted at $SVC_PATH"
-            fi
+            echo "scope=//..." >> "$GITHUB_OUTPUT"
+            echo "layout: standalone module rooted at $SVC_PATH"
           else
             echo "workdir=." >> "$GITHUB_OUTPUT"
             echo "scope=//$SVC_PATH/..." >> "$GITHUB_OUTPUT"
