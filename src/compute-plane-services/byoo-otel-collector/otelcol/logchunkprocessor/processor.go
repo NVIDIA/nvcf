@@ -417,7 +417,7 @@ func (p *logChunkProcessor) chunkRecord(ctx context.Context, record plog.LogReco
 		p.setChunkAttributes(attrs, chunkID, i, len(plan.chunks), chunk.offset, plan.originalBytes, chunk.structuredPaths)
 	}
 
-	p.metrics.recordChunks(ctx, p.cfg.mode(), int64(len(plan.chunks)), int64(plan.originalBytes))
+	p.metrics.recordChunks(ctx, p.cfg.mode(), int64(len(plan.chunks)))
 }
 
 func (p *logChunkProcessor) setChunkAttributes(
