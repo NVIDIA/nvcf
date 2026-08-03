@@ -14,9 +14,6 @@ Feature: Install local Helmfile observability with the control profile
       """
       bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
       """
-    # The public stack ships Makefile.dist. Copy it for this live run so the
-    # ledger restores the untracked development Makefile state afterward.
-    And I copy the file "deploy/stacks/self-managed/Makefile.dist" to "deploy/stacks/self-managed/Makefile"
     # Set the self-managed stack environment.
     And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-control.yaml"
     And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-control.yaml" with keys:

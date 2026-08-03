@@ -506,7 +506,6 @@ func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 	}))
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
-	seedObservabilityControlMakefile(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "observability-control.feature")
@@ -563,17 +562,6 @@ func observabilityControlHelmListJSON() string {
 {"name":"otel-collector","namespace":"monitoring","status":"deployed"},
 {"name":"default-monitors","namespace":"monitoring","status":"deployed"}
 ]`
-}
-
-func seedObservabilityControlMakefile(t *testing.T, repoRoot string) {
-	t.Helper()
-	path := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "Makefile.dist")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir self-managed stack: %v", err)
-	}
-	if err := os.WriteFile(path, []byte("install:\n\t@true\n"), 0o644); err != nil {
-		t.Fatalf("write self-managed Makefile.dist: %v", err)
-	}
 }
 
 // TestMultiClusterHelmfileFeatureFileWiresToSteps runs
