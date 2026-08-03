@@ -141,6 +141,22 @@ func startControllerManagerForAgent(
 		log.WithField("type", st).Info("Registered storage controller")
 	}
 
+	// Seed the model cache mount option defaults once, after the manager cache
+	// has started. A failure is logged rather than fatal: without the ConfigMap
+	// the reconciler falls back to the configured mount options.
+	if cachingEnabled {
+		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			if err := storage.EnsureCacheMountOptionsConfigMap(ctx, mgr.GetClient(), ""); err != nil {
+				log.WithError(err).Error("Failed to seed the cache mount option defaults")
+				return nil
+			}
+			log.Info("Cache mount option defaults are in place")
+			return nil
+		})); err != nil {
+			return fmt.Errorf("register cache mount options seeder: %w", err)
+		}
+	}
+
 	log.Info("Starting MiniService controller")
 
 	kartas, err := mscontroller.GetKartaObjects(ctx, a.backendk8scache.clients)
