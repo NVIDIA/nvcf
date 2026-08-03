@@ -174,8 +174,13 @@ jobs:
           fi
           if [ -f "$SVC_PATH/MODULE.bazel" ]; then
             echo "workdir=$SVC_PATH" >> "$GITHUB_OUTPUT"
-            echo "scope=//..." >> "$GITHUB_OUTPUT"
-            echo "layout: standalone module rooted at $SVC_PATH"
+            if [ "$SVC_PATH" = "src/compute-plane-services/nvca" ]; then
+              echo "scope=//cmd/nvca:image_index" >> "$GITHUB_OUTPUT"
+              echo "layout: standalone NVCA module, scoped to the agent image"
+            else
+              echo "scope=//..." >> "$GITHUB_OUTPUT"
+              echo "layout: standalone module rooted at $SVC_PATH"
+            fi
           else
             echo "workdir=." >> "$GITHUB_OUTPUT"
             echo "scope=//$SVC_PATH/..." >> "$GITHUB_OUTPUT"
