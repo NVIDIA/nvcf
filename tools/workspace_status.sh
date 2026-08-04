@@ -23,12 +23,9 @@ if [ "$COMMIT" != "unknown" ] && [ -n "$(git status --porcelain 2>/dev/null)" ];
     DIRTY="-dirty"
 fi
 
-# CI overrides for VERSION (from git tag or MR sha) and BUILD_USER.
-# When unset, fall back to the values the legacy nvcf-cli Makefile computed.
+# VERSION comes from NVCF_VERSION (set by release builds) or mr-<sha> otherwise.
 if [ -n "${NVCF_VERSION:-}" ]; then
     VERSION="${NVCF_VERSION}"
-elif TAG=$(git describe --tags --exact-match HEAD 2>/dev/null); then
-    VERSION="${TAG}"
 else
     VERSION="mr-${COMMIT}"
 fi

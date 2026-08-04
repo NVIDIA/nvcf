@@ -18,8 +18,10 @@ limitations under the License.
 package gateway
 
 import (
+	"ai-api-gateway-service/middleware"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +30,11 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
@@ -380,6 +387,73 @@ func TestServeExecReturnsProxyErrorAsProblemDetails(t *testing.T) {
 	assert.Len(t, observedLogs.FilterMessage("proxy request failed").All(), 1)
 }
 
+// A confirmed client disconnect (canceled inbound request context) is accounted
+// as 499 rather than a generic 502.
+func TestServeExecClientDisconnectReturns499(t *testing.T) {
+	core, observedLogs := observer.New(zap.WarnLevel)
+	undoLogger := zap.ReplaceGlobals(zap.New(core))
+	defer undoLogger()
+
+	director, err := NewVanityDirector("https://nvcf.example.test", roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, context.Canceled
+	}))
+	assert.NoError(t, err)
+
+	// The caller has already gone away: its request context is canceled before
+	// proxying completes.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest("POST", "/test", nil).WithContext(ctx)
+	recorder := httptest.NewRecorder()
+
+	err = director.ServeExec(VanityExecRequest{
+		FunctionID:        "func-123",
+		FunctionVersionID: "version-456",
+	}, recorder, req)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	result := recorder.Result()
+	defer result.Body.Close()
+	assert.Equal(t, statusClientClosedRequest, result.StatusCode)
+	assert.Equal(t, "application/problem+json", result.Header.Get("Content-Type"))
+
+	var pd ProblemDetails
+	err = json.NewDecoder(result.Body).Decode(&pd)
+	assert.NoError(t, err)
+	assert.Equal(t, "about:blank", pd.Type)
+	assert.Equal(t, "Client Closed Request", pd.Title)
+	assert.Equal(t, statusClientClosedRequest, pd.Status)
+
+	assert.Len(t, observedLogs.FilterMessage("client closed request before upstream response").All(), 1)
+}
+
+// A genuine upstream transport failure (inbound context still live) stays 502.
+func TestServeExecGenuineProxyFailureReturns502(t *testing.T) {
+	director, err := NewVanityDirector("https://nvcf.example.test", roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	}))
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest("POST", "/test", nil)
+	recorder := httptest.NewRecorder()
+
+	err = director.ServeExec(VanityExecRequest{
+		FunctionID:        "func-123",
+		FunctionVersionID: "version-456",
+	}, recorder, req)
+
+	assert.Error(t, err)
+	result := recorder.Result()
+	defer result.Body.Close()
+	assert.Equal(t, http.StatusBadGateway, result.StatusCode)
+
+	var pd ProblemDetails
+	err = json.NewDecoder(result.Body).Decode(&pd)
+	assert.NoError(t, err)
+	assert.Equal(t, "Bad Gateway", pd.Title)
+	assert.Equal(t, http.StatusBadGateway, pd.Status)
+}
+
 func TestOfflineMessageReturns503(t *testing.T) {
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("upstream should not be called when endpoint is offline")
@@ -436,4 +510,101 @@ func TestOfflineMessageTakesPriorityOverExpiredEOL(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "Service Unavailable", pd.Title)
 	assert.Equal(t, "Down for migration", pd.Detail)
+}
+
+// End-to-end at the telemetry layer: drive a request through the real otelhttp
+// server middleware wrapping ServeExec and assert what http.server.request.duration
+// records. A confirmed client disconnect (canceled inbound context) must land as
+// http.response.status_code=499, not 502.
+func TestServeExecClientDisconnectRecords499Metric(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	director, err := NewVanityDirector("https://nvcf.example.test", roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, context.Canceled
+	}))
+	require.NoError(t, err)
+
+	handler := middleware.ServerTelemetryMiddleware(otelhttp.WithMeterProvider(provider))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = director.ServeExec(VanityExecRequest{FunctionID: "func-123", FunctionVersionID: "version-456"}, w, r)
+		}),
+	)
+
+	// The caller has already gone away before proxying completes.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/test", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, statusClientClosedRequest, rec.Code)
+
+	metrics := collectGatewayMetrics(t, reader)
+	assert.True(t, gatewayMetricHasStatusCode(metrics, statusClientClosedRequest),
+		"gateway must record http.server.request.duration with status_code=499 on client disconnect")
+	assert.False(t, gatewayMetricHasStatusCode(metrics, http.StatusBadGateway),
+		"client disconnect must not be recorded as 502")
+}
+
+// A genuine upstream transport failure (inbound context still live) must be
+// recorded as 502, not 499.
+func TestServeExecGenuineFailureRecords502Metric(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	director, err := NewVanityDirector("https://nvcf.example.test", roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	}))
+	require.NoError(t, err)
+
+	handler := middleware.ServerTelemetryMiddleware(otelhttp.WithMeterProvider(provider))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = director.ServeExec(VanityExecRequest{FunctionID: "func-123", FunctionVersionID: "version-456"}, w, r)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/test", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadGateway, rec.Code)
+
+	metrics := collectGatewayMetrics(t, reader)
+	assert.True(t, gatewayMetricHasStatusCode(metrics, http.StatusBadGateway),
+		"genuine upstream failure must record status_code=502")
+	assert.False(t, gatewayMetricHasStatusCode(metrics, statusClientClosedRequest),
+		"genuine upstream failure must not be recorded as 499")
+}
+
+func collectGatewayMetrics(t *testing.T, reader sdkmetric.Reader) []metricdata.Metrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	var out []metricdata.Metrics
+	for _, sm := range rm.ScopeMetrics {
+		out = append(out, sm.Metrics...)
+	}
+	return out
+}
+
+func gatewayMetricHasStatusCode(metrics []metricdata.Metrics, code int) bool {
+	for _, metric := range metrics {
+		if metric.Name != "http.server.request.duration" {
+			continue
+		}
+		histogram, ok := metric.Data.(metricdata.Histogram[float64])
+		if !ok {
+			continue
+		}
+		for _, point := range histogram.DataPoints {
+			if value, ok := point.Attributes.Value("http.response.status_code"); ok &&
+				value == attribute.Int64Value(int64(code)) {
+				return true
+			}
+		}
+	}
+	return false
 }

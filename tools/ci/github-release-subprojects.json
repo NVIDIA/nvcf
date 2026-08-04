@@ -262,6 +262,11 @@
       "id": "api-keys",
       "path": "src/control-plane-services/api-keys",
       "service_name": "nvcf-api-keys"
+    },
+    {
+      "id": "instance-cluster-management",
+      "path": "src/control-plane-services/instance-cluster-management",
+      "service_name": "nvcf-instance-cluster-management"
     }
   ]
 }
