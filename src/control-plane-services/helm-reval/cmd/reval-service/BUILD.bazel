@@ -15,6 +15,7 @@ go_library(
         "//src/control-plane-services/helm-reval/pkg/authorizers",
         "//src/control-plane-services/helm-reval/pkg/reval/config",
         "//src/control-plane-services/helm-reval/pkg/telemetry/logging",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_spf13_viper//:viper",
         "@org_uber_go_zap//:zap",
     ],
