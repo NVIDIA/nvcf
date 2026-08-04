@@ -27,26 +27,27 @@ expand_template(
 
 # build.rs uses tonic-build + prost-build to compile crates/server/proto/*.proto.
 # Inside the crate it tries to find protoc via protoc_bin_vendored, but we
-# override PROTOC to the hermetic @protobuf//:protoc the bzlmod protoc
+# override PROTOC to the hermetic @com_google_protobuf//:protoc the bzlmod protoc
 # extension fetches; that way both local Bazel builds and CI go through the
 # same protoc binary.
 cargo_build_script(
     name = "build_script",
+    edition = "2021",
     srcs = ["build.rs"],
     build_script_env = {
-        "PROTOC": "$(execpath @protobuf//:protoc)",
-        # @protobuf//:well_known_type_protos is a filegroup whose files
+        "PROTOC": "$(execpath @com_google_protobuf//:protoc)",
+        # @com_google_protobuf//:well_known_type_protos is a filegroup whose files
         # live in the cargo_runfiles tree under protobuf+/src/google/protobuf/
         # (sibling of _main/). cargo_build_script runs from
         # _main/crates/server/, so the well-known-type include dir resolves
         # via three parent hops.
-        "PROTOC_WKT_DIR": "../../../protobuf+/src",
+        "PROTOC_WKT_DIR": "../../../../../../protobuf+/src",
     },
     data = glob(["proto/**/*.proto"]) + [
-        "@protobuf//:well_known_type_protos",
+        "@com_google_protobuf//:well_known_type_protos",
     ],
     tools = [
-        "@protobuf//:protoc",
+        "@com_google_protobuf//:protoc",
     ],
     deps = all_crate_deps(build = True),
 )

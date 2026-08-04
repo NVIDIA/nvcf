@@ -10,10 +10,10 @@ go_library(
     importpath = "k8s.io/client-go/listers/node/v1",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/api/node/v1:node",
-        "//vendor/k8s.io/apimachinery/pkg/labels",
-        "//vendor/k8s.io/client-go/listers",
-        "//vendor/k8s.io/client-go/tools/cache",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/node/v1:node",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/labels",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
     ],
 )
 

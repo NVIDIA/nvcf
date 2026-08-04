@@ -17,9 +17,9 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models",
     visibility = ["//visibility:public"],
     deps = [
-        "//internal/must",
-        "//internal/ptr",
-        "//internal/servicetier",
+        "//src/invocation-plane-services/llm-api-gateway/internal/must",
+        "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
+        "//src/invocation-plane-services/llm-api-gateway/internal/servicetier",
     ],
 )
 

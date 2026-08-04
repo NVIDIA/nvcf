@@ -18,29 +18,51 @@ limitations under the License.
 package k8sutil
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"testing"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 )
 
 func TestAddBYOOOTelCollectorEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) {
-	envs := []corev1.EnvVar{
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
+	collectorConfig := nvcaconfig.BYOOOTelCollectorConfig{
+		LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
+			SamplingPercentage: &logSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+			AttributeSource:    "record",
+			FromAttribute:      "log.id",
+			SamplingPriority:   "sampling.priority",
+		},
+		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+			SamplingPercentage: &traceSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+		},
+	}
+	envs := append([]corev1.EnvVar{
 		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
 		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
-		{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
-	}
-	expectedEnv := []corev1.EnvVar{
+	}, collectorConfig.EnvVars()...)
+	expectedEnv := append([]corev1.EnvVar{
 		{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
 		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
 		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
 		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
-		{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
-	}
+	}, collectorConfig.EnvVars()...)
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
@@ -59,4 +81,11 @@ func TestAddBYOOOTelCollectorEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t
 
 	assert.Equal(t, expectedEnv, pod.Spec.Containers[0].Env)
 	assert.Empty(t, pod.Spec.Containers[1].Env)
+
+	encodedConfig := pod.Spec.Containers[0].Env[len(pod.Spec.Containers[0].Env)-1].Value
+	decodedConfig, err := base64.StdEncoding.DecodeString(encodedConfig)
+	require.NoError(t, err)
+	var gotConfig nvcaconfig.BYOOOTelCollectorConfig
+	require.NoError(t, json.Unmarshal(decodedConfig, &gotConfig))
+	assert.Equal(t, collectorConfig, gotConfig)
 }

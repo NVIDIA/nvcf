@@ -97,6 +97,30 @@ func TestRenderOtelConfig(t *testing.T) {
 	}
 }
 
+func TestRenderOtelConfigRejectsRecordSamplingOutsideHashSeed(t *testing.T) {
+	samplingPercentage := 10.0
+	_, err := RenderOtelConfigFromBytes(
+		[]byte(`{"telemetries": {"logsTelemetry": {"protocol": "HTTP", "provider": "SPLUNK", "endpoint": "http://example.com", "name": "example-logs"}}}`),
+		TemplateConfig{
+			BackendType:       K8s,
+			WorkloadType:      Container,
+			Namespace:         "foo",
+			FunctionID:        "fake-function-id",
+			FunctionVersionID: "fake-function-version-id",
+			OTelCollector: OTelCollectorConfig{
+				LogSampling: LogSamplingConfig{
+					SamplingPercentage: &samplingPercentage,
+					Mode:               "proportional",
+					AttributeSource:    "record",
+					FromAttribute:      "log.id",
+				},
+			},
+		},
+	)
+
+	assert.ErrorContains(t, err, "attributeSource and fromAttribute require hash_seed mode")
+}
+
 func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
 	gotCfg, err := RenderOtelConfigFromBytes(
 		[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "example-metrics"}}}`),
@@ -600,6 +624,10 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 	batchSendMaxSize := int64(200)
 	logBatchSendSize := int64(340)
 	logBatchSendMaxSize := int64(340)
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 
 	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
 		Namespace: "test-namespace",
@@ -637,6 +665,21 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 				Timeout:          "400ms",
 				SendBatchSize:    &logBatchSendSize,
 				SendBatchMaxSize: &logBatchSendMaxSize,
+			},
+			LogSampling: LogSamplingConfig{
+				SamplingPercentage: &logSamplingPercentage,
+				Mode:               "hash_seed",
+				HashSeed:           &samplingHashSeed,
+				FailClosed:         &samplingFailClosed,
+				AttributeSource:    "record",
+				FromAttribute:      "log.id",
+				SamplingPriority:   "sampling.priority",
+			},
+			TraceSampling: SamplingConfig{
+				SamplingPercentage: &traceSamplingPercentage,
+				Mode:               "hash_seed",
+				HashSeed:           &samplingHashSeed,
+				FailClosed:         &samplingFailClosed,
 			},
 		},
 	})
@@ -684,9 +727,24 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 		"timeout":             "400ms",
 		"send_batch_max_size": int64(340),
 	}, otelConfig.Processors["batch/logs"])
-	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
+	assert.Equal(t, map[string]interface{}{
+		"sampling_percentage": logSamplingPercentage,
+		"mode":                "hash_seed",
+		"hash_seed":           samplingHashSeed,
+		"fail_closed":         samplingFailClosed,
+		"attribute_source":    "record",
+		"from_attribute":      "log.id",
+		"sampling_priority":   "sampling.priority",
+	}, otelConfig.Processors["probabilistic_sampler/logs"])
+	assert.Equal(t, map[string]interface{}{
+		"sampling_percentage": traceSamplingPercentage,
+		"mode":                "hash_seed",
+		"hash_seed":           samplingHashSeed,
+		"fail_closed":         samplingFailClosed,
+	}, otelConfig.Processors["probabilistic_sampler/traces"])
+	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/logs", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
 	assert.Equal(t, []string{"memory_limiter", "filter/metrics", "resource", "metrics_transform", "batch"}, otelConfig.Service.Pipelines["metrics"].Processors)
-	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
+	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/traces", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
 }
 
 func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {

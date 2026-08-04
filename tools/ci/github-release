@@ -29,6 +29,21 @@ VERSION_PLACEHOLDER = "${version}"
 INITIAL_RELEASE_VERSION = "0.1.0"
 INITIAL_RELEASE_FLOOR_VERSION = "0.0.0"
 
+# Java component descriptors. These are the same per-component files
+# `.github/workflows/bazel.yml` discovers to build its matrix and to apply the
+# framework -> service reverse-dependency edge. The dependency graph is declared
+# there and only there; this script reads it rather than restating it, so the
+# two cannot drift.
+JAVA_CI_DESCRIPTOR = "bazel-java-ci.json"
+JAVA_FRAMEWORK_KIND = "java-framework"
+JAVA_SERVICE_KIND = "java-service"
+JAVA_COMPONENT_KINDS = (JAVA_FRAMEWORK_KIND, JAVA_SERVICE_KIND)
+# Framework commits quoted in dependency-triggered release notes. A service that
+# is many framework commits behind should still get readable notes.
+MAX_QUOTED_FRAMEWORK_COMMITS = 20
+# Conventional Commit subject prefix, for example "fix(nv-boot)!: subject".
+COMMIT_SUBJECT_PATTERN = re.compile(r"^(?P<type>[a-zA-Z]+)(?:\([^)]*\))?(?P<breaking>!)?:")
+
 
 def bool_env(name, default=False):
     raw = os.environ.get(name)
@@ -264,10 +279,10 @@ def latest_service_tag_for_prefix(prefix):
     return sorted(candidates, key=lambda item: semverish_sort_key(item[0]))[-1][1]
 
 
-def latest_service_tag(service):
+def latest_service_tag(service, root=None):
     candidates = []
     for prefix in tag_prefixes(service):
-        raw = run(["git", "tag", "-l", f"{prefix}*"], capture=True)
+        raw = run(["git", "tag", "-l", f"{prefix}*"], cwd=root, capture=True)
         for line in raw.splitlines():
             tag = line.strip()
             if tag:
@@ -471,6 +486,207 @@ def publish_tag_for_version(root, service, version, dry_run, draft, reason):
     create_release(tag, tag, notes, draft, dry_run=False)
 
 
+def java_ci_components(root):
+    """Java components declared by the per-component bazel-java-ci.json files.
+
+    This is the single declaration of the Java dependency graph in the repo:
+    `.github/workflows/bazel.yml` reads the same descriptors to schedule every
+    `java-service` row when a `java-framework` path changes. Reading them here
+    keeps release fan-out and CI scheduling on one source of truth instead of a
+    second hardcoded list that can silently drift.
+    """
+    components = []
+    src = root / "src"
+    if not src.is_dir():
+        return components
+    for manifest in sorted(src.rglob(JAVA_CI_DESCRIPTOR)):
+        try:
+            descriptor = json.loads(manifest.read_text())
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"{manifest}: invalid {JAVA_CI_DESCRIPTOR}: {exc}") from exc
+        kind = descriptor.get("component_kind")
+        if kind not in JAVA_COMPONENT_KINDS:
+            raise SystemExit(
+                f"{manifest}: component_kind must be one of {', '.join(JAVA_COMPONENT_KINDS)}, got {kind!r}"
+            )
+        components.append(
+            {
+                "id": descriptor.get("id", ""),
+                "path": manifest.parent.relative_to(root).as_posix(),
+                "component_kind": kind,
+            }
+        )
+    return components
+
+
+def java_framework_paths(components):
+    return [c["path"] for c in components if c["component_kind"] == JAVA_FRAMEWORK_KIND]
+
+
+def is_java_service(components, service):
+    path = str(service.get("path") or "").strip("/")
+    return any(c["component_kind"] == JAVA_SERVICE_KIND and c["path"] == path for c in components)
+
+
+def next_patch_version(version):
+    major, minor, patch = (int(part) for part in version.split("."))
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def releases_a_version(subject):
+    """Whether a commit subject releases a version under RELEASE_RULES.
+
+    Derived from RELEASE_RULES so the fan-out applies exactly the rules
+    semantic-release is configured with: `feat`, `fix`, and `perf` release, the
+    other declared types do not, and a `!` breaking marker always releases. A
+    subject that is not a Conventional Commit releases nothing, the same as it
+    would inside a service directory.
+    """
+    match = COMMIT_SUBJECT_PATTERN.match(subject)
+    if not match:
+        return False
+    if match.group("breaking"):
+        return True
+    releasing = {rule["type"] for rule in RELEASE_RULES if rule["release"]}
+    return match.group("type").lower() in releasing
+
+
+def release_worthy_framework_commits_since(root, framework_paths, since_tag):
+    """Framework commits since a tag that would have released, had they been in a service.
+
+    A framework `docs:` or `chore:` commit releases nothing for the framework,
+    so it must not release anything for the framework's dependents either.
+    """
+    raw = run(
+        ["git", "log", "--format=%h %s", f"{since_tag}..HEAD", "--", *framework_paths],
+        cwd=root,
+        capture=True,
+    )
+    commits = []
+    for line in raw.splitlines():
+        commit = line.strip()
+        if not commit:
+            continue
+        _sha, _, subject = commit.partition(" ")
+        if releases_a_version(subject):
+            commits.append(commit)
+    return commits
+
+
+def framework_dependency_reason(service, framework_paths, since_tag, commits):
+    quoted = commits[:MAX_QUOTED_FRAMEWORK_COMMITS]
+    lines = [
+        "dependency-triggered release. This service has no release-worthy commits of its own "
+        f"under {service['path']} since {since_tag}.",
+        "",
+        "It is released because shared Java framework code it is built from changed:",
+    ]
+    lines.extend(f"  - {path}" for path in framework_paths)
+    lines.append("")
+    lines.append(f"Framework commits since {since_tag}:")
+    lines.extend(f"  - {commit}" for commit in quoted)
+    if len(commits) > len(quoted):
+        lines.append(f"  - ... and {len(commits) - len(quoted)} more")
+    lines.append("")
+    lines.append(
+        "The service source is unchanged; this release ships it rebuilt against the "
+        "updated framework."
+    )
+    return "\n".join(lines)
+
+
+def publish_framework_dependency_release(root, service, components, dry_run, draft):
+    """Cut a patch release for a Java service that a framework change rebuilt.
+
+    Fires only when the service would otherwise cut nothing, and only when the
+    framework actually changed since that service's last release tag. Always a
+    patch bump: the framework change adds no user-visible capability to this
+    service, and the service's own changelog has nothing to substantiate a
+    minor. A service that genuinely adopts a new framework API does so in a
+    commit under its own directory, which semantic-release turns into the right
+    bump, and this fan-out then does not run at all.
+    """
+    if not is_java_service(components, service):
+        return False
+    framework_paths = java_framework_paths(components)
+    if not framework_paths:
+        return False
+
+    last_tag = latest_service_tag(service, root)
+    if not last_tag:
+        print(
+            f"[github-release] {service['id']}: no existing release tag to bump from; "
+            "skipping Java framework dependency release"
+        )
+        return False
+
+    current_version = version_from_tag(service, last_tag)
+    if not re.fullmatch(STABLE_SEMVER_PATTERN, current_version):
+        print(
+            f"[github-release] {service['id']}: last tag {last_tag} is not a stable X.Y.Z; "
+            "skipping Java framework dependency release"
+        )
+        return False
+
+    commits = release_worthy_framework_commits_since(root, framework_paths, last_tag)
+    if not commits:
+        print(
+            f"[github-release] {service['id']}: no release-worthy Java framework commits since "
+            f"{last_tag}; nothing to release"
+        )
+        return False
+
+    version = next_patch_version(current_version)
+    print(
+        f"[github-release] {service['id']}: {len(commits)} release-worthy Java framework "
+        f"commit(s) since {last_tag} with no service release; cutting dependency patch "
+        f"release {version}"
+    )
+    publish_tag_for_version(
+        root,
+        service,
+        version,
+        dry_run,
+        draft,
+        framework_dependency_reason(service, framework_paths, last_tag, commits),
+    )
+    return True
+
+
+def resolve_release_outcome(exit_code, output):
+    """Classify a semantic-release run: it released, it released nothing, or it is unreadable."""
+    if exit_code != 0:
+        # A run that died is untrustworthy even if it printed a version before
+        # dying: the publish run may not reproduce it. Report it rather than
+        # previewing a tag that may never be created.
+        return "unknown"
+    if parse_next_version(output):
+        return "released"
+    if no_release_output(output):
+        return "no-release"
+    return "unknown"
+
+
+def finish_semantic_release(root, service, components, exit_code, output, dry_run, draft):
+    """Apply the semantic-release result, falling back to dependency fan-out.
+
+    semantic-release owns the version whenever it computed one, so a push that
+    touched both a framework and the service is never double-tagged.
+    """
+    outcome = resolve_release_outcome(exit_code, output)
+    if outcome == "released":
+        version = parse_next_version(output)
+        if dry_run:
+            print(f"[github-release] {service['id']}: would create {tag_for_version(service, version)}")
+        else:
+            print(f"[github-release] {service['id']}: semantic-release created {tag_for_version(service, version)}")
+        return outcome
+    if outcome == "no-release":
+        print(f"[github-release] {service['id']}: no release-worthy commits")
+        publish_framework_dependency_release(root, service, components, dry_run=dry_run, draft=draft)
+    return outcome
+
+
 def publish_version_file_release(root, service, dry_run, draft):
     version = validate_version_file(root, service)
     existing = existing_tag_for_version(root, service, version)
@@ -665,6 +881,7 @@ def auto_release(args):
     draft = bool_env("NVCF_GITHUB_RELEASE_DRAFT", False)
     service_filter = args.service or os.environ.get("NVCF_GITHUB_RELEASE_SERVICE", "")
     generated_paths = metadata.get("release_generated_paths", [])
+    java_components = java_ci_components(root)
     branch = current_branch(root)
     default_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
 
@@ -699,6 +916,13 @@ def auto_release(args):
                 continue
 
             if only_generated_changes(root, service, generated_paths):
+                # A shared Java framework change lands outside every service
+                # directory, so semantic-release (scoped to the service path by
+                # semantic-release-monorepo) would see nothing and ship nothing.
+                # Fan the framework change out here instead.
+                publish_framework_dependency_release(
+                    root, service, java_components, dry_run=dry_run, draft=draft
+                )
                 continue
             synthesize_current_prefix_anchor(service)
             synthesize_initial_version_anchor(root, service)
@@ -714,21 +938,33 @@ def auto_release(args):
 
             if dry_run:
                 code, output = stream(["npx", "semantic-release", "--dry-run", "--no-ci", "--debug"], cwd=service_dir)
-                next_version = parse_next_version(output)
-                if next_version:
-                    print(f"[github-release] {service['id']}: would create {tag_for_version(service, next_version)}")
-                elif code == 0 and no_release_output(output):
-                    print(f"[github-release] {service['id']}: no release-worthy commits")
-                else:
+                outcome = finish_semantic_release(
+                    root, service, java_components, code, output, dry_run=True, draft=draft
+                )
+                if outcome == "unknown":
                     # Preview could not compute a version (for example the
                     # semantic-release child was killed on a large history).
                     # Do not fail the inert workflow on a preview; record it so
                     # it is visible and gets resolved before the cutover.
-                    reason = f"semantic-release dry-run exited {code} with no NEXT_VERSION"
+                    reason = f"semantic-release dry-run exited {code} without a trustworthy release decision"
                     print(f"[github-release] WARNING: {service['id']}: {reason}; continuing (dry-run preview)")
                     dry_run_failures.append((service["id"], reason))
             else:
-                run(["npx", "semantic-release", "--no-ci"], cwd=service_dir)
+                # Streamed rather than run() so the result is readable: a
+                # dependency fan-out must only fire when semantic-release itself
+                # released nothing.
+                cmd = ["npx", "semantic-release", "--no-ci"]
+                code, output = stream(cmd, cwd=service_dir)
+                if code != 0:
+                    raise subprocess.CalledProcessError(code, cmd)
+                outcome = finish_semantic_release(
+                    root, service, java_components, code, output, dry_run=False, draft=draft
+                )
+                if outcome == "unknown":
+                    print(
+                        f"[github-release] WARNING: {service['id']}: semantic-release reported "
+                        "neither a version nor a no-release result; not cutting a dependency release"
+                    )
         finally:
             print("::endgroup::")
 

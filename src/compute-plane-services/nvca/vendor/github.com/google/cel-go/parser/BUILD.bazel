@@ -16,14 +16,14 @@ go_library(
     importpath = "github.com/google/cel-go/parser",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/antlr4-go/antlr/v4:antlr",
-        "//vendor/github.com/google/cel-go/common",
-        "//vendor/github.com/google/cel-go/common/ast",
-        "//vendor/github.com/google/cel-go/common/operators",
-        "//vendor/github.com/google/cel-go/common/runes",
-        "//vendor/github.com/google/cel-go/common/types",
-        "//vendor/github.com/google/cel-go/common/types/ref",
-        "//vendor/github.com/google/cel-go/parser/gen",
+        "//src/compute-plane-services/nvca/vendor/github.com/antlr4-go/antlr/v4:antlr",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/ast",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/operators",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/runes",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/ref",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/parser/gen",
     ],
 )
 

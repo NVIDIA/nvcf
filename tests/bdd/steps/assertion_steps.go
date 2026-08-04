@@ -18,6 +18,7 @@ limitations under the License.
 package steps
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -41,6 +42,8 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^yaml file "([^"]*)" should contain:$`, sc.yamlFileShouldContain)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should contain:$`, sc.yamlFileKeyShouldContain)
 	ctx.Step(`^the json output should contain rows:$`, sc.jsonOutputShouldContainRows)
+	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
+	ctx.Step(`^these ServiceMonitors should exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.serviceMonitorsShouldExist)
 }
 
 func (sc *ScenarioContext) commandExitCodeShouldBe(expected int) error {
@@ -144,6 +147,50 @@ func (sc *ScenarioContext) jsonOutputShouldContainRows(table *godog.Table) error
 		return err
 	}
 	return dsl.JSONContainsRows(sc.LastResult.Stdout, rows)
+}
+
+func (sc *ScenarioContext) renderedManifestsShouldNotContain(path string, table *godog.Table) error {
+	needles, err := tableToSingleColumn(table, "text")
+	if err != nil {
+		return err
+	}
+	return dsl.FilesDoNotContain(sc.resolvePath(dsl.Interpolate(path)), needles)
+}
+
+func tableToSingleColumn(table *godog.Table, header string) ([]string, error) {
+	if table == nil || len(table.Rows) < 2 {
+		return nil, fmt.Errorf("table must have a %q header and at least one data row", header)
+	}
+	if len(table.Rows[0].Cells) != 1 || strings.TrimSpace(table.Rows[0].Cells[0].Value) != header {
+		return nil, fmt.Errorf("table header must be %q", header)
+	}
+	values := make([]string, 0, len(table.Rows)-1)
+	for index, row := range table.Rows[1:] {
+		if len(row.Cells) != 1 {
+			return nil, fmt.Errorf("row %d has %d cells, expected exactly 1", index+1, len(row.Cells))
+		}
+		value := row.Cells[0].Value
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("row %d has an empty %s value", index+1, header)
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func (sc *ScenarioContext) serviceMonitorsShouldExist(ctx context.Context, namespace, kubeContext string, table *godog.Table) error {
+	names, err := tableToSingleColumn(table, "name")
+	if err != nil {
+		return err
+	}
+	command, err := dsl.ServiceMonitorExistenceCommand(namespace, kubeContext, names)
+	if err != nil {
+		return err
+	}
+	if err := sc.runAndRecordWith(ctx, command, sc.Suite.Runner.Run); err != nil {
+		return err
+	}
+	return sc.commandExitCodeShouldBe(0)
 }
 
 // tableToJSONRows converts a header-first Godog table into a slice of

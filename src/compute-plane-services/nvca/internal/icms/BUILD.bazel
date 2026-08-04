@@ -7,12 +7,12 @@ go_library(
     name = "icms",
     srcs = ["instance_type_cache.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/icms",
-    visibility = ["//:__subpackages__"],
-    deps = ["//pkg/types"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+    deps = ["//src/compute-plane-services/nvca/pkg/types"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":icms",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )

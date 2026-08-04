@@ -167,6 +167,13 @@ Always present for container and helm, NVCF and NVCT. The final list of metrics 
 * otelcol_exporter_send_failed_log_records_total
 * otelcol_exporter_send_failed_spans_total
 * otelcol_exporter_send_failed_metric_points_total
+* otelcol_exporter_enqueue_failed_log_records_total
+* otelcol_exporter_enqueue_failed_spans_total
+* otelcol_exporter_enqueue_failed_metric_points_total
+* otelcol_exporter_queue_size
+* otelcol_exporter_queue_capacity
+* otelcol_http_client_request_duration_seconds.*
+* otelcol_rpc_client_call_duration_seconds.*
 * otelcol_processor_incoming_items_total
 * otelcol_processor_outgoing_items_total
 * otelcol_receiver_accepted_log_records_total
@@ -284,6 +291,13 @@ Always present for container and helm, NVCF and NVCT. The final list of metrics 
 * otelcol_exporter_send_failed_metric_points_total
 * otelcol_exporter_send_failed_spans_total
 * otelcol_exporter_send_failed_log_records_total
+* otelcol_exporter_enqueue_failed_metric_points_total
+* otelcol_exporter_enqueue_failed_spans_total
+* otelcol_exporter_enqueue_failed_log_records_total
+* otelcol_exporter_queue_size
+* otelcol_exporter_queue_capacity
+* otelcol_http_client_request_duration_seconds.*
+* otelcol_rpc_client_call_duration_seconds.*
 * otelcol_processor_incoming_items_total
 * otelcol_processor_outgoing_items_total
 

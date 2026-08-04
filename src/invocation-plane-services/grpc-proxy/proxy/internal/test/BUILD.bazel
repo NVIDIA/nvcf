@@ -19,12 +19,12 @@ go_library(
     name = "test",
     srcs = ["http.go"],
     importpath = "nvcf-grpc-proxy/proxy/internal/test",
-    visibility = ["//proxy:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/grpc-proxy/proxy:__subpackages__"],
     deps = ["@org_uber_go_zap//:zap"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":test",
-    visibility = ["//proxy:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/grpc-proxy/proxy:__subpackages__"],
 )

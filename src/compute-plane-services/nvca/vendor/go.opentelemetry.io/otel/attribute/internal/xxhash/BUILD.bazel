@@ -5,12 +5,12 @@ go_library(
     srcs = ["xxhash.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute/internal/xxhash",
     importpath = "go.opentelemetry.io/otel/attribute/internal/xxhash",
-    visibility = ["//vendor/go.opentelemetry.io/otel/attribute:__subpackages__"],
-    deps = ["//vendor/github.com/cespare/xxhash/v2:xxhash"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute:__subpackages__"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/cespare/xxhash/v2:xxhash"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":xxhash",
-    visibility = ["//vendor/go.opentelemetry.io/otel/attribute:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute:__subpackages__"],
 )

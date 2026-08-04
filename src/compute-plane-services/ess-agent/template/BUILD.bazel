@@ -16,8 +16,8 @@ go_library(
     importpath = "github.com/hashicorp/consul-template/template",
     visibility = ["//visibility:public"],
     deps = [
-        "//config",
-        "//dependency",
+        "//src/compute-plane-services/ess-agent/config",
+        "//src/compute-plane-services/ess-agent/dependency",
         "@com_github_burntsushi_toml//:toml",
         "@com_github_davecgh_go_spew//spew",
         "@com_github_hashicorp_consul_api//:api",
@@ -55,7 +55,7 @@ go_test(
     tags = ["manual"],
     embed = [":template"],
     deps = [
-        "//dependency",
+        "//src/compute-plane-services/ess-agent/dependency",
         "@com_github_hashicorp_consul_api//:api",
         "@com_github_stretchr_testify//require",
     ],

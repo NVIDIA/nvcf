@@ -11,9 +11,9 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/webhook-server",
     visibility = ["//visibility:private"],
     deps = [
-        "//pkg/nvca/errors",
-        "//pkg/webhook",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/pkg/nvca/errors",
+        "//src/compute-plane-services/nvca/pkg/webhook",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
     ],
 )
 

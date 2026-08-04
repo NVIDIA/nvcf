@@ -20,10 +20,10 @@ go_library(
     visibility = ["//visibility:public"],
     deps = select({
         "@rules_go//go/platform:amd64": [
-            "//vendor/golang.org/x/sys/cpu",
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/cpu",
         ],
         "@rules_go//go/platform:arm64": [
-            "//vendor/golang.org/x/sys/cpu",
+            "//src/compute-plane-services/nvca/vendor/golang.org/x/sys/cpu",
         ],
         "//conditions:default": [],
     }),

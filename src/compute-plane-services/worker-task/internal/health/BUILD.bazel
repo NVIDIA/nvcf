@@ -4,7 +4,7 @@ go_library(
     name = "health",
     srcs = ["health.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/health",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
     deps = [
         "@com_github_nvidia_nvcf_src_libraries_go_worker//nvct",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvct",
@@ -16,7 +16,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":health",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
 )
 
 go_test(

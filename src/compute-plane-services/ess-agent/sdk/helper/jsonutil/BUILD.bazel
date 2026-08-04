@@ -9,7 +9,7 @@ go_library(
     importpath = "github.com/hashicorp/vault/sdk/helper/jsonutil",
     visibility = ["//visibility:public"],
     deps = [
-        "//sdk/helper/compressutil",
+        "//src/compute-plane-services/ess-agent/sdk/helper/compressutil",
         "@com_github_hashicorp_errwrap//:errwrap",
     ],
 )
@@ -24,5 +24,5 @@ go_test(
     name = "jsonutil_test",
     srcs = ["json_test.go"],
     embed = [":jsonutil"],
-    deps = ["//sdk/helper/compressutil"],
+    deps = ["//src/compute-plane-services/ess-agent/sdk/helper/compressutil"],
 )

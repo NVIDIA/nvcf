@@ -27,14 +27,14 @@ go_library(
     importpath = "github.com/aws/aws-sdk-go-v2/aws",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/aws/aws-sdk-go-v2/internal/rand",
-        "//vendor/github.com/aws/aws-sdk-go-v2/internal/sdk",
-        "//vendor/github.com/aws/aws-sdk-go-v2/internal/sync/singleflight",
-        "//vendor/github.com/aws/smithy-go/auth/bearer",
-        "//vendor/github.com/aws/smithy-go/logging",
-        "//vendor/github.com/aws/smithy-go/middleware",
-        "//vendor/github.com/aws/smithy-go/ptr",
-        "//vendor/github.com/aws/smithy-go/transport/http",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/rand",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/sdk",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/sync/singleflight",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/auth/bearer",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/logging",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/middleware",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/ptr",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/transport/http",
     ],
 )
 

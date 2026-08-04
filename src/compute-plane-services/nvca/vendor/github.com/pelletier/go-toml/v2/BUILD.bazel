@@ -16,9 +16,9 @@ go_library(
     importpath = "github.com/pelletier/go-toml/v2",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/pelletier/go-toml/v2/internal/characters",
-        "//vendor/github.com/pelletier/go-toml/v2/internal/tracker",
-        "//vendor/github.com/pelletier/go-toml/v2/unstable",
+        "//src/compute-plane-services/nvca/vendor/github.com/pelletier/go-toml/v2/internal/characters",
+        "//src/compute-plane-services/nvca/vendor/github.com/pelletier/go-toml/v2/internal/tracker",
+        "//src/compute-plane-services/nvca/vendor/github.com/pelletier/go-toml/v2/unstable",
     ],
 )
 

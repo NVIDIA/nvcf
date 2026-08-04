@@ -7,11 +7,11 @@ go_library(
         "upload.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/upload",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
     deps = [
-        "//internal/metrics",
-        "//internal/secrets",
-        "//pkg/ngc",
+        "//src/compute-plane-services/worker-task/internal/metrics",
+        "//src/compute-plane-services/worker-task/internal/secrets",
+        "//src/compute-plane-services/worker-task/pkg/ngc",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
         "@com_github_samber_lo//:lo",
         "@com_github_valyala_bytebufferpool//:bytebufferpool",
@@ -23,7 +23,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":upload",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
 )
 
 go_test(
@@ -31,8 +31,8 @@ go_test(
     srcs = ["upload_test.go"],
     embed = [":upload"],
     deps = [
-        "//internal/secrets",
-        "//pkg/ngc",
+        "//src/compute-plane-services/worker-task/internal/secrets",
+        "//src/compute-plane-services/worker-task/pkg/ngc",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

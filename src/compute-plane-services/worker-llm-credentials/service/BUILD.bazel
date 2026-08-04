@@ -6,8 +6,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials/service",
     visibility = ["//visibility:public"],
     deps = [
-        "//configs",
-        "//internal/worker",
+        "//src/compute-plane-services/worker-llm-credentials/configs",
+        "//src/compute-plane-services/worker-llm-credentials/internal/worker",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/config",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//types",
@@ -29,7 +29,7 @@ go_test(
     srcs = ["service_coverage_test.go"],
     embed = [":service"],
     deps = [
-        "//configs",
+        "//src/compute-plane-services/worker-llm-credentials/configs",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_protobuf//types/known/timestamppb",

@@ -4,9 +4,9 @@ go_library(
     name = "worker",
     srcs = ["worker.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials/internal/worker",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-llm-credentials:__subpackages__"],
     deps = [
-        "//configs",
+        "//src/compute-plane-services/worker-llm-credentials/configs",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//nvcf",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//token",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
@@ -22,7 +22,7 @@ go_test(
     ],
     embed = [":worker"],
     deps = [
-        "//configs",
+        "//src/compute-plane-services/worker-llm-credentials/configs",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
         "@com_github_samber_lo//:lo",
         "@org_golang_google_grpc//:grpc",
@@ -36,5 +36,5 @@ go_test(
 alias(
     name = "go_default_library",
     actual = ":worker",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-llm-credentials:__subpackages__"],
 )

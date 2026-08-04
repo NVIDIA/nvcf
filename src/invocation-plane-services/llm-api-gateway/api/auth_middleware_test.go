@@ -25,10 +25,44 @@ import (
 	"testing"
 
 	echo "github.com/labstack/echo/v4"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 )
+
+func TestNVCFAuthHTTPErrorMapsCodes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{"invalid argument -> 400", status.Error(codes.InvalidArgument, "bad routing key"), http.StatusBadRequest},
+		{"unauthenticated -> 401", status.Error(codes.Unauthenticated, "auth failed"), http.StatusUnauthorized},
+		{"permission denied -> 403", status.Error(codes.PermissionDenied, "nope"), http.StatusForbidden},
+		{"not found -> 404", status.Error(codes.NotFound, "not found"), http.StatusNotFound},
+		{"deadline -> 504", status.Error(codes.DeadlineExceeded, "slow"), http.StatusGatewayTimeout},
+		{"unavailable -> 503", status.Error(codes.Unavailable, "down"), http.StatusServiceUnavailable},
+		{"internal -> 502", status.Error(codes.Internal, "boom"), http.StatusBadGateway},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			he, ok := nvcfAuthHTTPError(tc.err).(*echo.HTTPError)
+			if !ok {
+				t.Fatalf("want *echo.HTTPError, got %T", nvcfAuthHTTPError(tc.err))
+			}
+			if he.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", he.Code, tc.wantStatus)
+			}
+		})
+	}
+}
 
 func TestNVCFAuthMiddlewareEnrichesRequestContext(t *testing.T) {
 	t.Parallel()
