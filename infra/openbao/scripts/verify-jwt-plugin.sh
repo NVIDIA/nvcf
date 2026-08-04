@@ -25,7 +25,6 @@ required_go_version=${REQUIRED_GO_VERSION:-v1.25.0}
 required_x_net_version=${REQUIRED_X_NET_VERSION:-v0.55.0}
 required_vault_api_version=${REQUIRED_VAULT_API_VERSION:-v1.15.0}
 required_vault_sdk_version=${REQUIRED_VAULT_SDK_VERSION:-v0.15.2}
-required_plugin_revision=${REQUIRED_PLUGIN_REVISION:-183b3159512f6fcfe766c8a3d738f47a751bad5c}
 
 metadata_files=
 cleanup_metadata_files() {
@@ -73,16 +72,10 @@ sha256() {
   fi
 }
 
-expected_sha256() {
+log_hash() {
   arch=$1
-  case "$arch" in
-    amd64) echo "be2a2bcea1e028c6a6be43877facafd12509c07aa09ce2da982fa9117135d006" ;;
-    arm64) echo "88a14ef10d3fc1a6290ffc78de3367de92de7cb56e9d45a097c7c945f13ec77d" ;;
-    *)
-      echo "unknown architecture: $arch" >&2
-      exit 1
-      ;;
-  esac
+  hash=$2
+  printf 'vault-plugin-secrets-jwt-linux-%s sha256=%s\n' "$arch" "$hash"
 }
 
 verify_binary() {
@@ -106,7 +99,7 @@ verify_binary() {
   fi
 
   path=$(awk '$1 == "path" { print $2 }' "$metadata")
-  if [ "$path" != "github.com/outfoxx/vault-plugin-secrets-jwt/cmd/vault-plugin-secrets-jwt" ]; then
+  if [ "$path" != "github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt/cmd/vault-plugin-secrets-jwt" ]; then
     echo "$binary has unexpected module path: $path" >&2
     exit 1
   fi
@@ -119,18 +112,23 @@ verify_binary() {
     exit 1
   fi
 
-  plugin_revision=$(build_value vcs.revision "$metadata")
-  if [ "$plugin_revision" != "$required_plugin_revision" ]; then
-    echo "$binary was built from revision $plugin_revision; expected $required_plugin_revision" >&2
-    exit 1
-  fi
+  # No vcs.revision assertion. It used to pin the external fork this plugin was
+  # cloned from, which git could stamp because the build ran inside a clone.
+  # Neither build path has git metadata now: this script builds from a copy in
+  # a temp dir, and the image build COPYs the source into a layer. Requiring
+  # the stamp fails both, and requiring a specific value pins a revision that
+  # no longer exists. Provenance is instead carried by the assertions above -
+  # module path, target triple, toolchain floor - plus the dependency versions
+  # checked below, all of which are stamped without git.
 
-  expected_hash=$(expected_sha256 "$arch")
+  # Hashes are recorded, not asserted. They were pinned when the binary came
+  # from a frozen external revision and could therefore be reproduced exactly.
+  # Now any source edit in this repository legitimately changes them, so an
+  # equality check would fail on every real change and teach people to update
+  # the constant without reading it. The provenance that still holds is
+  # asserted above: module path, target, toolchain, dependency versions.
   actual_hash=$(sha256 "$binary")
-  if [ "$actual_hash" != "$expected_hash" ]; then
-    echo "$binary has sha256 $actual_hash; expected $expected_hash" >&2
-    exit 1
-  fi
+  log_hash "$arch" "$actual_hash"
 
   x_net_version=$(dep_version golang.org/x/net "$metadata")
   vault_api_version=$(dep_version github.com/hashicorp/vault/api "$metadata")
@@ -154,7 +152,6 @@ verify_binary() {
   echo "  x/net: $x_net_version"
   echo "  vault/api: $vault_api_version"
   echo "  vault/sdk: $vault_sdk_version"
-  echo "  vcs.revision: $plugin_revision"
   echo "  sha256: $actual_hash"
 
   rm -f "$metadata"

@@ -10,8 +10,9 @@ This directory contains a modified copy of:
 
 The original Apache License 2.0 text is retained in LICENSE, and the original
 per-file copyright header is retained in HEADER and in every file carrying it.
-Files not listed below are unmodified from the upstream project and remain
-under Outfox, Inc. copyright.
+Upstream-originated files not listed below are unmodified and remain under
+Outfox, Inc. copyright. Files added by NVIDIA are listed below and are not
+covered by that statement.
 
 Modifications by NVIDIA CORPORATION & AFFILIATES
 ------------------------------------------------
@@ -42,10 +43,16 @@ changes were made to the original work:
    module resolves inside this repository. The friendlyid-go requirement was
    removed. Go, Vault, and security-sensitive dependency versions were updated.
 
-7. Upstream project machinery not applicable to this repository was omitted:
+7. AGENTS.md and CLAUDE.md (added by NVIDIA): repository guidance describing
+   this directory's third-party origin and the rules for changing it. They are
+   not part of the distributed plugin and carry no copyright header.
+
+8. Upstream project machinery not applicable to this repository was omitted:
    GitHub Actions workflows, goreleaser configuration, the upstream Dockerfile,
    install script, Makefile and linter configuration. Source, tests, and
    license material were retained in full.
 
-Files carrying an NVIDIA copyright header are NVIDIA-authored. All other files
-retain the upstream Outfox, Inc. header.
+Files carrying an NVIDIA copyright header are NVIDIA-authored. Every
+upstream-originated file retains the upstream Outfox, Inc. header. AGENTS.md
+and CLAUDE.md carry neither, being repository guidance rather than distributed
+source.

@@ -70,7 +70,15 @@ jobs:
       # would catch it.
       - name: Assert no unlicensed dependency
         run: |
-          if go list -m all | grep -q 'mariuszs/friendlyid-go'; then
+          # Capture first rather than piping into grep. Inside `if`, a failing
+          # `go list` would otherwise read as "dependency absent", and under
+          # pipefail grep can close the pipe on a match and leave go list
+          # killed by SIGPIPE. Either way the gate would pass while blind.
+          modules="$(go list -m all)" || {
+            echo "::error::failed to enumerate the Go module graph" >&2
+            exit 1
+          }
+          if grep -Fq 'github.com/mariuszs/friendlyid-go' <<<"$modules"; then
             echo "::error::friendlyid-go is back in the module graph; it carries no license and cannot be redistributed" >&2
             exit 1
           fi
