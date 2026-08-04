@@ -60,6 +60,12 @@ public class SecurityConfiguration {
         http.exceptionHandling(c -> c.authenticationEntryPoint(new UnauthorizedAuthenticationEntryPoint()));
 
         http.cors(Customizer.withDefaults());
+        // CSRF protection does not apply to ESS. Requests are authenticated by a
+        // bearer JWT in the Authorization header (see AuthChecker), with no cookie
+        // or session based authentication. Browsers do not auto-attach the
+        // Authorization header to forged cross-site requests, so CSRF is not
+        // exploitable here. Enabling it would only break non-browser service
+        // clients without adding security.
         http.csrf(CsrfSpec::disable);
 
         http.requestCache(RequestCacheSpec::disable);

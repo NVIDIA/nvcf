@@ -458,6 +458,8 @@ class AuditFilterIT {
          */
         @Bean
         SecurityWebFilterChain permitAllSecurityWebFilterChain(ServerHttpSecurity http) {
+            // Test-only permit-all chain. CSRF is disabled because this scaffolding has no
+            // authentication at all; it only lets the audit filter run end to end.
             return http.csrf(ServerHttpSecurity.CsrfSpec::disable)
                     .authorizeExchange(ex -> ex.anyExchange().permitAll())
                     .build();
@@ -487,6 +489,8 @@ class AuditFilterIT {
 
         @Bean
         SecurityWebFilterChain permitAllSecurityWebFilterChain(ServerHttpSecurity http) {
+            // Test-only permit-all chain. CSRF is disabled because this scaffolding has no
+            // authentication at all; it only lets the audit filter run end to end.
             return http.csrf(ServerHttpSecurity.CsrfSpec::disable)
                     .authorizeExchange(ex -> ex.anyExchange().permitAll())
                     .build();
