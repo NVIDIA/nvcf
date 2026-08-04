@@ -197,7 +197,10 @@ func (b *backend) saveConfig(ctx context.Context, stg logical.Storage, config *C
 	}
 
 	if err != nil {
-		return nil
+		// Return the error rather than nil. Swallowing it reported success for
+		// an unsupported signature algorithm, so the key was never rotated and
+		// the caller had no way to find out.
+		return err
 	}
 
 	defer b.lockManager.InvalidatePolicy(mainKeyName)

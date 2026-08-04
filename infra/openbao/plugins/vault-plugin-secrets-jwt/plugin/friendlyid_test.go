@@ -128,3 +128,32 @@ func TestFriendlyIDGeneratorProducesUsableIDs(t *testing.T) {
 		t.Errorf("generator produced %d chars, want %d: %q", len(id), encodedIDLen, id)
 	}
 }
+
+func TestGeneratedIDsAreNotTimeOrMACDerived(t *testing.T) {
+	// A v1 UUID encodes the host MAC and a timestamp, and this id becomes the
+	// token's jti. Assert version 4 at the source rather than inspecting the
+	// encoded string, which is opaque by design.
+	for i := 0; i < 50; i++ {
+		id, err := uuid.NewRandom()
+		if err != nil {
+			t.Fatalf("generating uuid: %v", err)
+		}
+		if got := id.Version(); got != 4 {
+			t.Fatalf("expected a version 4 UUID, got version %d", got)
+		}
+	}
+	// Two ids in a row must not share a suffix: v1 UUIDs end in the node id,
+	// which is constant per host.
+	var gen friendlyIdGenerator
+	a, err := gen.id()
+	if err != nil {
+		t.Fatalf("id(): %v", err)
+	}
+	b, err := gen.id()
+	if err != nil {
+		t.Fatalf("id(): %v", err)
+	}
+	if a[len(a)-6:] == b[len(b)-6:] {
+		t.Errorf("consecutive ids share a trailing segment (%q, %q); ids may be node-derived", a, b)
+	}
+}

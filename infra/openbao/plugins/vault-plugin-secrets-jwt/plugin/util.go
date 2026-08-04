@@ -35,7 +35,11 @@ type uniqueIdGenerator interface {
 type friendlyIdGenerator struct{}
 
 func (fid friendlyIdGenerator) id() (string, error) {
-	generatedUUID, err := uuid.NewUUID()
+	// NewRandom (v4), not NewUUID (v1). A v1 UUID encodes the host MAC address
+	// and the creation timestamp, and this id is published as the token's jti,
+	// so v1 would leak the signer's hardware address and issue time to every
+	// holder of a token.
+	generatedUUID, err := uuid.NewRandom()
 	if err != nil {
 		return "", err
 	}

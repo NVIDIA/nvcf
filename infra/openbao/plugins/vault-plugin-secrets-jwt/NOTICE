@@ -43,11 +43,19 @@ changes were made to the original work:
    module resolves inside this repository. The friendlyid-go requirement was
    removed. Go, Vault, and security-sensitive dependency versions were updated.
 
-7. AGENTS.md and CLAUDE.md (added by NVIDIA): repository guidance describing
+7. plugin/config.go: the unsupported-signature-algorithm error is returned
+   rather than discarded. It previously reported success, so the key was never
+   rotated and the caller could not detect it.
+
+8. plugin/util.go: token ids are generated from a version 4 UUID rather than a
+   version 1 UUID. A v1 UUID encodes the host MAC address and creation
+   timestamp, and this id is published as the token's `jti`.
+
+9. AGENTS.md and CLAUDE.md (added by NVIDIA): repository guidance describing
    this directory's third-party origin and the rules for changing it. They are
    not part of the distributed plugin and carry no copyright header.
 
-8. Upstream project machinery not applicable to this repository was omitted:
+10. Upstream project machinery not applicable to this repository was omitted:
    GitHub Actions workflows, goreleaser configuration, the upstream Dockerfile,
    install script, Makefile and linter configuration. Source, tests, and
    license material were retained in full.
