@@ -15,13 +15,14 @@
 
 {{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.llmRequestRouter.enabled }}
 ---
-# Pylon gRPC control channel into the LLM request router. Workers resolve this
-# address from nvcf.llm-request-router.worker-address handed down by nvcf-api.
-apiVersion: gateway.networking.k8s.io/v1alpha2
-kind: TCPRoute
+# Pylon gRPC control channel into the LLM request router. Pylon dials the
+# address nvcf-api hands workers, but sets the per-pod hostname the router
+# advertises as the request authority, so this route matches on that hostname.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
 metadata:
-  name: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.grpcName }}
-  namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.namespace }}
+  name: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.grpc.name }}
+  namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/component: llm-request-router-grpc-route
@@ -29,13 +30,18 @@ metadata:
     {{- toYaml .Values.nvcfGatewayRoutes.routes.llmRequestRouter.routeAnnotations | nindent 4 }}
 spec:
   parentRefs:
-    - name: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.name }}
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.namespace }}
-      sectionName: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.grpcListenerName }}
+    - name: {{ .Values.nvcfGatewayRoutes.gateways.shared.name }}
+      namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
+      sectionName: {{ .Values.nvcfGatewayRoutes.gateways.shared.listenerName }}
+
+  hostnames:
+    {{- range .Values.nvcfGatewayRoutes.routes.llmRequestRouter.grpc.hostnames }}
+    - {{ tpl . $ | quote }}
+    {{- end }}
 
   rules:
     - backendRefs:
-        - name: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.backend.name }}
-          namespace: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.backend.namespace }}
-          port: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.backend.grpcPort }}
+        - name: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.grpc.backend.name }}
+          namespace: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.grpc.backend.namespace }}
+          port: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.grpc.backend.port }}
 {{- end }}

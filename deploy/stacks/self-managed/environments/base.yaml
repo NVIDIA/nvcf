@@ -381,12 +381,16 @@ ingress:
       nats:
         enabled: false
         routeAnnotations: {}
-      # L4 routes exposing the LLM request router to external compute planes.
-      # Requires addons.llm.enabled and a Gateway with both listeners below.
+      # Routes exposing the LLM request router to external compute planes.
+      # Requires addons.llm.enabled. The gRPC hop is a GRPCRoute on the shared
+      # Gateway; the QUIC hop is a UDPRoute needing its own Gateway listener.
       llmRequestRouter:
         enabled: false
-        grpcListenerName: llm-router-grpc
-        quicListenerName: llm-router-quic
+        # GRPCRoute hostnames. Must match the hostnames the router advertises
+        # through addons.llm.requestRouter.external.advertisedHostnameTemplate,
+        # because pylon sends that host as the request authority.
+        # Empty uses the chart default, llm-router.<domain>.
+        hostnames: []
         routeAnnotations: {}
       # ESS route. NVCF worker containers fetch function secrets from ess-api.
       # In split/multi-cluster installs ess runs in the control plane, so
@@ -405,9 +409,12 @@ ingress:
         name: "" # must be set by the environment when routes.nats.enabled=true
         namespace: "" # must be set by the environment when routes.nats.enabled=true
         listenerName: nats
-      llmRequestRouter:
+      # Gateway carrying the router QUIC reverse tunnel. The gRPC hop rides the
+      # shared Gateway, so only the UDP listener needs its own entry.
+      llmRequestRouterQuic:
         name: "" # must be set when routes.llmRequestRouter.enabled=true
         namespace: "" # must be set when routes.llmRequestRouter.enabled=true
+        listenerName: llm-router-quic
 
 grpcproxy:
   # Optional NVCF API gRPC endpoint used only by grpc-proxy.

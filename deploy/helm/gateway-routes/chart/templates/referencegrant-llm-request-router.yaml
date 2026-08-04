@@ -16,23 +16,24 @@
 {{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.llmRequestRouter.enabled }}
 ---
 # ReferenceGrant allows the LLM request router routes to reference the router
-# Service across namespaces when they are rendered in the Gateway namespace.
-# Both route kinds share one grant because they target the same Service.
+# Service across namespaces. The gRPC hop is rendered in the shared Gateway
+# namespace and the QUIC hop in the UDP Gateway namespace, so both are granted
+# here; they target the same Service.
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
   name: allow-routes-to-llm-request-router
-  namespace: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.backend.namespace }}
+  namespace: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.grpc.backend.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
 spec:
   from:
     - group: gateway.networking.k8s.io
-      kind: TCPRoute
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.namespace }}
+      kind: GRPCRoute
+      namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
     - group: gateway.networking.k8s.io
       kind: UDPRoute
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.namespace }}
+      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouterQuic.namespace }}
   to:
     - group: ""
       kind: Service

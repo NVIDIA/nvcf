@@ -116,29 +116,35 @@ Workers use two channels. Pylon opens a gRPC control channel on the router's
 TCP port, registers, and receives a tunnel target. It then opens a QUIC reverse
 tunnel on the router's UDP port. Both channels have to reach the router.
 
-### 1. Gateway listeners
+### 1. Routes
 
-The stack does not create the Gateway. Add a TCP listener and a UDP listener to
-the Gateway the routes attach to, then reference it:
+The gRPC hop is a GRPCRoute on the shared Gateway, matched by hostname, so it
+needs no new listener. The QUIC hop is a UDPRoute and does need a UDP listener
+on a Gateway, which the stack does not create.
 
 ```yaml
 ingress:
   gatewayApi:
     gateways:
-      llmRequestRouter:
+      llmRequestRouterQuic:
         name: <gateway-name>
         namespace: <gateway-namespace>
+        listenerName: llm-router-quic
     routes:
       llmRequestRouter:
         enabled: true
-        grpcListenerName: llm-router-grpc
-        quicListenerName: llm-router-quic
+        hostnames:
+          - "llm-router.<external-domain>"
 ```
 
-This renders a TCPRoute to router port 50071, a UDPRoute to router port 50072,
+This renders a GRPCRoute to router port 50071, a UDPRoute to router port 50072,
 and a ReferenceGrant for the cross-namespace Service. The routes stay off unless
 `addons.llm.enabled` is also true, because without the addon there is no router
 Service to reference.
+
+`hostnames` defaults to `llm-router.<domain>`. It must match what the router
+advertises in step 2, because pylon sends the advertised host as the request
+authority and the GRPCRoute matches on it.
 
 ### 2. Router dial and identity settings
 
@@ -175,11 +181,15 @@ At `replicaCount: 1` a plain L4 forward is correct, because every connection
 reaches the only router pod.
 
 Above 1, the router hands each pylon a per-pod identity and expects the return
-path to honor it. Whatever terminates the dial addresses must route on the gRPC
-authority and the QUIC SNI. A Gateway that load balances only on port will send
-pylon to a router pod that does not own its tunnel target, and the reverse
-tunnel will not establish. Use a front end that routes on that identity, or keep
-external installs at one replica.
+path to honor it. The GRPCRoute can carry that for the control channel, since it
+matches on the authority pylon sends: give each pod its own hostname through
+`advertisedHostnameTemplate` and add a route per hostname pointing at a per-pod
+Service.
+
+The QUIC hop has no equivalent. A UDPRoute forwards on port alone, so the
+reverse tunnel can land on a router pod that does not own the tunnel target and
+will not establish. Multi-replica external therefore needs a front end that
+routes QUIC on SNI. Keep external installs at one replica otherwise.
 
 ## Local Plaintext Transport
 

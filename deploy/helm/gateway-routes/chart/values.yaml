@@ -51,19 +51,17 @@ nvcfGatewayRoutes:
       namespace: gateway
       # Listener (sectionName) on the Gateway to attach the route to
       listenerName: nats
-    # Gateway for LLM request router traffic from compute planes outside the
-    # control plane cluster. Both routes are disabled by default; when enabled,
-    # the referenced Gateway must expose a TCP listener for the pylon gRPC
-    # control channel and a UDP listener for the QUIC reverse tunnel.
-    llmRequestRouter:
-      # Name of the Gateway resource to attach the router routes to
-      name: tcp-gateway
+    # Gateway carrying the LLM request router QUIC reverse tunnel. The router's
+    # gRPC control channel rides the shared Gateway as a GRPCRoute; only the
+    # UDP hop needs its own listener. Disabled by default; when enabled, the
+    # referenced Gateway must expose a UDP listener.
+    llmRequestRouterQuic:
+      # Name of the Gateway resource to attach the UDPRoute to
+      name: udp-gateway
       # Namespace where the Gateway exists
       namespace: gateway
-      # TCP listener (sectionName) carrying the pylon gRPC control channel
-      grpcListenerName: llm-router-grpc
       # UDP listener (sectionName) carrying the pylon QUIC reverse tunnel
-      quicListenerName: llm-router-quic
+      listenerName: llm-router-quic
 
   # HTTPRoute configurations
   routes:
@@ -253,25 +251,36 @@ nvcfGatewayRoutes:
         port: 4222
       routeAnnotations: {}
 
-    # LLM request router L4 routes for compute planes outside the control plane
-    # cluster. Pylon opens a gRPC control channel on the TCP port and a QUIC
-    # reverse tunnel on the UDP port. Disabled by default because most installs
-    # keep the router in-cluster and existing Gateways have no listener for it.
+    # LLM request router routes for compute planes outside the control plane
+    # cluster. Pylon opens a gRPC control channel, registers, receives a tunnel
+    # target, then opens a QUIC reverse tunnel. Both hops are required.
+    # Disabled by default because most installs keep the router in-cluster.
     #
-    # At replicaCount 1 these routes reach the only router pod, so a plain L4
-    # forward is correct. Above 1 the router hands pylon a per-pod identity as
-    # the gRPC authority and QUIC SNI, and the Gateway must route on that
-    # identity. A Gateway that only load balances on port will send pylon to a
-    # router pod that does not own its tunnel target.
+    # The gRPC hop is a GRPCRoute on the shared Gateway, matched by hostname.
+    # Pylon sets the router's advertised per-pod hostname as the request
+    # authority, so hostnames here must line up with the router's
+    # advertisedHostnameTemplate.
+    #
+    # The QUIC hop is a UDPRoute and forwards on port alone. At replicaCount 1
+    # that reaches the only router pod. Above 1 the router expects the reverse
+    # tunnel to come back to the pod named by the QUIC SNI, which a UDPRoute
+    # cannot honor.
     llmRequestRouter:
       enabled: false
-      grpcName: llm-request-router-grpc
-      quicName: llm-request-router-quic
-      backend:
-        name: llm-request-router
-        namespace: nvcf
-        grpcPort: 50071
-        quicPort: 50072
+      grpc:
+        name: llm-request-router-grpc
+        hostnames:
+          - "llm-router.{{ .Values.nvcfGatewayRoutes.domain }}"
+        backend:
+          name: llm-request-router
+          namespace: nvcf
+          port: 50071
+      quic:
+        name: llm-request-router-quic
+        backend:
+          name: llm-request-router
+          namespace: nvcf
+          port: 50072
       routeAnnotations: {}
     
     # NVCF Worker Container needs to be able to fetch secrets for function pods

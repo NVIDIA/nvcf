@@ -57,7 +57,7 @@ Important settings to review before deployment:
 - `nvcfGatewayRoutes.gateways.shared.*` for the HTTP Gateway name, namespace, and listener
 - `nvcfGatewayRoutes.gateways.grpc.*` for the TCP Gateway name, namespace, and listener
 - `nvcfGatewayRoutes.gateways.nats.*` for the NATS TCP Gateway name, namespace, and listener
-- `nvcfGatewayRoutes.gateways.llmRequestRouter.*` for the LLM request router Gateway name, namespace, and its TCP and UDP listeners
+- `nvcfGatewayRoutes.gateways.llmRequestRouterQuic.*` for the Gateway name, namespace, and UDP listener carrying the LLM request router reverse tunnel
 - `nvcfGatewayRoutes.routes.<route>.enabled` to toggle individual routes
 - `nvcfGatewayRoutes.routes.nvcfApi.grpc.enabled` and
   `nvcfGatewayRoutes.routes.nvctApi.grpc.enabled` to expose API gRPC routes
@@ -88,7 +88,8 @@ Enabled `HTTPRoute` entries must not share a resolved hostname because each `HTT
 | `grpc` | TCPRoute | Not rendered | `grpc.nvcf:10081` |
 | `grpcWorker` | TCPRoute (disabled by default) | Not rendered | `grpc.nvcf:10086` |
 | `nats` | TCPRoute (disabled by default) | Not rendered | `nats.nats-system:4222` |
-| `llmRequestRouter` | TCPRoute and UDPRoute (disabled by default) | Not rendered | `llm-request-router.nvcf:50071` and `llm-request-router.nvcf:50072` |
+| `llmRequestRouter.grpc` | GRPCRoute (disabled by default) | `llm-router.<domain>` | `llm-request-router.nvcf:50071` |
+| `llmRequestRouter.quic` | UDPRoute (disabled by default) | Not rendered | `llm-request-router.nvcf:50072` |
 
 Cross-namespace routing is supported via `ReferenceGrant` resources rendered into each backend namespace.
 
@@ -99,5 +100,6 @@ Cross-namespace routing is supported via `ReferenceGrant` resources rendered int
 - The `grpc` TCPRoute does not enforce HTTP hostname matching at the Gateway layer. Configure DNS or TCP load balancer routing outside this chart.
 - The `grpcWorker` TCPRoute is beta support for split or multi-cluster gRPC worker callbacks. It carries HTTP/1 CONNECT callback traffic only. Enable it only when the control-plane grpc-proxy runs one replica with HPA disabled. Multi-replica grpc-proxy requires pod-specific callback routing and is not supported by this shared TCPRoute.
 - Enabling the `nats` route requires a reachable TCP listener for NATS on the referenced Gateway. The HTTP Gateway address does not imply NATS reachability unless that same Gateway also has the NATS TCP listener configured.
-- The `llmRequestRouter` entry renders two routes for compute planes outside the control plane cluster: a TCPRoute for the pylon gRPC control channel and a UDPRoute for the QUIC reverse tunnel. Both are required; the control channel alone does not carry inference traffic. Enabling them requires the referenced Gateway to expose both a TCP and a UDP listener.
-- The `llmRequestRouter` routes forward on port alone. Enable them only when the request router runs one replica. Above one replica the router advertises a per-pod identity as the gRPC authority and QUIC SNI, and the return path must route on that identity; pod-specific routing is not supported by these shared routes.
+- The `llmRequestRouter` entry renders two routes for compute planes outside the control plane cluster: a GRPCRoute for the pylon control channel and a UDPRoute for the QUIC reverse tunnel. Both are required; the control channel alone does not carry inference traffic. The GRPCRoute attaches to the shared Gateway, so only the UDPRoute needs a new listener.
+- The `llmRequestRouter.grpc` hostnames must match the hostnames the request router advertises. Pylon dials the address handed to workers but sends the router's advertised per-pod hostname as the request authority, which is what the GRPCRoute matches on.
+- The `llmRequestRouter.quic` UDPRoute forwards on port alone. Enable these routes only when the request router runs one replica. Above one replica the reverse tunnel must return to the pod named by the QUIC SNI; pod-specific UDP routing is not supported by this shared route.

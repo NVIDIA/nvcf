@@ -40,8 +40,8 @@ write_values() {
 }
 
 gateway_values=(
-  --state-values-set ingress.gatewayApi.gateways.llmRequestRouter.name=grpc-gw
-  --state-values-set ingress.gatewayApi.gateways.llmRequestRouter.namespace=envoy-gateway-system
+  --state-values-set ingress.gatewayApi.gateways.llmRequestRouterQuic.name=udp-gw
+  --state-values-set ingress.gatewayApi.gateways.llmRequestRouterQuic.namespace=envoy-gateway-system
 )
 
 # Single-cluster default: the router keeps in-cluster behavior and none of the
@@ -69,16 +69,18 @@ grep -q 'reverseTunnelPylonDialAddr: llm-router.example.com:50072' "$external_ro
 grep -q 'advertisedHostnameTemplate:' "$external_router" ||
   fail "external exposure did not render the advertised hostname template"
 
-# Routes are opt-in and must carry the Gateway coordinates through to the chart.
+# Routes are opt-in and must carry the QUIC Gateway coordinates and the
+# GRPCRoute hostnames through to the chart.
 routes_on="$work_dir/ingress-routes-on.yaml"
 write_values ingress "$routes_on" \
   --state-values-set addons.llm.enabled=true \
   --state-values-set ingress.gatewayApi.routes.llmRequestRouter.enabled=true \
+  --state-values-set-string 'ingress.gatewayApi.routes.llmRequestRouter.hostnames[0]=llm-router-0.example.com' \
   "${gateway_values[@]}"
-grep -q 'grpcListenerName: llm-router-grpc' "$routes_on" ||
-  fail "router routes did not render the gRPC listener name"
-grep -q 'quicListenerName: llm-router-quic' "$routes_on" ||
+grep -q 'listenerName: llm-router-quic' "$routes_on" ||
   fail "router routes did not render the QUIC listener name"
+grep -q 'llm-router-0.example.com' "$routes_on" ||
+  fail "router routes did not render the GRPCRoute hostnames"
 
 # Without the LLM addon there is no llm-request-router Service, so the routes
 # must stay off even when an operator opts in.
@@ -106,20 +108,27 @@ chart_dir="$repo_dir/deploy/helm/gateway-routes/chart"
 cat >"$work_dir/gw-values.yaml" <<'YAML'
 nvcfGatewayRoutes:
   gateways:
-    llmRequestRouter:
-      name: grpc-gw
+    llmRequestRouterQuic:
+      name: udp-gw
       namespace: envoy-gateway-system
   routes:
     llmRequestRouter:
       enabled: true
+      grpc:
+        hostnames:
+          - llm-router-0.example.com
 YAML
 helm template ingress "$chart_dir" -f "$work_dir/gw-values.yaml" >"$work_dir/gw-on.yaml"
-for kind in "kind: TCPRoute" "kind: UDPRoute" "kind: ReferenceGrant"; do
+for kind in "kind: GRPCRoute" "kind: UDPRoute" "kind: ReferenceGrant"; do
   grep -q "$kind" "$work_dir/gw-on.yaml" ||
     fail "router routes did not render $kind"
 done
 grep -q 'sectionName: llm-router-quic' "$work_dir/gw-on.yaml" ||
   fail "UDPRoute did not attach to the QUIC listener"
+# The gRPC hop must match on the advertised hostname, not forward on port.
+awk '/kind: GRPCRoute/,/^---/' "$work_dir/gw-on.yaml" |
+  grep -q 'llm-router-0.example.com' ||
+  fail "GRPCRoute did not render the advertised hostname match"
 
 helm template ingress "$chart_dir" >"$work_dir/gw-off.yaml"
 if grep -qE '^  name: llm-request-router-(grpc|quic)$|^kind: UDPRoute$' "$work_dir/gw-off.yaml"; then

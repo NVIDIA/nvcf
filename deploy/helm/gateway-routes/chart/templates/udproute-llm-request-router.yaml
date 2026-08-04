@@ -21,8 +21,8 @@
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: UDPRoute
 metadata:
-  name: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.quicName }}
-  namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.namespace }}
+  name: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.quic.name }}
+  namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouterQuic.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/component: llm-request-router-quic-route
@@ -30,13 +30,13 @@ metadata:
     {{- toYaml .Values.nvcfGatewayRoutes.routes.llmRequestRouter.routeAnnotations | nindent 4 }}
 spec:
   parentRefs:
-    - name: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.name }}
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.namespace }}
-      sectionName: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.quicListenerName }}
+    - name: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouterQuic.name }}
+      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouterQuic.namespace }}
+      sectionName: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouterQuic.listenerName }}
 
   rules:
     - backendRefs:
-        - name: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.backend.name }}
-          namespace: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.backend.namespace }}
-          port: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.backend.quicPort }}
+        - name: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.quic.backend.name }}
+          namespace: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.quic.backend.namespace }}
+          port: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.quic.backend.port }}
 {{- end }}
