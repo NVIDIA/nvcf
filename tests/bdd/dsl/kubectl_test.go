@@ -40,3 +40,25 @@ func TestServiceMonitorExistenceCommandRejectsEmptyNames(t *testing.T) {
 		t.Fatal("expected empty names error")
 	}
 }
+
+func TestKubectlApplyCommandTargetsExplicitContext(t *testing.T) {
+	got, err := KubectlApplyCommand("/tmp/bdd manifests/secret.yaml", "k3d-ncp-local-compute-1")
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "kubectl --context k3d-ncp-local-compute-1 apply -f '/tmp/bdd manifests/secret.yaml'"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestKubectlApplyCommandAllowsAmbientContext(t *testing.T) {
+	got, err := KubectlApplyCommand("/tmp/secret.yaml", "")
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "kubectl apply -f /tmp/secret.yaml"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}

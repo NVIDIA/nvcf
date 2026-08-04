@@ -75,15 +75,17 @@ helmDefaults:
 {{- if $environmentAgentMergeConfig }}
 {{- $agentMergeConfig = mergeOverwrite $agentMergeConfig ($environmentAgentMergeConfig | fromYaml | default dict) }}
 {{- end }}
+{{- $nvcaOp := dig "nvcaOperator" dict .Values.global }}
+{{- $selfManaged := dig "selfManaged" dict $nvcaOp }}
+{{- $otelCollector := dig "otelCollector" dict $selfManaged }}
+{{- $otelCollectorEnabled := dig "enabled" $computeObservabilityEnabled $otelCollector }}
 
 releases:
 
   - name: nvca-operator
-    # Released chart from nvca-operator-deploy. The chart bakes its own
-    # image.tag + selfManaged.nvcaVersion (set by `make vendor-chart` from
-    # nvca-operator-deploy/.env), so no inline tag override is needed; the
-    # nvca + nvca-operator images are mirrored to the environment registry by
-    # regsync-configs.
+    # Released chart from nvca-operator-deploy. The chart supplies default
+    # image.tag and selfManaged.nvcaVersion values. Environments can override
+    # them when validating a newer mirrored NVCA build.
     chart: nvcf/helm-nvca-operator
     version: 1.14.0
     namespace: nvca-operator
@@ -95,10 +97,13 @@ releases:
       # read by the nvca-operator chart.
       - {{ $registrationValuesPath | quote }}
       # Resolve operator + nvca images through global.image.{registry,repository}.
-      # The chart's image.tag and selfManaged.nvcaVersion defaults supply the
-      # actual image tag; this block only overrides repository and pullPolicy.
+      # The chart defaults supply image versions unless the environment sets
+      # global.nvcaOperator.imageTag or selfManaged.nvcaVersion.
       - image:
           repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvca-operator
+          {{- with dig "imageTag" "" $nvcaOp }}
+          tag: {{ . | quote }}
+          {{- end }}
           pullPolicy: IfNotPresent
         nvcaImage:
           repositoryOverride: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvca
@@ -112,11 +117,11 @@ releases:
         {{- end }}
         clusterName: {{ requiredEnv "CLUSTER_NAME" }}
         ncaId: {{ requiredEnv "NCA_ID" }}
-        {{- $selfManaged := dig "nvcaOperator" "selfManaged" dict .Values.global }}
-        {{- $otelCollector := dig "otelCollector" dict $selfManaged }}
-        {{- $otelCollectorEnabled := dig "enabled" $computeObservabilityEnabled $otelCollector }}
         selfManaged:
           identitySource: psat
+          {{- with dig "nvcaVersion" "" $selfManaged }}
+          nvcaVersion: {{ . | quote }}
+          {{- end }}
           {{- with dig "icmsServiceURL" "" $selfManaged }}
           icmsServiceURL: {{ . | quote }}
           {{- end }}
@@ -170,7 +175,6 @@ releases:
         networkPolicy:
 {{ toYaml . | nindent 10 }}
         {{- end }}
-        {{- $nvcaOp := dig "nvcaOperator" dict .Values.global }}
         {{- if .Values.global.nodeSelector.enabled -}}
         nodeSelector:
           key: {{ .Values.global.nodeSelector.key }}

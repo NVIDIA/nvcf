@@ -564,6 +564,153 @@ func observabilityControlHelmListJSON() string {
 ]`
 }
 
+// TestObservabilityComputeFeatureFileWiresToSteps runs the live-install
+// observability-compute feature against a fake runner. It checks that every
+// cluster operation is explicitly routed to the local control or compute
+// cluster and that the compute profile verifies its releases and monitors.
+func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
+	const (
+		registryLoginCommand  = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
+		serviceMonitorCommand = "kubectl get servicemonitor/nvcf-default-monitors-nvca" +
+			" --namespace monitoring --context k3d-ncp-local-compute-1"
+		podMonitorCommand = "kubectl get podmonitor/nvcf-default-monitors-dcgm" +
+			" podmonitor/nvcf-default-monitors-worker" +
+			" --namespace monitoring --context k3d-ncp-local-compute-1"
+		collectorEnabledCommand = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o json | jq -r ".selfManaged.otelCollector.enabled"'`
+		featureGatesCommand     = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o json | jq -r ".selfManaged.featureGateValues[]"'`
+		serviceKeyCommand       = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
+			` kubectl --context k3d-ncp-local-compute-1 create secret generic ngc-service-api-key` +
+			` --namespace nvca-system --from-file=ngc-service-api-key=/dev/stdin --dry-run=client -o yaml |` +
+			` kubectl --context k3d-ncp-local-compute-1 apply -f -'`
+		restartNVCACommand = "kubectl --context k3d-ncp-local-compute-1 delete pod --namespace nvca-system --selector app.kubernetes.io/name=nvca --wait=false"
+	)
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		registryLoginCommand:        {ExitCode: 0},
+		"k3d cluster get ncp-local": {ExitCode: 1},
+		serviceMonitorCommand:       {ExitCode: 0},
+		podMonitorCommand:           {ExitCode: 0},
+		collectorEnabledCommand:     {ExitCode: 0, Stdout: "true\n"},
+		featureGatesCommand:         {ExitCode: 0, Stdout: "DynamicGPUDiscovery\nBYOObservability\n"},
+		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {
+			ExitCode: 0,
+			Stdout:   observabilityComputeHelmListJSON(),
+		},
+		"kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local-compute-1 -o jsonpath='{.spec.targetAllocator.enabled}'": {
+			ExitCode: 0,
+			Stdout:   "true",
+		},
+		"kubectl get servicemonitor --namespace monitoring --context k3d-ncp-local-compute-1 -o name": {
+			ExitCode: 0,
+			Stdout:   "servicemonitor.monitoring.coreos.com/nvcf-default-monitors-nvca\n",
+		},
+		"helm status function-autoscaler --namespace nvcf --kube-context k3d-ncp-local-compute-1": {
+			ExitCode: 1,
+			Stderr:   "Error: release: not found\n",
+		},
+	}))
+	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "observability-compute.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "observability-compute-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+
+	runs := suite.Runner.(*fakeRunner).runs
+	for _, command := range []string{
+		registryLoginCommand,
+		serviceMonitorCommand,
+		podMonitorCommand,
+		collectorEnabledCommand,
+		featureGatesCommand,
+		serviceKeyCommand,
+		restartNVCACommand,
+	} {
+		if !commandRanExactly(runs, command) {
+			t.Fatalf("exact command was never invoked: %s", command)
+		}
+	}
+	for _, target := range []string{
+		"self-managed install HELMFILE_ENV=local-bdd-observability-compute KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-cp-kubeconfig.yaml",
+		"observability install HELMFILE_ENV=local-bdd-observability-compute KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-compute-1-kubeconfig.yaml",
+		"nvcf-compute-plane install CLUSTER_NAME=ncp-local-compute-1 HELMFILE_ENV=local-bdd-observability-compute",
+	} {
+		if !commandRanThatContains(runs, target) {
+			t.Fatalf("profile install command was never invoked: %s", target)
+		}
+	}
+	for _, run := range runs {
+		if strings.HasPrefix(run, "kubectl apply -f ") {
+			t.Fatalf("manifest apply relied on the ambient kube context: %s", run)
+		}
+		if strings.Contains(run, "test-key") {
+			t.Fatalf("NGC API key leaked into command arguments: %s", run)
+		}
+	}
+
+	for _, stack := range []string{"self-managed", "observability", "nvcf-compute-plane"} {
+		environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", stack, "environments", "local-bdd-observability-compute.yaml")
+		profile, found, err := dsl.ReadYAMLKey(environmentPath, "observability.profile")
+		if err != nil {
+			t.Fatalf("read %s observability profile: %v", stack, err)
+		}
+		want := "compute"
+		if stack == "self-managed" {
+			want = "disabled"
+		}
+		if !found || profile != want {
+			t.Fatalf("%s observability profile = %q, found = %t; want %q", stack, profile, found, want)
+		}
+	}
+	computeEnvironmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "nvcf-compute-plane", "environments", "local-bdd-observability-compute.yaml")
+	for key, want := range map[string]string{
+		"global.nvcaOperator.imageTag":                                  "3.1.0",
+		"global.nvcaOperator.selfManaged.nvcaVersion":                   "3.1.0",
+		"global.nvcaOperator.selfManaged.otelCollector.imageRepository": "nvcr.io/test-org/test-team/nvcf-otel-collector",
+		"global.nvcaOperator.selfManaged.otelCollector.imageTag":        "0.157.8",
+	} {
+		got, found, err := dsl.ReadYAMLKey(computeEnvironmentPath, key)
+		if err != nil {
+			t.Fatalf("read compute-profile override %s: %v", key, err)
+		}
+		if !found || got != want {
+			t.Fatalf("compute-profile override %s = %q, found = %t; want %q", key, got, found, want)
+		}
+	}
+}
+
+func observabilityComputeHelmListJSON() string {
+	return `[
+{"name":"prometheus-operator-crds","namespace":"monitoring","status":"deployed"},
+{"name":"opentelemetry-operator","namespace":"monitoring","status":"deployed"},
+{"name":"victoria-metrics","namespace":"monitoring","status":"deployed"},
+{"name":"otel-collector","namespace":"monitoring","status":"deployed"},
+{"name":"default-monitors","namespace":"monitoring","status":"deployed"},
+{"name":"nvca-operator","namespace":"nvca-operator","status":"deployed"}
+]`
+}
+
 // TestMultiClusterHelmfileFeatureFileWiresToSteps runs
 // multi-cluster-helmfile.feature against a fake runner. The same
 // fixture seeds and canned helm-list outputs cover the scenarios;
@@ -1279,6 +1426,16 @@ func TestObservabilityControl(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "observability-control.feature")
+}
+
+// TestObservabilityCompute is the live entry point for the compute
+// observability profile on the local split-cluster topology. Skipped under
+// -short.
+func TestObservabilityCompute(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "observability-compute.feature")
 }
 
 // TestSingleClusterHelmfileUpstreamImages is the live entry point for the
