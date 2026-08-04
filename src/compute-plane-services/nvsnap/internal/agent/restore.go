@@ -215,6 +215,10 @@ type PlaceholderManifestRequest struct {
 
 // TriggerRestore writes a trigger file for a placeholder pod to start restoring
 func (a *Agent) TriggerRestore(ctx context.Context, req TriggerRestoreRequest) (*TriggerRestoreResult, error) {
+	if err := validPathSegment("checkpointId", req.CheckpointID); err != nil {
+		return nil, err
+	}
+
 	log := a.log.WithFields(logrus.Fields{
 		"checkpointId":  req.CheckpointID,
 		"placeholderId": req.PlaceholderContainerID,
@@ -390,6 +394,13 @@ spec:
 // Restore restores a checkpointed process using CRIU directly.
 // This uses the host's CRIU binary to restore the process.
 func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult, error) {
+	// The ID is joined onto CheckpointDir below and reaches os.Stat,
+	// os.ReadFile and os.WriteFile from there. Reject anything that is not
+	// a single path component before it becomes a path.
+	if err := validPathSegment("checkpointId", req.CheckpointID); err != nil {
+		return nil, err
+	}
+
 	ctx, span := tracing.Tracer().Start(ctx, "restore.full")
 	defer span.End()
 	span.SetAttributes(
