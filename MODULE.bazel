@@ -227,6 +227,20 @@ crate.from_cargo(
     supported_platform_triples = SUPPORTED_TRIPLES,
 )
 
+crate.annotation(
+    build_script_env = {
+        "AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR": "/usr/include",
+        "AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR": "/usr/lib/aarch64-linux-gnu",
+        "CFLAGS_aarch64_unknown_linux_gnu": "-I/usr/include/aarch64-linux-gnu",
+        "OPENSSL_INCLUDE_DIR": "/usr/include",
+        "OPENSSL_LIB_DIR": "/usr/lib/x86_64-linux-gnu",
+        "OPENSSL_NO_VENDOR": "1",
+        "X86_64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR": "/usr/include",
+        "X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR": "/usr/lib/x86_64-linux-gnu",
+    },
+    crate = "openssl-sys",
+)
+
 # Only the workspace root Cargo.toml is listed. Naming the member manifest too
 # made `cargo-bazel splice` fail on the public GitHub Actions build with
 # "Failed to splice workspace ... No such file or directory"; cargo-bazel's own
