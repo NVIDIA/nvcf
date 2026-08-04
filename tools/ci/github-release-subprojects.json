@@ -262,6 +262,11 @@
       "id": "api-keys",
       "path": "src/control-plane-services/api-keys",
       "service_name": "nvcf-api-keys"
+    },
+    {
+      "id": "ess",
+      "path": "src/control-plane-services/ess",
+      "service_name": "nvcf-ess"
     }
   ]
 }
