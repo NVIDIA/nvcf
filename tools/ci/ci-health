@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Report GitHub Actions cache and workflow-duration health for this repository.
+
+Answers, without hand-rolling `gh api` calls each time:
+
+  how full is the cache, and what is filling it
+  which cache keys are duplicated across refs (merge-queue refs double them)
+  how long does a workflow take, by day, median and p90
+  how long do PRs sit between opening and merging
+
+The cache quota is 10 GB per repository and GitHub evicts least-recently-used
+entries once it is reached, so a single oversized family can silently evict the
+entries every other job depends on. That failure mode is invisible in a green
+pipeline: jobs still pass, they just stop being fast.
+
+Usage:
+  tools/ci/ci-health                      # cache report (the usual question)
+  tools/ci/ci-health --workflow bazel     # duration percentiles by day
+  tools/ci/ci-health --merge-times        # PR open -> merge latency
+  tools/ci/ci-health --all
+  tools/ci/ci-health --repo OWNER/NAME    # defaults to NVIDIA/nvcf
+
+Requires the `gh` CLI, authenticated.
+"""
+
+import argparse
+import datetime as dt
+import json
+import subprocess
+import sys
+from collections import defaultdict
+
+QUOTA_GB = 10.0
+
+
+def gh(path, repo, paginate=False):
+    cmd = ["gh", "api", f"repos/{repo}/{path}"]
+    if paginate:
+        cmd.append("--paginate")
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit(f"gh api {path} failed: {out.stderr.strip()}")
+    return json.loads(out.stdout)
+
+
+def gb(n):
+    return n / 1024 ** 3
+
+
+def family(key):
+    """Group keys by their stable prefix, dropping the trailing content hash."""
+    head = key.rsplit("-", 1)[0]
+    return head[:40]
+
+
+def cache_report(repo):
+    usage = gh("actions/cache/usage", repo)
+    total = gb(usage["active_caches_size_in_bytes"])
+    count = usage["active_caches_count"]
+    pct = total / QUOTA_GB * 100
+    print(f"cache: {total:.2f} GB / {QUOTA_GB:.0f} GB across {count} entries ({pct:.0f}% of quota)")
+    if pct >= 90:
+        print("  AT QUOTA: new entries are evicting existing ones. Builds still pass, just colder.")
+    elif pct >= 75:
+        print("  approaching quota; expect evictions soon")
+
+    caches = gh("actions/caches?per_page=100", repo).get("actions_caches", [])
+    if not caches:
+        return
+
+    sizes = defaultdict(float)
+    counts = defaultdict(int)
+    for c in caches:
+        f = family(c["key"])
+        sizes[f] += gb(c["size_in_bytes"])
+        counts[f] += 1
+
+    print("\nlargest families:")
+    for f, size in sorted(sizes.items(), key=lambda kv: -kv[1])[:8]:
+        share = size / QUOTA_GB * 100
+        print(f"  {size:6.2f} GB  {share:4.1f}% of quota  x{counts[f]:<3d} {f}")
+
+    # A key present on more than one ref is stored more than once. Merge-queue
+    # refs are the usual cause and are the least useful copy: the branch is
+    # deleted when the queue drains, so that entry can never be restored.
+    refs = defaultdict(list)
+    for c in caches:
+        refs[c["key"]].append(c["ref"])
+    dupes = {k: v for k, v in refs.items() if len(v) > 1}
+    if dupes:
+        wasted = sum(
+            gb(c["size_in_bytes"])
+            for c in caches
+            if c["key"] in dupes and "gh-readonly-queue" in c["ref"]
+        )
+        print(f"\nkeys stored under multiple refs: {len(dupes)}")
+        if wasted:
+            print(f"  {wasted:.2f} GB of that is on merge-queue refs, which are unrestorable")
+        for k, rs in list(dupes.items())[:5]:
+            short = [r.replace("refs/heads/", "") for r in rs]
+            print(f"  {k[:46]}\n      {short}")
+
+
+def percentile(values, p):
+    if not values:
+        return 0.0
+    s = sorted(values)
+    idx = min(int(len(s) * p), len(s) - 1)
+    return s[idx]
+
+
+def workflow_report(repo, name, days):
+    runs = gh(f"actions/runs?per_page=100&status=success", repo).get("workflow_runs", [])
+    rows = defaultdict(list)
+    for r in runs:
+        if r.get("name") != name:
+            continue
+        try:
+            start = dt.datetime.fromisoformat(r["run_started_at"].replace("Z", "+00:00"))
+            end = dt.datetime.fromisoformat(r["updated_at"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            continue
+        rows[start.date().isoformat()].append((end - start).total_seconds() / 60)
+
+    if not rows:
+        print(f"\nworkflow '{name}': no successful runs in the retained window")
+        return
+    print(f"\nworkflow '{name}' (successful runs only, GitHub retains a limited window):")
+    for day in sorted(rows)[-days:]:
+        v = rows[day]
+        print(
+            f"  {day}  runs={len(v):<4d} median={percentile(v, 0.5):6.1f} min"
+            f"  p90={percentile(v, 0.9):6.1f} min  max={max(v):6.1f} min"
+        )
+    print("  NOTE: a low median can mean rows were skipped by change detection,")
+    print("        not that builds got faster. Compare p90 and run counts too.")
+
+
+def merge_time_report(repo, limit):
+    prs = gh(f"pulls?state=closed&per_page={limit}&sort=updated&direction=desc", repo)
+    lat = []
+    for p in prs:
+        if not p.get("merged_at"):
+            continue
+        created = dt.datetime.fromisoformat(p["created_at"].replace("Z", "+00:00"))
+        merged = dt.datetime.fromisoformat(p["merged_at"].replace("Z", "+00:00"))
+        lat.append(((merged - created).total_seconds() / 3600, p["number"]))
+    if not lat:
+        print("\nno merged PRs in the sampled window")
+        return
+    hours = [h for h, _ in lat]
+    print(f"\nPR open -> merge, {len(lat)} merged PRs sampled:")
+    print(f"  median {percentile(hours, 0.5):.1f} h   p90 {percentile(hours, 0.9):.1f} h")
+    slowest = sorted(lat, reverse=True)[:5]
+    print("  slowest:")
+    for h, n in slowest:
+        print(f"    #{n:<6d} {h:8.1f} h")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--repo", default="NVIDIA/nvcf")
+    ap.add_argument("--workflow", help="report duration percentiles for this workflow name")
+    ap.add_argument("--merge-times", action="store_true", help="report PR open-to-merge latency")
+    ap.add_argument("--all", action="store_true", help="cache + bazel durations + merge times")
+    ap.add_argument("--days", type=int, default=10)
+    ap.add_argument("--prs", type=int, default=100)
+    args = ap.parse_args()
+
+    if args.all or (not args.workflow and not args.merge_times):
+        cache_report(args.repo)
+    if args.workflow:
+        workflow_report(args.repo, args.workflow, args.days)
+    elif args.all:
+        workflow_report(args.repo, "bazel", args.days)
+    if args.merge_times or args.all:
+        merge_time_report(args.repo, args.prs)
+
+
+if __name__ == "__main__":
+    main()
