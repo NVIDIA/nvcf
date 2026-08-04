@@ -502,6 +502,16 @@ func (r *Reconciler) prepareUpdateIfNeeded(ctx context.Context, ms *v1alpha1.Min
 	if ms.Status.ObservedGeneration == 0 || ms.Generation == ms.Status.ObservedGeneration {
 		return nil
 	}
+	// Installing at revision zero means initial object application is still in progress.
+	// doInstall reads the current spec and its render cache is keyed by Helm configuration,
+	// so it can handle spec changes without entering an update path that assumes infra exists.
+	if ms.Status.Phase == v1alpha1.MiniServiceInstalling && ms.Status.Revision == 0 {
+		logf.FromContext(ctx).Info("Spec change detected during initial install, continuing install",
+			"generation", ms.Generation,
+			"observedGeneration", ms.Status.ObservedGeneration,
+		)
+		return nil
+	}
 
 	log := logf.FromContext(ctx)
 	log.Info("Spec change detected, checking if helm values changed",
