@@ -36,7 +36,7 @@ import (
 
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 
-	nvcfversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/httpapi"
@@ -119,6 +119,7 @@ func runServer(cfg *config.RevalConfig, v *viper.Viper, factory AuthorizerFactor
 
 	router := chi.NewRouter()
 	router.NotFound(httpapi.ServeNotFound)
+	serveInfo(router)
 
 	oldGrpcMetricsMiddleware := metrics.CreateOldGrpcMetricsMiddleWare(logger, meter)
 
@@ -159,6 +160,11 @@ func runServer(cfg *config.RevalConfig, v *viper.Viper, factory AuthorizerFactor
 	return nil
 }
 
+// serveInfo mounts the unauthenticated GET /info on the API router so it is reachable externally through the ingress.
+func serveInfo(router chi.Router) {
+	router.Get("/info", golibversion.Handler().ServeHTTP)
+}
+
 func serveManagementRoutes(logger *zap.Logger, loggerAtomicLevel *zap.AtomicLevel, cfg config.HTTPConfig) *http.Server {
 	router := chi.NewRouter()
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -168,8 +174,6 @@ func serveManagementRoutes(logger *zap.Logger, loggerAtomicLevel *zap.AtomicLeve
 			logger.Error("failed to write healthz response", zap.Error(err))
 		}
 	})
-
-	router.Get("/info", nvcfversion.Handler().ServeHTTP)
 
 	router.Get("/log_level", loggerAtomicLevel.ServeHTTP)
 

@@ -25,11 +25,12 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/authorizers"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/config"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/logging"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 )
 
 var (
-	Version   = "dev"
-	GitCommit = "dev"
+	Version   = golibversion.Version
+	GitCommit = golibversion.GitHash
 )
 
 func main() {
