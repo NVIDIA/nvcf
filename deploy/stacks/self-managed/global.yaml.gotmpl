@@ -259,6 +259,16 @@ natsAuthCalloutService:
 {{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
+{{- /* LLM worker sidecars reach the request router using the address nvcf-api hands
+     down in the worker environment as LLM_REQUEST_ROUTER_ADDRESS. NVCA carries no
+     built-in default, so an empty nvcf.llm-request-router.worker-address fails LLM
+     launch-spec translation and no worker pod is created. Point at the in-cluster
+     router service by default; split-cluster installs override with an address the
+     compute planes can reach. */}}
+{{- $llmAddonEnabled := dig "addons" "llm" "enabled" false .Values }}
+{{- $llmRequestRouterAddressOverride := dig "llmRequestRouterAddress" "" $workerEndpoints }}
+{{- /* Port matches llmRequestRouter.service.grpcPort in the request router chart. */}}
+{{- $llmRequestRouterWorkerAddress := $llmRequestRouterAddressOverride | default "llm-request-router.nvcf.svc.cluster.local:50071" }}
 {{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
 {{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
 api:
@@ -314,6 +324,14 @@ api:
       {{- fail "accounts.limits.maxRegistryCreds must be greater than 0 and less than or equal to 25" }}
       {{- end }}
       maxRegistryCreds: {{ $maxRegistryCreds }}
+
+  {{- if or $llmAddonEnabled $llmRequestRouterAddressOverride }}
+  remoteConfig:
+    configData:
+      nvcf:
+        llm-request-router:
+          worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
+  {{- end }}
 
   env:
     NVCF_NATS_REGION_PLACEMENT_TAG: "dc"

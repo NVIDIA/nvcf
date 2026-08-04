@@ -82,6 +82,39 @@ api:
 The LLM API Gateway and request router images are resolved from the same stack
 artifact registry settings as the other control plane services.
 
+## Request Router Worker Address
+
+LLM worker pods learn where the request router is from the NVCF API, which sends
+the address down as the `LLM_REQUEST_ROUTER_ADDRESS` worker environment
+variable. The API reads it from the `nvcf.llm-request-router.worker-address`
+remote-config field. NVCA carries no built-in default, so an empty field fails
+launch-spec translation and no worker pod is created:
+
+```text
+terminal error: LLM request router address is not set
+(LLM_REQUEST_ROUTER_ADDRESS env or STARGATE_ADDRESS legacy env)
+```
+
+Setting `addons.llm.enabled: true` points the field at the in-cluster request
+router service, `llm-request-router.nvcf.svc.cluster.local:50071`.
+Single-cluster installs need no further configuration.
+
+Compute planes outside the control plane cluster cannot resolve that service
+name. Set an address those clusters can reach instead:
+
+```yaml
+global:
+  workerEndpoints:
+    llmRequestRouterAddress: "<router-host>:<port>"
+```
+
+Check the value the stack rendered after applying:
+
+```bash
+kubectl get cm nvcf-api-remote-config -n nvcf \
+  -o jsonpath='{.data.nvcf-api\.yaml}' | grep worker-address
+```
+
 ## Local Plaintext Transport
 
 Local development clusters commonly run the LLM API Gateway to NVCF API gRPC
@@ -166,6 +199,19 @@ local plaintext clusters, the `llm-worker` args should include
 `--quic-insecure`.
 
 ## Troubleshooting
+
+A deploy that reports `ERROR` with no worker pod in `nvcf-backend` usually means
+launch-spec translation failed. Check the NVCA agent log and the `ICMSRequest`
+custom resource:
+
+```bash
+kubectl logs -n nvca-system deploy/nvca --tail=100 | grep -i "terminal error"
+kubectl get icmsrequest -n nvcf-backend \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.requestStatus}{"\t"}{.status.lastReconcileError}{"\n"}{end}'
+```
+
+`LLM request router address is not set` means the API sent no router address to
+the worker. See [Request Router Worker Address](#request-router-worker-address).
 
 `404 no_eligible_candidates` from `llm.invocation.<domain>` means the request
 reached the LLM Gateway, but the requested function or model was unknown or was

@@ -66,6 +66,12 @@ global:
     invocationServiceURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy.
     grpcProxyWorkerConnectURL: ""
+    # LLM function worker env: LLM_REQUEST_ROUTER_ADDRESS. host:port, not a URL.
+    # Empty uses the in-cluster request router at
+    # llm-request-router.nvcf.svc.cluster.local:50071 when addons.llm.enabled is
+    # true. Set this when compute planes run outside the control plane cluster and
+    # must reach the router through an external address.
+    llmRequestRouterAddress: ""
 
   nodeSelectors:
     enabled: false
