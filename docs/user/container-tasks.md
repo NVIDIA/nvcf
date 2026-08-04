@@ -17,6 +17,12 @@ on an appropriate CUDA base image for your workload.
 
 ## Creating a container task
 
+<Warning>
+Result upload to a registry is not supported on self-hosted NVCF. Always set
+`resultHandlingStrategy` to `NONE`. Omitting it defaults to `UPLOAD`, which
+will be rejected at creation time.
+</Warning>
+
 ```bash
 # Minimal example using CLI flags
 nvcf-cli task create \
@@ -189,8 +195,10 @@ In Python: `os.rename(tmp_path, progress_path)`.
 
 ## Result handling
 
-Note: result upload to a registry is not yet supported in this release. Set
-`resultHandlingStrategy` to `NONE`.
+<Warning>
+Result upload to a registry is not supported on self-hosted NVCF in this
+release. Set `resultHandlingStrategy` to `NONE`.
+</Warning>
 
 With `NONE`, the container is responsible for delivering its own outputs --
 for example, writing to a volume or pushing to external storage using
