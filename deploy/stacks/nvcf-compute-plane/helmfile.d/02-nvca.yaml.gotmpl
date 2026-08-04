@@ -153,9 +153,8 @@ helmDefaults:
 releases:
 
   - name: nvca-operator
-    # Released chart from nvca-operator-deploy. The chart supplies default
-    # image.tag and selfManaged.nvcaVersion values. Environments can override
-    # them when validating a newer mirrored NVCA build.
+    # Released chart from nvca-operator-deploy. Compute-plane base values own
+    # the operator and NVCA versions used by this stack.
     chart: nvcf/helm-nvca-operator
     version: 1.14.0
     namespace: nvca-operator
@@ -167,8 +166,7 @@ releases:
       # read by the nvca-operator chart.
       - {{ $registrationValuesPath | quote }}
       # Resolve operator + nvca images through global.image.{registry,repository}.
-      # The chart defaults supply image versions unless the environment sets
-      # global.nvcaOperator.imageTag or selfManaged.nvcaVersion.
+      # Compute-plane base values supply their image versions.
       - image:
           repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvca-operator
           {{- with dig "imageTag" "" $nvcaOp }}

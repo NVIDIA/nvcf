@@ -685,10 +685,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 	}
 	computeEnvironmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "nvcf-compute-plane", "environments", "local-bdd-observability-compute.yaml")
 	for key, want := range map[string]string{
-		"global.nvcaOperator.imageTag":                                  "3.1.0",
-		"global.nvcaOperator.selfManaged.nvcaVersion":                   "3.1.0",
 		"global.nvcaOperator.selfManaged.otelCollector.imageRepository": "nvcr.io/test-org/test-team/nvcf-otel-collector",
-		"global.nvcaOperator.selfManaged.otelCollector.imageTag":        "0.157.8",
 	} {
 		got, found, err := dsl.ReadYAMLKey(computeEnvironmentPath, key)
 		if err != nil {

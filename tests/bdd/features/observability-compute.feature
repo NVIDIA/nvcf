@@ -22,12 +22,11 @@ Feature: Install local Helmfile observability with the compute profile
     # observability is installed separately on the compute cluster below.
     And I copy the file "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-compute.yaml"
     And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-compute.yaml" with keys:
-      | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
-      | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
-      | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
-      | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0  |
-      | addons.llm.enabled                            | false                                                               |
-      | observability.profile                         | disabled                                                            |
+      | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+      | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | addons.llm.enabled              | false                                |
+      | observability.profile           | disabled                             |
     # Configure the shared observability stack for compute-plane monitors.
     And I copy the file "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" to "deploy/stacks/observability/environments/local-bdd-observability-compute.yaml"
     And I update yaml file "deploy/stacks/observability/environments/local-bdd-observability-compute.yaml" with keys:
@@ -36,17 +35,12 @@ Feature: Install local Helmfile observability with the compute profile
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | compute                              |
     # Configure NVCA to use the same compute observability profile.
-    # Use the collector built from this checkout's pinned collector version in
-    # the supplied test registry so the local arm64 and amd64 paths are valid.
     And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-compute.yaml"
     And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-compute.yaml" with keys:
       | global.imagePullSecrets[0].name                               | nvcr-pull-secret                                                  |
       | global.helm.sources.repository                                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
       | global.image.repository                                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
-      | global.nvcaOperator.imageTag                                  | 3.1.0                                                             |
-      | global.nvcaOperator.selfManaged.nvcaVersion                   | 3.1.0                                                             |
       | global.nvcaOperator.selfManaged.otelCollector.imageRepository | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector |
-      | global.nvcaOperator.selfManaged.otelCollector.imageTag        | 0.157.8                                                           |
       | observability.profile                                         | compute                                                           |
     And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-observability-compute-secrets.yaml"
     And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-observability-compute-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"

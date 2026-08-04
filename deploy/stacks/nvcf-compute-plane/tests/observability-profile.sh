@@ -75,8 +75,6 @@ for profile in default disabled control compute all; do
 done
 
 render_values compute "$work_dir/compute-overrides.yaml" \
-  --state-values-set-string global.nvcaOperator.imageTag=3.1.0 \
-  --state-values-set-string global.nvcaOperator.selfManaged.nvcaVersion=3.1.0 \
   --state-values-set global.nvcaOperator.selfManaged.otelCollector.enabled=false \
   --state-values-set-string global.nvcaOperator.selfManaged.otelCollector.imageRepository=registry.example.com/nvcf/collector \
   --state-values-set-string global.nvcaOperator.selfManaged.otelCollector.imageTag=test-tag \
@@ -98,10 +96,10 @@ grep -Eq '^    imageTag: "?test-tag"?$' \
   fail "explicit collector image tag was not preserved"
 grep -Eq '^  tag: "?3\.1\.0"?$' \
   "$work_dir/compute-overrides.yaml" ||
-  fail "explicit operator image tag was not preserved"
+  fail "compute-plane operator image tag default was not preserved"
 grep -Eq '^  nvcaVersion: "?3\.1\.0"?$' \
   "$work_dir/compute-overrides.yaml" ||
-  fail "explicit NVCA version was not preserved"
+  fail "compute-plane NVCA version default was not preserved"
 
 render_values control "$work_dir/control-overrides.yaml" \
   --state-values-set global.nvcaOperator.selfManaged.otelCollector.enabled=true \

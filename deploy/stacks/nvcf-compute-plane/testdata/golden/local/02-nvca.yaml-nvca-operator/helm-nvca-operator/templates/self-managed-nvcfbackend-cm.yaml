@@ -20,7 +20,7 @@ metadata:
   name: nvcfbackend-self-managed
   namespace: nvca-operator
   annotations:
-    release-artifact-nvca-image: "nvcr.io/0651155215864979/ncp-dev/nvca:3.0.4"
+    release-artifact-nvca-image: "nvcr.io/0651155215864979/ncp-dev/nvca:3.1.0"
     release-artifact-nvcf-image-credential-helper-image: "nvcr.io/0651155215864979/ncp-dev/nvcf-image-credential-helper:0.10.2"
     release-artifact-samba-image: "nvcr.io/0651155215864979/ncp-dev/samba:1.0.5"
   labels:
@@ -37,7 +37,7 @@ data:
     clusterDescription: "ncp-local"
     clusterGroupName: "nvcf-default"
     ncaID: "nvcf-default"
-    nvcaVersion: "3.0.4"
+    nvcaVersion: "3.1.0"
     oAuthClientId: ""
     cloudProvider: "NCP"
     region: "us-west-1"
