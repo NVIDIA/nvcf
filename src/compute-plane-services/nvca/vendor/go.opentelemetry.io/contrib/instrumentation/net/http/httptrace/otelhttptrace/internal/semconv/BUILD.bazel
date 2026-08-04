@@ -10,19 +10,19 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace/internal/semconv",
     importpath = "go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace/internal/semconv",
-    visibility = ["//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace:__subpackages__"],
     deps = [
-        "//vendor/go.opentelemetry.io/otel",
-        "//vendor/go.opentelemetry.io/otel/attribute",
-        "//vendor/go.opentelemetry.io/otel/codes",
-        "//vendor/go.opentelemetry.io/otel/metric",
-        "//vendor/go.opentelemetry.io/otel/semconv/v1.39.0:v1_39_0",
-        "//vendor/go.opentelemetry.io/otel/semconv/v1.39.0/httpconv",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/codes",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.39.0:v1_39_0",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.39.0/httpconv",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":semconv",
-    visibility = ["//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace:__subpackages__"],
 )

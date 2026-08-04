@@ -14,11 +14,11 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker",
     visibility = ["//visibility:public"],
     deps = [
-        "//worker/httpstream",
-        "//worker/metrics",
-        "//worker/polling",
-        "//worker/progress",
-        "//worker/response",
+        "//src/compute-plane-services/worker-utils/worker/httpstream",
+        "//src/compute-plane-services/worker-utils/worker/metrics",
+        "//src/compute-plane-services/worker-utils/worker/polling",
+        "//src/compute-plane-services/worker-utils/worker/progress",
+        "//src/compute-plane-services/worker-utils/worker/response",
         "@com_github_aws_aws_sdk_go_v2//aws",
         "@com_github_aws_aws_sdk_go_v2_service_s3//:s3",
         "@com_github_aws_aws_sdk_go_v2_service_s3//types",
@@ -78,7 +78,7 @@ go_test(
     # this suite against service_test; run exclusively to avoid the port clash.
     tags = ["exclusive"],
     deps = [
-        "//worker/httpstream",
+        "//src/compute-plane-services/worker-utils/worker/httpstream",
         "@com_github_cenkalti_backoff_v4//:backoff",
         "@com_github_google_uuid//:uuid",
         "@com_github_nats_io_nats_go//:nats_go",

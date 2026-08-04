@@ -10,14 +10,14 @@ go_library(
     importpath = "sigs.k8s.io/controller-runtime/pkg/metrics/server",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/go-logr/logr",
-        "//vendor/github.com/prometheus/client_golang/prometheus/promhttp",
-        "//vendor/k8s.io/client-go/rest",
-        "//vendor/k8s.io/client-go/util/cert",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/certwatcher",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/httpserver",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/metrics",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promhttp",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/cert",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/certwatcher",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/httpserver",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/metrics",
     ],
 )
 

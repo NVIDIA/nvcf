@@ -31,22 +31,11 @@
 # src/compute-plane-services is carved out per-subtree rather than ignored
 # wholesale, because nvsnap is now part of the root module and must stay
 # loadable. The siblings below still carry nested MODULE.bazel files.
-src/compute-plane-services/byoo-otel-collector
-src/compute-plane-services/ess-agent
-src/compute-plane-services/image-credential-helper
-src/compute-plane-services/nvca
-src/compute-plane-services/nvcf-unbound
-src/compute-plane-services/worker-init
-src/compute-plane-services/worker-llm-credentials
-src/compute-plane-services/worker-task
-src/compute-plane-services/worker-utils
 # src/control-plane-services is carved out per-subtree: cloud-tasks is native
 # (Phase B) and must stay loadable, while these siblings still carry nested
 # MODULE.bazel / WORKSPACE-style BUILD files that conflict with bzlmod.
-src/control-plane-services/function-autoscaler
-src/control-plane-services/helm-reval
-src/control-plane-services/nats-auth-callout
-src/invocation-plane-services
+# http-invocation is still a nested Bazel module (Rust, own crate
+# universe); the rest of this tree has migrated to the root module.
 src/libraries/python
 # stargate is a nested Bazel module (own MODULE.bazel under
 # src/libraries/rust/stargate), built via a dedicated CI matrix row with
@@ -55,13 +44,18 @@ src/libraries/python
 # The root module keeps it ignored so its crate BUILD files (which load
 # @stargate_crates from the nested module) do not resolve against the
 # umbrella root MODULE.bazel.
-src/libraries/rust/stargate
 src/libraries/ts
 deploy
 docs
 fern
 infra
 migrations
+# tests/bdd is the standalone `nvcf-bdd` Go module. It is not in go.work.bazel,
+# so its deps (cucumber/godog and friends) are not registered in the root
+# MODULE.bazel. It is run directly with `go test`, not Bazel. Ignore it so
+# `bazel build //...` and query do not try to analyze generated BUILD targets
+# that reference unresolvable external repos.
+tests/bdd
 
 # Note: tools/ is not ignored here so //tools/bazel/java (the root-owned Java
 # build helpers) is loadable. Gazelle is still kept out of tools/ via the
@@ -77,7 +71,84 @@ migrations
 # from MODULE.bazel via Gazelle's go_deps extension, not from on-disk vendor.
 src/libraries/go/lib/vendor
 src/clis/nvcf-cli/vendor
+# image-credential-helper vendors the shared NVCF Go library and ships
+# BUILD.bazel files inside vendor/. Bazel resolves that module through go_deps,
+# so the vendored copy must stay unloadable or the same importpath is declared
+# by two packages and analysis fails on a duplicate.
+src/compute-plane-services/image-credential-helper/vendor
+
+# Tool-pin directory: holds only a //go:build tools file for go.mod and yields
+# no Bazel package. Skipped directly here because some Bazel commands (build
+# //..., query) load packages without consulting BUILD-level gazelle:exclude,
+# which otherwise fails when the transient build/ dir is missing during a scan.
+src/libraries/go/lib/pkg/nvkit/build
 
 # Bazel-managed caches we keep inside the workspace for CI cache: paths.
 .bazel-cache
 
+# Lifted from src/compute-plane-services/ess-agent/.bazelignore on migration into the root module.
+src/compute-plane-services/ess-agent/local
+src/compute-plane-services/ess-agent/vault
+src/compute-plane-services/ess-agent/api/auth/approle
+src/compute-plane-services/ess-agent/api/auth/aws
+src/compute-plane-services/ess-agent/api/auth/azure
+src/compute-plane-services/ess-agent/api/auth/gcp
+src/compute-plane-services/ess-agent/api/auth/ldap
+src/compute-plane-services/ess-agent/api/auth/userpass
+src/compute-plane-services/ess-agent/sdk/helper/ldaputil
+
+# Lifted from src/compute-plane-services/nvcf-unbound/.bazelignore on migration into the root module.
+src/compute-plane-services/nvcf-unbound/deploy
+src/compute-plane-services/nvcf-unbound/docker
+src/compute-plane-services/nvcf-unbound/docs
+src/compute-plane-services/nvcf-unbound/playbooks
+src/compute-plane-services/nvcf-unbound/scripts
+src/compute-plane-services/nvcf-unbound/tests
+
+# Lifted from src/control-plane-services/nats-auth-callout/.bazelignore on migration into the root module.
+src/control-plane-services/nats-auth-callout/local-dev
+src/control-plane-services/nats-auth-callout/deploy
+src/control-plane-services/nats-auth-callout/docs
+src/control-plane-services/nats-auth-callout/vault-agent
+src/control-plane-services/nats-auth-callout/scripts
+src/control-plane-services/nats-auth-callout/tools
+
+# Lifted from src/invocation-plane-services/grpc-proxy/.bazelignore on migration into the root module.
+src/invocation-plane-services/grpc-proxy/local
+src/invocation-plane-services/grpc-proxy/vault
+
+# Lifted from src/invocation-plane-services/llm-api-gateway/.bazelignore on migration into the root module.
+src/invocation-plane-services/llm-api-gateway/kustomize
+
+# Lifted from src/invocation-plane-services/vanity-gateway/.bazelignore on migration into the root module.
+src/invocation-plane-services/vanity-gateway/local
+src/invocation-plane-services/vanity-gateway/vault
+src/invocation-plane-services/vanity-gateway/api/auth/approle
+src/invocation-plane-services/vanity-gateway/api/auth/aws
+src/invocation-plane-services/vanity-gateway/api/auth/azure
+src/invocation-plane-services/vanity-gateway/api/auth/gcp
+src/invocation-plane-services/vanity-gateway/api/auth/ldap
+src/invocation-plane-services/vanity-gateway/api/auth/userpass
+src/invocation-plane-services/vanity-gateway/sdk/helper/ldaputil
+
+# Lifted from src/compute-plane-services/nvca/.bazelignore on migration into the root module.
+src/compute-plane-services/nvca/local
+src/compute-plane-services/nvca/vault
+
+# Lifted from src/control-plane-services/helm-reval/.bazelignore on migration into the root module.
+src/control-plane-services/helm-reval/local
+src/control-plane-services/helm-reval/vault
+src/control-plane-services/helm-reval/vendor/cel.dev/expr/
+src/control-plane-services/helm-reval/vendor/github.com/google/cel-go
+src/control-plane-services/helm-reval/vendor/github.com/grpc-ecosystem/grpc-gateway
+
+# Lifted from src/compute-plane-services/byoo-otel-collector/.bazelignore on migration into the root module.
+src/compute-plane-services/byoo-otel-collector/local
+src/compute-plane-services/byoo-otel-collector/vault
+src/compute-plane-services/byoo-otel-collector/api/auth/approle
+src/compute-plane-services/byoo-otel-collector/api/auth/aws
+src/compute-plane-services/byoo-otel-collector/api/auth/azure
+src/compute-plane-services/byoo-otel-collector/api/auth/gcp
+src/compute-plane-services/byoo-otel-collector/api/auth/ldap
+src/compute-plane-services/byoo-otel-collector/api/auth/userpass
+src/compute-plane-services/byoo-otel-collector/sdk/helper/ldaputil

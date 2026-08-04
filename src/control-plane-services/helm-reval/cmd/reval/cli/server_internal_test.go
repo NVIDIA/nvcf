@@ -18,6 +18,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -107,6 +108,54 @@ func TestServeManagementRoutes_UnknownRoute(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/unknown", nil)
 	server.Handler.ServeHTTP(w, r)
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestServeManagementRoutes_Info(t *testing.T) {
+	logger := zap.NewNop()
+	atomicLevel := zap.NewAtomicLevel()
+	cfg := config.HTTPConfig{ManagementPort: 0, Local: false}
+
+	server := serveManagementRoutes(logger, &atomicLevel, cfg)
+	require.NotNil(t, server)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/info", nil)
+	server.Handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	// x_defs are not injected under `go test`; resolve() falls back to "unknown"
+	// for any empty field, so all three values are guaranteed non-empty.
+	var info map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
+	assert.Contains(t, info, "service")
+	assert.Contains(t, info, "version")
+	assert.Contains(t, info, "commit")
+	for _, field := range []string{"service", "version", "commit"} {
+		assert.NotEmpty(t, info[field], field+" must be populated")
+	}
+}
+
+func TestServeManagementRoutes_Info_RejectsNonGET(t *testing.T) {
+	logger := zap.NewNop()
+	atomicLevel := zap.NewAtomicLevel()
+	cfg := config.HTTPConfig{ManagementPort: 0, Local: false}
+
+	server := serveManagementRoutes(logger, &atomicLevel, cfg)
+	require.NotNil(t, server)
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(method, "/info", nil)
+			server.Handler.ServeHTTP(w, r)
+
+			assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+			assert.Equal(t, http.MethodGet, w.Header().Get("Allow"))
+			assert.Empty(t, w.Body.String())
+		})
+	}
 }
 
 func TestServeManagementRoutes_ServerAddr_Local(t *testing.T) {

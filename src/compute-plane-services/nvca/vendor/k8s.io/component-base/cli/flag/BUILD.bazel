@@ -23,10 +23,10 @@ go_library(
     importpath = "k8s.io/component-base/cli/flag",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/spf13/cobra",
-        "//vendor/github.com/spf13/pflag",
-        "//vendor/k8s.io/apimachinery/pkg/util/sets",
-        "//vendor/k8s.io/klog/v2:klog",
+        "//src/compute-plane-services/nvca/vendor/github.com/spf13/cobra",
+        "//src/compute-plane-services/nvca/vendor/github.com/spf13/pflag",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog",
     ],
 )
 

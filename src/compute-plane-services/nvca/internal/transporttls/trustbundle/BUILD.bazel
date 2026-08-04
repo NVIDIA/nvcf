@@ -7,7 +7,7 @@ go_library(
     name = "trustbundle",
     srcs = ["trust_bundle.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls/trustbundle",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )
 
 go_test(
@@ -15,13 +15,13 @@ go_test(
     srcs = ["trust_bundle_test.go"],
     embed = [":trustbundle"],
     deps = [
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":trustbundle",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )

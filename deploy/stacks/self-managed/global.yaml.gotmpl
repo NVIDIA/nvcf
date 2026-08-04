@@ -137,12 +137,19 @@ openbao:
     {{- end }}
     replicas: {{ .Values.openbao.injector.replicas }}
     {{- $nvcfUiEnabled := dig "addons" "nvcfUi" "enabled" false .Values }}
-    {{- with .Values.openbao.injector.webhook }}
+    {{- with dig "openbao" "injector" "webhook" dict .Values }}
     webhook:
       {{- $webhook := deepCopy . }}
+      {{- $matchExpressions := dig "namespaceSelector" "matchExpressions" list $webhook }}
       {{- if $nvcfUiEnabled }}
-      {{- $expr := index $webhook.namespaceSelector.matchExpressions 0 }}
-      {{- $_ := set $expr "values" (append $expr.values "nvcf-ui") }}
+      {{- range $expr := $matchExpressions }}
+      {{- if and (eq (dig "key" "" $expr) "kubernetes.io/metadata.name") (eq (dig "operator" "" $expr) "In") }}
+      {{- $values := dig "values" list $expr }}
+      {{- if not (has "nvcf-ui" $values) }}
+      {{- $_ := set $expr "values" (append $values "nvcf-ui") }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
       {{- end }}
       {{- toYaml $webhook | nindent 6 }}
     {{- end }}

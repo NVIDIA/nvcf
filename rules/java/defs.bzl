@@ -149,6 +149,7 @@ def nv_boot_library(
         deps = [],
         resources = [],
         runtime_deps = [],
+        testonly = False,
         visibility = None,
         resource_strip_prefix = ""):
     _java_library(
@@ -160,6 +161,7 @@ def nv_boot_library(
         resources = resources,
         resource_strip_prefix = resource_strip_prefix,
         runtime_deps = runtime_deps,
+        testonly = testonly,
         visibility = visibility,
     )
 

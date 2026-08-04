@@ -118,9 +118,11 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 	defer span.End()
 	span.SetAttributes(attribute.String("nvsnap.checkpoint_id", checkpointID))
 
-	if checkpointID == "" {
-		span.SetStatus(codes.Error, "checkpoint id required")
-		return errors.New("checkpoint id required")
+	// This ID becomes a directory that the cascade below creates, deletes
+	// and writes files into. Everything downstream trusts it.
+	if err := validPathSegment("checkpoint id", checkpointID); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return err
 	}
 
 	localDir := filepath.Join(a.config.CheckpointDir, checkpointID)
@@ -377,7 +379,12 @@ func (a *Agent) fetchOneBlob(ctx context.Context, blobBaseURL, sha string, expec
 	blobURL := fmt.Sprintf("%s/v1/blob/%s", blobBaseURL, sha)
 	fileCtx, cancel := context.WithTimeout(ctx, peerFetchTimeoutPerFile)
 	defer cancel()
-	dst := filepath.Join(destDir, filepath.FromSlash(relPath))
+	// Same as the peer path: relPath comes from a manifest the blob store
+	// served, not from us.
+	dst, err := joinWithinRoot(destDir, filepath.FromSlash(relPath))
+	if err != nil {
+		return fmt.Errorf("manifest entry %q: %w", relPath, err)
+	}
 	return downloadToFile(fileCtx, peerHTTPClient, []string{blobURL}, expectedSize, dst)
 }
 
@@ -515,7 +522,12 @@ func (a *Agent) fetchOneFile(ctx context.Context, peerURL string, alternateURLs 
 	}
 	fileCtx, cancel := context.WithTimeout(ctx, peerFetchTimeoutPerFile)
 	defer cancel()
-	dst := filepath.Join(destDir, relPath)
+	// relPath is an entry in the manifest the peer served, so it decides
+	// where we write. Confine it to destDir.
+	dst, err := joinWithinRoot(destDir, relPath)
+	if err != nil {
+		return fmt.Errorf("manifest entry %q: %w", relPath, err)
+	}
 	return downloadToFile(fileCtx, peerHTTPClient, urls, expectedSize, dst)
 }
 

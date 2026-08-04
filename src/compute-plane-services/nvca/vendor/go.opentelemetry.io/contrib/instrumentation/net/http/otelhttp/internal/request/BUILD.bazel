@@ -9,11 +9,11 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp/internal/request",
     importpath = "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp/internal/request",
-    visibility = ["//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":request",
-    visibility = ["//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp:__subpackages__"],
 )

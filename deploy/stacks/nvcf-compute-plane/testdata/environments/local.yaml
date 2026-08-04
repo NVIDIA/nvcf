@@ -18,6 +18,8 @@ global:
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
 
 addons:
+  kaiScheduler:
+    enabled: true
   groveOperator:
     enabled: true
   dynamoOperator:

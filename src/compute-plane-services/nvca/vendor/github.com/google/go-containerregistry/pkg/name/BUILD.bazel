@@ -16,7 +16,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-containerregistry/pkg/name",
     importpath = "github.com/google/go-containerregistry/pkg/name",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/opencontainers/go-digest"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/opencontainers/go-digest"],
 )
 
 alias(

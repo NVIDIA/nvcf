@@ -14,8 +14,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/reval",
     visibility = ["//visibility:public"],
     deps = [
-        "//pkg/telemetry/metrics",
-        "//reval/cache",
+        "//src/control-plane-services/helm-reval/pkg/telemetry/metrics",
+        "//src/control-plane-services/helm-reval/reval/cache",
         "@com_github_google_go_containerregistry//pkg/name",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/icms-translate/translate/common",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/imagecredential",
@@ -95,7 +95,7 @@ go_test(
     # Content-Length the fixture sets vs. what the writer emits.
     tags = ["manual"],
     deps = [
-        "//reval/cache",
+        "//src/control-plane-services/helm-reval/reval/cache",
         "@com_github_google_go_containerregistry//pkg/name",
         "@com_github_google_go_containerregistry//pkg/registry",
         "@com_github_google_go_containerregistry//pkg/v1/random",

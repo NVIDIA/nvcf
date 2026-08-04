@@ -10,13 +10,13 @@ go_library(
     importpath = "sigs.k8s.io/controller-runtime/pkg/certwatcher",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/fsnotify/fsnotify",
-        "//vendor/github.com/go-logr/logr",
-        "//vendor/k8s.io/apimachinery/pkg/util/errors",
-        "//vendor/k8s.io/apimachinery/pkg/util/sets",
-        "//vendor/k8s.io/apimachinery/pkg/util/wait",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/certwatcher/metrics",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
+        "//src/compute-plane-services/nvca/vendor/github.com/fsnotify/fsnotify",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/wait",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/certwatcher/metrics",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
     ],
 )
 

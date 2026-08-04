@@ -19,10 +19,10 @@ go_library(
     name = "oauth",
     srcs = ["oauth.go"],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/oauth",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
     deps = [
-        "//internal/config",
-        "//internal/plugins/types",
+        "//src/control-plane-services/nats-auth-callout/internal/config",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/types",
         "@com_github_golang_jwt_jwt_v5//:jwt",
         "@com_github_micahparks_keyfunc_v3//:keyfunc",
         "@org_uber_go_zap//:zap",
@@ -32,7 +32,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":oauth",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
 )
 
 go_test(
@@ -40,8 +40,8 @@ go_test(
     srcs = ["oauth_test.go"],
     embed = [":oauth"],
     deps = [
-        "//internal/plugins/oauth/test_helpers",
-        "//internal/plugins/types",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/oauth/test_helpers",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/types",
         "@com_github_stretchr_testify//assert",
         "@org_uber_go_zap//zaptest",
     ],

@@ -24,12 +24,12 @@ go_library(
     importpath = "go.uber.org/zap",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/go.uber.org/multierr",
-        "//vendor/go.uber.org/zap/internal",
-        "//vendor/go.uber.org/zap/internal/bufferpool",
-        "//vendor/go.uber.org/zap/internal/pool",
-        "//vendor/go.uber.org/zap/internal/stacktrace",
-        "//vendor/go.uber.org/zap/zapcore",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/multierr",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal/bufferpool",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal/pool",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal/stacktrace",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/zapcore",
     ],
 )
 

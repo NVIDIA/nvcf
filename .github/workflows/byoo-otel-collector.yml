@@ -150,3 +150,27 @@ jobs:
           GOCACHE: ${{ runner.temp }}/go-cache
           GO_BUILD_P: "1"
         run: ./scripts/validate-otelconfig.sh "${{ matrix.mode }}"
+
+  perf:
+    name: perf module (build/vet/test)
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # The perf suite is a standalone module; use its own go.mod so the
+          # toolchain matches what the module declares.
+          go-version-file: src/compute-plane-services/byoo-otel-collector/perf/go.mod
+
+      # The perf module is intentionally excluded from go.work and has no Bazel
+      # targets, so neither the Bazel lane nor the recursive workspace build
+      # covers it. Run it explicitly with GOWORK=off so its tests are part of
+      # the required checks for this subtree.
+      - name: Build, vet, and test the perf module
+        working-directory: src/compute-plane-services/byoo-otel-collector
+        env:
+          GOCACHE: ${{ runner.temp }}/go-cache
+        run: make perf-test

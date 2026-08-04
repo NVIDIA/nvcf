@@ -11,20 +11,20 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/controlplane",
     importpath = "sigs.k8s.io/controller-runtime/pkg/internal/testing/controlplane",
-    visibility = ["//vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
     deps = [
-        "//vendor/k8s.io/apimachinery/pkg/util/errors",
-        "//vendor/k8s.io/client-go/rest",
-        "//vendor/k8s.io/client-go/tools/clientcmd",
-        "//vendor/k8s.io/client-go/tools/clientcmd/api",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/addr",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/certs",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/process",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/clientcmd",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/clientcmd/api",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/addr",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/certs",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/process",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":controlplane",
-    visibility = ["//vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg:__subpackages__"],
 )

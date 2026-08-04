@@ -916,7 +916,9 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 	if tmplConfig.DebugMode {
 		applyDebugMode(otelConfig)
 	}
-	applyOTelCollectorConfig(otelConfig, tmplConfig.OTelCollector)
+	if err := applyOTelCollectorConfig(otelConfig, tmplConfig.OTelCollector); err != nil {
+		return fmt.Errorf("apply BYOO OTel collector config: %w", err)
+	}
 
 	return nil
 }

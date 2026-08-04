@@ -5,12 +5,12 @@ go_library(
     srcs = ["level_enabler.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal",
     importpath = "go.uber.org/zap/internal",
-    visibility = ["//vendor/go.uber.org/zap:__subpackages__"],
-    deps = ["//vendor/go.uber.org/zap/zapcore"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.uber.org/zap:__subpackages__"],
+    deps = ["//src/compute-plane-services/nvca/vendor/go.uber.org/zap/zapcore"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":internal",
-    visibility = ["//vendor/go.uber.org/zap:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.uber.org/zap:__subpackages__"],
 )

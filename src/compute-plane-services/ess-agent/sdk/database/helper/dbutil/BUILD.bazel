@@ -13,7 +13,7 @@ go_library(
     importpath = "github.com/hashicorp/vault/sdk/database/helper/dbutil",
     visibility = ["//visibility:public"],
     deps = [
-        "//sdk/database/dbplugin",
+        "//src/compute-plane-services/ess-agent/sdk/database/dbplugin",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
     ],
@@ -29,5 +29,5 @@ go_test(
     name = "dbutil_test",
     srcs = ["dbutil_test.go"],
     embed = [":dbutil"],
-    deps = ["//sdk/database/dbplugin"],
+    deps = ["//src/compute-plane-services/ess-agent/sdk/database/dbplugin"],
 )

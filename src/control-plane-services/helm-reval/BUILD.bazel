@@ -129,6 +129,6 @@ gazelle(
 # Dockerfile entry (`go build -o reval-server ./cmd/reval-service`).
 alias(
     name = "reval-service",
-    actual = "//cmd/reval-service",
+    actual = "//src/control-plane-services/helm-reval/cmd/reval-service",
     visibility = ["//visibility:public"],
 )
