@@ -1,0 +1,116 @@
+load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:spring.bzl", "spring_boot_app")
+load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
+
+package(default_visibility = ["//visibility:public"])
+
+ICMS_SERVICE_SRCS = glob(["src/main/java/**/*.java"])
+
+ICMS_SERVICE_RESOURCES = glob(["src/main/resources/**"])
+
+ICMS_SERVICE_TEST_SRCS = glob(["src/test/java/**/*.java"])
+
+ICMS_SERVICE_TEST_RESOURCES = glob(["src/test/resources/**"])
+
+ICMS_SERVICE_DEPS = [
+    "//src/control-plane-services/instance-cluster-management/icms-core:icms_core",
+    "@nv_third_party_deps//:org_springframework_spring_context",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_security",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_tracing",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+    "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+    "@nv_third_party_deps//:io_swagger_core_v3_swagger_annotations_jakarta",
+]
+
+nv_boot_library(
+    name = "app_classes",
+    srcs = ICMS_SERVICE_SRCS,
+    deps = ICMS_SERVICE_DEPS,
+    resource_strip_prefix = "src/control-plane-services/instance-cluster-management/icms-service/src/main/resources",
+    resources = ICMS_SERVICE_RESOURCES,
+    runtime_deps = [
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_jarmode_tools",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+spring_boot_app(
+    name = "app",
+    application = ":app_classes",
+    artifact_id = "icms-service",
+    artifact_name = "ICMS Service",
+    artifact_version = "0.0.1-SNAPSHOT",
+    description = "NVIDIA Instance and Cluster Management Service executable",
+    group_id = "com.nvidia.icms",
+    main_class = "com.nvidia.icms.App",
+)
+
+nv_boot_library_test(
+    name = "tests",
+    coverage_library = ":app_classes",
+    srcs = ICMS_SERVICE_TEST_SRCS,
+    deps = ICMS_SERVICE_DEPS + [
+        ":app_classes",
+        "@nv_third_party_deps//:org_springframework_spring_web",
+        "@nv_third_party_deps//:org_springframework_spring_core",
+        "@nv_third_party_deps//:org_springframework_spring_beans",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
+        "//src/control-plane-services/instance-cluster-management/icms-core:test_fixtures",
+        "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
+        "@nv_third_party_deps//:io_opentelemetry_opentelemetry_sdk_testing",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+        "@nv_third_party_deps//:org_testcontainers_testcontainers",
+        "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
+        "@nv_third_party_deps//:org_testcontainers_testcontainers_junit_jupiter",
+        "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
+    ],
+    data = ["//src/control-plane-services/instance-cluster-management:integration_local_env"],
+    resource_strip_prefix = "src/control-plane-services/instance-cluster-management/icms-service/src/test/resources",
+    resources = ICMS_SERVICE_TEST_RESOURCES,
+    tags = [
+        "exclusive",
+        "requires-docker",
+    ],
+    timeout = "long",
+)
+
+# Release image. Push the _index label (multi-arch amd64 + arm64), never
+# :icms-service-oss-image, which is the single host-arch image.
+#
+# Runtime parity with the pre-Bazel icms-service/Dockerfile, which is the
+# contract this image must preserve:
+#   COPY app.jar /usr/share/app.jar
+#   ENV ULIMIT_FLAG=1
+#   ENV JDK_JAVA_OPTIONS="-XX:+UseG1GC -XX:InitialRAMPercentage=70.0 ..."
+#   WORKDIR /home/app
+#   CMD ["java", "-jar", "/usr/share/app.jar"]
+#
+# ULIMIT_FLAG is load-bearing, not decoration: the base's shelless_ulimit shim
+# reads it, so without it the shim runs and raises nothing. JDK_JAVA_OPTIONS
+# carries the container heap sizing (InitialRAMPercentage/MaxRAMPercentage) and
+# the G1 collector choice, so dropping it silently changes JVM memory behavior
+# in production.
+java_oci_image(
+    name = "icms-service-oss-image",
+    jar = ":app",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "-XX:+UseG1GC -XX:InitialRAMPercentage=70.0 -XX:+EnableDynamicAgentLoading -XX:MaxRAMPercentage=70.0",
+    },
+    workdir = "/home/app",
+)
+
+# Runtime-contract guard for the image, shared with every other Java service
+# so the assertions cannot drift apart between them.
+java_image_contract_test(
+    name = "image_contract_test",
+    image = ":icms-service-oss-image",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "-XX:+UseG1GC -XX:InitialRAMPercentage=70.0 -XX:+EnableDynamicAgentLoading -XX:MaxRAMPercentage=70.0",
+    },
+    workdir = "/home/app",
+)

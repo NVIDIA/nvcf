@@ -807,6 +807,24 @@ fn bundled_benchmark_lb_configs_parse() {
 }
 
 #[test]
+fn published_load_balancer_configuration_examples_parse() {
+    let guide = include_str!("../../../../docs/load-balancer-configuration.md");
+    let mut examples = guide.split("```json").skip(1);
+    let mut checked = 0;
+    for example in &mut examples {
+        let example = example
+            .split_once("```")
+            .expect("published JSON block should be closed")
+            .0;
+        let config: LoadBalancerConfig = parse_json(example);
+        LoadBalancerRouter::from_config(&config)
+            .expect("published load-balancer configuration should construct");
+        checked += 1;
+    }
+    assert!(checked > 0, "expected published load-balancer examples");
+}
+
+#[test]
 fn detailed_model_config_parses_for_pulsar() {
     let router = router_from_json(
         r#"{"default":"power-of-two","models":{"model-a":{"algorithm":"pulsar","seed":"seed-1","require_cache_affinity_key":true,"consider_kv_free_tokens":true}}}"#,

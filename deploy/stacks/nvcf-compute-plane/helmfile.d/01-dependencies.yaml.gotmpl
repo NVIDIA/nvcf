@@ -1,6 +1,7 @@
 # NVCF Compute Plane Releases
 #
-# Two optional releases — installed once per GPU cluster:
+# Optional releases — installed once per GPU cluster:
+#   kai-scheduler    — optional; addons.kaiScheduler.enabled (required by grove/dynamo)
 #   grove-operator   — optional; topology-aware scheduling (addons.groveOperator.enabled)
 #   dynamo-operator  — optional; Dynamo inference framework scheduling (addons.dynamoOperator.enabled)
 #
@@ -16,6 +17,9 @@ environments:
 ---
 
 repositories:
+  - name: kai-scheduler
+    url: ghcr.io/kai-scheduler/kai-scheduler
+    oci: true
   - name: nvidia-ai-dynamo-grove
     url: ghcr.io/ai-dynamo/grove
     oci: true
@@ -33,6 +37,197 @@ helmDefaults:
 
 releases:
 
+  - name: kai-scheduler
+    # Required by grove-operator and dynamo-operator. Release name and namespace
+    # must be "kai-scheduler" per KAI installation requirements.
+    # Enable per-environment: addons.kaiScheduler.enabled: true
+    # Per-component resources can be overridden under addons.kaiScheduler.<component>.resources;
+    # defaults below match the managed SBOM template.
+    condition: addons.kaiScheduler.enabled
+    chart: kai-scheduler/kai-scheduler
+    version: v0.16.7
+    namespace: kai-scheduler
+    values:
+      - ../global.yaml.gotmpl
+      - {{- $kai := dig "kaiScheduler" dict .Values.addons }}
+        {{- $opRes := dig "operator" "resources" dict $kai }}
+        {{- $opReq := dig "requests" dict $opRes }}
+        {{- $opLim := dig "limits" dict $opRes }}
+        {{- $pgRes := dig "podgrouper" "resources" dict $kai }}
+        {{- $pgReq := dig "requests" dict $pgRes }}
+        {{- $pgLim := dig "limits" dict $pgRes }}
+        {{- $pgcRes := dig "podgroupcontroller" "resources" dict $kai }}
+        {{- $pgcReq := dig "requests" dict $pgcRes }}
+        {{- $pgcLim := dig "limits" dict $pgcRes }}
+        {{- $bdRes := dig "binder" "resources" dict $kai }}
+        {{- $bdReq := dig "requests" dict $bdRes }}
+        {{- $bdLim := dig "limits" dict $bdRes }}
+        {{- $schRes := dig "scheduler" "resources" dict $kai }}
+        {{- $schReq := dig "requests" dict $schRes }}
+        {{- $schLim := dig "limits" dict $schRes }}
+        {{- $qcRes := dig "queuecontroller" "resources" dict $kai }}
+        {{- $qcReq := dig "requests" dict $qcRes }}
+        {{- $qcLim := dig "limits" dict $qcRes }}
+        {{- $adRes := dig "admission" "resources" dict $kai }}
+        {{- $adReq := dig "requests" dict $adRes }}
+        {{- $adLim := dig "limits" dict $adRes }}
+        {{- $nsaRes := dig "nodescaleadjuster" "resources" dict $kai }}
+        {{- $nsaReq := dig "requests" dict $nsaRes }}
+        {{- $nsaLim := dig "limits" dict $nsaRes }}
+        {{- $npeRes := dig "numaPlacementExporter" "resources" dict $kai }}
+        {{- $npeReq := dig "requests" dict $npeRes }}
+        {{- $npeLim := dig "limits" dict $npeRes }}
+        global:
+          securityContext:
+            runAsUser: 10000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          {{- if .Values.global.nodeSelector.enabled }}
+          nodeSelector:
+            {{ .Values.global.nodeSelector.key }}: {{ .Values.global.nodeSelector.value }}
+          {{- end }}
+          {{- if .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+          {{- toYaml .Values.global.imagePullSecrets | nindent 12 }}
+          {{- end }}
+          {{- if not (empty .Values.global.tolerations) }}
+          tolerations:
+          {{- toYaml .Values.global.tolerations | nindent 12 }}
+          {{- end }}
+
+        # Image names stay at chart defaults (ghcr.io/kai-scheduler/kai-scheduler/*).
+        # Managed SBOM uses kai-scheduler-* names with nv-ngc-devops; those do not
+        # resolve against the public chart registry.
+        operator:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $opReq }}
+              memory: {{ dig "memory" "256Mi" $opReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $opLim }}
+              memory: {{ dig "memory" "1Gi" $opLim }}
+
+        podgrouper:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $pgReq }}
+              memory: {{ dig "memory" "512Mi" $pgReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $pgLim }}
+              memory: {{ dig "memory" "4Gi" $pgLim }}
+
+        podgroupcontroller:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $pgcReq }}
+              memory: {{ dig "memory" "256Mi" $pgcReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $pgcLim }}
+              memory: {{ dig "memory" "1Gi" $pgcLim }}
+
+        binder:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $bdReq }}
+              memory: {{ dig "memory" "2Gi" $bdReq }}
+            limits:
+              cpu: {{ dig "cpu" "4000m" $bdLim }}
+              memory: {{ dig "memory" "4Gi" $bdLim }}
+
+        scheduler:
+          placementStrategy: binpack
+          plugins:
+            nodeplacement:
+              arguments:
+                gpu: binpack
+                cpu: spread
+          actions:
+            preempt:
+              enabled: false
+            consolidation:
+              enabled: false
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "500m" $schReq }}
+              memory: {{ dig "memory" "3Gi" $schReq }}
+            limits:
+              cpu: {{ dig "cpu" "2000m" $schLim }}
+              memory: {{ dig "memory" "6Gi" $schLim }}
+
+        queuecontroller:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $qcReq }}
+              memory: {{ dig "memory" "256Mi" $qcReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $qcLim }}
+              memory: {{ dig "memory" "1Gi" $qcLim }}
+
+        admission:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $adReq }}
+              memory: {{ dig "memory" "256Mi" $adReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $adLim }}
+              memory: {{ dig "memory" "1Gi" $adLim }}
+
+        nodescaleadjuster:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $nsaReq }}
+              memory: {{ dig "memory" "256Mi" $nsaReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $nsaLim }}
+              memory: {{ dig "memory" "1Gi" $nsaLim }}
+
+        numaPlacementExporter:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $npeReq }}
+              memory: {{ dig "memory" "64Mi" $npeReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $npeLim }}
+              memory: {{ dig "memory" "1Gi" $npeLim }}
+
+        defaultQueue:
+          createDefaultQueue: true
+          parentName: default-parent-queue
+          childName: default-queue
+          parentResources:
+            cpu:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+            gpu:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+            memory:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+          childResources:
+            cpu:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+            gpu:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+            memory:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+    labels:
+      release-group: workers
+    wait: true
+    waitForJobs: true
+
   - name: grove-operator
     # Topology-aware scheduling operator (optional; disabled by default).
     # Enable per-environment: addons.groveOperator.enabled: true
@@ -40,6 +235,8 @@ releases:
     chart: nvidia-ai-dynamo-grove/grove-charts
     version: v0.1.0-alpha.9
     namespace: grove-system
+    needs:
+      - kai-scheduler/kai-scheduler
     values:
       - ../global.yaml.gotmpl
       - replicaCount: 1

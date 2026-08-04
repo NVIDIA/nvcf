@@ -10,9 +10,9 @@ go_library(
     importpath = "sigs.k8s.io/structured-merge-diff/v6/merge",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/sigs.k8s.io/structured-merge-diff/v6/fieldpath",
-        "//vendor/sigs.k8s.io/structured-merge-diff/v6/typed",
-        "//vendor/sigs.k8s.io/structured-merge-diff/v6/value",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/fieldpath",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/typed",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/value",
     ],
 )
 

@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+
+rsfTemplate:
+  replicaCount: 1
+
+  nameOverride: nvcf-autoscaler-service
+
+  image:
+    repository: <your-registry>/<your-org>/nvcf-autoscaler-service
+    pullPolicy: IfNotPresent
+    tag:
+
+  entrypoint:
+    command: /bin/server
+    args: []
+
+  podAnnotations: {}
+
+  podLabels:
+    kratos_logging: "true"
+    kratos_metrics: "true"
+
+  podMonitor:
+    enabled: true
+
+  service:
+    host: "nvcf-autoscaler-service.service.odp.nvidia.com"
+    port: 50051
+    tls_secret: "odp-common-dns"
+    annotations:
+      'consul.hashicorp.com/service-name': 'nvcf-autoscaler-service'
+      'consul.hashicorp.com/service-sync': 'true'
+      'consul.hashicorp.com/service-tags': 'omni-backstage'
+      'consul.hashicorp.com/service-port': 'grpc'
+    livenessProbe:
+      delaySeconds: 30
+
+  ingress:
+    enabled: true
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.present
+            operator: NotIn
+            values:
+            - "true"
+
+  settings:
+    server:
+      metrics:
+        selectedMetricsBackend: "ott-metrics"
+        ottMetrics:
+          metrics: {}
+          # see env section below
+          
+        foundationsMetrics:
+          metrics_server:
+            addr: 0.0.0.0:8080
+
+      tracing:
+        selectedTracingBackend: "ott-tracing"
+        rsfTracing:
+          tracing:
+            endpoint_ip: nvks-opentelemetry-agent-collector.otel-collector.svc.cluster.local
+            endpoint_port: 4317
+            envfilter_directive: server=debug
+
+  env:
+    # These are honored by ott-metrics
+    OTEL_METRIC_EXPORT_INTERVAL: 5000
+    OTEL_EXPORTER_OTLP_ENDPOINT : http://nvks-opentelemetry-agent-collector.otel-collector.svc.cluster.local:4317

@@ -60,7 +60,7 @@ include Makefile.dist
 -include helmfile-docker.mk
 
 # --- Development-Only Targets ---
-.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-local generate-golden
+.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-local generate-golden
 
 # --- Binary Management (Development Only) ---
 ensure-helm:
@@ -159,9 +159,12 @@ render-local: dist
 	@cp -r testdata/registration $(DIST_DIR)/
 	@cd $(DIST_DIR) && CLUSTER_NAME=ncp-local NCA_ID=ncp-local HELMFILE_ENV=local make template
 
-test-local: render-local
+test-observability-profile:
+	@tests/observability-profile.sh
+
+test-local: test-observability-profile render-local
 	@echo ">>> Comparing $(DIST_DIR)/out against golden $(GOLDEN_LOCAL_DIR)..."
-	@if ! diff -ruN "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"; then \
+	@if ! tests/compare-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"; then \
 		echo ""; \
 		echo "ERROR: rendered output in $(DIST_DIR)/out differs from golden $(GOLDEN_LOCAL_DIR)."; \
 		echo "       Review the diff above. If the change is intentional, refresh the golden files:"; \
@@ -208,6 +211,7 @@ help:
 	@echo "  clean-dist         Remove the distribution directory"
 	@echo ""
 	@echo "Testing Targets:"
+	@echo "  test-observability-profile  Verify NVCA observability profile defaults"
 	@echo "  test-local         Render the local env and diff against golden testdata"
 	@echo "  generate-golden    Render the local env and update golden testdata"
 	@echo ""
@@ -218,7 +222,7 @@ help:
 	@echo "  KUBECONFIG_FILE    Path to kubeconfig file (pass to all targets in"
 	@echo "                     multi-cluster setups so registration reads JWKS"
 	@echo "                     from the correct cluster)"
-	@echo "  OUTPUT_DIR         Output directory for template (default: ./out)"
+	@echo "  OUTPUT_DIR         Output and Helmfile handoff directory (default: ./out)"
 	@echo "  NCA_ID             NCA identifier (default: $(NCA_ID))"
 	@echo "  CLUSTER_REGION     Cluster region (default: $(CLUSTER_REGION))"
 	@echo "  ICMS_URL           ICMS endpoint (default: $(ICMS_URL))"

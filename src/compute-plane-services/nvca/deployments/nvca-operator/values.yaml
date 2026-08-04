@@ -130,6 +130,17 @@ agentConfig:
   #       dropLabels:
   #         - metric_subset_enabled
   #         - custom_label
+  #     byooOtelCollector:
+  #       logSampling:
+  #         samplingPercentage: 10
+  #         mode: hash_seed
+  #         hashSeed: 1234
+  #         failClosed: true
+  #       traceSampling:
+  #         samplingPercentage: 1
+  #         mode: hash_seed
+  #         hashSeed: 1234
+  #         failClosed: true
 
 ## @section resources Resource requests and limits for the nvca-operator container
 ## @param resources.limits.cpu CPU limit for the nvca-operator container

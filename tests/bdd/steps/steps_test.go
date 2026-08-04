@@ -456,6 +456,27 @@ func TestSingleClusterBootstrapCachesAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestServiceMonitorsShouldExistRunsSingleExplicitGet(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	table := docTable(t, [][]string{
+		{"name"},
+		{"nvcf-default-monitors-state-metrics"},
+		{"nvcf-default-monitors-grpc-proxy"},
+	})
+
+	if err := sc.serviceMonitorsShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table); err != nil {
+		t.Fatalf("assert ServiceMonitors: %v", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(fake.runs))
+	}
+	want := "kubectl get servicemonitor/nvcf-default-monitors-state-metrics servicemonitor/nvcf-default-monitors-grpc-proxy --namespace monitoring --context k3d-ncp-local"
+	if fake.runs[0].command != want {
+		t.Fatalf("command = %q, want %q", fake.runs[0].command, want)
+	}
+}
+
 func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 	// End-to-end smoke check that RegisterAll wires every category. A
 	// minimal in-memory feature is driven through a Godog TestSuite so
@@ -576,6 +597,29 @@ func TestJSONOutputContainsRowsAssertion(t *testing.T) {
 	})
 	if err := sc.jsonOutputShouldContainRows(table); err != nil {
 		t.Fatalf("rows: %v", err)
+	}
+}
+
+func TestRenderedManifestsShouldNotContainAcceptsExplicitMarkers(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	renderDir := filepath.Join(sc.Suite.Config.RepoRoot, "out", "rendered", "control-plane")
+	if err := os.MkdirAll(renderDir, 0o755); err != nil {
+		t.Fatalf("create render directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(renderDir, "api.yaml"), []byte("kind: Deployment\n"), 0o644); err != nil {
+		t.Fatalf("write rendered manifest: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"text"},
+		{"kind: ServiceMonitor"},
+		{"kind: PodMonitor"},
+	})
+
+	if err := sc.renderedManifestsShouldNotContain("out/rendered", table); err != nil {
+		t.Fatalf("assert rendered manifests: %v", err)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
 	}
 }
 

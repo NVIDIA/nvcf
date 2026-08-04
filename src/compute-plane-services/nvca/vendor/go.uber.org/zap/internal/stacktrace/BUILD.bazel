@@ -5,16 +5,16 @@ go_library(
     srcs = ["stack.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal/stacktrace",
     importpath = "go.uber.org/zap/internal/stacktrace",
-    visibility = ["//vendor/go.uber.org/zap:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.uber.org/zap:__subpackages__"],
     deps = [
-        "//vendor/go.uber.org/zap/buffer",
-        "//vendor/go.uber.org/zap/internal/bufferpool",
-        "//vendor/go.uber.org/zap/internal/pool",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/buffer",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal/bufferpool",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/internal/pool",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":stacktrace",
-    visibility = ["//vendor/go.uber.org/zap:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.uber.org/zap:__subpackages__"],
 )

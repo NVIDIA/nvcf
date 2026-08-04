@@ -10,7 +10,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/mem",
     importpath = "google.golang.org/grpc/mem",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/google.golang.org/grpc/internal"],
+    deps = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal"],
 )
 
 alias(

@@ -12,7 +12,7 @@ go_library(
     importpath = "github.com/hashicorp/vault/sdk/physical/inmem",
     visibility = ["//visibility:public"],
     deps = [
-        "//sdk/physical",
+        "//src/compute-plane-services/ess-agent/sdk/physical",
         "@com_github_armon_go_radix//:go-radix",
         "@com_github_hashicorp_go_hclog//:go-hclog",
     ],
@@ -35,8 +35,8 @@ go_test(
     ],
     embed = [":inmem"],
     deps = [
-        "//sdk/helper/logging",
-        "//sdk/physical",
+        "//src/compute-plane-services/ess-agent/sdk/helper/logging",
+        "//src/compute-plane-services/ess-agent/sdk/physical",
         "@com_github_armon_go_metrics//:go-metrics",
         "@com_github_armon_go_radix//:go-radix",
         "@com_github_hashicorp_go_hclog//:go-hclog",

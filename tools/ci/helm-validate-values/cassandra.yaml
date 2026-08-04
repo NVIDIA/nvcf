@@ -1,0 +1,4 @@
+# CI-only values for helm lint/template validation.
+global:
+  security:
+    allowInsecureImages: true

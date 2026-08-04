@@ -11,11 +11,11 @@ go_library(
     importpath = "github.com/google/gnostic-models/openapiv2",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/google/gnostic-models/compiler",
-        "//vendor/go.yaml.in/yaml/v3:yaml",
-        "//vendor/google.golang.org/protobuf/reflect/protoreflect",
-        "//vendor/google.golang.org/protobuf/runtime/protoimpl",
-        "//vendor/google.golang.org/protobuf/types/known/anypb",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/gnostic-models/compiler",
+        "//src/compute-plane-services/nvca/vendor/go.yaml.in/yaml/v3:yaml",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/reflect/protoreflect",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoimpl",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/anypb",
     ],
 )
 

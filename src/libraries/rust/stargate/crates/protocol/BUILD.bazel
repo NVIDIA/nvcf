@@ -12,6 +12,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # hermetic capnp toolchain is a follow-up.
 cargo_build_script(
     name = "build_script",
+    edition = "2024",
     srcs = [
         "build.rs",
         "src/build_plan.rs",
@@ -47,6 +48,6 @@ rust_test(
     name = "stargate-protocol_test",
     crate = ":stargate-protocol",
     deps = [
-        "//crates/stargate-tls:stargate-tls",
+        "//src/libraries/rust/stargate/crates/stargate-tls:stargate-tls",
     ] + all_crate_deps(normal_dev = True),
 )

@@ -12,7 +12,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/awsutil",
     importpath = "github.com/aws/aws-sdk-go/aws/awsutil",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/jmespath/go-jmespath"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/jmespath/go-jmespath"],
 )
 
 alias(

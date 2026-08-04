@@ -10,7 +10,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volc-sdk-golang/service/sts",
     importpath = "github.com/volcengine/volc-sdk-golang/service/sts",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/volcengine/volc-sdk-golang/base"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/volcengine/volc-sdk-golang/base"],
 )
 
 alias(

@@ -9,7 +9,7 @@ KUBECONFIG_FLAG = $(if $(KUBECONFIG_FILE),--kubeconfig $(KUBECONFIG_FILE))
 HELMFILE_SELECTOR ?=
 HELMFILE_EXTRA_ARGS ?= --allow-no-matching-release
 
-.PHONY: template install sync apply destroy clean help
+.PHONY: template test install sync apply destroy clean help
 .DEFAULT_GOAL := help
 
 template: clean
@@ -21,6 +21,16 @@ template: clean
 		helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_EXTRA_ARGS) \
 		$(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) \
 		template --output-dir "$(OUTPUT_DIR)"
+
+test:
+	@helm lint charts/nvcf-default-monitors
+	@helm lint charts/nvcf-otel-collector
+	@helm lint ../../helm/function-autoscaler \
+		--set functionautoscaler.image.registry=nvcr.io \
+		--set functionautoscaler.image.repository=test/nvcf-function-autoscaler
+	@tests/profile-defaults.sh
+	@../self-managed/tests/observability-autoscaler.sh
+	@../nvcf-compute-plane/tests/observability-profile.sh
 
 install:
 	@echo ">>> Installing observability stack"
@@ -55,6 +65,7 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  template   Generate Kubernetes manifests without applying"
+	@echo "  test       Validate profile release and monitor defaults"
 	@echo "  install    Install the stack with helmfile sync"
 	@echo "  apply      Apply changes with helmfile apply"
 	@echo "  destroy    Remove stack releases"

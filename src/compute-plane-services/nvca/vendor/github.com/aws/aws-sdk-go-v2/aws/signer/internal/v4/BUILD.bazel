@@ -15,15 +15,15 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/signer/internal/v4",
     importpath = "github.com/aws/aws-sdk-go-v2/aws/signer/internal/v4",
-    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2/aws/signer:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/signer:__subpackages__"],
     deps = [
-        "//vendor/github.com/aws/aws-sdk-go-v2/aws",
-        "//vendor/github.com/aws/aws-sdk-go-v2/internal/strings",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/strings",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":internal",
-    visibility = ["//vendor/github.com/aws/aws-sdk-go-v2/aws/signer:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/signer:__subpackages__"],
 )

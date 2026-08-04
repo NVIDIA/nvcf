@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//rules/oci:defs.bzl", "rust_oci_image")
 
 # Workspace-local Cargo deps (own-workspace `workspace = true`).
 _WORKSPACE_DEPS = [
-    "//crates/proto:stargate-proto",
-    "//crates/protocol:stargate-protocol",
-    "//crates/stargate-forwarding:stargate-forwarding",
-    "//crates/stargate-runtime:stargate-runtime",
-    "//crates/stargate-tls:stargate-tls",
+    "//src/libraries/rust/stargate/crates/proto:stargate-proto",
+    "//src/libraries/rust/stargate/crates/protocol:stargate-protocol",
+    "//src/libraries/rust/stargate/crates/stargate-forwarding:stargate-forwarding",
+    "//src/libraries/rust/stargate/crates/stargate-runtime:stargate-runtime",
+    "//src/libraries/rust/stargate/crates/stargate-tls:stargate-tls",
 ]
 
 rust_library(
@@ -59,7 +60,7 @@ rust_oci_image(
 # feedback_image_entrypoint_exec_bit.
 sh_test(
     name = "image_entrypoint_mode_test",
-    srcs = ["//tools/ci:image_entrypoint_mode_test.sh"],
+    srcs = ["//src/libraries/rust/stargate/tools/ci:image_entrypoint_mode_test.sh"],
     args = [
         "$(location :image_layer)",
         "/usr/local/bin/stargate-k8s-router",

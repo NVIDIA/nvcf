@@ -7,9 +7,9 @@ go_library(
     importpath = "google.golang.org/protobuf/protoadapt",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/google.golang.org/protobuf/proto",
-        "//vendor/google.golang.org/protobuf/runtime/protoiface",
-        "//vendor/google.golang.org/protobuf/runtime/protoimpl",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/proto",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoiface",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoimpl",
     ],
 )
 

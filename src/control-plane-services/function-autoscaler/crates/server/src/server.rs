@@ -148,9 +148,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let timeseries_db_client =
-        startup::wait_for_timeseries_db(&config.timeseries_db, timeseries_db_credential_provider)
-            .await?;
+    let timeseries_db_client = startup::wait_for_timeseries_db(
+        &config.timeseries_db,
+        timeseries_db_credential_provider,
+        Some(secrets_file_watcher.clone()),
+    )
+    .await?;
 
     health
         .register_health_checker(timeseries_db_client.clone())

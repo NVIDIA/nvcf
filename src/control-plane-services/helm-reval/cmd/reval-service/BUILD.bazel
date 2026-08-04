@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//rules/oci:defs.bzl", "go_oci_image")
 
@@ -10,10 +11,10 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/cmd/reval-service",
     visibility = ["//visibility:private"],
     deps = [
-        "//cmd/reval/cli",
-        "//pkg/authorizers",
-        "//pkg/reval/config",
-        "//pkg/telemetry/logging",
+        "//src/control-plane-services/helm-reval/cmd/reval/cli",
+        "//src/control-plane-services/helm-reval/pkg/authorizers",
+        "//src/control-plane-services/helm-reval/pkg/reval/config",
+        "//src/control-plane-services/helm-reval/pkg/telemetry/logging",
         "@com_github_spf13_viper//:viper",
         "@org_uber_go_zap//:zap",
     ],
@@ -25,8 +26,9 @@ go_binary(
     visibility = ["//visibility:public"],
     # Mirrors the legacy Dockerfile ldflags: -X version.{Version,GitHash,ReleaseTag}.
     x_defs = {
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-helm-reval-api",
         "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
         "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
     },
 )
@@ -57,8 +59,8 @@ go_test(
     srcs = ["main_test.go"],
     embed = [":reval-service_lib"],
     deps = [
-        "//pkg/authorizers",
-        "//pkg/reval/config",
+        "//src/control-plane-services/helm-reval/pkg/authorizers",
+        "//src/control-plane-services/helm-reval/pkg/reval/config",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],

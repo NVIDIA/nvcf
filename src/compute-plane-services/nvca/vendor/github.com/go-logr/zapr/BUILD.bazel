@@ -12,10 +12,10 @@ go_library(
     importpath = "github.com/go-logr/zapr",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/go-logr/logr",
-        "//vendor/github.com/go-logr/logr/slogr",
-        "//vendor/go.uber.org/zap",
-        "//vendor/go.uber.org/zap/zapcore",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr/slogr",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap/zapcore",
     ],
 )
 

@@ -16,20 +16,8 @@
 commonLabels:
   nvcf.nvidia.com/observability-target: "true"
 
-dcgm:
-  enabled: false
-  namespace: ""
-  namespaceSelector:
-    any: true
-  interval: 30s
-  path: /metrics
-  # NVCA currently uses this name for the injected DCGM metrics port; keep the
-  # monitor disabled until the consuming stack owns that chart contract.
-  port: dcgm-metrics
-  labels: {}
-
-# Control-plane ServiceMonitors, owned by the obs stack. Each renders one
-# ServiceMonitor that picks up the observability-target label via commonLabels.
+# The parent stack derives these monitor-group defaults from
+# observability.profile. Explicit user values override those profile defaults.
 controlPlane:
   enabled: false
   interval: 30s
@@ -49,22 +37,53 @@ controlPlane:
       enabled: true
       selector:
         app.kubernetes.io/instance: grpc-proxy
-    - name: api
-      enabled: true
-      selector:
-        app.kubernetes.io/name: helm-nvcf-api
-    - name: sis
-      enabled: true
-      namespaces:
-        - sis
-      selector:
-        app.kubernetes.io/name: helm-nvcf-sis
     - name: llm-api-gateway
       enabled: true
       selector:
         app.kubernetes.io/instance: llm-api-gateway
-    # Off until the Invocation Service exporter is enabled.
     - name: invocation-service
-      enabled: false
+      enabled: true
       selector:
         app.kubernetes.io/instance: invocation-service
+
+computePlane:
+  enabled: false
+  interval: 30s
+  path: /metrics
+  services:
+    - name: nvca
+      enabled: true
+      namespaces:
+        - nvca-system
+      port: nvca
+      selector:
+        app.kubernetes.io/name: nvca
+      labels: {}
+
+  dcgm:
+    enabled: true
+    namespace: ""
+    namespaceSelector:
+      any: true
+    selector:
+      matchLabels:
+        nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
+    interval: 30s
+    path: /metrics
+    # NVCA uses this name for the injected DCGM metrics port.
+    port: dcgm-metrics
+    labels: {}
+
+  worker:
+    enabled: true
+    namespace: ""
+    namespaceSelector:
+      any: true
+    selector:
+      matchExpressions:
+        - key: icms-request-id
+          operator: Exists
+    interval: 30s
+    path: /metrics
+    port: metrics
+    labels: {}

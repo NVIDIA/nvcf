@@ -38,8 +38,14 @@ jobs:
   push:
     name: push to ncp-dev
     runs-on: ubuntu-latest
+    # Same public EC2 Buildbarn cache the matrix build uses. workflow_dispatch
+    # is restricted to users with write access, so the secret is available;
+    # fork PRs cannot reach this workflow at all.
+    env:
+      CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
+      CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
-      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.13.0' }}
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.14.0' }}
     defaults:
       run:
         # In container jobs Actions falls back to plain `sh` (dash), which
@@ -57,21 +63,63 @@ jobs:
           set -euo pipefail
           echo "name=$(basename "$SVC_PATH")" >> "$GITHUB_OUTPUT"
 
-      # Same repository/install caching as bazel.yml, plus a Bazel disk
-      # cache so compiled actions survive between dispatches. Without
-      # this every dispatch recompiled the full dependency tree from
-      # scratch. Keyed per service so caches do not evict each other;
-      # the restore-keys prefix tolerates lockfile drift.
-      - name: Cache Bazel repository + disk caches
+      # Two caches, because the content has two different identities.
+      #
+      # The install base and repository cache are a pure function of the root
+      # MODULE.bazel.lock and .bazelversion: every service dispatched from this
+      # workflow produces byte-identical content. Storing that per service would
+      # keep N copies of the same multi-gigabyte entry inside GitHub's 10 GB
+      # per-repository budget, so they would evict one another and nothing would
+      # ever hit. It is shared, and shares the key the matrix build uses so a
+      # dispatch can restore what CI already populated.
+      #
+      # Compiled action outputs in the disk cache genuinely are service-specific
+      # and stay keyed per service.
+      #
+      # Both previously hashed a MODULE.bazel.lock inside the service subtree.
+      # Those files are gone now that every service builds from the root module,
+      # so hashFiles returned empty and the key degenerated to a constant: the
+      # entry never matched the dependency state it claimed to describe.
+      - name: Cache Bazel repository + install
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
-            ~/.bazel-disk-cache
-          key: bazel-dispatch-${{ steps.svc.outputs.name }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', github.event.inputs.service_path), format('{0}/.bazelversion', github.event.inputs.service_path)) }}
+          key: bazel-rootmodule-${{ hashFiles('MODULE.bazel.lock', '.bazelversion') }}
+          restore-keys: |
+            bazel-rootmodule-
+
+      - name: Cache Bazel disk cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bazel-disk-cache
+          key: bazel-dispatch-${{ steps.svc.outputs.name }}-${{ hashFiles('MODULE.bazel.lock', '.bazelversion') }}
           restore-keys: |
             bazel-dispatch-${{ steps.svc.outputs.name }}-
+
+      # Read-only remote cache, same public Buildbarn the matrix build uses.
+      # This workflow previously passed --remote_cache= (empty, i.e. disabled)
+      # and relied only on a local disk cache, so every dispatch recompiled the
+      # service's entire dependency closure even though CI had already built
+      # those exact actions on main. Reusing tools/ci/bazel-cache-upload-mode
+      # keeps the upload policy in one place; a workflow_dispatch is neither a
+      # main push nor a merge_group, so it resolves to read-only and an ad-hoc
+      # push can never write to the shared cache.
+      - name: Prepare remote cache
+        id: rc
+        run: |
+          set -euo pipefail
+          if [ -n "${CACHE_TOKEN:-}" ] && [ -n "${CACHE_ENDPOINT:-}" ]; then
+            printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
+            echo "ready=1" >> "$GITHUB_OUTPUT"
+            echo "upload=$upload" >> "$GITHUB_OUTPUT"
+            echo "remote cache ready (upload=$upload)"
+          else
+            echo "ready=0" >> "$GITHUB_OUTPUT"
+            echo "remote cache unavailable (no token/endpoint): local disk cache only"
+          fi
 
       - name: Compute snapshot tag
         id: meta
@@ -141,6 +189,8 @@ jobs:
           SCOPE: ${{ steps.layout.outputs.scope }}
           TAG: ${{ steps.meta.outputs.tag }}
           REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+          RC_READY: ${{ steps.rc.outputs.ready }}
+          RC_UPLOAD: ${{ steps.rc.outputs.upload }}
         run: |
           set -euo pipefail
           REGISTRY="${REGISTRY%/}"
@@ -191,7 +241,21 @@ jobs:
             mkdir -p ci-ghcr
             printf 'load("@rules_oci//oci:defs.bzl", "oci_push")\n\noci_push(\n    name = "push",\n    image = "%s",\n    repository = "%s",\n    remote_tags = ["%s", "latest-dispatch"],\n)\n' \
               "$tgt" "$dest" "$TAG" > ci-ghcr/BUILD.bazel
-            bazel run --remote_cache= --disk_cache="${BAZEL_DISK_CACHE}" //ci-ghcr:push
+            CACHE=(--remote_cache=)
+            if [ "${RC_READY:-0}" = "1" ]; then
+              CACHE=(--remote_cache="$CACHE_ENDPOINT"
+                     --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+                     --remote_header="authorization=Bearer $CACHE_TOKEN"
+                     --remote_cache_compression
+                     --remote_download_all
+                     --remote_timeout=600 --remote_retries=5)
+              if [ "$RC_UPLOAD" = "true" ]; then
+                CACHE+=(--remote_upload_local_results=true)
+              else
+                CACHE+=(--remote_upload_local_results=false)
+              fi
+            fi
+            bazel run "${CACHE[@]}" --disk_cache="${BAZEL_DISK_CACHE}" //ci-ghcr:push
             rm -rf ci-ghcr
           done
           echo "Done: pushed ${#indexes[@]} image(s) under ${REGISTRY}/ at tag ${TAG}"

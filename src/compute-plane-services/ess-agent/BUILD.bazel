@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@gazelle//:def.bzl", "gazelle")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//rules/oci:defs.bzl", "go_oci_image")
@@ -29,15 +30,15 @@ go_library(
     importpath = "github.com/hashicorp/consul-template",
     visibility = ["//visibility:private"],
     deps = [
-        "//api",
-        "//config",
-        "//logging",
-        "//manager",
-        "//nv",
-        "//nv/telemetry",
-        "//service_os",
-        "//signals",
-        "//version",
+        "//src/compute-plane-services/ess-agent/api",
+        "//src/compute-plane-services/ess-agent/config",
+        "//src/compute-plane-services/ess-agent/logging",
+        "//src/compute-plane-services/ess-agent/manager",
+        "//src/compute-plane-services/ess-agent/nv",
+        "//src/compute-plane-services/ess-agent/nv/telemetry",
+        "//src/compute-plane-services/ess-agent/service_os",
+        "//src/compute-plane-services/ess-agent/signals",
+        "//src/compute-plane-services/ess-agent/version",
         "@com_github_hashicorp_go_uuid//:go-uuid",
     ],
 )
@@ -63,11 +64,11 @@ go_test(
     # See //dependency:dependency_test for the full rationale.
     tags = ["manual"],
     deps = [
-        "//config",
-        "//dependency",
-        "//nv",
-        "//signals",
-        "//test",
+        "//src/compute-plane-services/ess-agent/config",
+        "//src/compute-plane-services/ess-agent/dependency",
+        "//src/compute-plane-services/ess-agent/nv",
+        "//src/compute-plane-services/ess-agent/signals",
+        "//src/compute-plane-services/ess-agent/test",
         "@com_github_hashicorp_consul_sdk//testutil",
         "@com_github_hashicorp_go_gatedio//:go-gatedio",
     ],

@@ -7,19 +7,19 @@ go_library(
     name = "internal",
     srcs = ["util.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/internal",
-    visibility = ["//cmd:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/cmd:__subpackages__"],
     deps = [
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/k8s.io/client-go/kubernetes",
-        "//vendor/k8s.io/client-go/rest",
-        "//vendor/k8s.io/client-go/tools/clientcmd",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/clientcmd",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":internal",
-    visibility = ["//cmd:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/cmd:__subpackages__"],
 )
 
 go_test(
@@ -27,10 +27,10 @@ go_test(
     srcs = ["util_test.go"],
     embed = [":internal"],
     deps = [
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
-        "//vendor/k8s.io/client-go/kubernetes",
-        "//vendor/k8s.io/client-go/rest",
-        "//vendor/k8s.io/client-go/tools/clientcmd",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/clientcmd",
     ],
 )

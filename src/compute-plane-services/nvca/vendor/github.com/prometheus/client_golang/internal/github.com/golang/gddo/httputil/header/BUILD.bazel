@@ -5,11 +5,11 @@ go_library(
     srcs = ["header.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil/header",
     importpath = "github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil/header",
-    visibility = ["//vendor/github.com/prometheus/client_golang:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":header",
-    visibility = ["//vendor/github.com/prometheus/client_golang:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang:__subpackages__"],
 )

@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
 )
@@ -31,7 +32,14 @@ type OTelCollectorConfig struct {
 	MemoryLimiter  MemoryLimiterConfig  `json:"memoryLimiter,omitempty"`
 	Batch          BatchConfig          `json:"batch,omitempty"`
 	LogBatch       BatchConfig          `json:"logBatch,omitempty"`
+	LogSampling    LogSamplingConfig    `json:"logSampling,omitempty"`
+	TraceSampling  SamplingConfig       `json:"traceSampling,omitempty"`
 }
+
+const (
+	consistentMinSamplingPercentage = 100.0 / (1 << 56)
+	hashSeedMinSamplingPercentage   = 100.0 / (1 << 14)
+)
 
 // IsZero returns true when no collector rendering overrides are configured.
 func (c *OTelCollectorConfig) IsZero() bool {
@@ -41,7 +49,38 @@ func (c *OTelCollectorConfig) IsZero() bool {
 	return c.ExporterHelper.IsZero() &&
 		c.MemoryLimiter.IsZero() &&
 		c.Batch.IsZero() &&
-		c.LogBatch.IsZero()
+		c.LogBatch.IsZero() &&
+		c.LogSampling.IsZero() &&
+		c.TraceSampling.IsZero()
+}
+
+// SamplingConfig configures a BYOO collector trace probabilistic sampling processor.
+type SamplingConfig struct {
+	SamplingPercentage *float64 `json:"samplingPercentage,omitempty"`
+	Mode               string   `json:"mode,omitempty"`
+	HashSeed           *uint32  `json:"hashSeed,omitempty"`
+	FailClosed         *bool    `json:"failClosed,omitempty"`
+}
+
+// IsZero returns true when the trace sampling percentage is unset.
+func (c *SamplingConfig) IsZero() bool {
+	return c == nil || c.SamplingPercentage == nil
+}
+
+// LogSamplingConfig configures a BYOO collector log probabilistic sampling processor.
+type LogSamplingConfig struct {
+	SamplingPercentage *float64 `json:"samplingPercentage,omitempty"`
+	Mode               string   `json:"mode,omitempty"`
+	HashSeed           *uint32  `json:"hashSeed,omitempty"`
+	FailClosed         *bool    `json:"failClosed,omitempty"`
+	AttributeSource    string   `json:"attributeSource,omitempty"`
+	FromAttribute      string   `json:"fromAttribute,omitempty"`
+	SamplingPriority   string   `json:"samplingPriority,omitempty"`
+}
+
+// IsZero returns true when the log sampling percentage is unset.
+func (c *LogSamplingConfig) IsZero() bool {
+	return c == nil || c.SamplingPercentage == nil
 }
 
 // ExporterHelperConfig configures common exporterhelper settings for BYOO exporters.
@@ -172,17 +211,154 @@ func decodeOTelCollectorConfig(encoded string) (OTelCollectorConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return OTelCollectorConfig{}, fmt.Errorf("decode json: %w", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		return OTelCollectorConfig{}, fmt.Errorf("validate config: %w", err)
+	}
 	return cfg, nil
 }
 
-func applyOTelCollectorConfig(otelConfig *OpenTelemetryConfig, cfg OTelCollectorConfig) {
+func applyOTelCollectorConfig(otelConfig *OpenTelemetryConfig, cfg OTelCollectorConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
 	if cfg.IsZero() {
-		return
+		return nil
 	}
 	applyExporterHelperConfig(otelConfig, cfg.ExporterHelper)
 	applyMemoryLimiterConfig(otelConfig, cfg.MemoryLimiter)
 	applyBatchConfig(otelConfig, "batch", cfg.Batch)
 	applyLogBatchConfig(otelConfig, cfg.LogBatch)
+	applyLogSamplingConfig(otelConfig, "probabilistic_sampler/logs", cfg.LogSampling)
+	applySamplingConfig(otelConfig, "traces", "probabilistic_sampler/traces", cfg.TraceSampling)
+	return nil
+}
+
+// Validate rejects sampler settings that the pinned collector cannot apply safely.
+func (c OTelCollectorConfig) Validate() error {
+	if err := c.LogSampling.validate(); err != nil {
+		return fmt.Errorf("log sampling: %w", err)
+	}
+	if err := c.TraceSampling.validate(); err != nil {
+		return fmt.Errorf("trace sampling: %w", err)
+	}
+	return nil
+}
+
+func (c SamplingConfig) validate() error {
+	return validateSampling(c.Mode, c.SamplingPercentage)
+}
+
+func (c LogSamplingConfig) validate() error {
+	if err := validateSampling(c.Mode, c.SamplingPercentage); err != nil {
+		return err
+	}
+	if c.SamplingPercentage == nil || c.Mode == "" || c.Mode == "hash_seed" {
+		return nil
+	}
+	if c.AttributeSource != "" || c.FromAttribute != "" {
+		return fmt.Errorf("attributeSource and fromAttribute require hash_seed mode")
+	}
+	return nil
+}
+
+func validateSampling(mode string, samplingPercentage *float64) error {
+	if samplingPercentage == nil {
+		return nil
+	}
+
+	minimumSamplingPercentage, err := minimumSamplingPercentage(mode)
+	if err != nil {
+		return err
+	}
+	if math.IsNaN(*samplingPercentage) || math.IsInf(*samplingPercentage, 0) {
+		return fmt.Errorf("samplingPercentage must be finite")
+	}
+	if *samplingPercentage < 0 || *samplingPercentage > math.MaxFloat32 {
+		return fmt.Errorf("samplingPercentage must be between 0 and %g", math.MaxFloat32)
+	}
+	if *samplingPercentage != 0 && *samplingPercentage < minimumSamplingPercentage {
+		return fmt.Errorf("samplingPercentage must be 0 or at least %g for %s mode", minimumSamplingPercentage, effectiveSamplingMode(mode))
+	}
+	return nil
+}
+
+func minimumSamplingPercentage(mode string) (float64, error) {
+	switch mode {
+	case "", "hash_seed":
+		return hashSeedMinSamplingPercentage, nil
+	case "proportional", "equalizing":
+		return consistentMinSamplingPercentage, nil
+	default:
+		return 0, fmt.Errorf("unsupported sampling mode %q", mode)
+	}
+}
+
+func effectiveSamplingMode(mode string) string {
+	if mode == "" {
+		return "hash_seed"
+	}
+	return mode
+}
+
+func applySamplingConfig(otelConfig *OpenTelemetryConfig, pipelineID, processorID string, cfg SamplingConfig) {
+	if cfg.IsZero() {
+		return
+	}
+	processorConfig := map[string]interface{}{}
+	applySamplingSettings(processorConfig, cfg.SamplingPercentage, cfg.Mode, cfg.HashSeed, cfg.FailClosed)
+	applySamplingProcessor(otelConfig, pipelineID, processorID, processorConfig)
+}
+
+func applyLogSamplingConfig(otelConfig *OpenTelemetryConfig, processorID string, cfg LogSamplingConfig) {
+	if cfg.IsZero() {
+		return
+	}
+	processorConfig := map[string]interface{}{}
+	applySamplingSettings(processorConfig, cfg.SamplingPercentage, cfg.Mode, cfg.HashSeed, cfg.FailClosed)
+	if cfg.AttributeSource != "" {
+		processorConfig["attribute_source"] = cfg.AttributeSource
+	}
+	if cfg.FromAttribute != "" {
+		processorConfig["from_attribute"] = cfg.FromAttribute
+	}
+	if cfg.SamplingPriority != "" {
+		processorConfig["sampling_priority"] = cfg.SamplingPriority
+	}
+	applySamplingProcessor(otelConfig, "logs", processorID, processorConfig)
+}
+
+func applySamplingSettings(processorConfig map[string]interface{}, samplingPercentage *float64, mode string, hashSeed *uint32, failClosed *bool) {
+	processorConfig["sampling_percentage"] = *samplingPercentage
+	if mode != "" {
+		processorConfig["mode"] = mode
+	}
+	if hashSeed != nil {
+		processorConfig["hash_seed"] = *hashSeed
+	}
+	if failClosed != nil {
+		processorConfig["fail_closed"] = *failClosed
+	}
+}
+
+func applySamplingProcessor(otelConfig *OpenTelemetryConfig, pipelineID, processorID string, processorConfig map[string]interface{}) {
+	pipeline, ok := otelConfig.Service.Pipelines[pipelineID]
+	if !ok {
+		return
+	}
+
+	otelConfig.Processors[processorID] = processorConfig
+	for i, existingProcessorID := range pipeline.Processors {
+		if existingProcessorID != "batch" && existingProcessorID != "batch/logs" {
+			continue
+		}
+		processors := append([]string{}, pipeline.Processors[:i]...)
+		processors = append(processors, processorID)
+		pipeline.Processors = append(processors, pipeline.Processors[i:]...)
+		otelConfig.Service.Pipelines[pipelineID] = pipeline
+		return
+	}
+	pipeline.Processors = append(pipeline.Processors, processorID)
+	otelConfig.Service.Pipelines[pipelineID] = pipeline
 }
 
 func applyExporterHelperConfig(otelConfig *OpenTelemetryConfig, cfg ExporterHelperConfig) {

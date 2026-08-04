@@ -1,0 +1,5 @@
+# CI-only values for helm lint/template validation.
+apikeys:
+  image:
+    registry: example.com
+    repository: foo/bar/baz

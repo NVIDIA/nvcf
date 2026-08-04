@@ -23,7 +23,7 @@ environments:
   the raw list; output is the normalized list as YAML.
 */}}
 {{- define "nvca-operator.featureGateValues" -}}
-{{- $featureGateValues := . | default list -}}
+{{- $featureGateValues := dig "values" list . | default list -}}
 {{- $defaultFeatureGates := list
       "DynamicGPUDiscovery"
       "InfraResourceOverhead"
@@ -32,6 +32,9 @@ environments:
       "EnforceHelmTaskResourceLimits"
       "EnforceContainerTaskResourceLimits"
 -}}
+{{- if dig "byooEnabled" false . -}}
+{{- $defaultFeatureGates = append $defaultFeatureGates "BYOObservability" -}}
+{{- end -}}
 {{- range $gate := $defaultFeatureGates -}}
 {{-   if not (or (has $gate $featureGateValues) (has (printf "-%s" $gate) $featureGateValues)) -}}
 {{-     $featureGateValues = append $featureGateValues $gate -}}
@@ -55,10 +58,16 @@ helmDefaults:
     - "--dry-run=server"
 
 {{- $clusterName := requiredEnv "CLUSTER_NAME" }}
-{{- $registrationValuesPath := printf "../out/%s-register-values.yaml" $clusterName }}
+{{- $outputDir := requiredEnv "OUTPUT_DIR" }}
+{{- $registrationValuesPath := printf "%s/%s-register-values.yaml" $outputDir $clusterName }}
 {{- $registrationValues := readFile $registrationValuesPath | fromYaml | default dict }}
 {{- $registrationAgentMergeConfig := dig "agentConfig" "mergeConfig" "" $registrationValues }}
 {{- $environmentAgentMergeConfig := dig "agentConfig" "mergeConfig" "" .Values }}
+{{- $observabilityProfile := dig "observability" "profile" "compute" .Values }}
+{{- if not (has $observabilityProfile (list "disabled" "control" "compute" "all")) }}
+{{- fail (printf "observability.profile must be disabled, control, compute, or all, got %q" $observabilityProfile) }}
+{{- end }}
+{{- $computeObservabilityEnabled := or (eq $observabilityProfile "compute") (eq $observabilityProfile "all") }}
 {{- $agentMergeConfig := dict }}
 {{- if $registrationAgentMergeConfig }}
 {{- $agentMergeConfig = mergeOverwrite $agentMergeConfig ($registrationAgentMergeConfig | fromYaml | default dict) }}
@@ -84,7 +93,7 @@ releases:
       # `make register-cluster CLUSTER_NAME=<cluster>` — uses
       # selfManaged.clusterId/clusterGroupId schema emitted by nvcf-cli and
       # read by the nvca-operator chart.
-      - {{ $registrationValuesPath }}
+      - {{ $registrationValuesPath | quote }}
       # Resolve operator + nvca images through global.image.{registry,repository}.
       # The chart's image.tag and selfManaged.nvcaVersion defaults supply the
       # actual image tag; this block only overrides repository and pullPolicy.
@@ -104,6 +113,8 @@ releases:
         clusterName: {{ requiredEnv "CLUSTER_NAME" }}
         ncaId: {{ requiredEnv "NCA_ID" }}
         {{- $selfManaged := dig "nvcaOperator" "selfManaged" dict .Values.global }}
+        {{- $otelCollector := dig "otelCollector" dict $selfManaged }}
+        {{- $otelCollectorEnabled := dig "enabled" $computeObservabilityEnabled $otelCollector }}
         selfManaged:
           identitySource: psat
           {{- with dig "icmsServiceURL" "" $selfManaged }}
@@ -125,7 +136,17 @@ releases:
           natsHostOverride: {{ . | quote }}
           {{- end }}
           featureGateValues:
-          {{- include "nvca-operator.featureGateValues" (dig "featureGateValues" list $selfManaged) | nindent 10 }}
+          {{- include "nvca-operator.featureGateValues" (dict
+                "values" (dig "featureGateValues" list $selfManaged)
+                "byooEnabled" $computeObservabilityEnabled) | nindent 10 }}
+          otelCollector:
+            enabled: {{ $otelCollectorEnabled }}
+            {{- with dig "imageRepository" "" $otelCollector }}
+            imageRepository: {{ . | quote }}
+            {{- end }}
+            {{- with dig "imageTag" "" $otelCollector }}
+            imageTag: {{ . | quote }}
+            {{- end }}
           imageCredHelper:
             imageRepository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-image-credential-helper
             {{- with dig "imageCredHelper" "imageTag" "" $selfManaged }}

@@ -97,7 +97,7 @@ receivers:
         - job_name: opentelemetry-collector
           metric_relabel_configs:
             - action: keep
-              regex: (otelcol_receiver_refused_metric_points_total|otelcol_receiver_refused_spans_total|otelcol_receiver_refused_log_records_total|otelcol_receiver_accepted_metric_points_total|otelcol_receiver_accepted_spans_total|otelcol_receiver_accepted_log_records_total|otelcol_exporter_sent_metric_points_total|otelcol_exporter_sent_spans_total|otelcol_exporter_sent_log_records_total|otelcol_exporter_send_failed_metric_points_total|otelcol_exporter_send_failed_spans_total|otelcol_exporter_send_failed_log_records_total|otelcol_processor_incoming_items_total|otelcol_processor_outgoing_items_total)
+              regex: (otelcol_receiver_refused_metric_points_total|otelcol_receiver_refused_spans_total|otelcol_receiver_refused_log_records_total|otelcol_receiver_accepted_metric_points_total|otelcol_receiver_accepted_spans_total|otelcol_receiver_accepted_log_records_total|otelcol_exporter_sent_metric_points_total|otelcol_exporter_sent_spans_total|otelcol_exporter_sent_log_records_total|otelcol_exporter_send_failed_metric_points_total|otelcol_exporter_send_failed_spans_total|otelcol_exporter_send_failed_log_records_total|otelcol_exporter_enqueue_failed_metric_points_total|otelcol_exporter_enqueue_failed_spans_total|otelcol_exporter_enqueue_failed_log_records_total|otelcol_exporter_queue_size|otelcol_exporter_queue_capacity|otelcol_http_client_request_duration_seconds.*|otelcol_rpc_client_call_duration_seconds.*|otelcol_processor_incoming_items_total|otelcol_processor_outgoing_items_total)
               source_labels:
                 - __name__
           scrape_interval: 30s
@@ -110,8 +110,6 @@ exporters:
     enable_open_metrics: true
     endpoint: ${env:OTEL_POD_IP:-0.0.0.0}:19091
     metric_expiration: 5m
-    resource_to_telemetry_conversion:
-      enabled: true
     send_timestamps: true
   prometheus_remote_write/PROMETHEUS-workload-metrics-metrics:
     endpoint: https://workload-metrics.example.invalid/api/v1/write
