@@ -11,7 +11,7 @@ metadata:
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "2"
-    "helm.sh/hook-delete-policy": hook-succeeded
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
 spec:
   template:
     metadata:
@@ -19,9 +19,11 @@ spec:
         app: crd-upgrader
     spec:
       serviceAccountName: kai-scheduler-crd-manager
+      imagePullSecrets:
+        - name: nvcr-pull-secret
       containers:
       - name: upgrader
-        image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.14.0"
+        image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.16.7"
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
