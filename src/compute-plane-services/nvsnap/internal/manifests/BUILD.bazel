@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "manifests",
+    srcs = ["restore.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/manifests",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = ["@io_k8s_sigs_yaml//:yaml"],
+)
+
+go_test(
+    name = "manifests_test",
+    srcs = ["conformance_test.go"],
+    # The conformance checks read the workload manifests off disk. Bazel runs
+    # tests in a sandbox containing only declared inputs, so without this the
+    # glob finds nothing and every check vacuously passes -- which is worse
+    # than failing, because a manifest regression would sail through. Gazelle
+    # cannot infer a data dependency from a runtime path, so this attribute is
+    # maintained by hand; `# keep` stops the next gazelle run dropping it.
+    data = ["//src/compute-plane-services/nvsnap/deploy/k8s/workloads:workload_manifests"],  # keep
+    embed = [":manifests"],
+)

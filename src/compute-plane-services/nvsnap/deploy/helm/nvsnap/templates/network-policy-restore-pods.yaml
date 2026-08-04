@@ -1,3 +1,5 @@
+{{- if and .Values.webhook.enabled .Values.agent.l2.restoreNamespaces }}
+{{- /* Guard first: a disabled feature must emit nothing at all. With the guard below the license header, Helm still renders the header as a document and kubectl rejects it. */ -}}
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -47,7 +49,6 @@ Future: when nvsnap#179 (NVCA-side gate) lands, this policy can be
 deleted along with the nvsnap-l2-wait container itself — restore pods
 won't talk to nvsnap-server anymore.
 */ -}}
-{{- if and .Values.webhook.enabled .Values.agent.l2.restoreNamespaces -}}
 {{- range $ns := .Values.agent.l2.restoreNamespaces }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -107,7 +108,7 @@ Only rendered when the init-container strategy is selected AND
 agentHostCIDR is set. The default inline strategy does the mount inside
 the webhook and needs no pod->agent egress.
 */ -}}
-{{- if and .Values.webhook.enabled (eq (.Values.webhook.restorePrepStrategy | default "inline") "init-container") .Values.webhook.agentHostCIDR .Values.agent.l2.restoreNamespaces -}}
+{{- if and .Values.webhook.enabled (eq (.Values.webhook.restorePrepStrategy | default "inline") "init-container") .Values.webhook.agentHostCIDR .Values.agent.l2.restoreNamespaces }}
 {{- range $ns := .Values.agent.l2.restoreNamespaces }}
 ---
 apiVersion: networking.k8s.io/v1
