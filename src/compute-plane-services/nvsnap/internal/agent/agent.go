@@ -437,6 +437,11 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	router := mux.NewRouter()
 
+	// Every {id}/{hash}/{pod-uid} below names a directory under a hostPath
+	// mount. Validate them in one place so a route added later is covered
+	// without remembering to. See pathVarGuard in pathsafe.go.
+	router.Use(pathVarGuard)
+
 	// Metrics endpoint
 	router.Handle("/metrics", metrics.Handler()).Methods("GET")
 
@@ -833,6 +838,11 @@ func (a *Agent) gpuRestoreHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+	// Body-supplied, unlike the {id} routes the middleware covers.
+	if err := validPathSegment("checkpointId", req.CheckpointID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

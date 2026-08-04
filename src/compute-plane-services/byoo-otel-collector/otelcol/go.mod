@@ -20,6 +20,7 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.157.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v0.157.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.157.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/probabilisticsamplerprocessor v0.157.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.157.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.157.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.157.0
@@ -362,6 +363,7 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl v0.157.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil v0.157.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/resourcetotelemetry v0.157.0 // indirect
+	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/sampling v0.157.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/status v0.157.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/pprof v0.157.0 // indirect
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/prometheus v0.157.0 // indirect
