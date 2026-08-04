@@ -28,12 +28,20 @@ vault_sdk_version=${VAULT_SDK_VERSION:-v0.15.2}
 x_net_version=${X_NET_VERSION:-v0.55.0}
 output_dir=${OUTPUT_DIR:-"$repo_root/files/plugins"}
 
-work_dir=${WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/nvcf-openbao-jwt-plugin.XXXXXX")}
+# Only a work dir this script created is ours to remove. Deleting a
+# caller-supplied WORK_DIR would destroy a directory the caller still owns.
+if [ -n "${WORK_DIR:-}" ]; then
+  work_dir=$WORK_DIR
+  work_dir_is_ours=0
+else
+  work_dir=$(mktemp -d "${TMPDIR:-/tmp}/nvcf-openbao-jwt-plugin.XXXXXX")
+  work_dir_is_ours=1
+fi
 src_dir="$work_dir/source"
 build_dir="$work_dir/build"
 
 cleanup() {
-  if [ -z "${KEEP_WORK_DIR:-}" ]; then
+  if [ -z "${KEEP_WORK_DIR:-}" ] && [ "$work_dir_is_ours" = "1" ]; then
     rm -rf "$work_dir"
   else
     echo "Keeping work dir: $work_dir"

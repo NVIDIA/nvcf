@@ -1,29 +1,35 @@
-# JWT Plugin Provenance
+# JWT plugin provenance
 
-The committed `vault-plugin-secrets-jwt` binaries are rebuilt from NVIDIA's
-internal fork:
+The `vault-plugin-secrets-jwt` binaries in this directory are build output.
+They are not committed; `.gitignore` excludes them and only `.gitkeep` ships.
 
-- Source: https://gitlab-master.nvidia.com/kaizen-data/forks/vault-plugin-secrets-jwt
-- Commit: `183b3159512f6fcfe766c8a3d738f47a751bad5c`
-- Build script: `scripts/build-jwt-plugin.sh`
-- Verification script: `scripts/verify-jwt-plugin.sh`
+## Source
 
-Pinned dependency floor for `NVCF-10946`:
+`../../plugins/vault-plugin-secrets-jwt` in this repository. The plugin is a
+modified copy of the Apache-2.0 project `outfoxx/vault-plugin-secrets-jwt`;
+that directory's `NOTICE` enumerates every NVIDIA change.
 
-- `golang.org/x/net v0.55.0`
+The image build compiles the plugin from that source in a Dockerfile build
+stage, so the binary and the image come from the same commit. Nothing is
+fetched from outside this repository at build time.
 
-Compatibility pins retained from the previously shipped NVCF plugin binary:
+## Dependency floors
 
+Held deliberately, not incidental to a `go mod tidy`:
+
+- `golang.org/x/net v0.55.0` - security floor
 - `github.com/hashicorp/vault/api v1.15.0`
 - `github.com/hashicorp/vault/sdk v0.15.2`
 - `google.golang.org/grpc v1.69.4`
 - `github.com/go-jose/go-jose/v4 v4.0.4`
 
-The OpenBao producer image copies one binary per target platform into
-`/openbao/plugins/vault-plugin-secrets-jwt`. Run
-`scripts/verify-jwt-plugin.sh` before publishing the image.
+The vault and grpc pins keep compatibility with the previously shipped plugin
+binary. `scripts/verify-jwt-plugin.sh` asserts them against the built artifact.
 
-Current committed binary hashes:
+## Local build
 
-- `vault-plugin-secrets-jwt-linux-amd64`: `be2a2bcea1e028c6a6be43877facafd12509c07aa09ce2da982fa9117135d006`
-- `vault-plugin-secrets-jwt-linux-arm64`: `88a14ef10d3fc1a6290ffc78de3367de92de7cb56e9d45a097c7c945f13ec77d`
+    scripts/build-jwt-plugin.sh    # writes both arch binaries here
+    scripts/verify-jwt-plugin.sh   # asserts module path, target, toolchain, deps
+
+Hashes are reported by the verifier rather than pinned: any source change in
+this repository legitimately changes them.

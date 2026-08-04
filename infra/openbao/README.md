@@ -16,22 +16,27 @@ The image expects an OS-specific plugin binary at build time, placed at:
 - `files/plugins/vault-plugin-secrets-jwt-linux-amd64` (for `--platform linux/amd64`)
 - `files/plugins/vault-plugin-secrets-jwt-linux-arm64` (for `--platform linux/arm64`)
 
-Build a compatible `vault-plugin-secrets-jwt` plugin for each target architecture, place the resulting binary at the path above, and ensure it is executable. For example:
+The plugin is built from source in this repository, at
+`plugins/vault-plugin-secrets-jwt`. Nothing needs to be cloned or placed by
+hand, and no binaries are committed.
+
+The image build compiles it in a Dockerfile build stage, so `docker build .`
+here produces the same image as the release pipeline:
 
 ```bash
-git clone https://github.com/outfoxx/vault-plugin-secrets-jwt
-cd vault-plugin-secrets-jwt
-
-# amd64
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
-  -o ../files/plugins/vault-plugin-secrets-jwt-linux-amd64 ./cmd/vault-plugin-secrets-jwt
-chmod +x ../files/plugins/vault-plugin-secrets-jwt-linux-amd64
-
-# arm64
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
-  -o ../files/plugins/vault-plugin-secrets-jwt-linux-arm64 ./cmd/vault-plugin-secrets-jwt
-chmod +x ../files/plugins/vault-plugin-secrets-jwt-linux-arm64
+docker build --build-arg TARGETARCH=amd64 -t nvcf-openbao:local .
 ```
+
+To produce the binaries outside an image build, for local inspection or to run
+the verifier:
+
+```bash
+scripts/build-jwt-plugin.sh     # writes both arch binaries to files/plugins/
+scripts/verify-jwt-plugin.sh    # asserts module path, target, toolchain, deps
+```
+
+`files/plugins/` is gitignored apart from `.gitkeep`; see
+`files/plugins/PROVENANCE.md` for the dependency floors the verifier enforces.
 
 ## Prerequisites
 

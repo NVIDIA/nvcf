@@ -32,4 +32,4 @@ FROM openbao/openbao:${BAO_VERSION}
 RUN apk add --no-cache curl jq bash && \
     mkdir -p /openbao/plugins
 
-COPY --from=plugin-build --chmod=775 /out/vault-plugin-secrets-jwt /openbao/plugins/vault-plugin-secrets-jwt
+COPY --from=plugin-build --chmod=0555 /out/vault-plugin-secrets-jwt /openbao/plugins/vault-plugin-secrets-jwt
