@@ -674,7 +674,7 @@ func TestReconcile_UpdateWorkloadConfig_ConfigRemoved(t *testing.T) {
 	prior := &v1alpha1.WorkloadConfig{
 		FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
 	}
-	// Empty configYAML → no nvcf-workload-config in the rendered output.
+	// An empty configYAML omits nvcf-workload-config from the rendered output.
 	renderedData := newUpdateRenderedDataWithWorkloadConfig(t, workloadObjName, "v2", "")
 	r, req := setupUpdateReconcileForWorkloadConfig(t, prior, renderedData, workloadObjName)
 
