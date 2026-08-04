@@ -295,7 +295,7 @@ async fn fetch_timeseries_db_active_functions(
     );
 
     let mut active_map: HashMap<(Uuid, Uuid), ActiveFunctionDetails> = HashMap::new();
-    let mut failures = Vec::new();
+    let mut failed_sources = 0usize;
 
     match recent_result {
         Ok(functions) => {
@@ -309,7 +309,7 @@ async fn fetch_timeseries_db_active_functions(
         }
         Err(error) => {
             tracing::error!(error = %error, "Recently invoked function discovery failed");
-            failures.push(format!("recent invocations: {error}"));
+            failed_sources += 1;
         }
     }
 
@@ -317,33 +317,40 @@ async fn fetch_timeseries_db_active_functions(
         Ok(functions) => {
             tracing::info!("Got {} running functions (includes BYOC)", functions.len());
             for function in functions {
-                active_map
-                    .entry((function.function_id, function.function_version_id))
-                    .or_insert(function);
+                merge_worker_details(&mut active_map, function);
             }
         }
         Err(error) => {
             tracing::error!(error = %error, "Running function discovery failed");
-            failures.push(format!("workers and active instances: {error}"));
+            failed_sources += 1;
         }
     }
 
-    if failures.len() == 2 {
+    if failed_sources == 2 {
         return Err(anyhow!(
-            "all TimeseriesDb function discovery sources failed: {}",
-            failures.join("; ")
+            "all TimeseriesDb function discovery sources failed"
         ));
     }
 
-    if !failures.is_empty() {
+    if failed_sources > 0 {
         tracing::warn!(
-            failed_sources = failures.len(),
+            failed_sources,
             functions_found = active_map.len(),
             "Function discovery completed with partial TimeseriesDb results"
         );
     }
 
     Ok(active_map.into_values().collect())
+}
+
+fn merge_worker_details(
+    active_map: &mut HashMap<(Uuid, Uuid), ActiveFunctionDetails>,
+    function: ActiveFunctionDetails,
+) {
+    active_map
+        .entry((function.function_id, function.function_version_id))
+        .and_modify(|existing| existing.num_workers = function.num_workers)
+        .or_insert(function);
 }
 
 /// Step 3: Find TimeseriesDb-active functions not yet in the DB
@@ -564,7 +571,7 @@ async fn get_recently_invoked_functions_with_semaphore(
 
     let mut recently_invoked_functions = Vec::new();
     let mut seen_functions: HashSet<(Uuid, Uuid, String)> = HashSet::new();
-    let mut failures = Vec::new();
+    let mut failed_queries = 0usize;
     let mut successful_queries = 0usize;
 
     for (source, shard, query_result) in query_results {
@@ -587,7 +594,7 @@ async fn get_recently_invoked_functions_with_semaphore(
                     error = %error,
                     "Recently invoked query failed"
                 );
-                failures.push(format!("{} shard {}: {}", source.name(), shard_name, error));
+                failed_queries += 1;
                 continue;
             }
         };
@@ -644,17 +651,16 @@ async fn get_recently_invoked_functions_with_semaphore(
     // Discovery can safely consume partial shards because it only inserts
     // positive observations. Per-function scaling remains fail-closed: both
     // invocation sources must succeed before an empty result can mean idle.
-    if successful_queries == 0 || (function_version_id_filter.is_some() && !failures.is_empty()) {
+    if successful_queries == 0 || (function_version_id_filter.is_some() && failed_queries > 0) {
         return Err(anyhow!(
-            "recently invoked TimeseriesDb query failure: {}",
-            failures.join("; ")
+            "recently invoked TimeseriesDb queries failed: {successful_queries} succeeded, {failed_queries} failed"
         ));
     }
 
-    if !failures.is_empty() {
+    if failed_queries > 0 {
         tracing::warn!(
             successful_queries,
-            failed_queries = failures.len(),
+            failed_queries,
             functions_found = recently_invoked_functions.len(),
             "Recently invoked discovery completed with partial shard results"
         );
@@ -1068,7 +1074,10 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_err());
+        let error = result.expect_err("a partial per-function result must fail closed");
+        let message = format!("{error:#}");
+        assert!(message.contains("1 succeeded, 1 failed"));
+        assert!(!message.contains("boom"));
         invocation.assert_async().await;
         grpc.assert_async().await;
     }
@@ -1109,6 +1118,23 @@ mod tests {
         assert_eq!(functions[0].function_id, function_id);
         recent.assert_async().await;
         workers.assert_async().await;
+    }
+
+    #[test]
+    fn worker_count_is_preserved_when_discovery_sources_overlap() {
+        let function_id = Uuid::new_v4();
+        let function_version_id = Uuid::new_v4();
+        let recent = ActiveFunctionDetails::new(function_id, function_version_id, "recent".into());
+        let mut worker =
+            ActiveFunctionDetails::new(function_id, function_version_id, "worker".into());
+        worker.num_workers = Some(3);
+        let mut active_map = HashMap::from([((function_id, function_version_id), recent)]);
+
+        merge_worker_details(&mut active_map, worker);
+
+        let merged = active_map.get(&(function_id, function_version_id)).unwrap();
+        assert_eq!(merged.nca_id.as_deref(), Some("recent"));
+        assert_eq!(merged.num_workers, Some(3));
     }
 
     #[test]

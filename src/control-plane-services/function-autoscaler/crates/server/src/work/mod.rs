@@ -29,7 +29,7 @@ use crate::{
     cassandra::cassandra_service::CassandraServiceManager,
     timeseries_db::timeseries_db_client::TimeseriesDbClient,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
 use moka::sync::Cache;
 
@@ -518,6 +518,7 @@ async fn make_scaling_requests_for_table(
 ) -> Result<()> {
     let bucket_ranges = bucket_manager.get_all_bucket_ranges();
     let mut task_failures = 0usize;
+    let mut first_task_error = None;
 
     if bucket_ranges.is_empty() {
         tracing::warn!("No buckets assigned to this node, skipping scaling logic");
@@ -732,7 +733,11 @@ async fn make_scaling_requests_for_table(
             // Wait for all scaling requests in this bucket to complete. JoinSet
             // returns two result layers: the task's Result and Tokio's JoinError.
             // Count both while continuing to drain independent work.
-            task_failures += drain_scaling_tasks(&mut join_set, *bucket_index).await;
+            let (failure_count, error) = drain_scaling_tasks(&mut join_set).await;
+            task_failures += failure_count;
+            if first_task_error.is_none() {
+                first_task_error = error.map(|error| (*bucket_index, error));
+            }
 
             tracing::debug!("Completed processing bucket {}", bucket_index);
         } else {
@@ -743,40 +748,37 @@ async fn make_scaling_requests_for_table(
         }
     }
 
-    if task_failures > 0 {
-        Err(anyhow!(
-            "{} per-function scaling task(s) failed",
-            task_failures
-        ))
+    if let Some((bucket_index, error)) = first_task_error {
+        Err(error.context(format!(
+            "{task_failures} per-function scaling task(s) failed for table {table:?}; first failure was in bucket {bucket_index}"
+        )))
     } else {
         Ok(())
     }
 }
 
-async fn drain_scaling_tasks(join_set: &mut JoinSet<Result<()>>, bucket_index: usize) -> usize {
+async fn drain_scaling_tasks(join_set: &mut JoinSet<Result<()>>) -> (usize, Option<anyhow::Error>) {
     let mut failures = 0usize;
-    while let Some(result) = join_set.join_next().await {
-        match result {
+    let mut first_task_error = None;
+    let mut first_join_error = None;
+    while let Some(join_result) = join_set.join_next().await {
+        match join_result {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 failures += 1;
-                tracing::error!(
-                    bucket_index,
-                    error = %error,
-                    "Scaling task failed"
-                );
+                if first_task_error.is_none() {
+                    first_task_error = Some(error);
+                }
             }
             Err(join_error) => {
                 failures += 1;
-                tracing::error!(
-                    bucket_index,
-                    error = %join_error,
-                    "Scaling task panicked or was cancelled"
-                );
+                if first_join_error.is_none() {
+                    first_join_error = Some(join_error.into());
+                }
             }
         }
     }
-    failures
+    (failures, first_task_error.or(first_join_error))
 }
 
 // Function that determines if we should skip a scaling request
@@ -857,17 +859,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_scaling_tasks_counts_inner_and_join_errors() {
+    async fn drain_scaling_tasks_preserves_inner_and_counts_join_errors() {
         let mut join_set: JoinSet<Result<()>> = JoinSet::new();
         join_set.spawn(async { Ok(()) });
-        join_set.spawn(async { Err(anyhow!("sentinel task error")) });
+        join_set.spawn(async { Err(anyhow::anyhow!("sentinel task error")) });
         join_set.spawn(async {
             panic!("sentinel task panic");
             #[allow(unreachable_code)]
             Ok(())
         });
 
-        assert_eq!(drain_scaling_tasks(&mut join_set, 7).await, 2);
+        let (failures, error) = drain_scaling_tasks(&mut join_set).await;
+        assert_eq!(failures, 2);
+        assert!(format!("{:#}", error.expect("first task error")).contains("sentinel task error"));
     }
 
     /// Worker series present -> use worker metrics, no control-plane fallback.
