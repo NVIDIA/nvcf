@@ -322,7 +322,7 @@ bazel run --stamp //src/clis/nvcf-cli:image_push
 
 The image push uses `tools/workspace_status.sh` to compute tags. With
 `--stamp` enabled, the index is published with `latest`, the version
-(from `git describe` or `mr-<sha>`), and the short commit.
+(`$NVCF_VERSION` on release builds, else `mr-<sha>`), and the short commit.
 
 ### Generate or refresh BUILD files
 
@@ -538,7 +538,7 @@ archive/package/publish/ngc-push stages still consume
 
 | Symbol | Source |
 |---|---|
-| `main.Version` | `git describe --tags`, falls back to `mr-<short-sha>`, override via `$NVCF_VERSION` |
+| `main.Version` | `$NVCF_VERSION` when set (release builds), else `mr-<short-sha>` |
 | `main.GitCommit` | `git rev-parse --short HEAD` (with `-dirty` suffix if working tree is dirty) |
 | `main.GitBranch` | `git rev-parse --abbrev-ref HEAD` |
 | `main.BuildDate` | UTC ISO timestamp |
@@ -590,13 +590,10 @@ it in the rules of the Bazel-driven publish job:
 
 Knock-on choices that follow from the cadence:
 
-- Version derivation (`tools/workspace_status.sh`). The CLI uses
-  `git describe --tags --exact-match HEAD || mr-<sha>` because tag-only
-  publish makes that the meaningful version. Per-merge services usually
-  want a SHA-style version (`<short-sha>` or `0.0.0-<short-sha>`) so
-  every main commit produces a distinct OCI tag without semver implication.
-  Either fork `workspace_status.sh` per service or add an env-driven
-  branch (`NVCF_VERSION_STYLE=sha` etc.).
+- Version derivation (`tools/workspace_status.sh`). The version is
+  `$NVCF_VERSION` when set (release builds pass the clean semver) and
+  `mr-<sha>` otherwise, so every non-release build produces a distinct
+  SHA-style OCI tag without semver implication.
 
 - OCI tag set on push. Tag-driven services typically push
   `:latest`, `:<semver>`, `:<short-sha>`. Per-merge services usually

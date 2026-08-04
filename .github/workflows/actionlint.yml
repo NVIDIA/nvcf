@@ -10,11 +10,11 @@
 name: actionlint
 on:
   push:
-    branches: [main]
+    branches: [main, 'release-**']
     paths:
       - ".github/workflows/**"
   pull_request:
-    branches: [main]
+    branches: [main, 'release-**']
     paths:
       - ".github/workflows/**"
 
