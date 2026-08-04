@@ -22,15 +22,19 @@
 filegroup(
     name = "sources",
     srcs = glob(
-        ["*.go", "go.mod", "go.sum"],
+        [
+            "*.go",
+            "go.mod",
+            "go.sum",
+        ],
         allow_empty = True,
     ) + [
-        "//backend/cmd/control-plane:sources",
-        "//backend/cmd/server:sources",
-        "//backend/internal/control-plane:sources",
-        "//backend/internal/middleware:sources",
-        "//backend/internal/token-watcher:sources",
-        "//backend/internal/utils:sources",
+        "//src/uis/nvcf-ui/backend/cmd/control-plane:sources",
+        "//src/uis/nvcf-ui/backend/cmd/server:sources",
+        "//src/uis/nvcf-ui/backend/internal/control-plane:sources",
+        "//src/uis/nvcf-ui/backend/internal/middleware:sources",
+        "//src/uis/nvcf-ui/backend/internal/token-watcher:sources",
+        "//src/uis/nvcf-ui/backend/internal/utils:sources",
     ],
     visibility = ["//visibility:public"],
 )

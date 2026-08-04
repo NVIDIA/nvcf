@@ -19,9 +19,9 @@ go_library(
     name = "token-watcher",
     srcs = ["watcher.go"],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/token-watcher",
-    visibility = ["//backend:__subpackages__"],
+    visibility = ["//src/uis/nvcf-ui/backend:__subpackages__"],
     deps = [
-        "//backend/internal/utils",
+        "//src/uis/nvcf-ui/backend/internal/utils",
         "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_rs_zerolog//:zerolog",
     ],
@@ -34,9 +34,14 @@ go_test(
     deps = ["@com_github_rs_zerolog//:zerolog"],
 )
 
-
 filegroup(
     name = "sources",
-    srcs = glob(["*.go", "*.md"], allow_empty = True),
+    srcs = glob(
+        [
+            "*.go",
+            "*.md",
+        ],
+        allow_empty = True,
+    ),
     visibility = ["//visibility:public"],
 )

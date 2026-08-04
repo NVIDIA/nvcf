@@ -19,7 +19,7 @@ go_library(
     name = "middleware",
     srcs = ["middleware.go"],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/middleware",
-    visibility = ["//backend:__subpackages__"],
+    visibility = ["//src/uis/nvcf-ui/backend:__subpackages__"],
     deps = [
         "@com_github_rs_zerolog//:zerolog",
         "@com_github_rs_zerolog//hlog",
@@ -36,9 +36,14 @@ go_test(
     ],
 )
 
-
 filegroup(
     name = "sources",
-    srcs = glob(["*.go", "*.md"], allow_empty = True),
+    srcs = glob(
+        [
+            "*.go",
+            "*.md",
+        ],
+        allow_empty = True,
+    ),
     visibility = ["//visibility:public"],
 )

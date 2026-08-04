@@ -14,8 +14,8 @@
 # limitations under the License.
 
 load("@npm//:defs.bzl", "npm_link_all_packages")
-load("@npm//ui:vite/package_json.bzl", vite_bin = "bin")
-load("@npm//ui:vitest/package_json.bzl", vitest_bin = "bin")
+load("@npm//src/uis/nvcf-ui/ui:vite/package_json.bzl", vite_bin = "bin")
+load("@npm//src/uis/nvcf-ui/ui:vitest/package_json.bzl", vitest_bin = "bin")
 
 exports_files(["pnpm-lock.yaml"])
 

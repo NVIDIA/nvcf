@@ -21,10 +21,10 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/cmd/server",
     visibility = ["//visibility:private"],
     deps = [
-        "//backend/internal/control-plane",
-        "//backend/internal/middleware",
-        "//backend/internal/token-watcher",
-        "//backend/internal/utils",
+        "//src/uis/nvcf-ui/backend/internal/control-plane",
+        "//src/uis/nvcf-ui/backend/internal/middleware",
+        "//src/uis/nvcf-ui/backend/internal/token-watcher",
+        "//src/uis/nvcf-ui/backend/internal/utils",
         "@com_github_rs_zerolog//:zerolog",
         "@com_github_rs_zerolog//hlog",
         "@io_k8s_sigs_controller_runtime//pkg/manager/signals",
@@ -37,9 +37,14 @@ go_binary(
     visibility = ["//visibility:public"],
 )
 
-
 filegroup(
     name = "sources",
-    srcs = glob(["*.go", "*.md"], allow_empty = True),
+    srcs = glob(
+        [
+            "*.go",
+            "*.md",
+        ],
+        allow_empty = True,
+    ),
     visibility = ["//visibility:public"],
 )
