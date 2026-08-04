@@ -26,7 +26,9 @@ use tracing::info;
 use crate::AppState;
 use crate::kv_cache::{KvCacheAccess, KvCacheStats, insert_kv_cache_headers};
 use crate::stats_stream::StatsStreamEvent;
-use crate::test_control::{TestEndpoint, TestRequestClass, request_class};
+use crate::test_control::{
+    TestEndpoint, TestRequestClass, recorded_priority_headers, request_class,
+};
 use crate::timing::{
     embedding_item_count, jitter_ms, non_streaming_delay, optional_header, prefill_delay,
     request_embedding_tokens, request_input_tokens, request_output_tokens, response_input_tokens,
@@ -420,7 +422,12 @@ impl AppState {
     async fn record_request(&self, headers: &HeaderMap, endpoint: TestEndpoint, model: &str) {
         let request_class = request_class(headers);
         self.test_control
-            .record_request(endpoint, model, request_class)
+            .record_request(
+                endpoint,
+                model,
+                request_class,
+                recorded_priority_headers(headers),
+            )
             .await;
         if request_class == TestRequestClass::PylonGenerated {
             self.test_control.wait_for_bringup_release(model).await;
