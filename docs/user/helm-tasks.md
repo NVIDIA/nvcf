@@ -36,7 +36,9 @@ Before creating a Helm task:
 
 - Pull secrets are attached to the default ServiceAccount at runtime. Pods
   that use the default ServiceAccount can pull images without any pull-secret
-  configuration in the chart.
+  configuration in the chart. For private registries, register credentials
+  first with `nvcf-cli registry-credential add` -- see [CLI](./cli.md#registry-credentials-commands)
+  for details.
 
 ## Creating a Helm task
 
