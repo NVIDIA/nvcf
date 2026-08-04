@@ -138,6 +138,7 @@ var (
 
 const (
 	InferenceNamespaceEnvKey        = "HELM_CHART_NAMESPACE"
+	miniServiceKind                 = "MiniService"
 	miniServiceUnknownPhase         = "Unknown"
 	miniServiceUnknownFailureReason = "Unknown"
 	miniServicePhaseAttrKey         = "nvca.miniservice.phase"
@@ -458,15 +459,37 @@ func (r *Reconciler) saveWorkloadConfig(
 		return nil
 	}
 
-	original := ms.DeepCopy()
-	updated := original.DeepCopy()
-	updated.Spec.WorkloadConfig = desired.DeepCopy()
-	if err := r.Client.Patch(ctx, updated, client.MergeFrom(original)); err != nil {
+	spec := map[string]any{}
+	if desired != nil {
+		workloadConfig, err := runtime.DefaultUnstructuredConverter.ToUnstructured(desired)
+		if err != nil {
+			return fmt.Errorf("convert miniservice %s workload config: %w", ms.Name, err)
+		}
+		spec["workloadConfig"] = workloadConfig
+	}
+	// Build the apply payload independently of MiniServiceSpec's compatibility serializer.
+	// This gives the controller ownership of only spec.workloadConfig and prevents zero-valued
+	// namespace, request-name, or Helm fields from entering the SSA request.
+	applyPatch := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": v1alpha1.SchemeGroupVersion.String(),
+		"kind":       miniServiceKind,
+		"metadata": map[string]any{
+			"name": ms.Name,
+		},
+		"spec": spec,
+	}}
+	if err := r.Client.Patch(
+		ctx,
+		applyPatch,
+		client.Apply,
+		client.FieldOwner(managedByValue),
+		client.ForceOwnership,
+	); err != nil {
 		return fmt.Errorf("patch miniservice %s workload config: %w", ms.Name, err)
 	}
 
-	ms.Spec.WorkloadConfig = updated.Spec.WorkloadConfig
-	ms.ResourceVersion = updated.ResourceVersion
+	ms.Spec.WorkloadConfig = desired.DeepCopy()
+	ms.ResourceVersion = applyPatch.GetResourceVersion()
 	return nil
 }
 
