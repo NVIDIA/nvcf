@@ -85,7 +85,7 @@ metadata:
     # Job's native retry creates new pods. Those retries can't mount these
     # configmaps if they've already been deleted on hook-failed. Keep them
     # around until the Job ultimately succeeds.
-    helm.sh/hook-delete-policy: hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 data:
   deploy.sh: |-
     {{- .Files.Get "scripts/deploy.sh" | nindent 4 }}
@@ -102,7 +102,7 @@ metadata:
     # Job's native retry creates new pods. Those retries can't mount these
     # configmaps if they've already been deleted on hook-failed. Keep them
     # around until the Job ultimately succeeds.
-    helm.sh/hook-delete-policy: hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 data:
   utils.sh: |-
     {{- .Files.Get "scripts/utils.sh" | nindent 4 }}
