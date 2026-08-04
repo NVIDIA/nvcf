@@ -231,8 +231,13 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 func defaultL2Size(_ string, m checkpointstore.Manifest) int64 {
 	const oneGiB int64 = 1 << 30
 
-	// Rootfs path: size from the measured on-disk capture size.
-	if m.CaptureMethod == "rootfs" && m.TotalSizeBytes > 0 {
+	// Rootfs and cachedir paths both measure what they captured, so size
+	// from that rather than guessing. cachedir was added after this
+	// function and did not match the rootfs-only check, so every cachedir
+	// capture fell through to the vRAM estimate below: a 14 GB capture
+	// asked for 96 GiB (80 GiB H100 default x 1.2). On a Retain
+	// StorageClass that over-allocation is permanent and per-capture.
+	if (m.CaptureMethod == "rootfs" || m.CaptureMethod == "cachedir") && m.TotalSizeBytes > 0 {
 		const floor = 10 * oneGiB
 		return max(m.TotalSizeBytes*12/10, floor)
 	}
