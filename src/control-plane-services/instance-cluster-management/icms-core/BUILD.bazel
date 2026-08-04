@@ -1,3 +1,4 @@
+load("@rules_java//java:defs.bzl", "java_library")
 load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -126,6 +127,21 @@ nv_boot_library(
     resources = ICMS_CORE_RESOURCES,
 )
 
+# Maven's copy-integration-local-env writes local_env under
+# testOutputDirectory while the test resources sit at its root, so both are
+# root-relative in the tests jar. A target has one resource_strip_prefix and
+# cannot produce both, so the bundle needs its own library with a shallower
+# prefix. Keeping the test resources at the root preserves the paths that
+# TestUtil.readFileAsBytes and IcmsTest resolve through ClassPathResource.
+java_library(
+    name = "integration_local_env_resources",
+    testonly = True,
+    resource_strip_prefix = "src/control-plane-services/instance-cluster-management",
+    resources = [
+        "//src/control-plane-services/instance-cluster-management:integration_local_env_files",
+    ],
+)
+
 nv_boot_library(
     name = "test_fixtures",
     srcs = ICMS_CORE_TEST_SRCS,
@@ -156,6 +172,7 @@ nv_boot_library(
     ],
     resource_strip_prefix = "src/control-plane-services/instance-cluster-management/icms-core/src/test/resources",
     resources = ICMS_CORE_TEST_RESOURCES,
+    runtime_deps = [":integration_local_env_resources"],
     testonly = True,
 )
 

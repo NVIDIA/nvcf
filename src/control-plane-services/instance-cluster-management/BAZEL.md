@@ -18,13 +18,19 @@ The service does not own nested Bazel configuration:
 
 The root uses `local_jdk`. Install a full JDK 25 and set `JAVA_HOME`.
 
-## Build
+## Output root and clean
 
 Use one portable output root:
 
 ```bash
 export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
+
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" clean
 ```
+
+Use `clean --expunge` only to reset a corrupted cache.
+
+## Build
 
 Build every ICMS target:
 
@@ -37,6 +43,32 @@ Build the core library only:
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" build //src/control-plane-services/instance-cluster-management/icms-core:icms_core
 ```
+
+Build the test-fixtures target consumed by `icms-service` tests and by
+downstream Bzlmod consumers:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" build //src/control-plane-services/instance-cluster-management/icms-core:test_fixtures
+```
+
+The fixtures jar is:
+
+```text
+bazel-bin/src/control-plane-services/instance-cluster-management/icms-core/libtest_fixtures.jar
+```
+
+The fixtures jar keeps the test resources at its root, so `application-test.yaml`
+and paths such as `requests/cluster_create_request.json` stay resolvable through
+`ClassPathResource`. The `local_env/` Compose bundle ships beside it in
+`libintegration_local_env_resources.jar`, which reaches consumers through
+`runtime_deps`. Both land at the classpath root, matching the Maven tests jar.
+
+`IntegrationTest` resolves `local_env/docker-compose.test.yml` from the
+classpath and only falls back to the working directory, so downstream consumers
+outside this monorepo take the bundle from that jar instead of vendoring a copy.
+A consumer pinned to a commit that predates the bundle fails during
+`IntegrationTest` static initialization with `Missing classpath resource
+local_env/docker-compose.test.yml`.
 
 Build the executable Spring Boot jar:
 
