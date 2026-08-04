@@ -47,7 +47,7 @@ spec:
     # scripts/sync-versions.sh) — same restore-entrypoint binary the
     # production deploy uses.
     - name: get-criu
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.26
+      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.32
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "-c"]
       args:

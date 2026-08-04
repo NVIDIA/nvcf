@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The criu-v2 demo/test workloads. Everything structural -- the setsid launch
+# convention, log tailing, pid1 reaper, shm volume, privileged context,
+# tolerations, probe shape -- comes from the template in source.go. Only what
+# genuinely differs per workload lives here.
+#
+# Add a workload by adding an entry and running:
+#   go generate ./internal/manifests/...
+#
+# `notes` is rendered into the generated YAML as comments. Use it for hard-won
+# configuration knowledge (why a flag is set, what broke without it) so that
+# context survives regeneration instead of being flattened away.
+
+workloads:
+  - name: vllm-small
+    demoName: vLLM
+    desc: TinyLlama 1.1B on vLLM
+    image: vllm/vllm-openai:v0.20.0
+    model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    port: 8000
+    ckptSize: 30 GB
+    stdout: /vllm.out
+    prepDirs: [/var/run/vllm]
+    launch: |
+      vllm serve \
+        --model {{.Model}} \
+        --host 0.0.0.0 \
+        --port {{.Port}} \
+        --max-model-len 2048 \
+        --gpu-memory-utilization 0.3
+    env:
+      HF_HOME: /root/.cache/huggingface
+      VLLM_ENABLE_V1_MULTIPROCESSING: "0"
+      USE_LIBUV: "1"
+      UV_USE_IO_URING: "1"
+      VLLM_LOGGING_LEVEL: INFO
+    notes:
+      VLLM_ENABLE_V1_MULTIPROCESSING: >-
+        In-process v1 engine: no separate EngineCore process, so no cross-process
+        RPC unix socket, which is what upstream CRIU could not restore
+        (setns(mnt_ns) EINVAL in a multi-proc restorer). Must match the restore pod.
+      USE_LIBUV: >-
+        torch TCPStore libuv backend: keep it on (stock). The criu-v2 2x2
+        (nvsnap#107) showed the TCPStore libuv thread restores fine on single-GPU
+        TP=1 -- the restore-breaking lever was the io_uring ring below, not this.
+      UV_USE_IO_URING: >-
+        libuv >=1.46 uses an internal SQPOLL io_uring ring for epoll_ctl batching.
+        This used to abort the event loop on the first epoll_ctl_flush after a
+        criu-v2 restore: CRIU recreated the ring but left its SQ-array index map
+        zeroed, so submissions misrouted and completions never returned. Fixed in
+        the CRIU fork (io-uring-cr, sq_array identity-map restore). nvsnap#107.
+
+  - name: sglang-small
+    demoName: SGLang
+    desc: TinyLlama 1.1B on SGLang
+    image: lmsysorg/sglang:v0.5.15.post1-cu129
+    model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    port: 30000
+    ckptSize: 59 GB
+    stdout: /sglang.out
+    launch: |
+      python3 -m sglang.launch_server \
+        --model-path {{.Model}} \
+        --host 0.0.0.0 \
+        --port {{.Port}} \
+        --mem-fraction-static 0.8 \
+        --disable-prefill-cuda-graph
+    env:
+      TORCH_CPP_LOG_LEVEL: INFO
+      TORCH_SHOW_CPP_STACKTRACES: "1"
+      USE_LIBUV: "0"
+    notes:
+      launch: >-
+        --disable-prefill-cuda-graph: sglang v0.5's `breakable` prefill graph
+        backend hits an illegal memory access capturing this model. Decode graphs
+        (backend `full`) stay on, so the checkpoint still exercises graph state.
+      USE_LIBUV: >-
+        Keep torch off the libuv TCPStore backend; the patched libuv this workload
+        used to inject is gone with the rest of the legacy stack.
+
+  - name: sglang-8b
+    demoName: SGLang
+    desc: Llama-3.1-8B on SGLang (single GPU)
+    image: lmsysorg/sglang:v0.5.15.post1-cu129
+    model: meta-llama/Llama-3.1-8B-Instruct
+    port: 30000
+    ckptSize: 79 GB
+    stdout: /sglang.out
+    hfToken: true
+    launch: |
+      python3 -m sglang.launch_server \
+        --model-path {{.Model}} \
+        --host 0.0.0.0 \
+        --port {{.Port}} \
+        --tp-size 1 \
+        --mem-fraction-static 0.6 \
+        --disable-prefill-cuda-graph
+    env:
+      USE_LIBUV: "0"
+    notes:
+      launch: >-
+        --disable-prefill-cuda-graph: see sglang-small. Decode graphs stay on.
+
+  - name: trtllm-small
+    demoName: TensorRT-LLM
+    desc: TinyLlama 1.1B on TensorRT-LLM
+    image: nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc5
+    model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    port: 8000
+    ckptSize: 31 GB
+    stdout: /trtllm.out
+    launch: |
+      trtllm-serve \
+        {{.Model}} \
+        --host 0.0.0.0 \
+        --port {{.Port}} \
+        --kv_cache_free_gpu_memory_fraction 0.3
+    notes:
+      image: >-
+        First deploy is slow: ~25GB image pull plus TensorRT engine compilation.
