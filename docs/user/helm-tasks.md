@@ -11,8 +11,10 @@ Before creating a Helm task:
 
 - Chart version strings must not contain hyphens. For example, `v1` is valid;
   `v1-test` causes installation failures.
-- The chart's `values.yaml` must declare these keys so the task system can
-  inject runtime identity at launch:
+- The task system injects the following values before rendering the chart,
+  so templates can reference them as `.Values.nvctTaskId` etc. without any
+  other setup. Declaring them with empty defaults in `values.yaml` is
+  recommended so templates compile cleanly during local development:
 
   | Key | Description |
   | --- | --- |
@@ -32,8 +34,9 @@ Before creating a Helm task:
   nvctProgressFilePath: ""
   ```
 
-- Container image pull secrets are injected automatically into all Pod specs at
-  runtime. No pull-secret configuration is needed in the chart.
+- Pull secrets are attached to the default ServiceAccount at runtime. Pods
+  that use the default ServiceAccount can pull images without any pull-secret
+  configuration in the chart.
 
 ## Creating a Helm task
 
@@ -99,8 +102,9 @@ spec:
 
 ## Security constraints
 
-The task system validates the rendered chart against these rules before
-deployment.
+The supported object types below apply to all policies. The remaining rules
+(volume types, object count, hooks, CRDs) apply only when using the `Default`
+policy; `Unrestricted` bypasses those checks.
 
 Supported Kubernetes object types:
 
@@ -142,7 +146,7 @@ To permit additional resource types beyond the default set, supply them in
 "helmValidationPolicy": {
   "name": "Default",
   "extraKubernetesTypes": [
-    {"group": "batch", "version": "v1", "kind": "CronJob"}
+    {"group": "apps", "version": "v1", "kind": "DaemonSet"}
   ]
 }
 ```
