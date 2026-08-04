@@ -48,6 +48,7 @@ nv_boot_library(
     name = "ess_encryption",
     srcs = ESS_ENCRYPTION_SRCS,
     deps = ESS_ENCRYPTION_DEPS,
+    javacopts = ["-parameters", "--release", "25"],
 )
 
 ESS_ENCRYPTION_TEST_DEPS = ESS_ENCRYPTION_DEPS + [
@@ -71,7 +72,7 @@ nv_boot_library_test(
     name = "unit_tests",
     coverage_library = ":ess_encryption",
     include_classname = ".*(Test|Tests)",
-    javacopts = ["-Xep:FormatString:OFF"],
+    javacopts = ["-parameters", "--release", "25", "-Xep:FormatString:OFF"],
     resource_strip_prefix = "src/control-plane-services/ess/ess-encryption/src/test/resources",
     resources = ESS_ENCRYPTION_TEST_RESOURCES,
     runtime_deps = ESS_ENCRYPTION_TEST_RUNTIME_DEPS,
@@ -88,7 +89,7 @@ nv_boot_library_test(
         "//src/control-plane-services/ess:test_local_env",
     ],
     include_classname = ".*BaseEncryptionKeyServiceIT",
-    javacopts = ["-Xep:FormatString:OFF"],
+    javacopts = ["-parameters", "--release", "25", "-Xep:FormatString:OFF"],
     jvm_flags = ["-Dspring.aop.proxy-target-class=false"],
     resource_strip_prefix = "src/control-plane-services/ess/ess-encryption/src/test/resources",
     resources = ESS_ENCRYPTION_TEST_RESOURCES,
@@ -113,7 +114,7 @@ nv_boot_library_test(
         "//src/control-plane-services/ess:test_local_env",
     ],
     include_classname = "^(?!.*BaseEncryptionKeyServiceIT).*IT",
-    javacopts = ["-Xep:FormatString:OFF"],
+    javacopts = ["-parameters", "--release", "25", "-Xep:FormatString:OFF"],
     resource_strip_prefix = "src/control-plane-services/ess/ess-encryption/src/test/resources",
     resources = ESS_ENCRYPTION_TEST_RESOURCES,
     runtime_deps = [

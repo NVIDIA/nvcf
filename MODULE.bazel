@@ -376,7 +376,6 @@ maven.install(
         "io.projectreactor:reactor-test",
         "io.projectreactor:reactor-tools",
         "jakarta.servlet:jakarta.servlet-api",
-        "net.logstash.logback:logstash-logback-encoder:7.4",
         "org.apache.cassandra:java-driver-metrics-micrometer",
         "org.apache.commons:commons-collections4:4.5.0",
         "org.apache.commons:commons-lang3:3.20.0",

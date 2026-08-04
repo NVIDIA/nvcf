@@ -45,7 +45,7 @@
     "net.javacrumbs.shedlock:shedlock-bom": -1406345450,
     "net.javacrumbs.shedlock:shedlock-provider-cassandra": -1200872,
     "net.javacrumbs.shedlock:shedlock-spring": -326290089,
-    "net.logstash.logback:logstash-logback-encoder": 947571822,
+    "net.logstash.logback:logstash-logback-encoder": -85834084,
     "org.apache.cassandra:java-driver-mapper-runtime": 682905080,
     "org.apache.cassandra:java-driver-metrics-micrometer": -465267397,
     "org.apache.cassandra:java-driver-query-builder": -489577192,
@@ -476,8 +476,8 @@
     "net.javacrumbs.shedlock:shedlock-provider-cassandra:jar:sources": 1860167,
     "net.javacrumbs.shedlock:shedlock-spring": 337705847,
     "net.javacrumbs.shedlock:shedlock-spring:jar:sources": 875349683,
-    "net.logstash.logback:logstash-logback-encoder": 68260065,
-    "net.logstash.logback:logstash-logback-encoder:jar:sources": 757709029,
+    "net.logstash.logback:logstash-logback-encoder": -219378880,
+    "net.logstash.logback:logstash-logback-encoder:jar:sources": -1688035217,
     "net.minidev:accessors-smart": -325667575,
     "net.minidev:accessors-smart:jar:sources": -124254155,
     "net.minidev:json-smart": 1673421716,
@@ -2114,10 +2114,10 @@
     },
     "net.logstash.logback:logstash-logback-encoder": {
       "shasums": {
-        "jar": "cd9f1f4365d5ca50fc593f0363b06432088474c836366c1d5ff7626b9b4182bf",
-        "sources": "1c965620fc6ea3bd9776b9fd1fee653e03e71016601467fdc143e867de9093e9"
+        "jar": "2716cb6a3e83ec2f296395b8752063f502d10a90de1a88f711f06ae5b6ecefb7",
+        "sources": "44dffb167741b8e14f67c62fae05d735cca6facc484d2e9e33440176088891a2"
       },
-      "version": "7.4"
+      "version": "8.1"
     },
     "net.minidev:accessors-smart": {
       "shasums": {

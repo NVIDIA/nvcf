@@ -98,7 +98,7 @@ Lists of 197 third-party dependencies.
      (EPL 2.0) (GPL2 w/ CPE) Jakarta Servlet (jakarta.servlet:jakarta.servlet-api:6.1.0 - https://projects.eclipse.org/projects/ee4j.servlet)
      (Apache License 2.0) Jakarta Validation API (jakarta.validation:jakarta.validation-api:3.1.1 - https://beanvalidation.org)
      (Eclipse Distribution License - v 1.0) Jakarta XML Binding API (jakarta.xml.bind:jakarta.xml.bind-api:4.0.5 - https://github.com/jakartaee/jaxb-api)
-     (Apache License, Version 2.0) (MIT License) Logstash Logback Encoder (net.logstash.logback:logstash-logback-encoder:7.4 - https://github.com/logfellow/logstash-logback-encoder)
+     (Apache License, Version 2.0) (MIT License) Logstash Logback Encoder (net.logstash.logback:logstash-logback-encoder:8.1 - https://github.com/logfellow/logstash-logback-encoder)
      (Apache 2) Apache Cassandra Java Driver - core (org.apache.cassandra:java-driver-core:4.19.3 - https://github.com/datastax/java-driver)
      (Apache 2) Apache Cassandra Java Driver - guava shaded dep (org.apache.cassandra:java-driver-guava-shaded:4.19.3 - https://github.com/datastax/java-driver)
      (Apache 2) Apache Cassandra Java Driver - Metrics - Micrometer (org.apache.cassandra:java-driver-metrics-micrometer:4.19.3 - https://github.com/datastax/java-driver)

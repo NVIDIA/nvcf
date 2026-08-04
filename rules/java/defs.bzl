@@ -150,12 +150,13 @@ def nv_boot_library(
         runtime_deps = [],
         testonly = False,
         visibility = None,
+        javacopts = [],
         resource_strip_prefix = ""):
     _java_library(
         name = name,
         srcs = srcs,
         deps = deps + _LOMBOK_COMPILE_DEPS,
-        javacopts = NV_JAVA_JAVACOPTS,
+        javacopts = NV_JAVA_JAVACOPTS + javacopts,
         plugins = _LOMBOK_PLUGINS,
         resources = resources,
         resource_strip_prefix = resource_strip_prefix,

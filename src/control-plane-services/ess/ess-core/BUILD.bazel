@@ -81,6 +81,7 @@ nv_boot_library(
     name = "ess_core",
     srcs = ESS_CORE_SRCS,
     deps = ESS_CORE_DEPS,
+    javacopts = ["-parameters", "--release", "25"],
     runtime_deps = [
         "@nv_third_party_deps//:io_projectreactor_reactor_tools",
         "@nv_third_party_deps//:net_logstash_logback_logstash_logback_encoder",
@@ -112,7 +113,7 @@ nv_boot_library_test(
     name = "unit_tests",
     coverage_library = ":ess_core",
     include_classname = ".*(Test|Tests)",
-    javacopts = ["-Xep:ReturnValueIgnored:OFF"],
+    javacopts = ["-parameters", "--release", "25", "-Xep:ReturnValueIgnored:OFF"],
     resource_strip_prefix = "src/control-plane-services/ess/ess-core/src/test/resources",
     resources = ESS_CORE_TEST_RESOURCES,
     srcs = ESS_CORE_TEST_SRCS,
@@ -128,7 +129,7 @@ nv_boot_library_test(
         "//src/control-plane-services/ess:test_local_env",
     ],
     include_classname = ".*IT",
-    javacopts = ["-Xep:ReturnValueIgnored:OFF"],
+    javacopts = ["-parameters", "--release", "25", "-Xep:ReturnValueIgnored:OFF"],
     jvm_flags = [
         "-Dnv-boot.reloadable-properties.file=file:$(location //src/control-plane-services/ess:secrets_json)",
         "-Dspring.main.web-application-type=reactive",
