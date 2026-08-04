@@ -181,16 +181,45 @@ packages:
     resolution: {integrity: sha512-example}
   file:../workspace:
     resolution: {directory: ../workspace}
+  'linked@link:../workspace':
+    resolution: {directory: ../workspace}
 `)
 
-	got := parsePNPMLock(path)
+	got, err := parsePNPMLock(path)
+	if err != nil {
+		t.Fatalf("parsePNPMLock returned error: %v", err)
+	}
 	for _, want := range []string{"@scope/example@1.2.3", "unscoped@7.8.9"} {
 		if _, ok := got[want]; !ok {
 			t.Fatalf("parsePNPMLock missing %q from %#v", want, got)
 		}
 	}
+	for _, local := range []string{"file:../workspace", "linked@link:../workspace"} {
+		if _, ok := got[local]; ok {
+			t.Fatalf("parsePNPMLock included local dependency %q in %#v", local, got)
+		}
+	}
 	if len(got) != 2 {
 		t.Fatalf("parsePNPMLock returned %d dependencies, want 2: %#v", len(got), got)
+	}
+}
+
+func TestRunFailsOnInvalidPNPMLock(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestFile(t, filepath.Join(tmp, "imports.yaml"), `imports:
+  - path: app
+    repo: https://example.com/app.git
+`)
+	writeTestFile(t, filepath.Join(tmp, "app", "pnpm-lock.yaml"), "packages: [\n")
+
+	t.Setenv("REPO_ROOT", tmp)
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"collect-dependencies", "--language", "node"}
+
+	resetGlobalsForTest()
+	if err := run(); err == nil {
+		t.Fatal("expected invalid pnpm lockfile error")
 	}
 }
 

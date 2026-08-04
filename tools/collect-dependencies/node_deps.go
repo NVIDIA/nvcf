@@ -34,15 +34,15 @@ type nodeDependency struct {
 	Version string
 }
 
-func parsePNPMLock(path string) map[string]struct{} {
+func parsePNPMLock(path string) (map[string]struct{}, error) {
 	out := map[string]struct{}{}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return out
+		return nil, fmt.Errorf("read pnpm lockfile %s: %w", path, err)
 	}
 	var lock pnpmLockfile
 	if err := yaml.Unmarshal(raw, &lock); err != nil {
-		return out
+		return nil, fmt.Errorf("parse pnpm lockfile %s: %w", path, err)
 	}
 	for key := range lock.Packages {
 		dep, ok := parsePNPMPackageKey(key)
@@ -51,7 +51,7 @@ func parsePNPMLock(path string) map[string]struct{} {
 		}
 		out[dep.Name+"@"+dep.Version] = struct{}{}
 	}
-	return out
+	return out, nil
 }
 
 func parsePNPMPackageKey(key string) (nodeDependency, bool) {

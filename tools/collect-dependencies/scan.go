@@ -102,7 +102,11 @@ func scanTree(root string, langs map[string]bool) (dependencyScan, error) {
 				out.Python[dep] = struct{}{}
 			}
 		case langs["node"] && name == "pnpm-lock.yaml":
-			for dep := range parsePNPMLock(path) {
+			deps, err := parsePNPMLock(path)
+			if err != nil {
+				return err
+			}
+			for dep := range deps {
 				out.Node[dep] = struct{}{}
 			}
 		}
