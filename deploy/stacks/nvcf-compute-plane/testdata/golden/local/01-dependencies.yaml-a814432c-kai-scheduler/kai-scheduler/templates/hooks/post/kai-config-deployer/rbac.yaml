@@ -1,0 +1,46 @@
+---
+# Source: kai-scheduler/templates/hooks/post/kai-config-deployer/rbac.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kai-config-deployer
+  namespace: kai-scheduler
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+---
+# Source: kai-scheduler/templates/hooks/post/kai-config-deployer/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kai-scheduler-config-deployer
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+rules:
+- apiGroups: ["kai.scheduler"]
+  resources: ["configs"]
+  verbs: ["get", "list", "create", "update", "patch"]
+---
+# Source: kai-scheduler/templates/hooks/post/kai-config-deployer/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kai-scheduler-config-deployer
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kai-scheduler-config-deployer
+subjects:
+- kind: ServiceAccount
+  name: kai-config-deployer
+  namespace: kai-scheduler
+
