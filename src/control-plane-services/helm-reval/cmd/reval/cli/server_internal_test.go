@@ -111,11 +111,27 @@ func TestServeManagementRoutes_UnknownRoute(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// TestServeManagementRoutes_Info_NotFound locks in that /info is served on the API
+// router, not the management router.
+func TestServeManagementRoutes_Info_NotFound(t *testing.T) {
+	logger := zap.NewNop()
+	atomicLevel := zap.NewAtomicLevel()
+	cfg := config.HTTPConfig{ManagementPort: 0, Local: false}
+
+	server := serveManagementRoutes(logger, &atomicLevel, cfg)
+	require.NotNil(t, server)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/info", nil)
+	server.Handler.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
 // ── serveInfo ─────────────────────────────────────────────────────────────────
 
 func TestServeInfo(t *testing.T) {
 	router := chi.NewRouter()
-	serveInfo(router)
+	serveInfo(router, chi.Chain())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/info", nil)
@@ -136,7 +152,7 @@ func TestServeInfo(t *testing.T) {
 
 func TestServeInfo_RejectsNonGET(t *testing.T) {
 	router := chi.NewRouter()
-	serveInfo(router)
+	serveInfo(router, chi.Chain())
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {

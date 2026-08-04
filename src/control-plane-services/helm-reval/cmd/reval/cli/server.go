@@ -119,14 +119,26 @@ func runServer(cfg *config.RevalConfig, v *viper.Viper, factory AuthorizerFactor
 
 	router := chi.NewRouter()
 	router.NotFound(httpapi.ServeNotFound)
-	serveInfo(router)
 
 	oldGrpcMetricsMiddleware := metrics.CreateOldGrpcMetricsMiddleWare(logger, meter)
 
+	httpMetrics := metrics.CreateHttpMetricsMiddleWare(logger, meter)
+	otelTrace := tracing.NewOtelTraceMiddleware()
+	zapLogger := logging.NewZapLoggerMiddleware(logger)
+
+	publicMiddlewares := chi.Chain(
+		httpMetrics,
+		otelTrace,
+		zapLogger,
+		render.SetContentType(render.ContentTypeJSON),
+		chiMiddleware.Recoverer,
+	)
+	serveInfo(router, publicMiddlewares)
+
 	middlewares := chi.Chain(
-		metrics.CreateHttpMetricsMiddleWare(logger, meter),
-		tracing.NewOtelTraceMiddleware(),
-		logging.NewZapLoggerMiddleware(logger),
+		httpMetrics,
+		otelTrace,
+		zapLogger,
 		authzMiddleware,
 		render.SetContentType(render.ContentTypeJSON),
 		// This middleware is the last one in order to recover after panic
@@ -161,8 +173,8 @@ func runServer(cfg *config.RevalConfig, v *viper.Viper, factory AuthorizerFactor
 }
 
 // serveInfo mounts the unauthenticated GET /info on the API router so it is reachable externally through the ingress.
-func serveInfo(router chi.Router) {
-	router.Get("/info", golibversion.Handler().ServeHTTP)
+func serveInfo(router chi.Router, middlewares chi.Middlewares) {
+	router.With(middlewares...).Get("/info", golibversion.Handler().ServeHTTP)
 }
 
 func serveManagementRoutes(logger *zap.Logger, loggerAtomicLevel *zap.AtomicLevel, cfg config.HTTPConfig) *http.Server {
