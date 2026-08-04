@@ -55,6 +55,7 @@ func ServiceMonitorExistenceCommand(namespace, kubeContext string, names []strin
 // KubectlApplyCommand builds a kubectl apply command for a manifest file.
 // When kubeContext is set, the command always targets that context instead of
 // relying on the caller's ambient kubeconfig selection.
+// For example: kubectl --context k3d-ncp-local-compute-1 apply -f secret.yaml.
 func KubectlApplyCommand(manifestPath, kubeContext string) (string, error) {
 	manifestPath = strings.TrimSpace(manifestPath)
 	kubeContext = strings.TrimSpace(Interpolate(kubeContext))
