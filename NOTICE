@@ -11,6 +11,7 @@ The following third-party licenses are included in this repository:
     deploy/helm/container-cache/NOTICE
     deploy/helm/nats/NOTICE
     deploy/helm/openbao/NOTICE
+    infra/openbao/plugins/vault-plugin-secrets-jwt/NOTICE
     src/compute-plane-services/byoo-otel-collector/NOTICE
     src/compute-plane-services/ess-agent/NOTICE
     src/compute-plane-services/image-credential-helper/vendor/dario.cat/mergo/LICENSE

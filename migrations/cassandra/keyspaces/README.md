@@ -25,7 +25,7 @@ pinned version reference is bumped accordingly.
 | `ess_api`         | [ess_api/03_init_tables.up.sql](ess_api/03_init_tables.up.sql)                 | `v0.48.26`     | `200fd74d` |
 | `event_ledger`    | [event_ledger/03_init_tables.up.sql](event_ledger/03_init_tables.up.sql)       | `0.10.0`       | `adc2ff44` |
 | `nvcf_autoscaler` | [nvcf_autoscaler/03_init_tables.up.sql](nvcf_autoscaler/03_init_tables.up.sql) | `v1.15.0`      | `bff903c`  |
-| `nvcf_api`        | [nvcf_api/03_init_tables.up.sql](nvcf_api/03_init_tables.up.sql)               | `v1.5.1`       | `7a422ff1` |
+| `nvcf_api`        | [nvcf_api/03_init_tables.up.sql](nvcf_api/03_init_tables.up.sql)               | `v1.10.0`      | `fcaea0c1` |
 | `nvct_api`        | [nvct_api/03_init_tables.up.sql](nvct_api/03_init_tables.up.sql)               | `v1.5.2`       | `a0247478` |
 | `sis_api`         | [sis_api/03_init_tables.up.sql](sis_api/03_init_tables.up.sql)                 | `v1.531.2`     | `8a492a2e` |
 
@@ -43,7 +43,7 @@ pinned version reference is bumped accordingly.
 | `01_init_keyspace.up.sql` | Creates the keyspace with `NetworkTopologyStrategy` replication. Uses `${REPLICA_COUNT}`, which the entrypoint substitutes before migration.                                                                    |
 | `02_init_roles.up.sql`    | Creates the application role, grants privileges, and sets the service login password via `${SERVICE_ROLE_PASSWORD}`.                                                                                               |
 | `03_init_tables.up.sql`   | Complete canonical schema with all UDTs, tables, and indexes at the pinned upstream version.                                                                                                                       |
-| `04_*`, `05_*`, `06_*`    | Incremental deltas for rolling upgrades. These add tables/columns that are not in `03_init_tables.up.sql` at the version that was applied on existing clusters. `ess_api/04_*` is a data seed (deployment-specific values). `sis_api/04_*`-`06_*` and `nvcf_api/04_*`-`05_*` are DDL deltas. |
+| `04_*` and later          | Incremental deltas for rolling upgrades. These add tables/columns that are not in `03_init_tables.up.sql` at the version that was applied on existing clusters. `ess_api/04_*` is a data seed (deployment-specific values). The `sis_api` and `nvcf_api` deltas are DDL. |
 
 ---
 

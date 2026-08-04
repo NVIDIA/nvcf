@@ -1,15 +1,21 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# NIM Llama-3.1-8B-Instruct source pod (1 GPU, CRIU + cuda-checkpoint path).
+# NIM Llama-3.1-8B (single GPU) — criu-v2 checkpoint/restore.
 #
-# This manifest is the first user of the generic Python injection design
-# (docs/GENERIC-PYTHON-INJECTION-DESIGN.md): no `command:` override on the
-# main container, no inline bash injection. PYTHONPATH points Python at
-# our sitecustomize.py which detects the running interpreter's ABI tag
-# (NIM venv is cp312) and prepends /nvsnap-lib/site-packages-cp312 so our
-# patched uvloop wins on `import uvloop`. Native libs (libzmq, libuv) ride
-# on LD_LIBRARY_PATH; libnvsnap_intercept.so on LD_PRELOAD as before.
+# No injection stack: the criu-v2 in-namespace CRIU engine handles the
+# process at the OS level, so the container runs the stock NIM entrypoint.
+#
+# The one thing criu-v2 does require is that the workload own its session:
+# the agent dumps the GPU leader's session, and container init cannot be
+# restored into a placeholder whose pid1 slot is already taken. NIM ships
+# its server as the image CMD, so the entrypoint chain is re-launched here
+# under setsid rather than left as pid1. Everything else is stock, and the
+# chain (/opt/nvidia/nvidia_entrypoint.sh /opt/nim/start_server.sh) is the
+# image default, preserved verbatim.
+#
+# Wrapping the command in the manifest is a stop-gap: it belongs in the
+# admission webhook so stock images need no manifest edits at all.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -41,85 +47,27 @@ spec:
     - name: nvsnap-pull-secret
     - name: nim-pull-secret
 
-  initContainers:
-    # Extract uvloop wheel for every Python ABI we ship (cp310/311/312/313).
-    # sitecustomize.py picks the right one at runtime by interpreter tag,
-    # so this same init container works for any Python version going forward.
-    - name: get-uvloop
-      image: nvcr.io/0651155215864979/ncp-dev/uvloop-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          set -eu
-          for whl in /wheels/uvloop-*.whl; do
-              tag=$(echo "$whl" | grep -oE 'cp3[0-9]+' | head -1)
-              mkdir -p "/nvsnap-lib/site-packages-${tag}"
-              python3 -m zipfile -e "$whl" "/nvsnap-lib/site-packages-${tag}/"
-          done
-          ls -la /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-    - name: get-libuv
-      image: nvcr.io/0651155215864979/ncp-dev/libuv-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp /usr/local/lib/libuv.so* /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-    - name: get-libzmq
-      image: nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp /usr/local/lib/libzmq.so* /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-    # Drops both libnvsnap_intercept.so and the runtime sitecustomize.py.
-    # Renamed from get-intercept-lib to get-nvsnap to reflect the broader job.
-    - name: get-nvsnap
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.26
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          set -eu
-          cp /criu-bundle/lib/libnvsnap_intercept.so /nvsnap-lib/
-          cp -r /criu-bundle/sitecustomize /nvsnap-lib/
-          ls -la /nvsnap-lib/ /nvsnap-lib/sitecustomize/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
   containers:
     - name: nim
       image: nvcr.io/nim/meta/llama-3.1-8b-instruct:1.8.5
       imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          # criu-v2 convention: the workload runs in its own session so the
+          # agent can dump it without dumping container init. Stdio goes to a
+          # rootfs file so CRIU restores those fds as plain files; bash stays
+          # pid1, reaps orphans, and tails the file for kubectl logs.
+          nohup setsid /opt/nvidia/nvidia_entrypoint.sh /opt/nim/start_server.sh \
+            > /tmp/nim.out 2>&1 < /dev/null &
+          tail -F /tmp/nim.out &
+          while true; do sleep 30; done
       env:
-        # Generic Python injection — Python's site.py imports
-        # /nvsnap-lib/sitecustomize/sitecustomize.py at interpreter startup,
-        # which prepends /nvsnap-lib/site-packages-cp312 (NIM venv is cp312).
-        - name: PYTHONPATH
-          value: "/nvsnap-lib/sitecustomize"
         - name: LD_LIBRARY_PATH
-          value: "/nvsnap-lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
-        - name: LD_PRELOAD
-          value: "/nvsnap-lib/libnvsnap_intercept.so"
+          value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
         - name: NVSNAP_LOG_LEVEL
           value: "3"
-        - name: NVSNAP_ZMQ_INTERCEPT
-          value: "0"
-        - name: NVSNAP_QUIESCE_SIGNALS
-          value: "1"
         - name: NVSNAP_SECCOMP_ENABLED
           value: "0"
         - name: NGC_API_KEY
@@ -159,16 +107,12 @@ spec:
       volumeMounts:
         - name: shm
           mountPath: /dev/shm
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
         - name: nim-cache
           mountPath: /opt/nim/.cache
 
   volumes:
     - name: shm
       emptyDir: { medium: Memory, sizeLimit: 16Gi }
-    - name: nvsnap-lib
-      emptyDir: {}
     - name: nim-cache
       emptyDir: {}
 
