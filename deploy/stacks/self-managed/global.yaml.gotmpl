@@ -267,6 +267,11 @@ natsAuthCalloutService:
      compute planes can reach. */}}
 {{- $llmAddonEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- $llmRequestRouterAddressOverride := dig "llmRequestRouterAddress" "" $workerEndpoints }}
+{{- $llmRequestRouterExternal := dig "addons" "llm" "requestRouter" "external" dict .Values }}
+{{- $llmRequestRouterGrpcDialAddress := dig "grpcDialAddress" "" $llmRequestRouterExternal }}
+{{- $llmRequestRouterQuicDialAddress := dig "quicDialAddress" "" $llmRequestRouterExternal }}
+{{- $llmRequestRouterAdvertisedHostnameTemplate := dig "advertisedHostnameTemplate" "" $llmRequestRouterExternal }}
+{{- $llmRequestRouterRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmRequestRouter" "enabled" false .Values }}
 {{- /* Port matches llmRequestRouter.service.grpcPort in the request router chart. */}}
 {{- $llmRequestRouterWorkerAddress := $llmRequestRouterAddressOverride | default "llm-request-router.nvcf.svc.cluster.local:50071" }}
 {{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
@@ -752,6 +757,23 @@ llmRequestRouter:
   loadBalancer:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- /* External exposure. The dial addresses are what pylon connects to; the
+       advertised hostname stays the per-pod gRPC authority and QUIC SNI. Only
+       emitted when set, so single-cluster installs keep in-cluster defaults. */ -}}
+  {{- if $llmRequestRouterGrpcDialAddress }}
+  transport:
+    grpcPylonDialAddr: {{ $llmRequestRouterGrpcDialAddress | quote }}
+    {{- with $llmRequestRouterQuicDialAddress }}
+    reverseTunnelPylonDialAddr: {{ . | quote }}
+    {{- end }}
+  {{- else if $llmRequestRouterQuicDialAddress }}
+  transport:
+    reverseTunnelPylonDialAddr: {{ $llmRequestRouterQuicDialAddress | quote }}
+  {{- end }}
+  {{- with $llmRequestRouterAdvertisedHostnameTemplate }}
+  kubernetes:
+    advertisedHostnameTemplate: {{ . | quote }}
+  {{- end }}
   {{- /* Compound guard: skip the entire PKI block (and its required/fail
        validations) when the LLM addon itself is disabled. helmfile's
        `condition: addons.llm.enabled` already suppresses the chart release,
@@ -1059,6 +1081,13 @@ nvcfGatewayRoutes:
       namespace: {{ required "ingress.gatewayApi.gateways.nats.namespace is required when ingress.gatewayApi.routes.nats.enabled is true" .Values.ingress.gatewayApi.gateways.nats.namespace }}
       listenerName: {{ dig "ingress" "gatewayApi" "gateways" "nats" "listenerName" "nats" .Values }}
     {{- end }}
+    {{- if $llmRequestRouterRouteEnabled }}
+    llmRequestRouter:
+      name: {{ required "ingress.gatewayApi.gateways.llmRequestRouter.name is required when ingress.gatewayApi.routes.llmRequestRouter.enabled is true" (dig "ingress" "gatewayApi" "gateways" "llmRequestRouter" "name" "" .Values) }}
+      namespace: {{ required "ingress.gatewayApi.gateways.llmRequestRouter.namespace is required when ingress.gatewayApi.routes.llmRequestRouter.enabled is true" (dig "ingress" "gatewayApi" "gateways" "llmRequestRouter" "namespace" "" .Values) }}
+      grpcListenerName: {{ dig "ingress" "gatewayApi" "routes" "llmRequestRouter" "grpcListenerName" "llm-router-grpc" .Values }}
+      quicListenerName: {{ dig "ingress" "gatewayApi" "routes" "llmRequestRouter" "quicListenerName" "llm-router-quic" .Values }}
+    {{- end }}
   routes:
     nvcfApi:
       routeAnnotations:
@@ -1117,6 +1146,12 @@ nvcfGatewayRoutes:
       listenerName: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "listenerName" "worker-tcp" .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    {{- /* Router L4 routes require the LLM addon: without it there is no
+         llm-request-router Service for the routes to reference. */}}
+    llmRequestRouter:
+      enabled: {{ and $llmRequestRouterRouteEnabled $llmAddonEnabled }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "llmRequestRouter" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     nats:
       enabled: {{ $natsRouteEnabled }}
       routeAnnotations:

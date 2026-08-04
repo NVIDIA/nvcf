@@ -149,6 +149,15 @@ llmRequestRouter:
     quicRequestTimeoutMs: 30000
     reverseTunnelListenAddr: "0.0.0.0:50072"
     reverseTunnelConnectTimeoutMs: 10000
+    # Shared dial addresses handed to pylon when the router is reached from
+    # outside the cluster. Both are host:port. The per-pod identity rendered by
+    # kubernetes.advertisedHostnameTemplate stays the gRPC authority and QUIC
+    # SNI, so whatever terminates these addresses must route on that identity
+    # when replicaCount is greater than 1.
+    # Empty keeps the in-cluster behavior: pylon dials the advertised per-pod
+    # address directly.
+    grpcPylonDialAddr: ""
+    reverseTunnelPylonDialAddr: ""
 
   shutdown:
     drainTimeoutMs: 30000

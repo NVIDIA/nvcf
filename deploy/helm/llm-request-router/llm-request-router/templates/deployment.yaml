@@ -93,11 +93,17 @@ spec:
             - --quic-connect-timeout-ms={{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}
             - --quic-request-timeout-ms={{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}
             - --metrics-port={{ .Values.llmRequestRouter.service.metricsPort }}
+            {{- with dig "transport" "grpcPylonDialAddr" "" .Values.llmRequestRouter }}
+            - --grpc-pylon-dial-addr={{ . }}
+            {{- end }}
             {{- if .Values.llmRequestRouter.transport.reverseTunnelListenAddr }}
             - --backend-connectivity=reverse
             - --reverse-tunnel-listen-addr={{ .Values.llmRequestRouter.transport.reverseTunnelListenAddr }}
             {{- end }}
-            {{- if and .Values.llmRequestRouter.transport.reverseTunnelListenAddr (gt $replicaCount 1) }}
+            {{- $reverseTunnelPylonDialAddr := dig "transport" "reverseTunnelPylonDialAddr" "" .Values.llmRequestRouter }}
+            {{- if and .Values.llmRequestRouter.transport.reverseTunnelListenAddr $reverseTunnelPylonDialAddr }}
+            - --reverse-tunnel-pylon-dial-addr={{ $reverseTunnelPylonDialAddr }}
+            {{- else if and .Values.llmRequestRouter.transport.reverseTunnelListenAddr (gt $replicaCount 1) }}
             - --reverse-tunnel-pylon-dial-addr=$(POD_IP):{{ .Values.llmRequestRouter.service.reverseTunnelPort }}
             {{- end }}
             {{- if .Values.llmRequestRouter.transport.reverseTunnelConnectTimeoutMs }}

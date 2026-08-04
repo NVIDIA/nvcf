@@ -99,21 +99,87 @@ Setting `addons.llm.enabled: true` points the field at the in-cluster request
 router service, `llm-request-router.nvcf.svc.cluster.local:50071`.
 Single-cluster installs need no further configuration.
 
-Compute planes outside the control plane cluster cannot resolve that service
-name. Set an address those clusters can reach instead:
-
-```yaml
-global:
-  workerEndpoints:
-    llmRequestRouterAddress: "<router-host>:<port>"
-```
-
 Check the value the stack rendered after applying:
 
 ```bash
 kubectl get cm nvcf-api-remote-config -n nvcf \
   -o jsonpath='{.data.nvcf-api\.yaml}' | grep worker-address
 ```
+
+## External Compute Planes
+
+Compute planes outside the control plane cluster cannot resolve
+`llm-request-router.nvcf.svc.cluster.local`. Exposing the router takes three
+pieces, and all three are needed.
+
+Workers use two channels. Pylon opens a gRPC control channel on the router's
+TCP port, registers, and receives a tunnel target. It then opens a QUIC reverse
+tunnel on the router's UDP port. Both channels have to reach the router.
+
+### 1. Gateway listeners
+
+The stack does not create the Gateway. Add a TCP listener and a UDP listener to
+the Gateway the routes attach to, then reference it:
+
+```yaml
+ingress:
+  gatewayApi:
+    gateways:
+      llmRequestRouter:
+        name: <gateway-name>
+        namespace: <gateway-namespace>
+    routes:
+      llmRequestRouter:
+        enabled: true
+        grpcListenerName: llm-router-grpc
+        quicListenerName: llm-router-quic
+```
+
+This renders a TCPRoute to router port 50071, a UDPRoute to router port 50072,
+and a ReferenceGrant for the cross-namespace Service. The routes stay off unless
+`addons.llm.enabled` is also true, because without the addon there is no router
+Service to reference.
+
+### 2. Router dial and identity settings
+
+Tell the router which addresses to hand to pylon:
+
+```yaml
+addons:
+  llm:
+    requestRouter:
+      external:
+        grpcDialAddress: "<gateway-host>:<tcp-port>"
+        quicDialAddress: "<gateway-host>:<udp-port>"
+        advertisedHostnameTemplate: "{pod_name}.<external-domain>"
+```
+
+`grpcDialAddress` and `quicDialAddress` are what pylon connects to.
+`advertisedHostnameTemplate` is a separate thing: it is the per-pod identity the
+router advertises as the gRPC authority and the QUIC SNI. It supports
+`{pod_name}` and `{namespace}`.
+
+### 3. Worker address
+
+Point workers at the same gRPC address the Gateway exposes:
+
+```yaml
+global:
+  workerEndpoints:
+    llmRequestRouterAddress: "<gateway-host>:<tcp-port>"
+```
+
+### Replica count
+
+At `replicaCount: 1` a plain L4 forward is correct, because every connection
+reaches the only router pod.
+
+Above 1, the router hands each pylon a per-pod identity and expects the return
+path to honor it. Whatever terminates the dial addresses must route on the gRPC
+authority and the QUIC SNI. A Gateway that load balances only on port will send
+pylon to a router pod that does not own its tunnel target, and the reverse
+tunnel will not establish. Use a front end that routes on that identity, or keep
+external installs at one replica.
 
 ## Local Plaintext Transport
 

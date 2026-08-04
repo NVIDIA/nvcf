@@ -234,6 +234,29 @@ addons:
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
     enabled: false
+    requestRouter:
+      # External exposure for compute planes outside the control plane cluster.
+      # Leave empty for single-cluster installs: workers reach the router
+      # through in-cluster DNS and no Gateway routes are needed.
+      #
+      # Enabling this only advertises addresses. Also set
+      # ingress.gatewayApi.routes.llmRequestRouter.enabled and give the Gateway
+      # a TCP and a UDP listener, or expose the router some other way.
+      external:
+        # host:port pylon dials for the gRPC control channel. Also set
+        # global.workerEndpoints.llmRequestRouterAddress to the same value so
+        # nvcf-api hands it to workers.
+        grpcDialAddress: ""
+        # host:port pylon dials for the QUIC reverse tunnel.
+        quicDialAddress: ""
+        # Per-pod identity the router advertises as gRPC authority and QUIC
+        # SNI. Supports {pod_name} and {namespace}. Empty keeps the in-cluster
+        # service name, which external compute planes cannot resolve.
+        #
+        # With replicaCount above 1 this must resolve per pod and whatever
+        # fronts the dial addresses must route on it. A Gateway that balances
+        # only on port will break the reverse tunnel.
+        advertisedHostnameTemplate: ""
     # OpenBao-issued QUIC TLS certificate for the request router (Stargate).
     # When enabled, the chart provisions an NVCF service-issuing PKI hierarchy
     # in OpenBao via a Helm pre-install/pre-upgrade Job, requests a Certificate
@@ -358,6 +381,13 @@ ingress:
       nats:
         enabled: false
         routeAnnotations: {}
+      # L4 routes exposing the LLM request router to external compute planes.
+      # Requires addons.llm.enabled and a Gateway with both listeners below.
+      llmRequestRouter:
+        enabled: false
+        grpcListenerName: llm-router-grpc
+        quicListenerName: llm-router-quic
+        routeAnnotations: {}
       # ESS route. NVCF worker containers fetch function secrets from ess-api.
       # In split/multi-cluster installs ess runs in the control plane, so
       # compute-plane workers reach it through this route. Opt-in per environment.
@@ -375,6 +405,9 @@ ingress:
         name: "" # must be set by the environment when routes.nats.enabled=true
         namespace: "" # must be set by the environment when routes.nats.enabled=true
         listenerName: nats
+      llmRequestRouter:
+        name: "" # must be set when routes.llmRequestRouter.enabled=true
+        namespace: "" # must be set when routes.llmRequestRouter.enabled=true
 
 grpcproxy:
   # Optional NVCF API gRPC endpoint used only by grpc-proxy.

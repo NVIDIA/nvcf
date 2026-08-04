@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.llmRequestRouter.enabled }}
+---
+# Pylon gRPC control channel into the LLM request router. Workers resolve this
+# address from nvcf.llm-request-router.worker-address handed down by nvcf-api.
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.grpcName }}
+  namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.namespace }}
+  labels:
+    {{- include "nvcf-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-request-router-grpc-route
+  annotations:
+    {{- toYaml .Values.nvcfGatewayRoutes.routes.llmRequestRouter.routeAnnotations | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.name }}
+      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.namespace }}
+      sectionName: {{ .Values.nvcfGatewayRoutes.gateways.llmRequestRouter.grpcListenerName }}
+
+  rules:
+    - backendRefs:
+        - name: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.backend.name }}
+          namespace: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.backend.namespace }}
+          port: {{ .Values.nvcfGatewayRoutes.routes.llmRequestRouter.backend.grpcPort }}
+{{- end }}
