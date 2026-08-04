@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""nvcf-ui Bazel module. Mirrors the nvcf/nvcf umbrella so this repo is
+Bazel-buildable standalone and drops into the umbrella on migration.
+"""
+
+module(
+    name = "nvcf-ui",
+    version = "0.0.1",
+)
+
+# ---- OCI (multi-arch) ----
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_oci", version = "2.2.7")
+bazel_dep(name = "rules_pkg", version = "1.2.0")
+
+# 2.22.5 (not the umbrella's 2.19.3): aspect_rules_js 3.2.2 requires >= 2.22.5.
+bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
+bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
+
+# ---- Go ----
+bazel_dep(name = "rules_go", version = "0.60.0")
+bazel_dep(name = "gazelle", version = "0.48.0")
+
+# rules_pkg's pkg_tar runs through a Python builder, which pulls in
+# rules_python's hermetic interpreter. CI runs as root in the bazel-ci
+# container, and rules_python rejects root-user setup by default
+# (https://github.com/bazelbuild/rules_python/pull/713).
+bazel_dep(name = "rules_python", version = "1.4.1")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    ignore_root_user_error = True,
+    python_version = "3.11",
+)
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+
+# 1.26.2 matches backend/go.mod (umbrella pins 1.25.0; reconcile on migration).
+go_sdk.download(version = "1.26.2")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_work = "//:go.work.bazel")
+
+# Managed by `bazel mod tidy`.
+use_repo(go_deps, "com_github_fsnotify_fsnotify", "com_github_rs_zerolog", "in_yaml_go_yaml_v3", "io_k8s_api", "io_k8s_apimachinery", "io_k8s_client_go", "io_k8s_sigs_controller_runtime")
+
+# ---- Cross-compile toolchain (linux images from macOS/amd64 hosts) ----
+zig = use_extension("@hermetic_cc_toolchain//toolchain:ext.bzl", "toolchains")
+use_repo(zig, "zig_sdk")
+
+register_toolchains(
+    "@zig_sdk//toolchain:linux_arm64_gnu.2.38",
+)
+
+# ---- Base image: NVIDIA distroless-static (v4.0.0), pinned by digest ----
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+oci.pull(
+    name = "distroless_static",
+    digest = "sha256:d90158b69e250d2018f32622b5c622925202ee97224a990a54b63811cb1e3d69",
+    image = "nvcr.io/nvidia/distroless/static",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
+use_repo(
+    oci,
+    "distroless_static",
+    "distroless_static_linux_amd64",
+    "distroless_static_linux_arm64_v8",
+)
+
+# ---- JS/TS (aspect_rules_js, pnpm-native) ----
+# 3.2.x reads the build-script allowlist from pnpm-workspace.yaml (allowBuilds),
+# so nothing in ui/ changes.
+bazel_dep(name = "aspect_rules_js", version = "3.2.2")
+bazel_dep(name = "rules_nodejs", version = "6.7.3")
+
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+node.toolchain(node_version = "22.12.0")
+
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
+npm.npm_translate_lock(
+    name = "npm",
+    pnpm_lock = "//ui:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm")

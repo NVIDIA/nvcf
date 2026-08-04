@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+reviews:
+  profile: chill
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  pre_merge_checks:
+    title:
+      mode: error
+      requirements: >-
+        The title must follow Conventional Commits v1.0.0 (type[(scope)][!]: subject).
+        The scope and breaking-change ! are optional, EXCEPT that feat, fix, and perf
+        require a scope. Beyond format, the type must accurately reflect the primary
+        nature of the diff — flag mismatches (e.g. a bug fix labeled chore, a
+        docs-only change labeled fix). Do not flag PRs where the chosen type reflects
+        the most significant change across a legitimately mixed diff.
+    issue_assessment:
+      mode: warning
+  path_filters:
+    - "!vendor/kui-foundations/**"
+    - "!**/pnpm-lock.yaml"
+    - "!**/MODULE.bazel.lock"
+    - "!**/*.tgz"
+    - "!**/*.png"
+    - "!**/*.jpg"
+  path_instructions:
+    - path: "ui/src/features/**/*.tsx"
+      instructions: >-
+        Suspense hook variants (useGetFooSuspense) are expected when data is prefetched in
+        a route loader; regular useQuery is fine for secondary or deferred fetches.
+        Route loaders use ensureQueryData with revalidateIfStale: true for blocking data.
+        void prefetchQuery is intentional for fire-and-forget child-route cache warming.
+        No manual fetch calls for endpoints that have generated hooks in ui/src/generated/.
+        Prefer KUI components from @nvidia/foundations-react-core over plain HTML where a
+        natural fit exists — flag clear misses but use judgment.
+        New components should have co-located tests.
+    - path: "ui/src/**/*.test.tsx"
+      instructions: >-
+        Route-level views must use renderWithRouter from ~/testing/render, not standard render.
+        Tests should cover happy path, error state, and empty state — not just the happy path.
+        Prefer accessible queries (getByRole, getByText) over test IDs.
+    - path: "ui/src/generated/**"
+      instructions: >-
+        This is generated code (from control-plane-openapi.yaml / nvcf-openapi.yaml / sis-openapi.yaml).
+        Do NOT comment on code style, naming, or general best practices — Biome enforces formatting via CI.
+        ONLY flag spec-consistency issues: generated code that doesn't match the current spec
+        (e.g., missing or renamed fields, changed types, endpoints absent from codegen output),
+        OR generated files that appear to have been manually edited without a corresponding spec change.
+    - path: "spec/*.yaml"
+      instructions: >-
+        These are the source of truth for the API. Generated output lives in
+        ui/src/generated/ and must never be edited directly. Flag any PR that touches
+        ui/src/generated/ without a corresponding spec change that justifies it.
+    - path: "backend/**/*.go"
+      instructions: >-
+        Check %w error wrapping and structured logging with required context fields.
+  tools:
+    biome:
+      enabled: true
+    shellcheck:
+      enabled: true
+    yamllint:
+      enabled: true
+    golangci-lint:
+      enabled: true
+chat:
+  auto_reply: true

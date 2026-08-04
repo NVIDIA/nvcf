@@ -45,6 +45,11 @@ src/libraries/python
 # @stargate_crates from the nested module) do not resolve against the
 # umbrella root MODULE.bazel.
 src/libraries/ts
+# nvcf-ui is imported with the upstream repo's own MODULE.bazel still in
+# place (aspect_rules_js + rules_nodejs). Its BUILD files use labels
+# relative to that module root, so the root module keeps it ignored until
+# the labels are rewritten and the JS rules are merged into the root.
+src/uis/nvcf-ui
 deploy
 docs
 fern

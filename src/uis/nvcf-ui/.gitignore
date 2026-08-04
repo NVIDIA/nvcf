@@ -1,0 +1,9 @@
+.DS_Store
+
+# KUI skill files — synced from node_modules on pnpm install via prepare script
+.claude/skills/kaizen-ui/
+
+# Bazel (MODULE.bazel.lock IS committed, like go.sum)
+/bazel-*
+.bazel-cache/
+user.bazelrc

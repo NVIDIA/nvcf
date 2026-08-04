@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "control-plane",
+    srcs = [
+        "handler.go",
+        "health.go",
+        "heartbeat.go",
+        "httphealth.go",
+        "k8shealth.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/control-plane",
+    visibility = ["//backend:__subpackages__"],
+    deps = [
+        "//backend/internal/utils",
+        "@com_github_rs_zerolog//:zerolog",
+        "@in_yaml_go_yaml_v3//:yaml",
+        "@io_k8s_api//apps/v1:apps",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/labels",
+        "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_client_go//applyconfigurations/core/v1:core",
+        "@io_k8s_sigs_controller_runtime//pkg/client",
+    ],
+)
+
+go_test(
+    name = "control-plane_test",
+    srcs = [
+        "handler_test.go",
+        "health_test.go",
+        "heartbeat_test.go",
+        "k8shealth_test.go",
+    ],
+    embed = [":control-plane"],
+    deps = [
+        "@in_yaml_go_yaml_v3//:yaml",
+        "@io_k8s_api//apps/v1:apps",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_client_go//kubernetes/scheme",
+        "@io_k8s_sigs_controller_runtime//pkg/client",
+        "@io_k8s_sigs_controller_runtime//pkg/client/fake",
+        "@io_k8s_sigs_controller_runtime//pkg/client/interceptor",
+    ],
+)
+
+
+filegroup(
+    name = "sources",
+    srcs = glob(["*.go", "*.md"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
