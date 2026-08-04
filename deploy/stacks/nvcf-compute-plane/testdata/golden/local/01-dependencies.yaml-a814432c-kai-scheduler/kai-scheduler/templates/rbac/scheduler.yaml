@@ -132,6 +132,14 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - topology.node.k8s.io
+  resources:
+  - noderesourcetopologies
+  verbs:
+  - get
+  - list
+  - watch
 ---
 # Source: kai-scheduler/templates/rbac/scheduler.yaml
 # Copyright 2025 NVIDIA CORPORATION
