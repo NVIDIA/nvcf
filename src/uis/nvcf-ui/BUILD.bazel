@@ -1,0 +1,92 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@gazelle//:def.bzl", "gazelle")
+load("@rules_pkg//pkg:mappings.bzl", "strip_prefix")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("//rules/oci:defs.bzl", "go_web_oci_image")
+
+# Gazelle manages the Go backend only; the prefix lives in backend/BUILD.bazel.
+# gazelle:exclude ui
+# gazelle:exclude spec
+# gazelle:exclude helm
+# gazelle:exclude public
+# gazelle:exclude node_modules
+# gazelle:exclude backend/static
+# gazelle:exclude backend/bin
+# gazelle:exclude backend/vendor
+# gazelle:exclude .bazel-cache
+# gazelle:exclude rules
+gazelle(name = "gazelle")
+
+# Source files bundled into the container at /usr/share/nvcf-ui/src.
+# Sub-packages (backend/, ui/, platforms/, rules/) are referenced via their
+# own :sources filegroups because glob() does not cross package boundaries.
+filegroup(
+    name = "source_files",
+    srcs = glob(
+        include = [
+            "spec/**",
+            "helm/**",
+            "tools/**",
+            "*.bazel",
+            "*.json",
+            "*.yml",
+            "*.txt",
+            "*.md",
+            "Taskfile.yml",
+            "biome.json",
+            "LICENSE",
+            "NOTICE",
+            "THIRD-PARTY.txt",
+        ],
+        exclude = [
+            "node_modules/**",
+            "MODULE.bazel.lock",
+        ],
+    ) + [
+        "//backend:sources",
+        "//ui:sources",
+        "//platforms:sources",
+        "//rules/oci:sources",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+pkg_tar(
+    name = "source_layer",
+    srcs = [":source_files"],
+    package_dir = "/usr/share/nvcf-ui/src",
+    strip_prefix = strip_prefix.from_root(""),
+    visibility = ["//visibility:private"],
+)
+
+# Container image (server + control-plane + built SPA on distroless). Generates
+# :image, :image_index, :image_load. Matches the Dockerfile.
+go_web_oci_image(
+    name = "image",
+    base = "@distroless_static",
+    binaries = [
+        "//backend/cmd/server:server",
+        "//backend/cmd/control-plane:control-plane",
+    ],
+    entrypoint = ["/app/server"],
+    registry = "nvcr.io/0651155215864979/ncp-dev/nvcf-ui",
+    source_layer = "//:source_layer",
+    tags = ["nvcf-ui"],
+    visibility = ["//visibility:public"],
+    web_assets = "//ui",
+    web_dir = "/app/static",
+)

@@ -1,0 +1,53 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.5/schema.json",
+	"root": false,
+	"vcs": {
+		"enabled": false,
+		"clientKind": "git",
+		"useIgnoreFile": false
+	},
+	"files": {
+		"ignoreUnknown": false,
+		"includes": [
+			"**/src/**/*",
+			"**/index.html",
+			"**/vite.config.ts",
+			"**/orval.config.ts",
+			"**/orval-transformer.ts",
+			"!**/src/styles.css"
+		]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"indentWidth": 2
+	},
+	"assist": { "actions": { "source": { "organizeImports": "on", "useSortedAttributes": "on" } } },
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"correctness": {
+				"noUnusedVariables": {
+					"options": {
+						"ignoreRestSiblings": true
+					},
+					"level": "error"
+				},
+				"noUnusedImports": "error"
+			}
+		}
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"indentWidth": 2
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**/src/generated/**"],
+			"linter": { "enabled": false }
+		}
+	]
+}

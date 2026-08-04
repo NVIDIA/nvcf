@@ -1,0 +1,386 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# All values are namespaced under the nvcfUi key so this flat chart can be
+# fed a single nvcfUi block (matching helm-nvcf-grpc-proxy / helm-reval).
+nvcfUi:
+
+  # Default values for nvcf-ui.
+  # This is a YAML-formatted file.
+  # Declare variables to be passed into your templates.
+
+  # This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
+  replicaCount: 1
+
+  # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
+  image:
+    repository: nvcf-ui
+    # This sets the pull policy for images.
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the chart appVersion.
+    tag: ""
+
+  # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+  imagePullSecrets: []
+  # This is to override the chart name.
+  nameOverride: ""
+  fullnameOverride: ""
+
+  # This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
+  # A dedicated ServiceAccount and RBAC are always created. Token automounting is
+  # hardcoded on (the server needs it to read the control-plane-health ConfigMap).
+  serviceAccount:
+    # Annotations to add to the service account.
+    annotations: {}
+    # The name is hardcoded to "nvcf-ui" (see the serviceAccountName helper):
+    # it must match the OpenBao JWT auth role's bound_claims, so it is not
+    # overridable.
+
+  # This is for setting Kubernetes Annotations to a Pod.
+  # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+  vault:
+    role: "nvcf-ui"
+    authPath: "auth/jwt"
+    secretVolumePath: "/var/run/secrets/vault"
+    # Audience the OpenBao jwt auth role expects (its bound_audiences). The agent
+    # presents a projected ServiceAccount token carrying this audience; it must
+    # match the server-side role config or login fails with "invalid audience
+    # (aud) claim". This is OpenBao's in-cluster address — the shared value the
+    # other NVCF services' roles are bound to.
+    audience: "http://openbao-server.vault-system.svc.cluster.local:8200"
+
+  # Helm hook Job that provisions the nvcf-ui OpenBao JWT signing roles
+  # (cluster, NVCF API, NVCT) plus the auth role the vault block above logs in with.
+  # These are an optional addon in the nvcf-openbao-migrations image; core
+  # installs that do not deploy the UI never create them. The Job runs
+  # pre-install/pre-upgrade with CORE_MIGRATIONS_ENABLED=false +
+  # ADDONS_NVCF_UI_ENABLED=true so only addons/nvcf-ui/setup_nvcf-ui.sh runs.
+  # Mirrors the llm-request-router pki hook pattern.
+  openbaoMigrations:
+    # Namespace for the hook Job. Should match the openbao-server install
+    # namespace so the root-token secret and serviceAccount resolve.
+    namespace: vault-system
+    # backoffLimit for the hook Job. Transient failures retry via
+    # restartPolicy: OnFailure; deterministic failures exhaust this and the Job
+    # fails, blocking the release.
+    backoffLimit: 3
+    # nvcf-openbao-migrations image. registry is optional; repository and tag are
+    # required when enabled. Supply via the stack's image overrides.
+    image:
+      registry: ""
+      repository: nvcf-openbao-migrations
+      tag: "0.16.2"
+      pullPolicy: IfNotPresent
+    # OpenBao connection. When baoService is empty, the template derives
+    # openbao-server.<namespace>.svc.cluster.local.
+    baoService: ""
+    baoPort: "8200"
+    # Service account with read access to the OpenBao root-token secret (created
+    # by the k8s-openbao chart).
+    serviceAccountName: openbao-server-initialize-cluster
+    # Secret holding the OpenBao root token, mounted at
+    # /secrets/root_token/root_token by the entrypoint.
+    rootTokenSecretName: openbao-server-root-token
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+    # Container securityContext for the hook Job. Its own knob (not the shared
+    # top-level nvcfUi.securityContext) because the hook runs the
+    # nvcf-openbao-migrations image, which may not support the server's
+    # runAsUser 65532. Empty by default so the image's own user/settings apply;
+    # set it to harden the hook.
+    securityContext: {}
+
+  podAnnotations: {}
+  # This is for setting Kubernetes Labels to a Pod.
+  # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+  podLabels: {}
+
+  podSecurityContext: {}
+    # fsGroup: 2000
+
+  # runAsUser MUST be set: the server deployment requests the OpenBao/Vault agent
+  # sidecar with agent-run-as-same-user=true (see _helpers.tpl), and the injector
+  # webhook rejects the pod ("No SecurityContext found for Container 0") unless the
+  # app container declares runAsUser. 65532 is the distroless "nonroot" UID/GID the
+  # image already runs as (see Dockerfile).
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    capabilities:
+      drop:
+      - ALL
+
+  # This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
+  service:
+    # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+    type: ClusterIP
+    # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
+    port: 8300
+
+  # Upstream service addresses the BFF server proxies to. Each is injected into the
+  # server container as an environment variable (NVCF_URL, NVCT_URL, SIS_URL).
+  config:
+    nvcfUrl: "api.nvcf.svc.cluster.local:8080"
+    nvctUrl: "nvct-api.nvcf.svc.cluster.local:8080"
+    sisUrl: "api.sis.svc.cluster.local:8080"
+
+  # -- Expose the service via gateway-api HTTPRoute
+  # Requires Gateway API resources and a suitable controller in the cluster
+  # (see: https://gateway-api.sigs.k8s.io/guides/).
+  # Defaults mirror the cluster's live routes (the nvcf-gateway-routes chart): the
+  # route is created in the Gateway's namespace and attaches to the shared gateway,
+  # with a cross-namespace backendRef to the in-release Service authorized by the
+  # ReferenceGrant below.
+  httpRoute:
+    # HTTPRoute enabled.
+    enabled: false
+    # Namespace to create the HTTPRoute in. Set this to the Gateway's namespace to
+    # attach to a Gateway that lives elsewhere (the convention here); the backendRef
+    # to the in-release Service is then cross-namespace and requires the
+    # ReferenceGrant below. Leave empty to create the route in the release namespace
+    # (no ReferenceGrant needed).
+    namespace: envoy-gateway
+    # HTTPRoute annotations.
+    annotations: {}
+    # Which Gateways this Route is attached to.
+    parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: nvcf-gateway
+      namespace: envoy-gateway
+      sectionName: http
+    # Hostnames matched by the route.
+    hostnames:
+    - nvcf-ui.localhost
+    # List of rules and filters applied. The template appends a backendRef to the
+    # in-release Service (cross-namespace, via the ReferenceGrant) to each rule.
+    rules:
+    - matches:
+      - path:
+          type: PathPrefix
+          value: /
+    #   filters:
+    #   - type: RequestHeaderModifier
+    #     requestHeaderModifier:
+    #       set:
+    #       - name: My-Overwrite-Header
+    #         value: this-is-the-only-value
+    #       remove:
+    #       - User-Agent
+    # - matches:
+    #   - path:
+    #       type: PathPrefix
+    #       value: /echo
+    #     headers:
+    #     - name: version
+    #       value: v2
+    # ReferenceGrant authorizing the cross-namespace HTTPRoute (in .namespace above)
+    # to reference the in-release Service. Created in the release namespace, only
+    # when .namespace differs from it.
+    referenceGrant:
+      enabled: false
+
+  resources: {}
+    # We usually recommend not to specify default resources and to leave this as a conscious
+    # choice for the user. This also increases chances charts run on environments with little
+    # resources, such as Minikube. If you do want to specify resources, uncomment the following
+    # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+    # limits:
+    #   cpu: 100m
+    #   memory: 128Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 128Mi
+
+  # Liveness/readiness probe timing for the BFF server. The probe action is
+  # hardcoded in the Deployment template to an HTTP GET of /status (the server's
+  # dependency-free 200 handler); only these timing knobs are configurable.
+  # https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+  livenessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+
+  # control-plane runs the cluster health-monitor binary (cmd/control-plane) as a
+  # separate, headless Deployment that is always created. It has no Service or
+  # ports: it loops over the configured components, probes their health, and
+  # writes the result to the control-plane-health ConfigMap in its own namespace.
+  # It does not use Vault. Its replica count (1), entrypoint command, and exec
+  # probes are hardcoded in the Deployment template, not configurable here.
+  controlPlane:
+    serviceAccount:
+      # A dedicated ServiceAccount and RBAC are always created. Optionally override
+      # the name and add annotations.
+      name: ""
+      annotations: {}
+    resources: {}
+    # Probe timing for the control-plane liveness/readiness checks. The exec
+    # command (the binary in -liveness mode) is hardcoded in the Deployment
+    # template; only these timing knobs are configurable. The liveness
+    # periodSeconds * failureThreshold (60s) should track the heartbeat staleness
+    # window (3 x 20s).
+    livenessProbe:
+      initialDelaySeconds: 25
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      initialDelaySeconds: 5
+      periodSeconds: 20
+      timeoutSeconds: 5
+    # Extra environment variables. NAMESPACE (= metadata.namespace) is always
+    # injected by the template.
+    env: []
+    # Components the monitor probes each cycle. This list is rendered verbatim into
+    # the control-plane components ConfigMap and mounted at COMPONENTS_PATH; the
+    # binary reads it once at startup (changing it rolls the pods via a checksum
+    # annotation). See backend/internal/control-plane/endpoints.md for the
+    # full component inventory.
+    #
+    # Each component has a name and namespace, plus at least one of the following
+    # (both may be set, in which case the component is healthy only when both
+    # checks pass):
+    #   endpoints:     probed with an HTTP GET. Each endpoint must include the
+    #                  health path and port and omit the scheme (http:// is added);
+    #                  a 2xx response is healthy.
+    #   k8s_workloads: probed by checking each workload's pods are ready, looked up
+    #                  in the component's namespace. type is one of deployment,
+    #                  statefulset, daemonset, replicaset.
+    components:
+      - name: api
+        namespace: nvcf
+        endpoints:
+          - api.nvcf.svc.cluster.local:8080/health
+      - name: nvct-api
+        namespace: nvcf
+        endpoints:
+          - nvct-api.nvcf.svc.cluster.local:8080/health
+      - name: notary-service
+        namespace: nvcf
+        endpoints:
+          - notary.nvcf.svc.cluster.local:8080/health
+      - name: grpc-proxy
+        namespace: nvcf
+        endpoints:
+          - grpc.nvcf.svc.cluster.local:10081/health
+      - name: ratelimiter
+        namespace: nvcf
+        endpoints:
+          - ratelimiter.nvcf.svc.cluster.local:8080/health
+      - name: llm-api-gateway
+        namespace: nvcf
+        endpoints:
+          - llm-api-gateway.nvcf.svc.cluster.local:8080/healthz
+          - llm-api-gateway.nvcf.svc.cluster.local:8080/readyz
+      - name: llm-request-router
+        namespace: nvcf
+        endpoints:
+          - llm-request-router-headless.nvcf.svc.cluster.local:8000/healthz
+          - llm-request-router-headless.nvcf.svc.cluster.local:8000/readyz
+      - name: reval
+        namespace: nvcf
+        endpoints:
+          - reval.nvcf.svc.cluster.local:8082/healthz
+      - name: invocation-service
+        namespace: nvcf
+        endpoints:
+          - invocation.nvcf.svc.cluster.local:8080/health
+      - name: sis
+        namespace: sis
+        endpoints:
+          - api.sis.svc.cluster.local:8080/health
+      - name: ess-api
+        namespace: ess
+        endpoints:
+          - ess-api.ess.svc.cluster.local:8080/health
+      - name: api-keys
+        namespace: api-keys
+        endpoints:
+          - api-keys.api-keys.svc.cluster.local:8080/health
+      - name: admin-issuer-proxy
+        namespace: api-keys
+        endpoints:
+          - admin-token-issuer-proxy.api-keys.svc.cluster.local:8080/healthz
+      - name: nats-auth-callout-service
+        namespace: nats-system
+        endpoints:
+          - nvcf-nats-auth-callout-service.nats-system.svc.cluster.local:8080/health
+      - name: nats
+        namespace: nats-system
+        endpoints:
+          - nats-headless.nats-system.svc.cluster.local:8222/healthz?js-server-only
+      - name: openbao-server
+        namespace: vault-system
+        endpoints:
+          - openbao-server.vault-system.svc.cluster.local:8200/v1/sys/health?standbyok=true
+        k8s_workloads:
+          - name: openbao-server-agent-injector
+            type: deployment
+      - name: cassandra
+        namespace: cassandra-system
+        k8s_workloads:
+          - name: cassandra
+            type: statefulset
+      - name: cert-manager
+        namespace: cert-manager
+        k8s_workloads:
+          - name: cert-manager
+            type: deployment
+          - name: cert-manager-cainjector
+            type: deployment
+          - name: cert-manager-webhook
+            type: deployment
+      - name: envoy-gateway
+        namespace: envoy-gateway-system
+        k8s_workloads:
+          - name: envoy-gateway
+            type: deployment
+
+  # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 100
+    targetCPUUtilizationPercentage: 80
+    # targetMemoryUtilizationPercentage: 80
+
+  extraVolumes: []
+    # - name: foo
+    #   secret:
+    #     secretName: mysecret
+    #     optional: false
+
+
+  extraVolumeMounts: []
+    # - name: foo
+    #   mountPath: "/etc/foo"
+    #   readOnly: true
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
