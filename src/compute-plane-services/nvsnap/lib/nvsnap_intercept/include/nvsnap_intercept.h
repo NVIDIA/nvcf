@@ -225,4 +225,15 @@ void *nvsnap_cuda_symbol_override(const char *symbol);
 void nvsnap_zmq_handle_checkpoint(void);
 void nvsnap_zmq_handle_restore(void);
 
+/* Non-zero when this library must stay completely inert in the current
+ * process, because /etc/ld.so.preload force-loaded it into one of our own
+ * bundle binaries (CRIU and friends). Every constructor must check this
+ * first. See src/self_disable.c. */
+int nvsnap_self_disabled(void);
+
+/* Creates the quiesce worker a fork() child could not create in its atfork
+ * handler (pthread_create is not async-signal-safe and deadlocks there).
+ * No-op unless a fork left this process without one. */
+void nvsnap_quiesce_worker_restart_if_needed(void);
+
 #endif /* NVSNAP_INTERCEPT_H */

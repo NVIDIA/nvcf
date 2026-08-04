@@ -245,3 +245,23 @@ func TestValidateL2StorageClass_StorageClassNotFound(t *testing.T) {
 		t.Errorf("error should name the missing class; got: %v", err)
 	}
 }
+
+// A cachedir capture must size from what it measured. cachedir mode was added
+// after defaultL2Size and did not match its rootfs-only check, so every
+// cachedir capture fell through to the vRAM estimate: a 14 GB capture asked
+// for 96 GiB (80 GiB H100 default x 1.2) and stranded the difference, since
+// the L2 StorageClass is typically Retain.
+func TestDefaultL2Size_CacheDirUsesTotalSize(t *testing.T) {
+	const oneGiB int64 = 1 << 30
+	m := checkpointstore.Manifest{CaptureMethod: "cachedir", TotalSizeBytes: 14 * oneGiB}
+
+	got := defaultL2Size("hash", m)
+	if want := 14 * oneGiB * 12 / 10; got != want {
+		t.Errorf("defaultL2Size = %d GiB, want %d GiB (measured x1.2)",
+			got/oneGiB, want/oneGiB)
+	}
+	if got >= 80*oneGiB {
+		t.Errorf("cachedir capture fell through to the vRAM estimate (%d GiB)",
+			got/oneGiB)
+	}
+}

@@ -18,9 +18,11 @@ spec:
         app: topology-migration
     spec:
       serviceAccountName: kai-topology-migration
+      imagePullSecrets:
+        - name: nvcr-pull-secret
       containers:
       - name: migration
-        image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.14.0"
+        image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.16.7"
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
