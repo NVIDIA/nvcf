@@ -37,6 +37,13 @@ vendored     src/compute-plane-services/nvca/vendor/cel.dev/expr
 scaffolding  rules/oci-destinations
 
 
+# nvcf-ui arrived from ngc/apps/nvcf-ui with its own module already in place
+# (aspect_rules_js + rules_nodejs). Its BUILD files use labels relative to that
+# module root, so merging into the root module means rewriting every label and
+# validating with a Node/pnpm build. Ledger, not exception: the work is
+# outstanding, not excused. Tracked in NVIDIA/nvcf#634.
+ledger       src/uis/nvcf-ui
+
 # No permanent exceptions today. nvsnap was the open question in Phase 1 and it
 # migrated in NVIDIA/nvcf#471, so it is absent from this file entirely, which is
 # what a completed migration looks like here.
