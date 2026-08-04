@@ -239,6 +239,7 @@ crate.annotation(
         "X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR": "/usr/lib/x86_64-linux-gnu",
     },
     crate = "openssl-sys",
+    repositories = ["rs_autoscaler_crates"],
 )
 
 # Only the workspace root Cargo.toml is listed. Naming the member manifest too
