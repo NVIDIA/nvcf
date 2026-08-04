@@ -47,6 +47,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
 )
 
@@ -496,4 +497,240 @@ func TestReconcile_FailedUpdateRetryReusesCache(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, reconcile.Result{}, gotRes)
 	assert.Equal(t, 0, reval.calls, "expected retry to reuse cached render data without ReVal call")
+}
+
+// newUpdateRenderedDataWithWorkloadConfig returns a serialized rendered-objects payload that
+// includes a regular workload ConfigMap and, when configYAML is non-empty, the
+// nvcf-workload-config control ConfigMap that decodeObjects extracts as a WorkloadConfig.
+// Passing an empty configYAML simulates a Helm revision that omits nvcf-workload-config.
+func newUpdateRenderedDataWithWorkloadConfig(t *testing.T, workloadObjName, workloadValue, configYAML string) []byte {
+	t.Helper()
+
+	workloadCM := &corev1.ConfigMap{
+		TypeMeta:   metav1.TypeMeta{APIVersion: corev1.SchemeGroupVersion.String(), Kind: "ConfigMap"},
+		ObjectMeta: metav1.ObjectMeta{Name: workloadObjName},
+		Data:       map[string]string{"key": workloadValue},
+	}
+	workloadBytes, err := json.Marshal(workloadCM)
+	require.NoError(t, err)
+
+	objects := []json.RawMessage{workloadBytes}
+
+	if configYAML != "" {
+		configCM := &corev1.ConfigMap{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
+			ObjectMeta: metav1.ObjectMeta{Name: featureflag.WorkloadConfigConfigMapName},
+			Data:       map[string]string{featureflag.WorkloadConfigDataKey: configYAML},
+		}
+		configBytes, err := json.Marshal(configCM)
+		require.NoError(t, err)
+		objects = append(objects, configBytes)
+	}
+
+	out, err := json.Marshal(objects)
+	require.NoError(t, err)
+	return out
+}
+
+// setupUpdateReconcileForWorkloadConfig creates the fake client and reconciler for workload-config
+// persistence tests. It pre-populates the rendered data cache so ReVal is never called.
+// initialWorkloadConfig is set on the MiniService spec before it is stored in the fake client;
+// pass nil when the prior revision had no workload config.
+// workloadObjName is the name of the workload ConfigMap in the rendered data; it must pre-exist
+// in the fake client so that the SSA apply in applySSAWorkload can patch it.
+func setupUpdateReconcileForWorkloadConfig(
+	t *testing.T,
+	initialWorkloadConfig *v1alpha1.WorkloadConfig,
+	renderedData []byte,
+	workloadObjName string,
+) (*Reconciler, reconcile.Request) {
+	t.Helper()
+	ctx := newTestContext()
+	testScheme := mgrScheme
+
+	ms := newUpdateMiniService(`{"key":"value-v2"}`)
+	ms.Spec.WorkloadConfig = initialWorkloadConfig
+
+	c, _ := newFakeClient(testScheme,
+		ms,
+		newUpdateICMSRequest(true),
+		newReadyUtilsPod(),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: updateTestNamespace}},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      workloadObjName,
+				Namespace: updateTestNamespace,
+			},
+		},
+	)
+	r := newUpdateTestReconciler(t, c, testScheme)
+
+	existing := &v1alpha1.MiniService{}
+	require.NoError(t, r.Client.Get(ctx, client.ObjectKey{Name: updateMSName}, existing))
+	require.NoError(t, r.saveRenderedData(ctx, existing, renderedData))
+	require.NoError(t, r.Client.Status().Update(ctx, existing))
+
+	return r, reconcile.Request{NamespacedName: client.ObjectKey{Name: updateMSName}}
+}
+
+// setupDoUpdateWorkloadForWorkloadConfig creates the fake client, reconciler, and a MiniService
+// struct for doUpdateWorkload-level workload-config tests. The MiniService is stored in the fake
+// client so saveWorkloadConfig can patch it, and the rendered data cache is pre-populated so
+// ReVal is never called. initialWorkloadConfig is the prior spec.workloadConfig value.
+func setupDoUpdateWorkloadForWorkloadConfig(
+	t *testing.T,
+	initialWorkloadConfig *v1alpha1.WorkloadConfig,
+	renderedData []byte,
+	workloadObjName string,
+) (*Reconciler, *v1alpha1.MiniService) {
+	t.Helper()
+	ctx := newTestContext()
+	testScheme := mgrScheme
+
+	ms := newUpdateMiniService(`{"key":"value-v2"}`)
+	ms.Spec.WorkloadConfig = initialWorkloadConfig
+
+	c, _ := newFakeClient(testScheme,
+		ms,
+		newUpdateICMSRequest(true),
+		newReadyUtilsPod(),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: updateTestNamespace}},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: workloadObjName, Namespace: updateTestNamespace},
+		},
+	)
+	r := newUpdateTestReconciler(t, c, testScheme)
+
+	// Fetch the stored MS so its ResourceVersion matches the fake client, then populate the
+	// render cache and persist the updated status so getRenderedData can find the hash.
+	stored := &v1alpha1.MiniService{}
+	require.NoError(t, r.Client.Get(ctx, client.ObjectKey{Name: updateMSName}, stored))
+	require.NoError(t, r.saveRenderedData(ctx, stored, renderedData))
+	require.NoError(t, r.Client.Status().Update(ctx, stored))
+
+	// Return stored so the caller has an in-sync MS to pass to doUpdateWorkload.
+	return r, stored
+}
+
+// TestDoUpdateWorkload_PersistsWorkloadConfig_NoConfigToEnabled verifies that a successful Helm
+// update whose rendered output includes nvcf-workload-config with StatusByWorkerReadiness: true
+// calls saveWorkloadConfig and sets the flag on the MiniService spec.
+// Unrelated spec fields (namespace, ICMSRequestName, HelmChartConfig) must not be modified.
+func TestDoUpdateWorkload_PersistsWorkloadConfig_NoConfigToEnabled(t *testing.T) {
+	ctx := newTestContext()
+	const workloadObjName = "workload-cm"
+
+	configYAML := "featureFlags:\n  " + featureflag.StatusByWorkerReadiness + ": true\n"
+	renderedData := newUpdateRenderedDataWithWorkloadConfig(t, workloadObjName, "v2", configYAML)
+	r, ms := setupDoUpdateWorkloadForWorkloadConfig(t, nil, renderedData, workloadObjName)
+	icmsReq := newUpdateICMSRequest(true)
+
+	gotRes, err := r.doUpdateWorkload(ctx, ms, icmsReq)
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, gotRes)
+	assert.Equal(t, v1alpha1.MiniServiceInstalled, ms.Status.Phase)
+
+	require.NotNil(t, ms.Spec.WorkloadConfig, "saveWorkloadConfig must be called after successful apply")
+	assert.True(t, ms.Spec.WorkloadConfig.IsFeatureFlagEnabled(featureflag.StatusByWorkerReadiness))
+
+	// Unrelated spec fields must not be modified by workload-config persistence.
+	assert.Equal(t, updateTestNamespace, ms.Spec.Namespace)
+	assert.Equal(t, updateICMSName, ms.Spec.ICMSRequestName)
+	assert.Equal(t, "https://helm.ngc.nvidia.com/myorg/charts/foo-1.0.0.tgz", ms.Spec.HelmChartConfig.URL)
+}
+
+// TestDoUpdateWorkload_PersistsWorkloadConfig_EnabledToDisabled verifies that a successful Helm
+// update whose rendered output includes nvcf-workload-config with StatusByWorkerReadiness: false
+// calls saveWorkloadConfig and replaces the previously enabled config with the disabled one.
+func TestDoUpdateWorkload_PersistsWorkloadConfig_EnabledToDisabled(t *testing.T) {
+	ctx := newTestContext()
+	const workloadObjName = "workload-cm"
+
+	prior := &v1alpha1.WorkloadConfig{
+		FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+	}
+	configYAML := "featureFlags:\n  " + featureflag.StatusByWorkerReadiness + ": false\n"
+	renderedData := newUpdateRenderedDataWithWorkloadConfig(t, workloadObjName, "v2", configYAML)
+	r, ms := setupDoUpdateWorkloadForWorkloadConfig(t, prior, renderedData, workloadObjName)
+	icmsReq := newUpdateICMSRequest(true)
+
+	gotRes, err := r.doUpdateWorkload(ctx, ms, icmsReq)
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, gotRes)
+	assert.Equal(t, v1alpha1.MiniServiceInstalled, ms.Status.Phase)
+
+	require.NotNil(t, ms.Spec.WorkloadConfig)
+	assert.False(t, ms.Spec.WorkloadConfig.IsFeatureFlagEnabled(featureflag.StatusByWorkerReadiness),
+		"prior enabled flag must be replaced with disabled after successful update")
+}
+
+// TestReconcile_UpdateWorkloadConfig_ConfigRemoved verifies that a successful Helm update
+// whose rendered output omits nvcf-workload-config clears spec.workloadConfig,
+// removing the previously persisted flag.
+func TestReconcile_UpdateWorkloadConfig_ConfigRemoved(t *testing.T) {
+	ctx := newTestContext()
+	const workloadObjName = "workload-cm"
+
+	prior := &v1alpha1.WorkloadConfig{
+		FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+	}
+	// Empty configYAML → no nvcf-workload-config in the rendered output.
+	renderedData := newUpdateRenderedDataWithWorkloadConfig(t, workloadObjName, "v2", "")
+	r, req := setupUpdateReconcileForWorkloadConfig(t, prior, renderedData, workloadObjName)
+
+	gotRes, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, gotRes)
+
+	updated := &v1alpha1.MiniService{}
+	require.NoError(t, r.Client.Get(ctx, client.ObjectKey{Name: updateMSName}, updated))
+	assert.Equal(t, v1alpha1.MiniServiceInstalled, updated.Status.Phase)
+	assert.Nil(t, updated.Spec.WorkloadConfig, "spec.workloadConfig must be cleared when nvcf-workload-config is absent")
+}
+
+// TestDoUpdateWorkload_FailedApply_RetainsPriorWorkloadConfig verifies that when workload
+// object apply fails, the previously persisted WorkloadConfig is left unchanged so status
+// behavior remains aligned with the workload revision that is still serving.
+// This is tested at the doUpdateWorkload level to directly assert that saveWorkloadConfig
+// is not called on the failure path.
+func TestDoUpdateWorkload_FailedApply_RetainsPriorWorkloadConfig(t *testing.T) {
+	ctx := newTestContext()
+	testScheme := mgrScheme
+	const workloadObjName = "workload-cm"
+
+	prior := &v1alpha1.WorkloadConfig{
+		FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+	}
+	configYAML := "featureFlags:\n  " + featureflag.StatusByWorkerReadiness + ": false\n"
+	renderedData := newUpdateRenderedDataWithWorkloadConfig(t, workloadObjName, "v2", configYAML)
+
+	c, _ := newFakeClientWithInterceptors(testScheme,
+		interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == workloadObjName {
+					return apierrors.NewForbidden(
+						schema.GroupResource{Group: "", Resource: "configmaps"},
+						cm.Name,
+						fmt.Errorf("forbidden by test"),
+					)
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: updateTestNamespace}},
+		newReadyUtilsPod(),
+	)
+	r := newUpdateTestReconciler(t, c, testScheme)
+
+	ms := newUpdateMiniService(`{"key":"value-v2"}`)
+	ms.Spec.WorkloadConfig = prior
+	icmsReq := newUpdateICMSRequest(true)
+	require.NoError(t, r.saveRenderedData(ctx, ms, renderedData))
+
+	_, err := r.doUpdateWorkload(ctx, ms, icmsReq)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "is forbidden")
+	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
+	// saveWorkloadConfig must not have been called: prior config is unchanged.
+	assert.Equal(t, prior, ms.Spec.WorkloadConfig, "prior workload config must be retained after failed apply")
 }
