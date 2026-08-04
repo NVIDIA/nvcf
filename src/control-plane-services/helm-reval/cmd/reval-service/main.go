@@ -16,6 +16,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 
 	"github.com/spf13/viper"
@@ -28,9 +29,10 @@ import (
 	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 )
 
+// Fall back to "unknown" for unstamped builds, matching the go-lib /info handler.
 var (
-	Version   = golibversion.Version
-	GitCommit = golibversion.GitHash
+	Version   = cmp.Or(golibversion.Version, "unknown")
+	GitCommit = cmp.Or(golibversion.GitHash, "unknown")
 )
 
 func main() {
