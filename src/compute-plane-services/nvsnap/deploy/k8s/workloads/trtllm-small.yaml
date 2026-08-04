@@ -1,15 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# TensorRT-LLM with small model for checkpoint/restore testing
-# Uses TinyLlama (1.1B parameters) with trtllm-serve (OpenAI-compatible API)
+# TensorRT-LLM with TinyLlama-1.1B (single GPU) — criu-v2 checkpoint/restore.
+# trtllm-serve exposes an OpenAI-compatible API on port 8000.
 #
-# TRT-LLM characteristics for CRIU:
-# - Standard asyncio + FastAPI (NOT uvloop) — no libuv state issues
-# - Still uses pyzmq → existing intercept library handles it
-# - Single worker process for single-GPU
-# - OpenAI-compatible API on port 8000
-# - First deploy is slow: ~25GB image pull + TensorRT engine compilation
+# No injection stack: the criu-v2 in-namespace CRIU engine handles the process
+# at the OS level, so the container just runs stock trtllm-serve under setsid.
+#
+# The legacy interception stack this used to carry is incompatible with
+# criu-v2: /etc/ld.so.preload is mount-namespace wide, and criu-v2 nsenters
+# CRIU into that namespace, so the loader force-loaded the intercept library
+# into CRIU itself and the dump hung before finishing seize.
+#
+# First deploy is slow: ~25GB image pull plus TensorRT engine compilation.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -35,56 +38,6 @@ spec:
   imagePullSecrets:
     - name: nvsnap-pull-secret
 
-  initContainers:
-    - name: get-uvloop
-      image: nvcr.io/0651155215864979/ncp-dev/uvloop-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          set -eu
-          for whl in /wheels/uvloop-*.whl; do
-              tag=$(echo "$whl" | grep -oE 'cp3[0-9]+' | head -1)
-              mkdir -p "/nvsnap-lib/site-packages-${tag}"
-              python3 -m zipfile -e "$whl" "/nvsnap-lib/site-packages-${tag}/"
-          done
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-    - name: get-libuv
-      image: nvcr.io/0651155215864979/ncp-dev/libuv-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp /usr/local/lib/libuv.so* /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-    - name: get-libzmq
-      image: nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp /usr/local/lib/libzmq.so* /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-    - name: get-intercept-lib
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.26
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp /criu-bundle/lib/libnvsnap_intercept.so /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
   containers:
     - name: trtllm
       image: nvcr.io/nvidia/tensorrt-llm/release:1.3.0rc5
@@ -92,96 +45,29 @@ spec:
       command: ["/bin/bash", "-lc"]
       args:
         - |
+          set -e
           ulimit -c unlimited
-          PYTAG=$(python3 -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
-          SITE=$(python3 -c "import site; print(site.getsitepackages()[0])")
-          if [ -d "/nvsnap-lib/site-packages-${PYTAG}" ]; then
-            cp -a /nvsnap-lib/site-packages-${PYTAG}/* "$SITE/" 2>/dev/null || true
-          fi
-          if [ -f /nvsnap-lib/libzmq.so.5 ]; then
-            cp /nvsnap-lib/libzmq.so* /usr/local/lib/
-          fi
-          if [ -f /nvsnap-lib/libuv.so.1 ]; then
-            cp /nvsnap-lib/libuv.so* /usr/local/lib/
-          fi
-          ldconfig
-          if [ -f /nvsnap-lib/libnvsnap_intercept.so ]; then
-            echo "/nvsnap-lib/libnvsnap_intercept.so" > /etc/ld.so.preload
-          fi
-          trtllm-serve \
+          # criu-v2 convention: launch the workload in its own session via
+          # setsid — the agent dumps the GPU leader's session, never container
+          # init. Stdio goes to a rootfs file so CRIU restores those fds as
+          # plain files; bash stays pid1 to reap orphans and tails the file so
+          # kubectl logs keeps working.
+          nohup setsid trtllm-serve \
             TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
             --host 0.0.0.0 \
             --port 8000 \
-            --kv_cache_free_gpu_memory_fraction 0.3
+            --kv_cache_free_gpu_memory_fraction 0.3 > /trtllm.out 2>&1 < /dev/null &
+          tail -F /trtllm.out &
+          while true; do sleep 30; done
       env:
-        - name: LD_LIBRARY_PATH
-          value: "/nvsnap-lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
-        - name: LD_PRELOAD
-          value: "/nvsnap-lib/libnvsnap_intercept.so"
-        - name: PYTHONFAULTHANDLER
-          value: "1"
-        - name: PYTHONUNBUFFERED
-          value: "1"
-        - name: NVSNAP_LOG_LEVEL
-          value: "3"
-        - name: NVSNAP_ZMQ_INTERCEPT
-          value: "0"
-        - name: NVSNAP_ZMQ_TRACE
-          value: "1"
-        - name: NVSNAP_ZMQ_PRE_SHUTDOWN
-          value: "0"
-        - name: NVSNAP_ZMQ_RECOVERY_DELAY_MS
-          value: "200"
-        - name: NVSNAP_ZMQ_GATE_MAX_MS
-          value: "2000"
-        - name: NVSNAP_ZMQ_GATE_SLEEP_MS
-          value: "50"
-        - name: NVSNAP_ZMQ_KILL_BG_THREADS
-          value: "0"
-        - name: NVSNAP_ZMQ_IO_THREADS
-          value: "1"
-        - name: NVSNAP_ZMQ_REBUILD_ON_EINVAL
-          value: "1"
-        - name: NVSNAP_ZMQ_REBUILD_ON_FIRST_SEND
-          value: "1"
-        - name: NVSNAP_ZMQ_EHOSTUNREACH_MAX_MS
-          value: "5000"
-        - name: NVSNAP_ZMQ_EHOSTUNREACH_SLEEP_MS
-          value: "100"
-        - name: NVSNAP_QUIESCE_SIGNALS
-          value: "1"
-        - name: NVSNAP_QUIESCE_METADATA_ONLY
-          value: "1"
-        - name: CUDA_VISIBLE_DEVICES
-          value: "0"
-        - name: NVSNAP_SECCOMP_ENABLED
-          value: "0"
-        - name: HF_HOME
-          value: "/root/.cache/huggingface"
-        - name: HF_HUB_DISABLE_XET
-          value: "1"
-        - name: HF_HUB_ENABLE_HF_TRANSFER
-          value: "0"
-        - name: HF_HUB_DOWNLOAD_TIMEOUT
-          value: "600"
-        - name: HF_HUB_ETAG_TIMEOUT
-          value: "60"
-        - name: HF_HUB_MAX_RETRIES
-          value: "20"
-        - name: TORCH_CPP_LOG_LEVEL
-          value: "INFO"
-        - name: TORCH_SHOW_CPP_STACKTRACES
-          value: "1"
-        - name: NCCL_DEBUG
-          value: "INFO"
-        - name: NCCL_DEBUG_SUBSYS
-          value: "ALL"
-        - name: NCCL_DEBUG_FILE
-          value: "/tmp/nccl-debug.log"
-        - name: TORCH_DISTRIBUTED_DEBUG
-          value: "DETAIL"
-        - name: USE_LIBUV
-          value: "0"
+        - { name: LD_LIBRARY_PATH, value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PYTHONFAULTHANDLER, value: "1" }
+        - { name: PYTHONUNBUFFERED,   value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,     value: "3" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
       ports:
         - containerPort: 8000
           name: http
@@ -192,7 +78,7 @@ spec:
         initialDelaySeconds: 30
         periodSeconds: 10
         timeoutSeconds: 5
-        failureThreshold: 120
+        failureThreshold: 60
       resources:
         limits:
           nvidia.com/gpu: "1"
@@ -201,17 +87,12 @@ spec:
       securityContext:
         privileged: true
       volumeMounts:
-        - name: shm
-          mountPath: /dev/shm
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
+        - { name: shm, mountPath: /dev/shm }
 
   volumes:
     - name: shm
       emptyDir:
         medium: Memory
         sizeLimit: 16Gi
-    - name: nvsnap-lib
-      emptyDir: {}
 
   restartPolicy: Never

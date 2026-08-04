@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS nvcf_api.functions_v3 (
     container_image               TEXT,
     utils_container_image         TEXT,
     model_specs                   MAP<TEXT, TEXT>,
+    llm_config                    TEXT,
     container_args                TEXT,
     container_environment         TEXT,
     helm_chart                    TEXT,

@@ -22,6 +22,7 @@ metadata:
     nvsnap.io/port: "30000"
     nvsnap.io/gpus: "1"
     nvsnap.io/path: "criu"
+    nvsnap.io/restore-failure-threshold: "120"
 spec:
   tolerations:
     - key: "nvidia.com/gpu"
