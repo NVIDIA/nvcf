@@ -44,6 +44,9 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `enableGXCache`                           | Enables GXCache Support in NVCA                                                                                                                                                                       | `true`                     |
 | `ddcsIPAllowList`                         | provides comma separated CIDR ranges to allowList                                                                                                                                                     | `""`                       |
 | `agentConfig.mergeConfig`                 | Merge fields into the generated NVCA config. Must be a string.                                                                                                                                        | `""`                       |
+| `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name` | Secret containing the workload transport trust bundle; empty disables the source. Example: `nvcf-trust`. | `""` |
+| `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.key` | Secret data key containing certificate-only PEM. | `ca.crt` |
+| `operatorConfig.workload.transportTLS.fingerprint` | Optional SHA-256 pin; empty computes the Secret data fingerprint. | `""` |
 
 ### resources Resource requests and limits for the nvca-operator container
 
