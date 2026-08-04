@@ -12,10 +12,11 @@ CFLAGS = -Wall -Wextra -fPIC -O2 -g -D_GNU_SOURCE -Iinclude
 CXXFLAGS = -Wall -Wextra -fPIC -O2 -g -std=c++17 -D_GNU_SOURCE -Iinclude
 
 # Linker flags — use g++ for C++ object linking
-LDFLAGS = -shared -ldl -lpthread -rdynamic -Wl,--version-script=libnvsnap.map
+LDFLAGS = -shared -ldl -lpthread -rdynamic -static-libstdc++ -static-libgcc -Wl,--version-script=libnvsnap.map
 
 # ── NvSnap source files (C) ──────────────────────────────────────────────
 NVSNAP_SRCS = src/init.c \
+            src/self_disable.c \
             src/quiesce.c \
             src/io_uring_intercept.c \
             src/seccomp_intercept.c \
@@ -62,6 +63,74 @@ all: $(LIB)
 $(LIB): $(OBJS)
 	$(CXX) $(CFLAGS) $(LDFLAGS) -o $@ $^
 	@echo "Built $(LIB) (OS-level intercepts + GPU sub-module merged)"
+	@$(MAKE) --no-print-directory verify-deps
+	@$(MAKE) --no-print-directory verify-self-disable
+
+# This library is force-loaded into EVERY process in the target mount namespace
+# via /etc/ld.so.preload -- including CRIU, which runs against the bundled glibc
+# rather than the container's. Any dependency beyond libc therefore gets resolved
+# from the *container*, and pairing a newer container libstdc++/libm with the
+# bundle's older libc fails with "GLIBC_2.xx not found" before CRIU can start.
+# The C++ runtime is statically linked (-static-libstdc++ -static-libgcc) to keep
+# the DT_NEEDED set at libc alone; libc itself is safe because glibc is backward
+# compatible, so a library built here runs against any newer container glibc.
+# Guard it so a new dependency cannot reintroduce the failure silently.
+ALLOWED_NEEDED = libc.so.6 libdl.so.2 libpthread.so.0 ld-linux-x86-64.so.2
+
+.PHONY: verify-deps
+verify-deps: $(LIB)
+	@bad=""; \
+	for n in $$(readelf -d $(LIB) 2>/dev/null | awk '/NEEDED/{gsub(/[][]/,"",$$5); print $$5}'); do \
+	    case " $(ALLOWED_NEEDED) " in *" $$n "*) ;; *) bad="$$bad $$n";; esac; \
+	done; \
+	if [ -n "$$bad" ]; then \
+	    echo "ERROR: $(LIB) has disallowed dependencies:$$bad"; \
+	    echo "       It is preloaded into CRIU, which uses the bundled glibc;"; \
+	    echo "       anything outside [$(ALLOWED_NEEDED)] resolves from the target"; \
+	    echo "       container and breaks on any newer-glibc image."; \
+	    echo "       Static-link it (see -static-libstdc++) or drop the dependency."; \
+	    exit 1; \
+	fi; \
+	echo "verify-deps: OK (only $(ALLOWED_NEEDED) permitted)"
+
+# Workloads enable this library through /etc/ld.so.preload, which the loader
+# applies to every process in the mount namespace -- including the CRIU that
+# nsenters in to dump the container. Loaded into CRIU it wedges the dump (CRIU
+# blocks in wait4() before finishing seize), so every constructor must call
+# nvsnap_self_disabled() first and bail out. No environment variable can undo
+# it later: constructors run before any NVSNAP_* gate is read. Adding a
+# constructor without the guard silently reintroduces the hang, so check it
+# here rather than discovering it in a customer's checkpoint.
+CTOR_SRCS = $(NVSNAP_SRCS) $(NVSNAP_GPU_C_SRCS) src/libuv_intercept.c
+
+.PHONY: verify-self-disable
+verify-self-disable:
+	@bad=0; \
+	for f in $(CTOR_SRCS); do \
+	    [ -f "$$f" ] || continue; \
+	    case "$$f" in */self_disable.c) continue;; esac; \
+	    awk -v F="$$f" ' \
+	        /^[[:space:]]*[*]/ { next } \
+	        /^[[:space:]]*\/\// { next } \
+	        /__attribute__\(\(constructor/ { want=1; L=NR; next } \
+	        want && /^[[:space:]]*(static[[:space:]]+)?void[[:space:]]+[A-Za-z_].*\(/ { next } \
+	        want && /^[[:space:]]*\{[[:space:]]*$$/ { next } \
+	        want && /^[[:space:]]*$$/ { next } \
+	        want { \
+	            if ($$0 ~ /if[[:space:]]*\([[:space:]]*nvsnap_self_disabled\(\)[[:space:]]*\)/) { want=0; next } \
+	            print F ":" L; bad=1; want=0 \
+	        } \
+	        END { exit bad?1:0 }' "$$f" || bad=1; \
+	done; \
+	if [ "$$bad" != "0" ]; then \
+	    echo "ERROR: the constructors listed above do not call nvsnap_self_disabled()"; \
+	    echo "       as their FIRST statement. They will run inside CRIU (via"; \
+	    echo "       /etc/ld.so.preload) and hang the dump."; \
+	    echo "       Required first line of the body:"; \
+	    echo "           if (nvsnap_self_disabled()) return;"; \
+	    exit 1; \
+	fi; \
+	echo "verify-self-disable: OK (guard is the first statement in every constructor)"
 
 # C compilation
 src/%.o: src/%.c

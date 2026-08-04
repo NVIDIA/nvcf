@@ -21,7 +21,7 @@
 /deploy/helm/cassandra/ @NVIDIA/nvcf-infra-dev
 /deploy/helm/nats/ @NVIDIA/nvcf-infra-dev
 /deploy/helm/openbao/ @NVIDIA/nvcf-infra-dev
-/infra/cassandra/ @NVIDIA/nvcf-infra-dev
+/infra/ @NVIDIA/nvcf-infra-dev
 /migrations/cassandra/ @NVIDIA/nvcf-infra-dev
 /migrations/openbao/ @NVIDIA/nvcf-infra-dev
 

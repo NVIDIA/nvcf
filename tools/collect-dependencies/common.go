@@ -98,6 +98,7 @@ type dependencyScan struct {
 	Go     map[string]struct{}
 	Rust   map[string]struct{}
 	Python map[string]struct{}
+	Node   map[string]struct{}
 	Helm   map[string]struct{}
 }
 
