@@ -576,14 +576,22 @@ func (a *Agent) registerAsPeer(ctx context.Context, checkpointID string) error {
 // agent's peer-server endpoints. Empty string if we don't have
 // enough config to construct it (NodeIP missing).
 func (a *Agent) selfAgentURL() string {
-	if a.config.NodeIP == "" {
+	// AdvertiseIP first: under pod networking peers must dial the pod IP,
+	// since the node IP only resolves to us via hostPort (GH #490). Falls
+	// back to NodeIP so a deployment that sets neither, or only the older
+	// value, keeps working.
+	ip := a.config.AdvertiseIP
+	if ip == "" {
+		ip = a.config.NodeIP
+	}
+	if ip == "" {
 		return ""
 	}
 	port := "8081"
 	if addr := a.config.ListenAddr; len(addr) > 1 && addr[0] == ':' {
 		port = addr[1:]
 	}
-	return fmt.Sprintf("http://%s:%s", a.config.NodeIP, port)
+	return fmt.Sprintf("http://%s:%s", ip, port)
 }
 
 // bytesReader returns an io.Reader for a byte slice. Tiny helper to

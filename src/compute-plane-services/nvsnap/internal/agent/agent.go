@@ -121,6 +121,17 @@ type Config struct {
 	// when registering as a peer in the catalog.
 	NodeIP string
 
+	// AdvertiseIP overrides NodeIP as the address peers dial (GH #490).
+	//
+	// Under hostNetwork the two are the same, because kubelet reports a
+	// hostNetwork pod's status.podIP as the node IP. Under pod networking
+	// they differ, and peers must dial the pod IP -- the node IP would only
+	// work via hostPort, which is exactly the node-wide exposure we are
+	// trying not to require. The chart sets this from status.podIP, which
+	// is correct in both modes; NodeIP stays available for the places that
+	// genuinely mean "this node".
+	AdvertiseIP string
+
 	// BlobStoreURL is the base URL of the cluster's nvsnap-blobstore
 	// (Phase 5d.2 durable backstop). Empty disables capture-side
 	// upload AND cascade tier-3 fallback — agents fall back to

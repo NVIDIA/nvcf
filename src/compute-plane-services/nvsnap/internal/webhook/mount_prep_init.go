@@ -23,6 +23,7 @@ package webhook
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -89,12 +90,17 @@ func (m *Mutator) emitMountPrepInitContainer(
 	if agentPort == 0 {
 		agentPort = MountPrepDefaultAgentPort
 	}
-	// NVSNAP_AGENT_URL points at the host IP via downward API
-	// (status.hostIP), so the init container always hits the agent
-	// on its OWN node — same trust boundary as today's hostNetwork
-	// agent endpoints. Cross-node peer routing is the agent's job,
-	// driven by captureNode in the POST body.
+	// Both forms reach the agent on the pod's OWN node; cross-node peer
+	// routing is the agent's job, driven by captureNode in the POST body.
+	//
+	// Default is the downward-API host IP, which depends on the agent
+	// binding hostPort. AgentBaseURL replaces it with the
+	// internalTrafficPolicy:Local Service under pod networking, which routes
+	// to the node-local endpoint with no node-wide listener (GH #490).
 	agentURL := fmt.Sprintf("http://$(NVSNAP_HOST_IP):%d", agentPort)
+	if m.AgentBaseURL != "" {
+		agentURL = strings.TrimRight(m.AgentBaseURL, "/")
+	}
 
 	c := corev1.Container{
 		Name:            MountPrepContainerName,
