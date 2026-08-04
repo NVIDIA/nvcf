@@ -169,9 +169,9 @@ Field requirements:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `taskId` | Yes | Task ID from `NVCT_TASK_ID` |
+| `taskId` | No | Task ID; if omitted the worker fills it in from `NVCT_TASK_ID`. If present, must match `NVCT_TASK_ID`. |
 | `percentComplete` | Yes | Integer 1-100; must be non-decreasing (equal values are permitted) |
-| `name` | Yes | Name of the current result; 1-190 characters, allowed characters: letters, digits, `!`, `-`, `_`, `.`, `*`, `'`, `(`, `)`, no `./` or `../` prefix |
+| `name` | No | Name of the current result. Required and validated for `UPLOAD` (1-190 characters, allowed: letters, digits, `!`, `-`, `_`, `.`, `*`, `'`, `(`, `)`; no `./` or `../` prefix). Informational for `NONE`. |
 | `metadata` | No | Arbitrary key-value pairs surfaced in task details |
 | `lastUpdatedAt` | Yes | RFC3339Nano timestamp; must be refreshed at least every 3 minutes |
 
