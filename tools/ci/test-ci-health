@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Tests for tools/ci/ci-health.
+
+Every case here corresponds to a defect the tool actually shipped with at
+some point. The analysis functions are pure, so none of this touches the
+network.
+
+Run: tools/ci/test-ci-health
+"""
+
+import datetime as dt
+import importlib.util
+import os
+import unittest
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_spec = importlib.util.spec_from_loader(
+    "ci_health",
+    importlib.machinery.SourceFileLoader("ci_health", os.path.join(_HERE, "ci-health")),
+)
+ci = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(ci)
+
+
+def at(day, hour=0, minute=0):
+    return dt.datetime(2026, 7, day, hour, minute, tzinfo=dt.timezone.utc)
+
+
+def iso(day, hour=0, minute=0, second=0):
+    return f"2026-07-{day:02d}T{hour:02d}:{minute:02d}:{second:02d}Z"
+
+
+def job(name, created, started, completed, conclusion="success", run_id=1, runner="self"):
+    return {
+        "name": name,
+        "created_at": created,
+        "started_at": started,
+        "completed_at": completed,
+        "conclusion": conclusion,
+        "run_id": run_id,
+        "runner_name": runner,
+    }
+
+
+class Percentile(unittest.TestCase):
+    def test_interpolates_between_samples(self):
+        # Index-truncation would return 10.0 here; the real p90 is 9.1.
+        self.assertAlmostEqual(ci.pct([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.9), 9.1)
+
+    def test_median_of_even_length_is_the_midpoint(self):
+        self.assertAlmostEqual(ci.pct([1, 2, 3, 4], 0.5), 2.5)
+
+    def test_degenerate_inputs(self):
+        self.assertEqual(ci.pct([], 0.5), 0.0)
+        self.assertEqual(ci.pct([7.5], 0.9), 7.5)
+
+
+class Weekly(unittest.TestCase):
+    """The oldest bucket is only a slice of its week when history was cut."""
+
+    def runs(self):
+        # W28 has a single fast run (the truncated tail); W29 and W30 are whole.
+        return (
+            [{"start": at(6, 9), "minutes": 1.0}]
+            + [{"start": at(13, 9), "minutes": 10.0} for _ in range(5)]
+            + [{"start": at(20, 9), "minutes": 20.0} for _ in range(5)]
+        )
+
+    def test_keeps_every_week_when_not_truncated(self):
+        weeks = ci.weekly(self.runs(), truncated=False)
+        self.assertEqual([w[0] for w in weeks], ["2026-W28", "2026-W29", "2026-W30"])
+        self.assertEqual(weeks[0][1], 1.0)
+
+    def test_drops_the_partial_oldest_week_when_truncated(self):
+        weeks = ci.weekly(self.runs(), truncated=True)
+        self.assertEqual([w[0] for w in weeks], ["2026-W29", "2026-W30"])
+
+    def test_never_drops_the_only_week(self):
+        one = [{"start": at(20, 9), "minutes": 4.0}]
+        self.assertEqual(len(ci.weekly(one, truncated=True)), 1)
+
+    def test_reports_run_counts(self):
+        self.assertEqual([w[3] for w in ci.weekly(self.runs(), truncated=True)], [5, 5])
+
+
+class Classification(unittest.TestCase):
+    def test_unexpanded_matrix_expression_counts_as_skipped(self):
+        # A skipped matrix row keeps its raw expression as the job name.
+        self.assertTrue(
+            ci.is_skipped_matrix(
+                {"name": "bazel (${{ matrix.subtree.id }})", "conclusion": "success"}
+            )
+        )
+
+    def test_explicit_skip_counts_as_skipped(self):
+        self.assertTrue(ci.is_skipped_matrix({"name": "bazel (nvca)", "conclusion": "skipped"}))
+
+    def test_real_row_is_not_skipped(self):
+        self.assertFalse(ci.is_skipped_matrix({"name": "bazel (nvca)", "conclusion": "success"}))
+
+    def test_gate_jobs_are_recognised(self):
+        self.assertTrue(ci.is_gate("detect changed subtrees"))
+        self.assertTrue(ci.is_gate("bazel required checks"))
+        self.assertFalse(ci.is_gate("bazel (nvca)"))
+
+
+class AnalyseJobs(unittest.TestCase):
+    def test_splits_queue_from_execution(self):
+        stats = ci.analyse_jobs(
+            [job("bazel (nvca)", iso(20, 10, 0), iso(20, 10, 2), iso(20, 10, 12))]
+        )
+        s = stats["bazel (nvca)"]
+        self.assertEqual(s["runs"], 1)
+        self.assertAlmostEqual(s["queue"][0], 2.0)
+        self.assertAlmostEqual(s["exec"][0], 10.0)
+
+    def test_skipped_rows_are_counted_not_timed(self):
+        stats = ci.analyse_jobs(
+            [job("bazel (nvca)", iso(20), iso(20), iso(20), conclusion="skipped")]
+        )
+        self.assertEqual(stats["bazel (nvca)"]["skipped"], 1)
+        self.assertEqual(stats["bazel (nvca)"]["runs"], 0)
+
+    def test_missing_timestamps_are_dropped(self):
+        stats = ci.analyse_jobs([job("bazel (nvca)", iso(20), None, iso(20, 1))])
+        self.assertEqual(stats["bazel (nvca)"]["runs"], 0)
+
+    def test_hosted_runners_are_tallied(self):
+        stats = ci.analyse_jobs(
+            [job("gate", iso(20, 1), iso(20, 1), iso(20, 2), runner="GitHub Actions 12")]
+        )
+        self.assertEqual(stats["gate"]["hosted"], 1)
+
+
+class LongPoles(unittest.TestCase):
+    def test_picks_the_last_finishing_build_job(self):
+        jobs = [
+            job("bazel (fast)", iso(20, 10), iso(20, 10), iso(20, 10, 30), run_id=1),
+            job("bazel (slow)", iso(20, 10), iso(20, 10), iso(20, 10, 50), run_id=1),
+        ]
+        tally, runs = ci.long_poles(jobs)
+        self.assertEqual(runs, 1)
+        self.assertEqual(dict(tally), {"bazel (slow)": 1})
+
+    def test_gate_jobs_never_count_as_the_long_pole(self):
+        # The required-checks gate finishes last by construction; it is not
+        # the reason the build is slow.
+        jobs = [
+            job("bazel (slow)", iso(20, 10), iso(20, 10), iso(20, 10, 50), run_id=1),
+            job("bazel required checks", iso(20, 10), iso(20, 10), iso(20, 11), run_id=1),
+        ]
+        tally, _ = ci.long_poles(jobs)
+        self.assertEqual(dict(tally), {"bazel (slow)": 1})
+
+    def test_tallies_across_runs_independently(self):
+        jobs = [
+            job("bazel (a)", iso(20, 10), iso(20, 10), iso(20, 10, 50), run_id=1),
+            job("bazel (b)", iso(20, 10), iso(20, 10), iso(20, 10, 30), run_id=1),
+            job("bazel (b)", iso(21, 10), iso(21, 10), iso(21, 10, 50), run_id=2),
+            job("bazel (a)", iso(21, 10), iso(21, 10), iso(21, 10, 30), run_id=2),
+        ]
+        tally, runs = ci.long_poles(jobs)
+        self.assertEqual(runs, 2)
+        self.assertEqual(dict(tally), {"bazel (a)": 1, "bazel (b)": 1})
+
+
+class Diagnose(unittest.TestCase):
+    def cache(self, total=1.0, stranded=0.0):
+        return {"total": total, "count": 3, "families": {}, "counts": {},
+                "dupes": {}, "stranded": stranded}
+
+    def test_flags_cache_pressure_at_quota(self):
+        runs = [{"start": at(20), "minutes": 10.0}]
+        causes, _ = ci.diagnose(runs, {}, {}, 0, self.cache(total=9.5, stranded=1.9))
+        titles = [c[1] for c in causes]
+        self.assertIn("Cache pressure", titles)
+
+    def test_quiet_when_everything_is_healthy(self):
+        runs = [{"start": at(20), "minutes": 10.0}]
+        stats = ci.analyse_jobs(
+            [job("bazel (nvca)", iso(20, 10), iso(20, 10), iso(20, 10, 30))]
+        )
+        causes, wall = ci.diagnose(runs, stats, {}, 0, self.cache(total=1.0))
+        self.assertEqual(causes, [])
+        self.assertAlmostEqual(wall, 10.0)
+
+    def test_warns_when_change_detection_skipped_most_rows(self):
+        runs = [{"start": at(20), "minutes": 10.0}]
+        jobs = [
+            job(f"bazel (s{i})", iso(20), iso(20), iso(20), conclusion="skipped")
+            for i in range(9)
+        ] + [job("bazel (real)", iso(20, 10), iso(20, 10), iso(20, 10, 30))]
+        causes, _ = ci.diagnose(runs, ci.analyse_jobs(jobs), {}, 0, self.cache())
+        self.assertTrue(any(c[1].startswith("Note") for c in causes),
+                        "a 90% skip rate must be called out")
+
+    def test_ranks_the_largest_contributor_first(self):
+        runs = [{"start": at(20), "minutes": 20.0}]
+        # A job that waits 10 min for a runner and executes for 1.
+        jobs = [job("bazel (a)", iso(20, 10, 0), iso(20, 10, 10), iso(20, 10, 11))]
+        causes, _ = ci.diagnose(runs, ci.analyse_jobs(jobs), {}, 0, self.cache())
+        self.assertEqual(causes[0][1], "Runner queue wait")
+
+
+class Rendering(unittest.TestCase):
+    def test_job_names_with_matrix_syntax_are_escaped(self):
+        svg = ci.stacked_bars([("bazel (<a & b>)", 1.0, 2.0, 3, 0)])
+        self.assertNotIn("<a & b>", svg)
+        self.assertIn("&amp;", svg)
+
+    def test_charts_handle_no_data(self):
+        self.assertIn("no data", ci.line_chart([]))
+        self.assertIn("no data", ci.stacked_bars([]))
+
+    def test_dashboard_has_no_external_references(self):
+        cache = {"total": 1.0, "count": 1, "families": {"fam": 1.0},
+                 "counts": {"fam": 1}, "dupes": {}, "stranded": 0.0}
+        runs = [{"start": at(20), "minutes": 5.0}]
+        out = ci.render_html("o/r", "bazel.yml", runs, {}, {}, 0, cache, [], 5.0, "now")
+        for marker in ("http://", "https://", "src="):
+            self.assertNotIn(marker, out, f"dashboard must stay self-contained ({marker})")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
