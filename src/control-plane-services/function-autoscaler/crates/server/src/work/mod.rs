@@ -29,7 +29,7 @@ use crate::{
     cassandra::cassandra_service::CassandraServiceManager,
     timeseries_db::timeseries_db_client::TimeseriesDbClient,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use chrono::{Duration, Utc};
 use moka::sync::Cache;
 
@@ -517,6 +517,7 @@ async fn make_scaling_requests_for_table(
     function_state_cache: Arc<FunctionStateCache>,
 ) -> Result<()> {
     let bucket_ranges = bucket_manager.get_all_bucket_ranges();
+    let mut task_failures = 0usize;
 
     if bucket_ranges.is_empty() {
         tracing::warn!("No buckets assigned to this node, skipping scaling logic");
@@ -601,7 +602,13 @@ async fn make_scaling_requests_for_table(
                         ignore_env,
                         &scaling_settings,
                     )
-                    .await?;
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "gathering scaling inputs for {}:{}",
+                            function.function_id, function.function_version_id
+                        )
+                    })?;
                     let current_instances = inputs.current_instances;
 
                     tracing::info!(
@@ -722,12 +729,10 @@ async fn make_scaling_requests_for_table(
                 });
             }
 
-            // Wait for all scaling requests in this bucket to complete
-            while let Some(result) = join_set.join_next().await {
-                if let Err(e) = result {
-                    tracing::error!("Task failed in bucket {}: {}", bucket_index, e);
-                }
-            }
+            // Wait for all scaling requests in this bucket to complete. JoinSet
+            // returns two result layers: the task's Result and Tokio's JoinError.
+            // Count both while continuing to drain independent work.
+            task_failures += drain_scaling_tasks(&mut join_set, *bucket_index).await;
 
             tracing::debug!("Completed processing bucket {}", bucket_index);
         } else {
@@ -738,7 +743,40 @@ async fn make_scaling_requests_for_table(
         }
     }
 
-    Ok(())
+    if task_failures > 0 {
+        Err(anyhow!(
+            "{} per-function scaling task(s) failed",
+            task_failures
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+async fn drain_scaling_tasks(join_set: &mut JoinSet<Result<()>>, bucket_index: usize) -> usize {
+    let mut failures = 0usize;
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                failures += 1;
+                tracing::error!(
+                    bucket_index,
+                    error = %error,
+                    "Scaling task failed"
+                );
+            }
+            Err(join_error) => {
+                failures += 1;
+                tracing::error!(
+                    bucket_index,
+                    error = %join_error,
+                    "Scaling task panicked or was cancelled"
+                );
+            }
+        }
+    }
+    failures
 }
 
 // Function that determines if we should skip a scaling request
@@ -816,6 +854,20 @@ mod tests {
     /// A VictoriaMetrics matrix response with no series (empty result).
     fn vm_empty() -> String {
         r#"{"status":"success","data":{"resultType":"matrix","result":[]}}"#.to_string()
+    }
+
+    #[tokio::test]
+    async fn drain_scaling_tasks_counts_inner_and_join_errors() {
+        let mut join_set: JoinSet<Result<()>> = JoinSet::new();
+        join_set.spawn(async { Ok(()) });
+        join_set.spawn(async { Err(anyhow!("sentinel task error")) });
+        join_set.spawn(async {
+            panic!("sentinel task panic");
+            #[allow(unreachable_code)]
+            Ok(())
+        });
+
+        assert_eq!(drain_scaling_tasks(&mut join_set, 7).await, 2);
     }
 
     /// Worker series present -> use worker metrics, no control-plane fallback.
