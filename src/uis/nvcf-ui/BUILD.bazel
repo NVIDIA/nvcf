@@ -32,8 +32,9 @@ load("//rules/oci:defs.bzl", "go_web_oci_image")
 gazelle(name = "gazelle")
 
 # Source files bundled into the container at /usr/share/nvcf-ui/src.
-# Sub-packages (backend/, ui/, platforms/, rules/) are referenced via their
+# Sub-packages (backend/, ui/) are referenced via their
 # own :sources filegroups because glob() does not cross package boundaries.
+# platforms/ and rules/ are root build infrastructure and are not bundled.
 filegroup(
     name = "source_files",
     srcs = glob(
@@ -57,10 +58,8 @@ filegroup(
             "MODULE.bazel.lock",
         ],
     ) + [
-        "//backend:sources",
-        "//ui:sources",
-        "//platforms:sources",
-        "//rules/oci:sources",
+        "//src/uis/nvcf-ui/backend:sources",
+        "//src/uis/nvcf-ui/ui:sources",
     ],
     visibility = ["//visibility:private"],
 )
@@ -79,14 +78,14 @@ go_web_oci_image(
     name = "image",
     base = "@distroless_static",
     binaries = [
-        "//backend/cmd/server:server",
-        "//backend/cmd/control-plane:control-plane",
+        "//src/uis/nvcf-ui/backend/cmd/server:server",
+        "//src/uis/nvcf-ui/backend/cmd/control-plane:control-plane",
     ],
     entrypoint = ["/app/server"],
     registry = "nvcr.io/0651155215864979/ncp-dev/nvcf-ui",
     source_layer = "//:source_layer",
     tags = ["nvcf-ui"],
     visibility = ["//visibility:public"],
-    web_assets = "//ui",
+    web_assets = "//src/uis/nvcf-ui/ui",
     web_dir = "/app/static",
 )

@@ -25,9 +25,9 @@ go_library(
         "k8shealth.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nvcf-ui/backend/internal/control-plane",
-    visibility = ["//backend:__subpackages__"],
+    visibility = ["//src/uis/nvcf-ui/backend:__subpackages__"],
     deps = [
-        "//backend/internal/utils",
+        "//src/uis/nvcf-ui/backend/internal/utils",
         "@com_github_rs_zerolog//:zerolog",
         "@in_yaml_go_yaml_v3//:yaml",
         "@io_k8s_api//apps/v1:apps",
@@ -63,9 +63,14 @@ go_test(
     ],
 )
 
-
 filegroup(
     name = "sources",
-    srcs = glob(["*.go", "*.md"], allow_empty = True),
+    srcs = glob(
+        [
+            "*.go",
+            "*.md",
+        ],
+        allow_empty = True,
+    ),
     visibility = ["//visibility:public"],
 )

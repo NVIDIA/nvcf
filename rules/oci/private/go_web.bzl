@@ -30,7 +30,7 @@ _exec_files = rule(
     attrs = {"src": attr.label(cfg = "exec", allow_files = True)},
 )
 
-def _go_web_oci_image_impl(name, visibility, binaries, web_assets, web_dir, package_dir, base, entrypoint, registry, tags, repo_tag, source_layer):
+def _go_web_oci_image_impl(name, visibility, binaries, web_assets, web_dir, package_dir, base, entrypoint, registry, tags, source_layer):
     tars = []
 
     # One layer per binary at {package_dir}/{basename}, e.g. /app/server.
@@ -85,7 +85,6 @@ def _go_web_oci_image_impl(name, visibility, binaries, web_assets, web_dir, pack
         visibility = visibility,
         registry = registry,
         tags = tags,
-        repo_tag = repo_tag,
     )
 
 go_web_oci_image = macro(
@@ -130,12 +129,6 @@ go_web_oci_image = macro(
         ),
         "tags": attr.string_list(
             doc = "Tags for generated targets. 'manual' is always added.",
-            configurable = False,
-        ),
-        "repo_tag": attr.string(
-            doc = "docker repo:tag for the _load target. Required at the repo " +
-                  "root, where the package name is empty.",
-            default = "nvcf-ui:latest",
             configurable = False,
         ),
         "source_layer": attr.label(
