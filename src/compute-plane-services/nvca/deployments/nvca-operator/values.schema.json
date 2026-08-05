@@ -53,7 +53,7 @@
                 "imageTag": {
                     "type": "string",
                     "description": "Image tag of OpenTelemetry Collector sidecar.",
-                    "default": "0.143.2"
+                    "default": "0.157.9"
                 },
                 "resources": {
                     "type": "object",
@@ -627,7 +627,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.143.2"
+                            "default": "0.157.9"
                         }
                     }
                 }
@@ -693,7 +693,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.143.2"
+                            "default": "0.157.9"
                         }
                     }
                 },

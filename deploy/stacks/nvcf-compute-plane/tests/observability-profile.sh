@@ -49,6 +49,14 @@ collector_enabled() {
   ' "$1"
 }
 
+collector_image_tag() {
+  awk '
+    /^selfManaged:$/ { self_managed = 1; next }
+    self_managed && /^  otelCollector:$/ { collector = 1; next }
+    collector && /^    imageTag:/ { gsub(/"/, "", $2); print $2; exit }
+  ' "$1"
+}
+
 has_byoo_gate() {
   grep -q '^[[:space:]]*- BYOObservability$' "$1"
 }
@@ -73,6 +81,9 @@ for profile in default disabled control compute all; do
       ;;
   esac
 done
+
+test "$(collector_image_tag "$work_dir/compute.yaml")" = "0.157.9" ||
+  fail "compute profile did not use collector image tag 0.157.9"
 
 render_values compute "$work_dir/compute-overrides.yaml" \
   --state-values-set global.nvcaOperator.selfManaged.otelCollector.enabled=false \
