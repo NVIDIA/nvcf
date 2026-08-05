@@ -1758,25 +1758,122 @@ func TestMapEvictionReason(t *testing.T) {
 	}
 }
 
-// TestWorkerConnectionCloseReasonsCoverMapping guards the pairing between
-// mapEvictionReason and the pre-initialised label set. A reason that is
-// emitted but not pre-initialised appears only after it first occurs, which
-// leaves gaps in rate() and makes absent() alerts misfire.
+// TestWorkerConnectionCloseReasonsCoverMapping guards the pairing between the
+// reasons resolveCloseReason can emit and the pre-initialised label set. A
+// reason that is emitted but not pre-initialised appears only after it first
+// occurs, which leaves gaps in rate() and makes absent() alerts misfire.
+//
+// Note the emitter is resolveCloseReason, not mapEvictionReason: the latter
+// only classifies the raw ttlcache eviction, and the client/worker/shutdown
+// distinction is layered on top of it.
 func TestWorkerConnectionCloseReasonsCoverMapping(t *testing.T) {
-	emitted := []string{
-		mapEvictionReason(ttlcache.EvictionReasonExpired),
-		mapEvictionReason(ttlcache.EvictionReasonDeleted),
-		mapEvictionReason(ttlcache.EvictionReasonCapacityReached),
-		mapEvictionReason(ttlcache.EvictionReason(99)),
+	conn := func(origin string) *worker.WorkerConnection {
+		wc := worker.NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
+		if origin != "" {
+			wc.SetCloseOrigin(origin)
+		}
+		return wc
 	}
-	for _, reason := range emitted {
+
+	// Every reachable combination of raw eviction reason, recorded origin and
+	// drain state.
+	emitted := map[string]bool{}
+	for _, raw := range []ttlcache.EvictionReason{
+		ttlcache.EvictionReasonExpired,
+		ttlcache.EvictionReasonDeleted,
+		ttlcache.EvictionReasonCapacityReached,
+		ttlcache.EvictionReason(99),
+	} {
+		for _, origin := range []string{"", metrics.CloseReasonClientClosed, metrics.CloseReasonWorkerClosed} {
+			for _, draining := range []bool{false, true} {
+				emitted[resolveCloseReason(raw, conn(origin), draining)] = true
+			}
+		}
+	}
+
+	for reason := range emitted {
 		if !slices.Contains(metrics.WorkerConnectionCloseReasons, reason) {
-			t.Errorf("mapEvictionReason can emit %q, but it is not pre-initialised in metrics.WorkerConnectionCloseReasons", reason)
+			t.Errorf("resolveCloseReason can emit %q, but it is not pre-initialised in metrics.WorkerConnectionCloseReasons", reason)
 		}
 	}
 	for _, reason := range metrics.WorkerConnectionCloseReasons {
-		if !slices.Contains(emitted, reason) {
-			t.Errorf("metrics.WorkerConnectionCloseReasons contains %q, which mapEvictionReason never emits", reason)
+		if !emitted[reason] {
+			t.Errorf("metrics.WorkerConnectionCloseReasons contains %q, which resolveCloseReason never emits", reason)
+		}
+	}
+}
+
+// TestResolveCloseReason covers the disambiguation of ttlcache's
+// EvictionReasonDeleted, which on its own cannot tell a client hang-up from a
+// worker hang-up from a proxy drain. Which side went first is normally the
+// question being asked during an incident, so this mapping is load-bearing.
+func TestResolveCloseReason(t *testing.T) {
+	newConn := func(origin string) *worker.WorkerConnection {
+		wc := worker.NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
+		if origin != "" {
+			wc.SetCloseOrigin(origin)
+		}
+		return wc
+	}
+
+	tests := []struct {
+		name         string
+		reason       ttlcache.EvictionReason
+		origin       string
+		shuttingDown bool
+		want         string
+	}{
+		{"ttl expiry is never ambiguous", ttlcache.EvictionReasonExpired, "", false, metrics.CloseReasonTTLExpired},
+		{"capacity is never ambiguous", ttlcache.EvictionReasonCapacityReached, "", false, metrics.CloseReasonCapacity},
+		{"deleted during drain is shutdown", ttlcache.EvictionReasonDeleted, "", true, metrics.CloseReasonShutdown},
+		{"drain wins over a recorded origin", ttlcache.EvictionReasonDeleted, metrics.CloseReasonClientClosed, true, metrics.CloseReasonShutdown},
+		{"client origin is reported", ttlcache.EvictionReasonDeleted, metrics.CloseReasonClientClosed, false, metrics.CloseReasonClientClosed},
+		{"worker origin is reported", ttlcache.EvictionReasonDeleted, metrics.CloseReasonWorkerClosed, false, metrics.CloseReasonWorkerClosed},
+		{"no origin stays distinguishable", ttlcache.EvictionReasonDeleted, "", false, metrics.CloseReasonDeleted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveCloseReason(tt.reason, newConn(tt.origin), tt.shuttingDown); got != tt.want {
+				t.Errorf("resolveCloseReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSetCloseOriginFirstWriterWins ensures a cascading teardown cannot
+// overwrite the original cause. A client close triggers a worker close, so
+// without this the origin would always end up reported as worker_closed.
+func TestSetCloseOriginFirstWriterWins(t *testing.T) {
+	wc := worker.NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
+	if got := wc.CloseOrigin(); got != "" {
+		t.Errorf("new connection should have no origin, got %q", got)
+	}
+	wc.SetCloseOrigin(metrics.CloseReasonClientClosed)
+	wc.SetCloseOrigin(metrics.CloseReasonWorkerClosed)
+	if got := wc.CloseOrigin(); got != metrics.CloseReasonClientClosed {
+		t.Errorf("first writer should win, got %q", got)
+	}
+}
+
+// TestConnectResultsArePreInitialised guards the pairing between the outcomes
+// HijackHandler can emit and the label set pre-initialised in the metrics
+// package. A result emitted but not pre-initialised appears only after it
+// first occurs, leaving gaps in rate() and misfiring absent() alerts.
+func TestConnectResultsArePreInitialised(t *testing.T) {
+	emitted := []string{
+		metrics.ConnectAccepted, metrics.ConnectNotHijackable, metrics.ConnectMissingAuth,
+		metrics.ConnectMissingRequestID, metrics.ConnectInvalidRequestID,
+		metrics.ConnectTokenExpired, metrics.ConnectTokenUnknown,
+		metrics.ConnectRequestIDMismatch, metrics.ConnectHijackFailed,
+	}
+	for _, r := range emitted {
+		if !slices.Contains(metrics.ConnectResults, r) {
+			t.Errorf("%q can be emitted but is not pre-initialised in metrics.ConnectResults", r)
+		}
+	}
+	for _, r := range metrics.ConnectResults {
+		if !slices.Contains(emitted, r) {
+			t.Errorf("metrics.ConnectResults contains %q which is never emitted", r)
 		}
 	}
 }
