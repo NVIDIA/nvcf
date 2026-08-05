@@ -205,8 +205,8 @@ global:
     nvctServiceURL: ""             # CHANGE (multi-cluster): "http://tasks.${GATEWAY_ADDR}". Worker env NVCT_FQDN.
     nvctGrpcServiceURL: ""         # CHANGE (multi-cluster): "http://worker-tasks.${GATEWAY_ADDR}". Worker env NVCT_FQDN_GRPC.
     invocationServiceURL: ""       # Empty = in-cluster default. Workers use this for the invocation stream address.
-    # CHANGE when enabling LLM: required when addons.llm.enabled is true. Use a
-    # worker-reachable host:port for the selected topology.
+    # CHANGE (multi-cluster): worker-reachable request-router host:port. Empty
+    # uses llm-request-router.nvcf.svc.cluster.local:50071.
     llmRequestRouterAddress: ""
 
   nodeSelectors:
@@ -336,9 +336,9 @@ Multi-cluster worker endpoints and GRPCRoutes
 
 In single-cluster deployments, leave the URL fields under `workerEndpoints`
 empty and leave `grpc.enabled` false. Worker pods resolve control-plane
-services through in-cluster DNS. When the LLM addon is enabled, set
-`llmRequestRouterAddress` to
-`llm-request-router.nvcf.svc.cluster.local:50071`.
+services through in-cluster DNS. When the LLM addon is enabled, an empty
+`llmRequestRouterAddress` uses
+`llm-request-router.nvcf.svc.cluster.local:50071` by default.
 
 In multi-cluster deployments, worker pods run on a separate compute cluster and
 cannot resolve in-cluster service names from the control-plane cluster. Set each
@@ -355,9 +355,9 @@ configure the NVCA agent's own connections to the control plane. The
 into launched worker pods. Both layers are required for multi-cluster function
 execution.
 
-The stack maps `llmRequestRouterAddress` to the NVCF API remote-config key
-`nvcf.llm-request-router.worker-address` only when the LLM addon is enabled.
-Do not place this value under `api.env`.
+The stack maps the configured or default `llmRequestRouterAddress` to the NVCF
+API remote-config key `nvcf.llm-request-router.worker-address` only when the LLM
+addon is enabled. Do not place this value under `api.env`.
 </Info>
 
 ### Create the registry pull secret
@@ -629,9 +629,9 @@ are correct.
 | --- | --- | --- |
 | Clusters | One cluster for everything | Control plane on one cluster, NVCA on a separate GPU cluster |
 | Gateway | On the only cluster | On the control-plane cluster only |
-| Worker endpoints | Empty except for the LLM router address when LLM is enabled | Set to externally resolvable addresses |
+| Worker endpoints | Use in-cluster defaults | Set to externally resolvable addresses |
 | Worker GRPCRoutes | Disabled | Enabled (`nvcfApi.grpc`, `nvctApi.grpc`) |
-| Control-plane env file | Sets the three NVCA Host-header overrides and the LLM router address when needed | Same, plus external `workerEndpoints` and worker GRPCRoutes |
+| Control-plane env file | Sets the three NVCA Host-header overrides | Same, plus external `workerEndpoints` and worker GRPCRoutes |
 | Compute-plane env file | Required: uses endpoints reachable from the shared cluster | Required: uses endpoints reachable from the separate compute cluster |
 | Context before `register-cluster` | Control-plane context | Compute context (so JWKS is discovered from the compute cluster) |
 | `KUBECONFIG_FILE` | Not used | Compute-scoped kubeconfig passed to `register-cluster` and `install` |

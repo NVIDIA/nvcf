@@ -33,14 +33,10 @@ When enabled, the stack creates:
 
 ## Helmfile Configuration
 
-Add the LLM worker endpoint, addon, and `agentConfig` block to your Helmfile
-environment file before applying the stack:
+Add the LLM addon and `agentConfig` block to your Helmfile environment file
+before applying the stack:
 
 ```yaml
-global:
-  workerEndpoints:
-    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
-
 addons:
   llm:
     enabled: true
@@ -69,13 +65,13 @@ agentConfig:
 Use `replicaCount: 1` for local or single-node test clusters. Increase
 replica counts for shared or production environments.
 
-`global.workerEndpoints.llmRequestRouterAddress` is required when
-`addons.llm.enabled` is `true`. Use the cluster-local service address shown
-above when workers run in the same cluster as the control plane. For a split
-control-plane and compute-plane deployment, set a host and port that worker
-pods can reach.
+When `addons.llm.enabled` is `true`, the stack defaults
+`global.workerEndpoints.llmRequestRouterAddress` to
+`llm-request-router.nvcf.svc.cluster.local:50071`. Colocated deployments do not
+need to set this field. For a split control-plane and compute-plane deployment,
+set it to a host and port that worker pods can reach.
 
-The stack maps this value to
+The stack maps the configured or default address to
 `api.remoteConfig.configData.nvcf.llm-request-router.worker-address`. The NVCF
 API then includes the address in LLM worker configuration. Do not configure
 the worker address under `api.env`. When the LLM addon is disabled, the stack
@@ -195,7 +191,7 @@ mean the router knows the target but has no active eligible backend. Check:
 - `addons.llm.requestRouter.loadBalancer.config` includes the algorithm selected
   by the function's `models[].llmConfig.routingMethod`.
 - The `llm-worker` sidecar connected to `llm-request-router`.
-- `global.workerEndpoints.llmRequestRouterAddress` is reachable from the worker
+- The effective LLM request-router worker address is reachable from the worker
   cluster.
 - Local clusters using plaintext transport include both `grpcInsecure` and
   `stargateQUICInsecure`.

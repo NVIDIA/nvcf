@@ -243,8 +243,8 @@ global:
     # repository: <your-ecr-repository-name>
 
   workerEndpoints:
-    # Required when addons.llm.enabled is true. Use a host and port that LLM
-    # worker pods can reach.
+    # Optional. Empty uses the cluster-local request-router service. Set a
+    # worker-reachable host and port for a split-cluster deployment.
     llmRequestRouterAddress: ""
 
   nodeSelectors:
@@ -331,11 +331,10 @@ ingress:
         listenerName: tcp
 ```
 
-If you enable `addons.llm`, set
-`global.workerEndpoints.llmRequestRouterAddress` to a request-router host and
-port that worker pods can reach. Colocated workers can use
-`llm-request-router.nvcf.svc.cluster.local:50071`. Split deployments require an
-externally reachable address. See
+If you enable `addons.llm`, colocated workers use
+`llm-request-router.nvcf.svc.cluster.local:50071` by default. For a split
+deployment, set `global.workerEndpoints.llmRequestRouterAddress` to an
+externally reachable request-router host and port. See
 [LLM Function Enablement](./llm-function-enablement.md) for the complete addon
 configuration.
 
