@@ -741,24 +741,26 @@ llmRequestRouter:
        should not be punished with confusing required errors during render. */ -}}
   {{- if and (dig "addons" "llm" "enabled" false .Values) (dig "addons" "llm" "pki" "enabled" false .Values) }}
   {{- $secretName := dig "addons" "llm" "pki" "secretName" "stargate-quic-tls" .Values }}
-  {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.enabled is true" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
+  {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
+  {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+  {{- $manageSetting := dig "addons" "llm" "pki" "clusterIssuer" "enabled" "__default__" .Values }}
+  {{- $managedIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+  {{- if ne (toString $manageSetting) "__default__" }}
+  {{- $managedIssuer = eq (toString $manageSetting) "true" }}
+  {{- end }}
+  {{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
+  {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
+  {{- end }}
   {{- $dnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
   {{- if eq (len $dnsNames) 0 }}
   {{- fail "addons.llm.pki.dnsNames must contain at least one DNS name when addons.llm.pki.enabled is true" }}
-  {{- end }}
-  {{- /* Provisioning hook reuses the same image the k8s-openbao chart drives;
-       fall back to openbao.migrations.image.tag so operators set the version
-       in one place. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values }}
-  {{- if not $pkiImageTag }}
-  {{- fail "addons.llm.pki.image.tag (or openbao.migrations.image.tag) is required when addons.llm.pki.enabled is true" }}
   {{- end }}
   certificate:
     enabled: true
     secretName: {{ $secretName | quote }}
     issuerRef:
-      kind: {{ dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values | quote }}
-      name: {{ dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values | quote }}
+      kind: {{ $issuerKind | quote }}
+      name: {{ $issuerName | quote }}
     dnsNames:
       {{- toYaml $dnsNames | nindent 6 }}
   tls:
@@ -767,6 +769,15 @@ llmRequestRouter:
     certPath: {{ dig "addons" "llm" "pki" "certPath" "/etc/stargate/tls/tls.crt" .Values | quote }}
     keyPath: {{ dig "addons" "llm" "pki" "keyPath" "/etc/stargate/tls/tls.key" .Values | quote }}
     quicInsecure: false
+  {{- if $managedIssuer }}
+  {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
+  {{- /* Provisioning hook reuses the same image the k8s-openbao chart drives;
+       fall back to openbao.migrations.image.tag so operators set the version
+       in one place. */ -}}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values }}
+  {{- if not $pkiImageTag }}
+  {{- fail "addons.llm.pki.image.tag (or openbao.migrations.image.tag) is required when addons.llm.pki.clusterIssuer management is enabled" }}
+  {{- end }}
   pki:
     enabled: true
     namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
@@ -780,6 +791,7 @@ llmRequestRouter:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
     {{- end }}
+  {{- end }}
   {{- end }}
 
 vanityGateway:
@@ -864,7 +876,7 @@ vanityGateway:
 {{- if dig "addons" "nvcfUi" "enabled" false .Values }}
 {{/* Shared backend coordinates for the services the nvcf-ui proxies to and
      the control-plane health monitor probes. Read the same way gateway-routes
-     is fed — from ingress.gatewayApi.routes.<x>.backend — so the config URLs and
+     is fed from ingress.gatewayApi.routes.<x>.backend so the config URLs and
      component endpoints track any operator override; the dict defaults fill the
      usual case where a route pins no explicit backend. merge lets a partial
      override (e.g. namespace only) keep the remaining default fields. */}}
