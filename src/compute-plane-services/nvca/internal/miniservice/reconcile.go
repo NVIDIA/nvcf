@@ -138,6 +138,7 @@ var (
 
 const (
 	InferenceNamespaceEnvKey        = "HELM_CHART_NAMESPACE"
+	miniServiceKind                 = "MiniService"
 	miniServiceUnknownPhase         = "Unknown"
 	miniServiceUnknownFailureReason = "Unknown"
 	miniServicePhaseAttrKey         = "nvca.miniservice.phase"
@@ -458,25 +459,37 @@ func (r *Reconciler) saveWorkloadConfig(
 		return nil
 	}
 
-	base := &v1alpha1.MiniService{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: v1alpha1.SchemeGroupVersion.String(),
-			Kind:       "MiniService",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            ms.Name,
-			ResourceVersion: ms.ResourceVersion,
-		},
-		Spec: v1alpha1.MiniServiceSpec{
-			WorkloadConfig: desired.DeepCopy(),
-		},
+	spec := map[string]any{"workloadConfig": nil}
+	if desired != nil {
+		workloadConfig, err := runtime.DefaultUnstructuredConverter.ToUnstructured(desired)
+		if err != nil {
+			return fmt.Errorf("convert miniservice %s workload config: %w", ms.Name, err)
+		}
+		spec["workloadConfig"] = workloadConfig
 	}
-	if err := r.Client.Patch(ctx, base, client.Apply, client.ForceOwnership, client.FieldOwner(managedByValue)); err != nil {
+	// Build the apply payload independently of MiniServiceSpec's compatibility serializer.
+	// This gives the controller ownership of only spec.workloadConfig and prevents zero-valued
+	// namespace, request-name, or Helm fields from entering the SSA request.
+	applyPatch := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": v1alpha1.SchemeGroupVersion.String(),
+		"kind":       miniServiceKind,
+		"metadata": map[string]any{
+			"name": ms.Name,
+		},
+		"spec": spec,
+	}}
+	if err := r.Client.Patch(
+		ctx,
+		applyPatch,
+		client.Apply,
+		client.FieldOwner(managedByValue),
+		client.ForceOwnership,
+	); err != nil {
 		return fmt.Errorf("patch miniservice %s workload config: %w", ms.Name, err)
 	}
 
-	ms.Spec.WorkloadConfig = desired
-	ms.ResourceVersion = base.ResourceVersion
+	ms.Spec.WorkloadConfig = desired.DeepCopy()
+	ms.ResourceVersion = applyPatch.GetResourceVersion()
 	return nil
 }
 
@@ -487,6 +500,16 @@ func (r *Reconciler) saveWorkloadConfig(
 // (observedGeneration is still updated at the end of Reconcile).
 func (r *Reconciler) prepareUpdateIfNeeded(ctx context.Context, ms *v1alpha1.MiniService) error {
 	if ms.Status.ObservedGeneration == 0 || ms.Generation == ms.Status.ObservedGeneration {
+		return nil
+	}
+	// Installing at revision zero means initial object application is still in progress.
+	// doInstall reads the current spec and its render cache is keyed by Helm configuration,
+	// so it can handle spec changes without entering an update path that assumes infra exists.
+	if ms.Status.Phase == v1alpha1.MiniServiceInstalling && ms.Status.Revision == 0 {
+		logf.FromContext(ctx).Info("Spec change detected during initial install, continuing install",
+			"generation", ms.Generation,
+			"observedGeneration", ms.Status.ObservedGeneration,
+		)
 		return nil
 	}
 
