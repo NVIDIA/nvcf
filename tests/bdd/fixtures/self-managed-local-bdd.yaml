@@ -30,6 +30,7 @@ global:
   workerEndpoints:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
+    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
 
 cassandra:
   replicaCount: 1

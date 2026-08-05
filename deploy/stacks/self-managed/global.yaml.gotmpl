@@ -259,6 +259,11 @@ natsAuthCalloutService:
 {{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
+{{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim }}
+{{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
+{{- if and $llmEnabled (not $llmRequestRouterWorkerAddress) }}
+{{- fail "global.workerEndpoints.llmRequestRouterAddress is required when addons.llm.enabled is true" }}
+{{- end }}
 {{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
 {{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
 api:
@@ -280,6 +285,13 @@ api:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $llmEnabled }}
+  remoteConfig:
+    configData:
+      nvcf:
+        llm-request-router:
+          worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
   {{- end }}
   accountBootstrap:
     image:

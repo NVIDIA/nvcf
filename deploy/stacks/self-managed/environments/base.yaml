@@ -66,6 +66,9 @@ global:
     invocationServiceURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy.
     grpcProxyWorkerConnectURL: ""
+    # LLM request-router address advertised to LLM worker sidecars. Required
+    # when addons.llm.enabled is true.
+    llmRequestRouterAddress: ""
 
   nodeSelectors:
     enabled: false

@@ -242,6 +242,11 @@ global:
     # registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
     # repository: <your-ecr-repository-name>
 
+  workerEndpoints:
+    # Required when addons.llm.enabled is true. Use a host and port that LLM
+    # worker pods can reach.
+    llmRequestRouterAddress: ""
+
   nodeSelectors:
     enabled: true # Set true when using dedicated node labels for NVCF workloads
     vault:
@@ -326,6 +331,13 @@ ingress:
         listenerName: tcp
 ```
 
+If you enable `addons.llm`, set
+`global.workerEndpoints.llmRequestRouterAddress` to a request-router host and
+port that worker pods can reach. Colocated workers can use
+`llm-request-router.nvcf.svc.cluster.local:50071`. Split deployments require an
+externally reachable address. See
+[LLM Function Enablement](./llm-function-enablement.md) for the complete addon
+configuration.
 
 #### `domain` and `ingress` Configuration
 
