@@ -37,6 +37,20 @@ images:
 cache:
   # Size for storing cache keys.
   keyStorageSize: 50m
+  # How long a waiter blocks for the in-flight fill of the same key before it
+  # gives up and fetches from origin itself (proxy_cache_lock_timeout).
+  #
+  # Sized for the slowest expected upstream fetch, not the average: a waiter that
+  # gives up mid-fill re-downloads from origin. Observed 10GB fills (2026-07-06)
+  # were p50 707s, p90 1142s, max ~1200s, hence the default.
+  #
+  # Keep consistentHashRouting.relayReadTimeout consistent with this: the relay
+  # waits on exactly this mechanism, so a relay timeout well below lockTimeout
+  # means followers 504 while the owner is still filling normally.
+  lockTimeout: 1200s
+  # How long an existing cache entry may be "being filled" before another request
+  # is allowed to start its own fill (proxy_cache_lock_age).
+  lockAge: 3600s
   # Period a resource can remain in cache without being accessed.
   # Immutable blobs (SHA256-addressed) are safe to keep long; disk pressure
   # is handled by the min_free watermark (persistentVolumeClaim.freeProxyPct),
