@@ -74,7 +74,9 @@ image credential helper and shared storage image tags.
 
 Use `global.helm.sources` for chart repository location and `global.image` for
 container image repository location. The stack rewrites repositories through
-those global values, while chart defaults supply the tested image tags.
+those global values. Chart defaults provide fallback versions for values the
+compute-plane stack does not override.
+
 Only set `global.nvcaOperator.selfManaged.imageCredHelper.imageTag` when
 pinning a tested replacement helper image.
 

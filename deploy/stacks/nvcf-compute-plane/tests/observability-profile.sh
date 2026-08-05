@@ -57,6 +57,20 @@ collector_image_tag() {
   ' "$1"
 }
 
+operator_image_tag() {
+  awk '
+    /^image:$/ { image = 1; next }
+    image && /^  tag:/ { gsub(/"/, "", $2); print $2; exit }
+  ' "$1"
+}
+
+nvca_version() {
+  awk '
+    /^selfManaged:$/ { self_managed = 1; next }
+    self_managed && /^  nvcaVersion:/ { gsub(/"/, "", $2); print $2; exit }
+  ' "$1"
+}
+
 has_byoo_gate() {
   grep -q '^[[:space:]]*- BYOObservability$' "$1"
 }
@@ -82,10 +96,9 @@ for profile in default disabled control compute all; do
   esac
 done
 
-test "$(collector_image_tag "$work_dir/compute.yaml")" = "0.157.9" ||
-  fail "compute profile did not use collector image tag 0.157.9"
-
 render_values compute "$work_dir/compute-overrides.yaml" \
+  --state-values-set-string global.nvcaOperator.imageTag=operator-test-tag \
+  --state-values-set-string global.nvcaOperator.selfManaged.nvcaVersion=nvca-test-tag \
   --state-values-set global.nvcaOperator.selfManaged.otelCollector.enabled=false \
   --state-values-set-string global.nvcaOperator.selfManaged.otelCollector.imageRepository=registry.example.com/nvcf/collector \
   --state-values-set-string global.nvcaOperator.selfManaged.otelCollector.imageTag=test-tag \
@@ -102,15 +115,12 @@ grep -q '^[[:space:]]*- -BYOObservability$' \
 grep -Eq '^    imageRepository: "?registry\.example\.com/nvcf/collector"?$' \
   "$work_dir/compute-overrides.yaml" ||
   fail "explicit collector image repository was not preserved"
-grep -Eq '^    imageTag: "?test-tag"?$' \
-  "$work_dir/compute-overrides.yaml" ||
+test "$(collector_image_tag "$work_dir/compute-overrides.yaml")" = "test-tag" ||
   fail "explicit collector image tag was not preserved"
-grep -Eq '^  tag: "?3\.1\.0"?$' \
-  "$work_dir/compute-overrides.yaml" ||
-  fail "compute-plane operator image tag default was not preserved"
-grep -Eq '^  nvcaVersion: "?3\.1\.0"?$' \
-  "$work_dir/compute-overrides.yaml" ||
-  fail "compute-plane NVCA version default was not preserved"
+test "$(operator_image_tag "$work_dir/compute-overrides.yaml")" = "operator-test-tag" ||
+  fail "operator image tag override was not preserved"
+test "$(nvca_version "$work_dir/compute-overrides.yaml")" = "nvca-test-tag" ||
+  fail "NVCA version override was not preserved"
 
 render_values control "$work_dir/control-overrides.yaml" \
   --state-values-set global.nvcaOperator.selfManaged.otelCollector.enabled=true \
