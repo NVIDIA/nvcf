@@ -15,17 +15,26 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
-{{- define "nvcf-kai-topology.name" -}}
+{{- define "nvcf-cluster-topology.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "nvcf-kai-topology.labels" -}}
+{{- define "nvcf-cluster-topology.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
-app.kubernetes.io/name: {{ include "nvcf-kai-topology.name" . }}
+app.kubernetes.io/name: {{ include "nvcf-cluster-topology.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- with .Values.commonLabels }}
 {{ toYaml . }}
 {{- end }}
+{{- end -}}
+
+{{/*
+Derive a Grove domain name from a KAI nodeLabel: last path element with '.' removed.
+Example: nvidia.com/gpu.clique -> gpuclique; kubernetes.io/hostname -> hostname
+*/}}
+{{- define "nvcf-cluster-topology.groveDomain" -}}
+{{- $nodeLabel := . | required "nvcf-cluster-topology: every level must set nodeLabel" -}}
+{{- $nodeLabel | splitList "/" | last | replace "." "" -}}
 {{- end -}}

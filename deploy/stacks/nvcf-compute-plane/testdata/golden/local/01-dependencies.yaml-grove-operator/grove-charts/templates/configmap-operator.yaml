@@ -3,7 +3,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: grove-operator-cm-b77904eb
+  name: grove-operator-cm-58969b77
   namespace: grove-system
   labels:
     chart: "grove-charts-v0.1.0-alpha.11"
@@ -55,6 +55,6 @@ data:
     logLevel: info
     logFormat: json
     topologyAwareScheduling:
-      enabled: false
+      enabled: true
     network:
       autoMNNVLEnabled: false

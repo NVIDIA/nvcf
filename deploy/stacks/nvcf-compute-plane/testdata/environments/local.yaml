@@ -18,10 +18,10 @@ global:
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
 
 addons:
+  topologyAwareScheduling:
+    enabled: true
   kaiScheduler:
     enabled: true
-    clusterTopologies:
-      enabled: true
   groveOperator:
     enabled: true
   dynamoOperator:

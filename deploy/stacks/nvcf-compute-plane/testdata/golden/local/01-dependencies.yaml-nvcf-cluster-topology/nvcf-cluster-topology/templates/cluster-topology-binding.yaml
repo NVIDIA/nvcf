@@ -1,3 +1,5 @@
+---
+# Source: nvcf-cluster-topology/templates/cluster-topology-binding.yaml
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -13,9 +15,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: v2
-name: nvcf-kai-topology
-description: KAI Scheduler Topology resource describing the NVLink clique hierarchy for NVCF workloads
-type: application
-version: 0.1.0
-appVersion: "0.1.0"
+apiVersion: grove.io/v1alpha1
+kind: ClusterTopologyBinding
+metadata:
+  name: nvcf-mnnvl-topology-binding
+  labels:
+    helm.sh/chart: nvcf-cluster-topology-0.1.0
+    app.kubernetes.io/name: nvcf-cluster-topology
+    app.kubernetes.io/instance: nvcf-cluster-topology
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  levels:
+  - domain: "gpuclique"
+    key: "nvidia.com/gpu.clique"
+  - domain: "hostname"
+    key: "kubernetes.io/hostname"
+  schedulerTopologyBindings:
+  - schedulerName: "kai-scheduler"
+    topologyReference: "nvcf-mnnvl-topology"

@@ -100,15 +100,15 @@ The compute plane stack ships this as an optional add-on. Enable it in
 
 ```yaml
 addons:
+  topologyAwareScheduling:
+    enabled: true
+    topologies:
+      - name: nvcf-mnnvl-topology
+        levels:
+          - nodeLabel: nvidia.com/gpu.clique
+          - nodeLabel: kubernetes.io/hostname
   kaiScheduler:
     enabled: true
-    clusterTopologies:
-      enabled: true
-      topologies:
-        - name: nvcf-mnnvl-topology
-          levels:
-            - nodeLabel: nvidia.com/gpu.clique
-            - nodeLabel: kubernetes.io/hostname
 ```
 
 The add-on requires the `kai-scheduler` release (enable `addons.kaiScheduler.enabled`)
@@ -127,6 +127,13 @@ spec:
   - nodeLabel: kubernetes.io/hostname
 ```
 
+When `addons.groveOperator.enabled` is also true, the same
+`topologyAwareScheduling` toggle sets Grove `topologyAwareScheduling.enabled`
+and installs a `ClusterTopologyBinding` that references the primary KAI
+Topology (`nvcf-mnnvl-topology` by default). Grove `network.autoMNNVLEnabled`
+is not set by this toggle; configure it under `addons.groveOperator.network`
+when you need it.
+
 The `nvidia.com/gpu.clique` label is applied by the NVIDIA GPU DRA driver, which is already
 a prerequisite on NVLink-optimized clusters.
 
@@ -134,6 +141,12 @@ Verify the resource exists:
 
 ```bash
 kubectl get topologies.kai.scheduler nvcf-mnnvl-topology
+```
+
+When Grove is enabled, also verify the binding:
+
+```bash
+kubectl get clustertopologybindings.grove.io nvcf-mnnvl-topology-binding
 ```
 
 ### Opt a function in

@@ -72,6 +72,23 @@ observability:
 # =============================================================================
 addons:
 
+  # MNNVL topology-aware scheduling (disabled by default). Enable on
+  # NVLink-optimized clusters so multi-node functions can request clique-level
+  # gang placement. When true and kaiScheduler.enabled, installs KAI Topology
+  # CRs from topologies below. When true and groveOperator.enabled, also sets
+  # Grove topologyAwareScheduling.enabled and installs a ClusterTopologyBinding
+  # that references the KAI Topology. Requires addons.kaiScheduler.enabled.
+  # Function owners opt in per workload with the `kai.scheduler/topology`
+  # annotation naming one of the entries below.
+  topologyAwareScheduling:
+    enabled: false
+    topologies:
+      - name: nvcf-mnnvl-topology
+        # Ordered widest domain first, narrowest last.
+        levels:
+          - nodeLabel: nvidia.com/gpu.clique
+          - nodeLabel: kubernetes.io/hostname
+
   # KAI Scheduler (disabled by default). Required when enabling Grove or Dynamo.
   # When enabled, NVCA also gets the KAIScheduler feature gate.
   # Per-component resource overrides: addons.kaiScheduler.<component>.resources
@@ -79,25 +96,12 @@ addons:
   kaiScheduler:
     enabled: false
 
-    # Cluster-scoped Topologies for KAI Scheduler gang placement (disabled by
-    # default). Enable on NVLink-optimized clusters so multi-node functions can
-    # request clique-level gang placement. Function owners opt in per workload
-    # with the `kai.scheduler/topology` annotation naming one of the entries
-    # below. Requires addons.kaiScheduler.enabled (or an equivalent in-cluster
-    # KAI install with the Topology CRD).
-    clusterTopologies:
-      enabled: false
-      topologies:
-        - name: nvcf-mnnvl-topology
-          # Ordered widest domain first, narrowest last.
-          levels:
-            - nodeLabel: nvidia.com/gpu.clique
-            - nodeLabel: kubernetes.io/hostname
-
-  # Grove topology-aware scheduling operator (disabled by default)
+  # Grove topology-aware scheduling operator (disabled by default).
+  # topologyAwareScheduling.enabled is driven by addons.topologyAwareScheduling
+  # when that top-level toggle is on. Override network settings explicitly
+  # (for example network.autoMNNVLEnabled); they are not set by the topology toggle.
   groveOperator:
     enabled: false
-    topologyAwareScheduling: {}
     network: {}
 
   # Dynamo inference framework scheduling operator (disabled by default).

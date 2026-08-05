@@ -13,16 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Cluster-scoped Topology resources to install. Workloads reference a Topology
-# by name through the `kai.scheduler/topology` annotation.
-#
-# Each entry needs:
-#   name:   Topology resource name
-#   levels: node labels ordered widest domain first, narrowest last
-topologies:
-- name: nvcf-mnnvl-topology
-  levels:
-  - nodeLabel: nvidia.com/gpu.clique
-  - nodeLabel: kubernetes.io/hostname
-
-commonLabels: {}
+apiVersion: v2
+name: nvcf-cluster-topology
+description: >-
+  Cluster-scoped KAI Topology and Grove ClusterTopologyBinding resources for
+  NVCF MNNVL topology-aware scheduling
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

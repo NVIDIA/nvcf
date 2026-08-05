@@ -90,16 +90,17 @@ make install CLUSTER_NAME=...   # downloads helmfile v1.1.9 + helm v3.15.4 on fi
 ## Optional Add-ons
 
 KAI Scheduler, Grove (topology-aware scheduling), Dynamo (inference framework
-scheduling), and optional KAI cluster Topologies are disabled by default. Grove
-and Dynamo require KAI Scheduler (release and namespace `kai-scheduler`). Enable
+scheduling), and optional MNNVL topology-aware scheduling are disabled by
+default. Grove and Dynamo require KAI Scheduler (release and namespace
+`kai-scheduler`). Topology-aware scheduling also requires KAI Scheduler. Enable
 per-environment in `environments/<env>.yaml`:
 
 ```yaml
 addons:
+  topologyAwareScheduling:
+    enabled: true
   kaiScheduler:
     enabled: true
-    clusterTopologies:
-      enabled: true
   groveOperator:
     enabled: true
   dynamoOperator:
@@ -110,14 +111,15 @@ Override KAI component resources under `addons.kaiScheduler.<component>.resource
 (for example `addons.kaiScheduler.scheduler.resources.requests.memory`). Defaults
 are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
 
-`kaiScheduler.clusterTopologies` installs one or more cluster-scoped KAI
-`Topology` resources from `clusterTopologies.topologies`. The default entry
-names the `nvidia.com/gpu.clique` and `kubernetes.io/hostname` node labels.
-Multi-node functions reference a Topology by name through the
+`addons.topologyAwareScheduling` installs cluster-scoped KAI `Topology`
+resources from `topologyAwareScheduling.topologies` when KAI is enabled. The
+default entry names the `nvidia.com/gpu.clique` and `kubernetes.io/hostname`
+node labels. Multi-node functions reference a Topology by name through the
 `kai.scheduler/topology` annotation so KAI places every replica of a workload
 inside one NVLink clique instead of binding pods one at a time. It requires
-KAI Scheduler v0.12.0 or later. See
-[the KAI Scheduler guide](../../../docs/user/cluster-management/kai-scheduler.md).
+KAI Scheduler v0.12.0 or later. When Grove is also enabled, the same toggle
+sets Grove `topologyAwareScheduling.enabled` and installs a
+`ClusterTopologyBinding` that points at the primary KAI Topology.
 
 Enabling `addons.kaiScheduler.enabled` or `addons.dynamoOperator.enabled` also
 adds the matching NVCA feature gates (`KAIScheduler`, `DynamoOperatorSupport`).

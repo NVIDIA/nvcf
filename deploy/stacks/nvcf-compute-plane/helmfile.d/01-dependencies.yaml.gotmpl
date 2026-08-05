@@ -1,11 +1,11 @@
 # NVCF Compute Plane Releases
 #
 # Optional releases, installed once per GPU cluster:
-#   kai-scheduler:        addons.kaiScheduler.enabled (required by grove/dynamo)
-#   nvcf-kai-topology:    KAI Topologies for gang scheduling
-#                         (addons.kaiScheduler.clusterTopologies.enabled)
-#   grove-operator:       topology-aware scheduling (addons.groveOperator.enabled)
-#   dynamo-operator:      Dynamo inference framework scheduling (addons.dynamoOperator.enabled)
+#   kai-scheduler:           addons.kaiScheduler.enabled (required by grove/dynamo)
+#   nvcf-cluster-topology:   KAI Topology + Grove ClusterTopologyBinding
+#                            (addons.topologyAwareScheduling.enabled)
+#   grove-operator:          topology-aware scheduling (addons.groveOperator.enabled)
+#   dynamo-operator:         Dynamo inference framework scheduling (addons.dynamoOperator.enabled)
 #
 # CLUSTER_NAME is required and scopes the registration values handoff file.
 # Run `make register-cluster CLUSTER_NAME=<name>` before `make install`.
@@ -230,29 +230,42 @@ releases:
     wait: true
     waitForJobs: true
 
-  - name: nvcf-kai-topology
-    # Cluster-scoped KAI Scheduler Topology resources (optional; disabled by
-    # default). Workloads opt in through the `kai.scheduler/topology`
-    # annotation so KAI places every replica of a StatefulSet inside a single
-    # clique instead of binding pods one at a time.
+  - name: nvcf-cluster-topology
+    # Cluster-scoped KAI Topology and Grove ClusterTopologyBinding resources
+    # (optional; disabled by default).
     #
-    # Enable per-environment: addons.kaiScheduler.clusterTopologies.enabled: true
+    # Enable per-environment: addons.topologyAwareScheduling.enabled: true
     # Configure the Topology list under
-    # addons.kaiScheduler.clusterTopologies.topologies.
+    # addons.topologyAwareScheduling.topologies.
     #
-    # Requires the kai-scheduler release (and KAI v0.12.0 or later) for the
-    # native `kai.scheduler/v1alpha1` Topology CRD.
+    # Requires addons.kaiScheduler.enabled (and KAI v0.12.0 or later) for the
+    # native `kai.scheduler/v1alpha1` Topology CRD. When Grove is also enabled,
+    # the release waits on grove-operator for the ClusterTopologyBinding CRD
+    # and renders a binding that references the primary KAI Topology.
     #
-    # Topologies are cluster-scoped; the release lives in the nvca-operator
+    # Resources are cluster-scoped; the release lives in the nvca-operator
     # namespace so lifecycle stays with NVCA-owned resources.
-    condition: addons.kaiScheduler.clusterTopologies.enabled
-    chart: ../charts/nvcf-kai-topology
+    {{- $topoEnabled := dig "topologyAwareScheduling" "enabled" false .Values.addons }}
+    {{- $kaiEnabled := dig "kaiScheduler" "enabled" false .Values.addons }}
+    {{- $groveEnabled := dig "groveOperator" "enabled" false .Values.addons }}
+    {{- if and $topoEnabled (not $kaiEnabled) }}
+    {{- fail "addons.topologyAwareScheduling.enabled requires addons.kaiScheduler.enabled" }}
+    {{- end }}
+    condition: addons.topologyAwareScheduling.enabled
+    chart: ../charts/nvcf-cluster-topology
     namespace: nvca-operator
     needs:
       - kai-scheduler/kai-scheduler
+      {{- if $groveEnabled }}
+      - grove-system/grove-operator
+      {{- end }}
     values:
       - topologies:
-        {{- toYaml (dig "kaiScheduler" "clusterTopologies" "topologies" list .Values.addons) | nindent 10 }}
+        {{- toYaml (dig "topologyAwareScheduling" "topologies" list .Values.addons) | nindent 10 }}
+        kaiScheduler:
+          enabled: {{ $kaiEnabled }}
+        groveOperator:
+          enabled: {{ $groveEnabled }}
     labels:
       release-group: workers
     wait: true
@@ -307,9 +320,9 @@ releases:
               concurrentSyncs: 3
             podCliqueScalingGroup:
               concurrentSyncs: 3
-          {{- with .Values.addons.groveOperator.topologyAwareScheduling }}
+          {{- if dig "topologyAwareScheduling" "enabled" false .Values.addons }}
           topologyAwareScheduling:
-            {{- toYaml . | nindent 12 }}
+            enabled: true
           {{- end }}
           {{- with .Values.addons.groveOperator.network }}
           network:

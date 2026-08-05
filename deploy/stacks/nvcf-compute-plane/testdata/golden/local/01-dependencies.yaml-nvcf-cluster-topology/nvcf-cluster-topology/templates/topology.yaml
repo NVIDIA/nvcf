@@ -1,5 +1,5 @@
 ---
-# Source: nvcf-kai-topology/templates/topology.yaml
+# Source: nvcf-cluster-topology/templates/topology.yaml
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,14 +14,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 apiVersion: kai.scheduler/v1alpha1
 kind: Topology
 metadata:
   name: nvcf-mnnvl-topology
   labels:
-    helm.sh/chart: nvcf-kai-topology-0.1.0
-    app.kubernetes.io/name: nvcf-kai-topology
-    app.kubernetes.io/instance: nvcf-kai-topology
+    helm.sh/chart: nvcf-cluster-topology-0.1.0
+    app.kubernetes.io/name: nvcf-cluster-topology
+    app.kubernetes.io/instance: nvcf-cluster-topology
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/managed-by: Helm
 spec:
