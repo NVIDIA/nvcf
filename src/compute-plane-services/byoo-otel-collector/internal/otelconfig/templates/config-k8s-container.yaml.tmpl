@@ -59,12 +59,6 @@ receivers:
               regex: "kubelet"
               replacement: "kubernetes-cadvisor"
               target_label: job
-            # CRI-O reports the pod sandbox, which owns pod network metrics, as container="POD".
-            - source_labels: [container]
-              regex: "POD"
-              replacement: ""
-              target_label: container
-              action: replace
             - action: labelkeep
               regex: "(__name__|container|cpu|device|image|job|interface|pod)"
         - job_name: "kube-state-metrics"

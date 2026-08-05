@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 receivers:
   otlp:
     protocols:
@@ -52,12 +49,6 @@ receivers:
               source_labels:
                 - job
               target_label: job
-            - action: replace
-              regex: POD
-              replacement: ""
-              source_labels:
-                - container
-              target_label: container
             - action: labelkeep
               regex: (__name__|container|cpu|device|image|job|interface|pod)
           metrics_path: /federate

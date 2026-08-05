@@ -15,12 +15,6 @@ SOURCE_TEMPLATES_DIR = GENERATOR_DIR.parent / "internal" / "otelconfig" / "sourc
 
 SELF_SCRAPE_METRIC_MATCHER = "otelcol_.*"
 CADVISOR_POD_SELECTOR = 'container=~"inference|task|POD|"'
-CADVISOR_POD_NORMALIZATION = """            - source_labels: [container]
-              regex: "POD"
-              replacement: ""
-              target_label: container
-              action: replace
-"""
 
 CONFIG_TEMPLATES = {
     "helm": ("generated_src-config-vm-helm.yaml.tmpl", "generated_src-config-k8s-helm.yaml.tmpl"),
@@ -56,7 +50,7 @@ class PrometheusConfigGeneratorTest(unittest.TestCase):
                             rendered_template,
                         )
 
-    def test_k8s_container_cadvisor_keeps_and_normalizes_pod_sandbox_metrics(self) -> None:
+    def test_k8s_container_cadvisor_keeps_pod_sandbox_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as output_dir:
             TemplateBuilder(
                 str(SOURCE_CONFIG), str(SOURCE_TEMPLATES_DIR), output_dir
@@ -73,11 +67,6 @@ class PrometheusConfigGeneratorTest(unittest.TestCase):
             )
             cadvisor_config = rendered_template[cadvisor_start:cadvisor_end]
             self.assertIn(CADVISOR_POD_SELECTOR, cadvisor_config)
-            self.assertIn(CADVISOR_POD_NORMALIZATION, cadvisor_config)
-            self.assertLess(
-                cadvisor_config.index(CADVISOR_POD_NORMALIZATION),
-                cadvisor_config.index("            - action: labelkeep"),
-            )
 
 
 if __name__ == "__main__":
