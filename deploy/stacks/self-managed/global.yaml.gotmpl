@@ -276,7 +276,7 @@ natsAuthCalloutService:
 {{- if or (contains `:::` $llmRequestRouterIPv6Host) (gt $llmRequestRouterIPv6CompressionCount 1) }}
 {{- $llmRequestRouterIPv6Valid = false }}
 {{- end }}
-{{- if and (eq $llmRequestRouterIPv6CompressionCount 0) (or (hasPrefix `:` $llmRequestRouterIPv6Host) (hasSuffix `:` $llmRequestRouterIPv6Host)) }}
+{{- if or (and (hasPrefix `:` $llmRequestRouterIPv6Host) (not (hasPrefix `::` $llmRequestRouterIPv6Host))) (and (hasSuffix `:` $llmRequestRouterIPv6Host) (not (hasSuffix `::` $llmRequestRouterIPv6Host))) }}
 {{- $llmRequestRouterIPv6Valid = false }}
 {{- end }}
 {{- $llmRequestRouterIPv6HexPart := $llmRequestRouterIPv6Host }}

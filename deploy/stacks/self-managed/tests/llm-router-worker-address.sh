@@ -262,6 +262,8 @@ invalid_address_cases=(
   'too-few-hextets-ipv6|[1:2:3:4:5:6:7]:50071'
   'invalid-embedded-ipv4-octet|[::ffff:256.0.2.1]:50071'
   'incomplete-embedded-ipv4|[::ffff:192.0.2]:50071'
+  'leading-single-colon-ipv6|[:1::2]:50071'
+  'trailing-single-colon-ipv6|[1::2:]:50071'
 )
 address_validation_failed=false
 for invalid_address_case in "${invalid_address_cases[@]}"; do
