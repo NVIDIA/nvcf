@@ -178,13 +178,25 @@ func fetchJobs(repo string, runs []Run, workers int) []Job {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			var body struct {
-				Jobs []Job `json:"jobs"`
+			// Paginate. A run with more than 100 jobs would otherwise report
+			// partial timings, and the wide matrix rows are exactly the runs
+			// whose numbers matter most.
+			var all []Job
+			for page := 1; ; page++ {
+				var body struct {
+					Total int   `json:"total_count"`
+					Jobs  []Job `json:"jobs"`
+				}
+				path := fmt.Sprintf("actions/runs/%d/jobs?per_page=100&page=%d", id, page)
+				if err := getJSON(path, repo, &body); err != nil {
+					return
+				}
+				all = append(all, body.Jobs...)
+				if len(body.Jobs) < 100 || len(all) >= body.Total {
+					break
+				}
 			}
-			if err := getJSON(fmt.Sprintf("actions/runs/%d/jobs?per_page=100", id), repo, &body); err != nil {
-				return
-			}
-			out[i] = result{jobs: body.Jobs}
+			out[i] = result{jobs: all}
 		}(i, run.ID)
 	}
 	wg.Wait()
