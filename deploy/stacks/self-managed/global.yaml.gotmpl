@@ -265,9 +265,53 @@ natsAuthCalloutService:
 {{- if not $llmRequestRouterWorkerAddress }}
 {{- fail "global.workerEndpoints.llmRequestRouterAddress is required when addons.llm.enabled is true" }}
 {{- end }}
-{{- $llmRequestRouterWorkerAddressPattern := `^(([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*|\[[0-9A-Fa-f]*:[0-9A-Fa-f]*:[0-9A-Fa-f:]*\]):[0-9]{1,5}$` }}
 {{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
-{{- if not (regexMatch $llmRequestRouterWorkerAddressPattern $llmRequestRouterWorkerAddress) }}
+{{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
+{{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}
+{{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAddress }}
+{{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAddress }}
+{{- $llmRequestRouterIPv6Host := regexFind `^\[[0-9A-Fa-f:.]+\]` $llmRequestRouterWorkerAddress | trimPrefix "[" | trimSuffix "]" }}
+{{- $llmRequestRouterIPv6Valid := true }}
+{{- $llmRequestRouterIPv6CompressionCount := len (regexFindAll `::` $llmRequestRouterIPv6Host -1) }}
+{{- if or (contains `:::` $llmRequestRouterIPv6Host) (gt $llmRequestRouterIPv6CompressionCount 1) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if and (eq $llmRequestRouterIPv6CompressionCount 0) (or (hasPrefix `:` $llmRequestRouterIPv6Host) (hasSuffix `:` $llmRequestRouterIPv6Host)) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- $llmRequestRouterIPv6HexPart := $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv6RequiredHextets := 8 }}
+{{- if contains `.` $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv4OctetPattern := `(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)` }}
+{{- $llmRequestRouterIPv4SuffixPattern := printf `(^|:)(%s)(\.%s){3}$` $llmRequestRouterIPv4OctetPattern $llmRequestRouterIPv4OctetPattern }}
+{{- $llmRequestRouterIPv4Suffix := regexFind $llmRequestRouterIPv4SuffixPattern $llmRequestRouterIPv6Host | trimPrefix ":" }}
+{{- if not $llmRequestRouterIPv4Suffix }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- else }}
+{{- $llmRequestRouterIPv6HexPart = trimSuffix $llmRequestRouterIPv4Suffix $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv6RequiredHextets = 6 }}
+{{- end }}
+{{- end }}
+{{- $llmRequestRouterIPv6ExplicitHextets := 0 }}
+{{- range $llmRequestRouterIPv6Hextet := splitList `:` $llmRequestRouterIPv6HexPart }}
+{{- if $llmRequestRouterIPv6Hextet }}
+{{- $llmRequestRouterIPv6ExplicitHextets = add $llmRequestRouterIPv6ExplicitHextets 1 }}
+{{- if not (regexMatch `^[0-9A-Fa-f]{1,4}$` $llmRequestRouterIPv6Hextet) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (eq $llmRequestRouterIPv6CompressionCount 0) (ne $llmRequestRouterIPv6ExplicitHextets $llmRequestRouterIPv6RequiredHextets) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if and (eq $llmRequestRouterIPv6CompressionCount 1) (ge $llmRequestRouterIPv6ExplicitHextets $llmRequestRouterIPv6RequiredHextets) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if $llmRequestRouterIPv6Valid }}
+{{- $llmRequestRouterWorkerAddressValid = true }}
+{{- end }}
+{{- end }}
+{{- if not $llmRequestRouterWorkerAddressValid }}
 {{- fail $llmRequestRouterWorkerAddressError }}
 {{- end }}
 {{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAddress | atoi }}
