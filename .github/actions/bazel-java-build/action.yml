@@ -1,0 +1,165 @@
+# Build and test one Java component with Bazel on a bare runner.
+#
+# Extracted so the framework row (nv-boot-parent) and the service rows can run
+# as two jobs without duplicating 130 lines of setup. The services gate on the
+# framework job, so when nv-boot-parent changes it finishes before anything
+# compiles against it.
+name: bazel-java-build
+description: Build and test a Java component with Bazel on a docker-host runner.
+
+inputs:
+  id:
+    description: Component id, e.g. cloud-tasks.
+    required: true
+  path:
+    description: Component path, e.g. src/control-plane-services/cloud-tasks.
+    required: true
+  workdir:
+    description: Directory to invoke Bazel from.
+    required: true
+  scope:
+    description: Bazel target pattern for this component.
+    required: true
+  component_kind:
+    description: java-framework or java-service.
+    required: true
+
+runs:
+  using: composite
+  steps:
+  - uses: actions/checkout@v4
+    with:
+      fetch-depth: 0
+  # The Java tree builds with local_jdk (root .bazelrc). Unlike the fast
+  # matrix, this lane runs on a bare runner rather than the bazel-ci image,
+  # so provide JDK 25 explicitly for the Java requires-docker tests.
+  - uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '25'
+  - name: Install bazelisk
+    shell: bash
+    run: |
+      sudo curl -fsSLo /usr/local/bin/bazel \
+        https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64
+      sudo chmod +x /usr/local/bin/bazel
+      bazel version
+  # Cache Bazel's install base + repository cache (external deps: Maven
+  # artifacts, toolchains) across runs. Compiled action outputs come from
+  # the remote cache below.
+  - name: Cache Bazel repository + disk caches
+    uses: actions/cache@v4
+    with:
+      path: |
+        ~/.cache/bazel/*/install
+        ~/.cache/bazel/*/cache
+      key: bazel-docker-${{ inputs.workdir == '.' && 'rootmodule' || inputs.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', inputs.workdir), format('{0}/.bazelversion', inputs.workdir)) }}
+      restore-keys: |
+        bazel-docker-${{ inputs.workdir == '.' && 'rootmodule' || inputs.id }}-
+  # Enable the public EC2 Buildbarn remote cache when the token+endpoint are
+  # present. Upload only on main pushes so PRs are read-only and cannot
+  # poison the shared cache.
+  - name: Prepare remote cache
+    shell: bash
+    run: |
+      if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ] && [ -n "$CACHE_CA" ]; then
+        printf '%s\n' "$CACHE_CA" > "$RUNNER_TEMP/cache-ca.pem"
+        echo "CACHE_READY=1" >> "$GITHUB_ENV"
+        upload=false
+        upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
+        echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
+        echo "remote cache ready (upload=$upload)"
+      else
+        echo "CACHE_READY=0" >> "$GITHUB_ENV"
+        echo "remote cache unavailable: cacheless build"
+      fi
+  - name: bazel build (${{ inputs.id }})
+    working-directory: ${{ inputs.workdir }}
+    shell: bash
+    run: |
+      CACHE=(--remote_cache=)
+      if [ "${CACHE_READY:-0}" = "1" ]; then
+        CACHE=(--remote_cache="$CACHE_ENDPOINT"
+               --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+               --remote_header="authorization=Bearer $CACHE_TOKEN"
+               --remote_cache_compression --remote_download_all
+               --remote_timeout=600 --remote_retries=5)
+        if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
+          CACHE+=(--remote_upload_local_results=true)
+        else
+          CACHE+=(--remote_upload_local_results=false)
+        fi
+      fi
+      # Capture output so a remote-cache transport error is told apart from a
+      # genuine build failure: retry cacheless only on the former, otherwise
+      # every broken PR builds twice (CodeRabbit review on #399). The grep is
+      # broad on purpose -- a false positive only costs a second attempt (the
+      # old always-retry behavior), a false negative never hides a real break.
+      set +e
+      bazel build "${CACHE[@]}" ${{ inputs.scope }} 2>&1 | tee "$RUNNER_TEMP/bazel-build.log"
+      rc=${PIPESTATUS[0]}
+      set -e
+      if [ "$rc" -ne 0 ] && [ "${CACHE_READY:-0}" = "1" ] && grep -qiE \
+          'remote (cache|spawn)|StatusRuntimeException|UNAVAILABLE|DEADLINE_EXCEEDED|Bad Gateway|502|lost inputs|BulkTransfer|Failed to (query remote|init TLS)' \
+          "$RUNNER_TEMP/bazel-build.log"; then
+        echo "::warning::remote cache error (exit $rc); retrying cacheless"
+        bazel build --remote_cache= ${{ inputs.scope }}
+        rc=$?
+      fi
+      exit "$rc"
+  - name: bazel test (${{ inputs.id }})
+    working-directory: ${{ inputs.workdir }}
+    # Full suite, NO tag filter: unit AND requires-docker (Testcontainers)
+    # tests against the host Docker daemon. bazel exit 4 (no test targets in
+    # scope) is treated as success.
+    shell: bash
+    run: |
+      CACHE=(--remote_cache=)
+      if [ "${CACHE_READY:-0}" = "1" ]; then
+        CACHE=(--remote_cache="$CACHE_ENDPOINT"
+               --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+               --remote_header="authorization=Bearer $CACHE_TOKEN"
+               --remote_cache_compression --remote_download_all
+               --remote_timeout=600 --remote_retries=5)
+        if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
+          CACHE+=(--remote_upload_local_results=true)
+        else
+          CACHE+=(--remote_upload_local_results=false)
+        fi
+      fi
+      set +e
+      bazel test "${CACHE[@]}" ${{ inputs.scope }} \
+        --test_output=errors --flaky_test_attempts=2 2>&1 | tee "$RUNNER_TEMP/bazel-test.log"
+      rc=${PIPESTATUS[0]}
+      set -e
+      [ "$rc" -eq 4 ] && { echo "::warning::${{ inputs.id }}: no test targets in scope"; exit 0; }
+      # Retry cacheless only on a remote-cache transport error, never on a
+      # genuine test failure (exit 3) or build failure (1); see the build
+      # step above for the rationale.
+      if [ "$rc" -ne 0 ] && [ "${CACHE_READY:-0}" = "1" ] && grep -qiE \
+          'remote (cache|spawn)|StatusRuntimeException|UNAVAILABLE|DEADLINE_EXCEEDED|Bad Gateway|502|lost inputs|BulkTransfer|Failed to (query remote|init TLS)' \
+          "$RUNNER_TEMP/bazel-test.log"; then
+        echo "::warning::remote cache error (exit $rc); retrying cacheless"
+        set +e; bazel test --remote_cache= ${{ inputs.scope }} --test_output=errors --flaky_test_attempts=2; rc=$?; set -e
+        [ "$rc" -eq 4 ] && exit 0
+      fi
+      exit "$rc"
+
+  - name: Stage Java verification artifacts
+    if: ${{ always() && startsWith(inputs.component_kind, 'java-') }}
+    working-directory: ${{ inputs.workdir }}
+    shell: bash
+    run: |
+      bash tools/ci/stage-bazel-java-artifacts \
+        "${{ inputs.id }}" \
+        "${{ inputs.path }}"
+
+  - name: Upload Java verification artifacts
+    if: ${{ always() && startsWith(inputs.component_kind, 'java-') }}
+    uses: actions/upload-artifact@v4
+    with:
+      name: bazel-${{ inputs.id }}-verification-${{ github.run_attempt }}
+      path: ${{ runner.temp }}/bazel-java-verification/${{ inputs.id }}
+      if-no-files-found: error
+      retention-days: 14
+

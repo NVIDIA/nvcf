@@ -73,6 +73,8 @@ jobs:
     outputs:
       matrix: ${{ steps.detect.outputs.matrix }}
       matrix_docker: ${{ steps.detect.outputs.matrix_docker }}
+      matrix_docker_framework: ${{ steps.detect.outputs.matrix_docker_framework }}
+      matrix_docker_service: ${{ steps.detect.outputs.matrix_docker_service }}
       any: ${{ steps.detect.outputs.any }}
     steps:
       - uses: actions/checkout@v4
@@ -147,7 +149,8 @@ jobs:
           helm-reval|src/control-plane-services/helm-reval|false|go-root|build-container
           stargate|src/libraries/rust/stargate|false|go-root|build-container
           nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container
-          image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container'
+          image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container
+            nvcf-ui|src/uis/nvcf-ui|false|go-root|build-container'
 
           # Java rows are discovered from component-local bazel-java-ci.json
           # descriptors. The descriptor's parent directory is the component
@@ -378,6 +381,16 @@ jobs:
           echo "selected ${total} subtree(s): build-container=[$(printf '%s' "$include" | jq -r '[.[].id] | join(", ")')] docker-host=[$(printf '%s' "$include_docker" | jq -r '[.[].id] | join(", ")')]"
           echo "matrix=${include}" >> "$GITHUB_OUTPUT"
           echo "matrix_docker=${include_docker}" >> "$GITHUB_OUTPUT"
+          # nv-boot-parent is a java-framework that the Java services compile
+          # against. Split it out so the services can gate on it finishing rather
+          # than racing it: it sorts last by path (src/libraries/... after
+          # src/control-plane-services/...) and, with max-parallel below the row
+          # count, could not start until a service freed a slot, so it reliably
+          # finished last and never warmed the cache for its own consumers.
+          include_docker_fw=$(printf '%s' "$include_docker" | jq -c '[.[] | select(.component_kind == "java-framework")]')
+          include_docker_svc=$(printf '%s' "$include_docker" | jq -c '[.[] | select(.component_kind != "java-framework")]')
+          echo "matrix_docker_framework=${include_docker_fw}" >> "$GITHUB_OUTPUT"
+          echo "matrix_docker_service=${include_docker_svc}" >> "$GITHUB_OUTPUT"
           if [ "$total" -gt 0 ]; then echo "any=true" >> "$GITHUB_OUTPUT"; else echo "any=false" >> "$GITHUB_OUTPUT"; fi
 
   bazel:
@@ -874,10 +887,10 @@ jobs:
   # excluded from the build-container matrix, so they never produce a
   # zero-test lane.
   # bazelisk reads .bazelversion for the pinned Bazel.
-  bazel-docker:
+  bazel-java-framework:
     name: bazel (${{ matrix.subtree.id }})
     needs: detect
-    if: needs.detect.outputs.matrix_docker != '[]'
+    if: needs.detect.outputs.matrix_docker_framework != '[]'
     runs-on: ubuntu-latest
     # Same public EC2 Buildbarn remote cache the container matrix uses, sourced
     # from a repo secret/var. Bare runners reach it over grpcs with a bearer
@@ -894,142 +907,55 @@ jobs:
       # do not add to the simultaneous actions/checkout burst.
       max-parallel: 4
       matrix:
-        subtree: ${{ fromJson(needs.detect.outputs.matrix_docker) }}
+        subtree: ${{ fromJson(needs.detect.outputs.matrix_docker_framework) }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # The Java tree builds with local_jdk (root .bazelrc). Unlike the fast
-      # matrix, this lane runs on a bare runner rather than the bazel-ci image,
-      # so provide JDK 25 explicitly for the Java requires-docker tests.
-      - uses: actions/setup-java@v4
+      - uses: ./.github/actions/bazel-java-build
         with:
-          distribution: temurin
-          java-version: '25'
-      - name: Install bazelisk
-        run: |
-          sudo curl -fsSLo /usr/local/bin/bazel \
-            https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64
-          sudo chmod +x /usr/local/bin/bazel
-          bazel version
-      # Cache Bazel's install base + repository cache (external deps: Maven
-      # artifacts, toolchains) across runs. Compiled action outputs come from
-      # the remote cache below.
-      - name: Cache Bazel repository + disk caches
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/bazel/*/install
-            ~/.cache/bazel/*/cache
-          key: bazel-docker-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
-          restore-keys: |
-            bazel-docker-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-
-      # Enable the public EC2 Buildbarn remote cache when the token+endpoint are
-      # present. Upload only on main pushes so PRs are read-only and cannot
-      # poison the shared cache.
-      - name: Prepare remote cache
-        run: |
-          if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ] && [ -n "$CACHE_CA" ]; then
-            printf '%s\n' "$CACHE_CA" > "$RUNNER_TEMP/cache-ca.pem"
-            echo "CACHE_READY=1" >> "$GITHUB_ENV"
-            upload=false
-            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
-            echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
-            echo "remote cache ready (upload=$upload)"
-          else
-            echo "CACHE_READY=0" >> "$GITHUB_ENV"
-            echo "remote cache unavailable: cacheless build"
-          fi
-      - name: bazel build (${{ matrix.subtree.id }})
-        working-directory: ${{ matrix.subtree.workdir }}
-        run: |
-          CACHE=(--remote_cache=)
-          if [ "${CACHE_READY:-0}" = "1" ]; then
-            CACHE=(--remote_cache="$CACHE_ENDPOINT"
-                   --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
-                   --remote_header="authorization=Bearer $CACHE_TOKEN"
-                   --remote_cache_compression --remote_download_all
-                   --remote_timeout=600 --remote_retries=5)
-            if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
-              CACHE+=(--remote_upload_local_results=true)
-            else
-              CACHE+=(--remote_upload_local_results=false)
-            fi
-          fi
-          # Capture output so a remote-cache transport error is told apart from a
-          # genuine build failure: retry cacheless only on the former, otherwise
-          # every broken PR builds twice (CodeRabbit review on #399). The grep is
-          # broad on purpose -- a false positive only costs a second attempt (the
-          # old always-retry behavior), a false negative never hides a real break.
-          set +e
-          bazel build "${CACHE[@]}" ${{ matrix.subtree.scope }} 2>&1 | tee "$RUNNER_TEMP/bazel-build.log"
-          rc=${PIPESTATUS[0]}
-          set -e
-          if [ "$rc" -ne 0 ] && [ "${CACHE_READY:-0}" = "1" ] && grep -qiE \
-              'remote (cache|spawn)|StatusRuntimeException|UNAVAILABLE|DEADLINE_EXCEEDED|Bad Gateway|502|lost inputs|BulkTransfer|Failed to (query remote|init TLS)' \
-              "$RUNNER_TEMP/bazel-build.log"; then
-            echo "::warning::remote cache error (exit $rc); retrying cacheless"
-            bazel build --remote_cache= ${{ matrix.subtree.scope }}
-            rc=$?
-          fi
-          exit "$rc"
-      - name: bazel test (${{ matrix.subtree.id }})
-        working-directory: ${{ matrix.subtree.workdir }}
-        # Full suite, NO tag filter: unit AND requires-docker (Testcontainers)
-        # tests against the host Docker daemon. bazel exit 4 (no test targets in
-        # scope) is treated as success.
-        run: |
-          CACHE=(--remote_cache=)
-          if [ "${CACHE_READY:-0}" = "1" ]; then
-            CACHE=(--remote_cache="$CACHE_ENDPOINT"
-                   --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
-                   --remote_header="authorization=Bearer $CACHE_TOKEN"
-                   --remote_cache_compression --remote_download_all
-                   --remote_timeout=600 --remote_retries=5)
-            if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
-              CACHE+=(--remote_upload_local_results=true)
-            else
-              CACHE+=(--remote_upload_local_results=false)
-            fi
-          fi
-          set +e
-          bazel test "${CACHE[@]}" ${{ matrix.subtree.scope }} \
-            --test_output=errors --flaky_test_attempts=2 2>&1 | tee "$RUNNER_TEMP/bazel-test.log"
-          rc=${PIPESTATUS[0]}
-          set -e
-          [ "$rc" -eq 4 ] && { echo "::warning::${{ matrix.subtree.id }}: no test targets in scope"; exit 0; }
-          # Retry cacheless only on a remote-cache transport error, never on a
-          # genuine test failure (exit 3) or build failure (1); see the build
-          # step above for the rationale.
-          if [ "$rc" -ne 0 ] && [ "${CACHE_READY:-0}" = "1" ] && grep -qiE \
-              'remote (cache|spawn)|StatusRuntimeException|UNAVAILABLE|DEADLINE_EXCEEDED|Bad Gateway|502|lost inputs|BulkTransfer|Failed to (query remote|init TLS)' \
-              "$RUNNER_TEMP/bazel-test.log"; then
-            echo "::warning::remote cache error (exit $rc); retrying cacheless"
-            set +e; bazel test --remote_cache= ${{ matrix.subtree.scope }} --test_output=errors --flaky_test_attempts=2; rc=$?; set -e
-            [ "$rc" -eq 4 ] && exit 0
-          fi
-          exit "$rc"
+          id: ${{ matrix.subtree.id }}
+          path: ${{ matrix.subtree.path }}
+          workdir: ${{ matrix.subtree.workdir }}
+          scope: ${{ matrix.subtree.scope }}
+          component_kind: ${{ matrix.subtree.component_kind }}
 
-      - name: Stage Java verification artifacts
-        if: ${{ always() && startsWith(matrix.subtree.component_kind, 'java-') }}
-        working-directory: ${{ matrix.subtree.workdir }}
-        run: |
-          bash tools/ci/stage-bazel-java-artifacts \
-            "${{ matrix.subtree.id }}" \
-            "${{ matrix.subtree.path }}"
-
-      - name: Upload Java verification artifacts
-        if: ${{ always() && startsWith(matrix.subtree.component_kind, 'java-') }}
-        uses: actions/upload-artifact@v4
+  bazel-docker:
+    name: bazel (${{ matrix.subtree.id }})
+    needs: [detect, bazel-java-framework]
+    if: always() && needs.detect.result == 'success' && needs.bazel-java-framework.result != 'failure' && needs.bazel-java-framework.result != 'cancelled' && needs.detect.outputs.matrix_docker_service != '[]'
+    runs-on: ubuntu-latest
+    # Same public EC2 Buildbarn remote cache the container matrix uses, sourced
+    # from a repo secret/var. Bare runners reach it over grpcs with a bearer
+    # token; fork PRs have no secret and fall back to cacheless automatically.
+    env:
+      CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
+      CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
+      # Passed as an env var, never interpolated inline into a run: script, so
+      # its contents can never be parsed as shell (zizmor template-injection).
+      CACHE_CA: ${{ vars.BAZEL_REMOTE_CACHE_CA }}
+    strategy:
+      fail-fast: false
+      # Cap concurrency here too (see the bazel job) so the docker-host rows
+      # do not add to the simultaneous actions/checkout burst.
+      max-parallel: 4
+      matrix:
+        subtree: ${{ fromJson(needs.detect.outputs.matrix_docker_service) }}
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: bazel-${{ matrix.subtree.id }}-verification-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/bazel-java-verification/${{ matrix.subtree.id }}
-          if-no-files-found: error
-          retention-days: 14
+          fetch-depth: 0
+      - uses: ./.github/actions/bazel-java-build
+        with:
+          id: ${{ matrix.subtree.id }}
+          path: ${{ matrix.subtree.path }}
+          workdir: ${{ matrix.subtree.workdir }}
+          scope: ${{ matrix.subtree.scope }}
+          component_kind: ${{ matrix.subtree.component_kind }}
 
   bazel-verification:
     name: bazel required checks
-    needs: [detect, bazel, bazel-docker]
+    needs: [detect, bazel, bazel-java-framework, bazel-docker]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -1037,6 +963,7 @@ jobs:
         env:
           DETECT_RESULT: ${{ needs.detect.result }}
           BAZEL_RESULT: ${{ needs.bazel.result }}
+          FRAMEWORK_RESULT: ${{ needs.bazel-java-framework.result }}
           DOCKER_RESULT: ${{ needs.bazel-docker.result }}
           BAZEL_ANY: ${{ needs.detect.outputs.any }}
         run: |
@@ -1067,6 +994,14 @@ jobs:
             exit 1
           fi
 
+          # The framework gate runs before the service rows. A failure here
+          # skips them, so without this check the aggregate would pass on a
+          # skipped bazel-docker while nv-boot-parent was actually broken.
+          echo "bazel-java-framework result: ${FRAMEWORK_RESULT}"
+          if [ "${FRAMEWORK_RESULT}" != "success" ] && [ "${FRAMEWORK_RESULT}" != "skipped" ]; then
+            echo "::error::bazel-java-framework did not pass (${FRAMEWORK_RESULT})"
+            exit 1
+          fi
           echo "bazel-docker result: ${DOCKER_RESULT}"
           if [ "${DOCKER_RESULT}" != "success" ] && [ "${DOCKER_RESULT}" != "skipped" ]; then
             echo "one or more bazel docker (per-service Testcontainers) lanes failed or were cancelled"
