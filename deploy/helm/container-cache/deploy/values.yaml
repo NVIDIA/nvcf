@@ -51,6 +51,10 @@ cache:
   # How long an existing cache entry may be "being filled" before another request
   # is allowed to start its own fill (proxy_cache_lock_age).
   lockAge: 3600s
+  # Read timeout on the NGC CDN origin hop (ngc.conf). Inactivity-between-reads,
+  # so it bounds an origin stall rather than the total transfer. Raise only if
+  # the CDN's first-byte latency for large Range requests proves to need it.
+  originReadTimeout: 30s
   # Period a resource can remain in cache without being accessed.
   # Immutable blobs (SHA256-addressed) are safe to keep long; disk pressure
   # is handled by the min_free watermark (persistentVolumeClaim.freeProxyPct),
