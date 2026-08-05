@@ -1,0 +1,1709 @@
+version: 1
+default_tags:
+  - eks
+  - nvcf-cds
+  - prod
+go_work:
+  go: "1.26"
+  use:
+    - tools/byoo
+    - tools/collect-dependencies
+    - tools/docs-version-sync
+    - tools/generate-subproject-ci
+    - tools/sync-synthetic-imports
+shared_change_paths:
+  # Files here trigger every subproject's full validation lane
+  # regardless of which subtree changed. Keep tight. Generated
+  # release-jobs YAML under `tools/ci/` is intentionally NOT here:
+  # chart MRs regenerate it but don't change Go sources, and the
+  # parent pipeline's check-release-pipeline-generated already
+  # catches generator drift. Edits to this config file itself stay
+  # covered through the explicit `subproject-validations.yaml` entry.
+  - .gitlab-ci.yml
+  - tools/ci/subproject-validations.yaml
+  - tools/generate-subproject-ci/**/*
+  - tools/scripts/boilerplate.go.txt
+  - tools/scripts/update-go-deepcopy
+  - tools/scripts/update-go-work
+bazel_shared_change_paths:
+  - .bazelrc
+  - .bazelversion
+  - MODULE.bazel
+  - MODULE.bazel.lock
+  - rules/**/*
+  - platforms/**/*
+  - ci/Dockerfile.bazel
+# Generated/mechanical files (basenames). The semantic-release
+# release-worthiness guard skips a service's version bump when the only
+# in-scope changes since its last tag are these files -- a cross-cutting
+# commit (a Bazel repin, an .oss-allowlist flip) that incidentally touches
+# a service subtree should not release it.
+#
+# This list is the complete, authoritative set: setting the key REPLACES
+# the built-in default (YAML lists are not merged). The key is
+# pre-populated with the default below, so to add an exclusion (e.g.
+# Cargo.lock, a generated *.pb.go basename) edit this list directly, and
+# keep the existing entries unless you intend to drop them. If the key is
+# omitted entirely, the generator falls back to MODULE.bazel.lock +
+# .oss-allowlist.
+release_generated_paths:
+  - MODULE.bazel.lock
+  - .oss-allowlist
+profiles:
+  go-library:
+    stage: validate
+    image: golang:1.26-bookworm
+    variables:
+      GOTOOLCHAIN: local
+      GOWORK: $CI_PROJECT_DIR/go.work
+    checks:
+      - id: vendor
+        type: go-vendor
+      - id: codegen
+        type: go-codegen
+        install:
+          - k8s.io/code-generator/cmd/deepcopy-gen@v0.34.2
+        command: make codegen-update
+      # Lint is intentionally omitted here because go-lib's Bazel lane owns
+      # //src/libraries/go/lib:golangci_lint.
+  go-tool:
+    stage: validate
+    image: golang:1.26-bookworm
+    variables:
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+    checks:
+      - id: unit-tests
+        type: shell
+        command: go test ./...
+      - id: build
+        type: shell
+        command: go build ./...
+  docs:
+    stage: validate
+    image: dockerhub.nvidia.com/node:24-alpine
+    variables:
+      FERN_NO_VERSION_REDIRECTION: "true"
+    checks:
+      - id: lint
+        type: shell
+        command: apk add --no-cache go && ./tools/ci/check-docs
+  nvcf-cli:
+    image: $CI_REGISTRY_IMAGE/bazel-ci:$BAZEL_CI_VERSION
+    extends: .bazel-check
+    variables:
+      INSTALL_GO: "1"
+    checks:
+      - id: check-agent-skill-generated
+        type: shell
+        command: ./tools/ci/check-agent-skill-generated
+      - id: verify-agent-skill-manifest
+        type: shell
+        command: bazel test ${BAZEL_REMOTE_FLAGS} --invocation_id=$BAZEL_INVOCATION_ID --disk_cache=$BAZEL_DISK_CACHE --repository_cache=$BAZEL_REPO_CACHE --test_output=errors //src/clis/nvcf-cli/internal/agentskill:agentskill_test
+      - id: test
+        type: shell
+        command: bazel test ${BAZEL_REMOTE_FLAGS} --invocation_id=$BAZEL_INVOCATION_ID --disk_cache=$BAZEL_DISK_CACHE --repository_cache=$BAZEL_REPO_CACHE --build_tests_only --@rules_go//go/config:race --@rules_go//go/config:pure=false --test_output=errors //src/clis/nvcf-cli/...
+  nvca-toolbox:
+    stage: validate
+    image: gitlab-master.nvidia.com:5005/egx/tools/toolbox:15
+    checks:
+      - id: dotenv-format
+        type: shell
+        skip_workspace_setup: true
+        command: $CI_PROJECT_DIR/tools/ci/run-nvca-check dotenv-format
+      - id: generated-files
+        type: go-codegen
+        command: >-
+          make codegen-update &&
+          make openapigen-update &&
+          make testdata-update &&
+          nv_components gen-gitlab-ci >./pipelines/components.yml &&
+          make docs-update &&
+          make dotenv-dependencies-update
+      - id: service-oauth-defaults
+        type: shell
+        skip_workspace_setup: true
+        command: $CI_PROJECT_DIR/tools/ci/run-nvca-check service-oauth-defaults
+      - id: mirror-helm-chart
+        type: shell
+        skip_workspace_setup: true
+        command: $CI_PROJECT_DIR/tools/ci/run-nvca-check mirror-helm-chart
+      - id: bazel-image-push-targets
+        type: shell
+        skip_workspace_setup: true
+        command: $CI_PROJECT_DIR/tools/ci/run-nvca-check bazel-image-push-targets
+      - id: lint
+        type: shell
+        skip_workspace_setup: true
+        command: $CI_PROJECT_DIR/tools/ci/run-nvca-check lint
+subprojects:
+  - id: go-lib
+    path: src/libraries/go/lib
+    profile: go-library
+    go_work: true
+    bazel:
+      extra_test_targets:
+        - //src/libraries/go/lib:golangci_lint
+    needs_host_go: true
+    change_paths:
+      - src/libraries/go/lib/BUILD.bazel
+      - src/libraries/go/lib/cmd/**/*
+      - src/libraries/go/lib/go.mod
+      - src/libraries/go/lib/go.sum
+      - src/libraries/go/lib/Makefile
+      - src/libraries/go/lib/.goheader.tmpl
+      - src/libraries/go/lib/.golangci.yml
+      - src/libraries/go/lib/BUILD.bazel
+      - src/libraries/go/lib/pkg/**/*
+      - src/libraries/go/lib/testdata/**/*
+      - src/libraries/go/lib/validator/**/*
+      - src/libraries/go/lib/vendor/**/*
+  - id: go-worker
+    path: src/libraries/go/worker
+    go_work: true
+    bazel:
+      targets:
+        - //src/libraries/go/worker/...
+    change_paths:
+      - src/libraries/go/worker/go.mod
+      - src/libraries/go/worker/go.sum
+      - src/libraries/go/worker/**/*
+  # The worker services are GitHub-first OSS-mirrored image releases.
+  # Tag pipelines build the multi-arch image index, push to a staging
+  # registry, emit release-manifest.json, and trigger the private
+  # release repo which copies the staging digest by reference to its
+  # NVCR destinations (ncp-dev + nvcf-staging + nvcf-production). NVCR
+  # destinations and NGC auth are owned by that private repo, never by
+  # this OSS tree. Image names carry the hyphenated `-oss` suffix (nvcf-worker-<svc>-oss)
+  - id: worker-init
+    path: src/compute-plane-services/worker-init
+    change_paths:
+      - src/compute-plane-services/worker-init/go.mod
+      - src/compute-plane-services/worker-init/go.sum
+      - src/compute-plane-services/worker-init/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-worker-init
+      legacy_tag_prefix: nvcf-worker-init-v
+      staging:
+        images:
+          - name: nvcf-worker-init-oss
+            bazel_image_target: //cmd:image_index
+      slack_channel: C08S6KLCEJH
+  - id: worker-utils
+    path: src/compute-plane-services/worker-utils
+    change_paths:
+      - src/compute-plane-services/worker-utils/go.mod
+      - src/compute-plane-services/worker-utils/go.sum
+      - src/compute-plane-services/worker-utils/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-worker-utils
+      legacy_tag_prefix: nvcf-worker-utils-v
+      staging:
+        images:
+          - name: nvcf-worker-utils-oss
+            bazel_image_target: //cmd:image_index
+      slack_channel: C08S6KLCEJH
+  - id: worker-llm-credentials
+    path: src/compute-plane-services/worker-llm-credentials
+    change_paths:
+      - src/compute-plane-services/worker-llm-credentials/go.mod
+      - src/compute-plane-services/worker-llm-credentials/go.sum
+      - src/compute-plane-services/worker-llm-credentials/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-worker-llm-credentials
+      legacy_tag_prefix: nvcf-worker-llm-credentials-v
+      staging:
+        images:
+          - name: nvcf-worker-llm-credentials-oss
+            bazel_image_target: //cmd:image_index
+      slack_channel: C08S6KLCEJH
+  - id: ncp-local-credential-provider
+    path: tools/ncp-local-cluster/credential-provider-go
+    profile: go-tool
+    go_work: false
+    change_paths:
+      - tools/ncp-local-cluster/credential-provider-go/go.mod
+      - tools/ncp-local-cluster/credential-provider-go/go.sum
+      - tools/ncp-local-cluster/credential-provider-go/cmd/**/*
+      - tools/ncp-local-cluster/credential-provider-go/internal/**/*
+      - tools/ncp-local-cluster/credential-provider-go/hack/**/*
+  - id: docs
+    path: .
+    profile: docs
+    skip_shared_change_paths: true
+    skip_global_triggers: true
+    change_paths:
+      - docs/**/*
+      - docs/version-catalog/**/*
+      - fern/**/*
+      - tools/docs-version-sync/**/*
+      - .rumdl.toml
+  - id: nvcf-cli
+    path: .
+    profile: nvcf-cli
+    # archive_release opts the CLI into auto-versioned semantic-release
+    # without an image-push job: the cut path-scoped CLI tag triggers
+    # the CLI's own child pipeline (tools/ci/nvcf-cli.yml), which builds the
+    # multi-platform binaries, uploads archives to the GitLab generic
+    # package registry, and pushes the bundle to NGC resource registry
+    # (ncp-dev / staging / test-sandbox). subtree overrides the umbrella-
+    # root path: above so semantic-release-monorepo scopes commits to
+    # the CLI subtree (path: . is needed by the nvcf-cli profile because
+    # ./tools/ci/check-agent-skill-generated resolves from umbrella root).
+    release:
+      service_name: nvcf-cli
+      legacy_tag_prefix: nvcf-cli-v
+      archive_release:
+        subtree: src/clis/nvcf-cli
+      slack_channel: C08S6KLCEJH
+    change_paths:
+      - src/clis/nvcf-cli/**/*
+      - ai-tooling/user/skills/nvcf-self-managed-cli/**/*
+      - ai-tooling/user/skills/nvcf-self-managed-installation/**/*
+      - tools/ci/nvcf-cli.yml
+      - tools/ci/check-agent-skill-generated
+  # nvcf-compute-plane-stack is the helmfile stack distributed to
+  # operators for GPU cluster onboarding. archive_release opts it into
+  # VERSION-file-backed release tagging without an image-push job: the cut
+  # deploy/stacks/nvcf-compute-plane/v<X> tag triggers the stack's own child
+  # pipeline (tools/ci/nvcf-compute-plane.yml), which runs `make dist`,
+  # tarballs the output, uploads the archive to the GitLab generic
+  # package registry, and pushes the bundle to NGC resource registry
+  # (nvcf-ncp-staging / test-sandbox / ncp-dev). The nvcf-cli resolves
+  # the stack via oci://nvcr.io/.../nvcf-compute-plane-stack:<version>.
+  - id: nvcf-compute-plane-stack
+    path: deploy/stacks/nvcf-compute-plane
+    release:
+      service_name: nvcf-compute-plane-stack
+      legacy_tag_prefix: nvcf-compute-plane-stack-v
+      version_file: VERSION
+      dev_prerelease: true
+      archive_release:
+        subtree: deploy/stacks/nvcf-compute-plane
+      slack_channel: C08S6KLCEJH
+    checks:
+      - id: yamllint
+        type: shell
+        image: dockerhub.nvidia.com/pipelinecomponents/yamllint:0.35.9
+        skip_workspace_setup: true
+        command: >-
+          yamllint -d "{extends: relaxed, rules: {line-length: {max: 200}, empty-lines: disable}}" environments/*.yaml
+      - id: template
+        type: shell
+        image: ghcr.io/helmfile/helmfile:v1.1.0
+        skip_workspace_setup: true
+        command: >-
+          apk add --no-cache make bash &&
+          mkdir -p registration &&
+          cp testdata/registration/ncp-local-register-values.yaml registration/ &&
+          cp testdata/environments/local.yaml environments/ &&
+          sed -i 's|chart: nvcf/helm-nvca-operator|chart: /builds/nvcf/nvcf/deploy/helm/nvca-operator/nvca-operator|g' helmfile.d/02-nvca.yaml.gotmpl &&
+          DEV_MODE=1 make template HELMFILE_ENV=local CLUSTER_NAME=ncp-local
+      - id: dist
+        type: shell
+        image: dockerhub.nvidia.com/alpine:3.20
+        skip_workspace_setup: true
+        command: apk add --no-cache make bash && make dist
+    change_paths:
+      - deploy/stacks/nvcf-compute-plane/**/*
+      - tools/ci/nvcf-compute-plane.yml
+  # nvcf-observability-stack has a working install-mode path (self-managed-cp
+  # overlay) but publishes no release artifact until the consuming stack lands.
+  # Validates its local charts and both Helmfile envs.
+  - id: nvcf-observability-stack
+    path: deploy/stacks/observability
+    checks:
+      - id: helm-lint
+        type: shell
+        image: ghcr.io/helmfile/helmfile:v1.1.0
+        skip_workspace_setup: true
+        command: >-
+          helm lint charts/nvcf-otel-collector &&
+          helm lint charts/nvcf-default-monitors
+      - id: helm-template
+        type: shell
+        image: ghcr.io/helmfile/helmfile:v1.1.0
+        skip_workspace_setup: true
+        command: >-
+          helm template control-plane-collector charts/nvcf-otel-collector
+          --namespace monitoring
+          --set 'imagePullSecrets[0].name=nvcf-registry' &&
+          helm template default-monitors charts/nvcf-default-monitors
+          --namespace monitoring
+          --set dcgm.enabled=true
+      - id: helmfile-template-local
+        type: shell
+        image: ghcr.io/helmfile/helmfile:v1.1.0
+        skip_workspace_setup: true
+        command: >-
+          HELMFILE_ENV=local helmfile --environment default
+          --allow-no-matching-release template
+      - id: helmfile-template-install
+        type: shell
+        image: ghcr.io/helmfile/helmfile:v1.1.0
+        skip_workspace_setup: true
+        # Renders the install-mode overlay, scoped to the local collector chart
+        # (CI can't pull the remote OCI charts -- no nvcr creds). Still exercises
+        # the full gotmpl: mode gating and the VM endpoint guard run at parse time.
+        command: >-
+          HELMFILE_ENV=self-managed-cp helmfile --environment default
+          --allow-no-matching-release --selector name=control-plane-collector
+          template
+  # grpc-proxy is a native Bazel-built subtree. Its `bazel:` block
+  # emits grpc-proxy-bazel-build-test into the generated subproject-validations
+  # child pipeline. It also opts into the umbrella's auto-versioned
+  # release pipeline. The
+  # `release:` block declares the service name, the per-registry image
+  # push targets, and the auth source for each. The generator emits
+  # `compute-next-release-version-grpc-proxy`,
+  # `semantic-release-grpc-proxy`, and `grpc-proxy-image-push` jobs
+  # into `tools/ci/generated-release-jobs.yml`, which the umbrella
+  # `.gitlab-ci.yml` includes.
+  #
+  # Adding a new opt-in native service is a YAML entry here. Add
+  # `bazel: {}` for build/test validation, add `release:` when the
+  # service also publishes artifacts, then regenerate
+  # tools/ci/generated-release-jobs.yml if release changed:
+  # `go run -C tools/generate-subproject-ci . --config ../ci/subproject-validations.yaml --release-output ../ci/generated-release-jobs.yml`.
+  # The validation child pipeline is generated at CI runtime and is
+  # not committed. The check-release-pipeline-generated CI job verifies
+  # the committed release output stays in sync.
+  - id: grpc-proxy
+    path: src/invocation-plane-services/grpc-proxy
+    # grpc-proxy releases before the monorepo cutover were tagged v* in the
+    # upstream repo, so those tags and their history are not reachable from
+    # nvcf/nvcf (upstream v1.28.6 and earlier; the umbrella continues the
+    # line as nvcf-grpc-proxy-v1.28.7+). Point the changelog browser at the
+    # upstream so older versions render inline. Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/nvcf-grpc-proxy.git
+      tag_prefix: v
+      umbrella_tag_prefix: nvcf-grpc-proxy-v
+    change_paths:
+      - src/invocation-plane-services/grpc-proxy/**/*
+    bazel:
+      dind: true
+    release:
+      service_name: nvcf-grpc-proxy
+      legacy_tag_prefix: nvcf-grpc-proxy-v
+      # Tag pipelines build the multi-arch image index, push to a
+      # staging registry, emit release-manifest.json, and trigger the
+      # private release repo which copies the staging digest by
+      # reference to nvcf-staging + nvcf-production (both via
+      # NGC_NVCF_COMPONENTS_KEY) and ncp-dev (NGC_DEVOPS_API_KEY).
+      # NVCR destinations and NGC auth are owned by the private repo,
+      # not here. Drops the legacy nvcr.io/nvidian/kaze destination;
+      # nvcf-staging + nvcf-production cover the same audience under
+      # the unified components key.
+      staging:
+        images:
+          - name: nvcf-grpc-proxy
+            bazel_image_target: //:image_index
+      slack_channel: C08S6KLCEJH
+  # grpc-proxy Helm chart subtree. Imported from
+  # ncp/nvcf/application-services/grpc-proxy-colocated-deploy in !440.
+  # Chart proper is at deploy/helm/grpc-proxy/grpc-proxy.
+  # The chart releases independently of the grpc-proxy binary above:
+  # commits touching only helm/ bump this chart entry, commits touching
+  # the Rust code bump the binary entry, commits touching both bump
+  # both. service_name matches the chart's Chart.yaml `name:`
+  # field (helm-nvcf-grpc-proxy) so the pushed OCI artifact path stays
+  # aligned with the packaged chart.
+  - id: grpc-proxy-helm
+    path: deploy/helm/grpc-proxy
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/application-services/grpc-proxy-colocated-deploy.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-nvcf-grpc-proxy-v
+    change_paths:
+      - deploy/helm/grpc-proxy/**/*
+      - tools/ci/helm-validate-values/grpc-proxy.yaml
+    helm_validate:
+      values_file: tools/ci/helm-validate-values/grpc-proxy.yaml
+    release:
+      service_name: helm-nvcf-grpc-proxy
+      legacy_tag_prefix: helm-nvcf-grpc-proxy-v
+      helm:
+        # Relative to subtree root (`path:`). The generator joins
+        # `${path}/${chart_path}` -> deploy/helm/grpc-proxy/grpc-proxy.
+        chart_path: grpc-proxy
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # ratelimiter is a native Bazel-built subtree. Single image-push to
+  # nvcr.io/nvidian/kaze/nvcf-ratelimiter via the legacy vault key
+  # `nvcf-rate-limiter` (note: with hyphen, matches $CI_PROJECT_TITLE
+  # on the upstream — not $CI_PROJECT_NAME). Anchor tag in the umbrella
+  # is `nvcf-ratelimiter-v1.12.3` (last pre-cutover upstream release).
+  - id: ratelimiter
+    path: src/invocation-plane-services/ratelimiter
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/nvcf-ratelimiter.git
+      tag_prefix: v
+      umbrella_tag_prefix: nvcf-ratelimiter-v
+    change_paths:
+      - src/invocation-plane-services/ratelimiter/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-ratelimiter
+      legacy_tag_prefix: nvcf-ratelimiter-v
+      # Tag pipelines build the multi-arch image index, push to a
+      # staging registry, emit release-manifest.json, and trigger the
+      # private release repo which copies the staging digest by
+      # reference to nvcf-staging + nvcf-production (both via
+      # NGC_NVCF_COMPONENTS_KEY) and ncp-dev (NGC_DEVOPS_API_KEY).
+      # NVCR destinations and NGC auth are owned by that private repo,
+      # not here.
+      staging:
+        images:
+          - name: nvcf-ratelimiter
+            bazel_image_target: //cmd:image_index
+      slack_channel: C08S6KLCEJH
+  # ratelimiter Helm chart subtree. Pre-cutover the upstream
+  # nvcf-ratelimiter-colocated-deploy repo used the
+  # ncp-service-helm-release@1.7.0 cds-component to package + publish
+  # to nvcr.io/0651155215864979/ncp-dev via the shared NCP SERVICE_KEY.
+  # Anchor tag helm-nvcf-rate-limiter-v1.0.3 matches the upstream's
+  # last released tag.
+  - id: ratelimiter-helm
+    path: deploy/helm/ratelimiter
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/application-services/nvcf-ratelimiter-colocated-deploy.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-nvcf-rate-limiter-v
+    change_paths:
+      - deploy/helm/ratelimiter/**/*
+      - tools/ci/helm-validate-values/ratelimiter.yaml
+    helm_validate:
+      values_file: tools/ci/helm-validate-values/ratelimiter.yaml
+    release:
+      service_name: helm-nvcf-rate-limiter
+      legacy_tag_prefix: helm-nvcf-rate-limiter-v
+      helm:
+        chart_path: nvcf-ratelimiter
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # http-invocation is a native Bazel-built subtree. Publishes to
+  # nvcr.io/0544956542906249/nvcf-dev/nvcf-invocation-service (legacy
+  # vault key `nvcf-invocation-service`) plus a new ncp-dev tenant
+  # push under nvcr.io/0651155215864979/ncp-dev/nvcf-invocation-service
+  # (NGC_DEVOPS_API_KEY CI variable). Anchor tag in the umbrella is
+  # `nvcf-invocation-service-v0.5.8` (matches upstream's last
+  # pre-cutover release).
+  - id: http-invocation
+    path: src/invocation-plane-services/http-invocation
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/nvcf-invocation-service.git
+      tag_prefix: ""
+      umbrella_tag_prefix: nvcf-invocation-service-v
+    change_paths:
+      - src/invocation-plane-services/http-invocation/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-invocation-service
+      legacy_tag_prefix: nvcf-invocation-service-v
+      # Tag pipelines build the multi-arch image index, push to a
+      # staging registry, emit release-manifest.json, and trigger the
+      # private release repo which copies the staging digest by
+      # reference to nvcr.io/0544956542906249/nvcf-dev/nvcf-invocation-service
+      # (legacy nvcf-dev tenant) and ncp-dev. NVCR destinations and
+      # NGC auth are owned by the private repo, not here.
+      staging:
+        images:
+          - name: nvcf-invocation-service
+            bazel_image_target: //crates/server:image_index
+      slack_channel: C08S6KLCEJH
+  # HTTP invocation Helm chart subtree. The chart was moved out of the
+  # Rust image-source subtree so chart-only edits validate independently.
+  - id: http-invocation-helm
+    path: deploy/helm/http-invocation
+    change_paths:
+      - deploy/helm/http-invocation/**/*
+    helm_validate:
+      chart_path: "."
+  # stargate is intentionally NOT wired for umbrella Bazel build here.
+  # stargate is upstream-authoritative. Its image build + push lives in
+  # the private release repo (nvcf-internal build_stargate_images.sh), which
+  # builds the three runtime images from the Dockerfile and pushes them to
+  # ncp-dev and nvcf-dev. The umbrella only triggers that backend on the tag.
+  - id: stargate
+    path: src/libraries/rust/stargate
+    change_paths:
+      - src/libraries/rust/stargate/**/*
+    release:
+      service_name: stargate
+      legacy_tag_prefix: stargate-v
+      internal_release: {}
+      slack_channel: C08S6KLCEJH
+  # llm-api-gateway is a native Bazel-built subtree (imports.yaml
+  # authoritative_source: native). Two Go binaries -- the main
+  # llm-api-gateway server and the rate-limit-sync-worker. Each is
+  # built as its own oci_image_index, staged, and promoted
+  # independently.
+  #
+  # Tag pipelines build both multi-arch image indexes, push them to a
+  # staging registry, emit release-manifest.json (two image entries),
+  # and trigger the private release repo which copies each staging
+  # digest by reference to its NVCR destinations. NVCR destinations
+  # and NGC auth are owned by that private repo, not here.
+  #
+  # Anchor tag is `nvcf-llm-api-gateway-v0.4.0` (above upstream's
+  # last v0.3.0 release; v0.4.0-* pre-release tags exist upstream
+  # and are not real releases).
+  - id: llm-api-gateway
+    path: src/invocation-plane-services/llm-api-gateway
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/llm-api-gateway.git
+      tag_prefix: ""
+      umbrella_tag_prefix: nvcf-llm-api-gateway-v
+    change_paths:
+      - src/invocation-plane-services/llm-api-gateway/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-llm-api-gateway
+      legacy_tag_prefix: nvcf-llm-api-gateway-v
+      staging:
+        images:
+          - name: llm-api-gateway
+            bazel_image_target: //:image_index
+          - name: llm-api-gateway-rate-limit-sync-worker
+            bazel_image_target: //:rate_limit_sync_worker_image_index
+      slack_channel: C08S6KLCEJH
+  # LLM API Gateway Helm chart subtree. Pre-cutover the upstream
+  # llm-api-gateway-colocated-deploy repo used the
+  # ncp-service-helm-release@1.7.0 cds-component to package + publish
+  # to nvcr.io/0651155215864979/ncp-dev via the shared NCP SERVICE_KEY.
+  # Anchor tag helm-nvcf-llm-api-gateway-v1.3.1 matches the upstream's
+  # last released tag.
+  - id: llm-api-gateway-helm
+    path: deploy/helm/llm-api-gateway
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/application-services/llm-api-gateway-colocated-deploy.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-nvcf-llm-api-gateway-v
+    change_paths:
+      - deploy/helm/llm-api-gateway/**/*
+      - tools/ci/helm-validate-values/llm-api-gateway.yaml
+    helm_validate:
+      values_file: tools/ci/helm-validate-values/llm-api-gateway.yaml
+    release:
+      service_name: helm-nvcf-llm-api-gateway
+      legacy_tag_prefix: helm-nvcf-llm-api-gateway-v
+      helm:
+        chart_path: llm-api-gateway
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # vanity-gateway (upstream nvcf-ai-api-gateway-service) is a native
+  # Bazel-built subtree. Tag pipelines build the multi-arch image index,
+  # push it to a staging registry, emit release-manifest.json, and
+  # trigger the private release repo which copies the staging digest by
+  # reference to nvcf-staging, nvcf-production, and ncp-dev. NVCR
+  # destinations and NGC auth are owned by the private repo, never by
+  # this OSS tree. The legacy nvcr.io/nvidian/kaze destination is dropped
+  # in this cutover, matching the ratelimiter precedent (kaze is not
+  # carried into the private release repo).
+  #
+  # Anchor tag in the umbrella is `nvcf-ai-api-gateway-service-v1.27.0`
+  # (matches the last release at cutover).
+  - id: vanity-gateway
+    path: src/invocation-plane-services/vanity-gateway
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/nvcf-ai-api-gateway-service.git
+      tag_prefix: v
+      umbrella_tag_prefix: nvcf-ai-api-gateway-service-v
+    change_paths:
+      - src/invocation-plane-services/vanity-gateway/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-ai-api-gateway-service
+      legacy_tag_prefix: nvcf-ai-api-gateway-service-v
+      staging:
+        images:
+          - name: nvcf-ai-api-gateway-service
+            bazel_image_target: //:image_index
+      # Post-release Slack notification to #nv-nvcf-cicd, matching the
+      # legacy upstream's SLACK_CHANNEL_ID.
+      slack_channel: C08S6KLCEJH
+  # function-autoscaler is a native Bazel-built subtree. Publishes to
+  # legacy nvcr.io/ema5hzr4ziav/nvcf_autoscaling (vault key
+  # rs-autoscaler) plus a new ncp-dev tenant push under
+  # nvcr.io/0651155215864979/ncp-dev/nvcf-function-autoscaler
+  # (NGC_DEVOPS_API_KEY CI variable). Anchor tag in the umbrella is
+  # `nvcf-function-autoscaler-v1.13.6` (matches upstream's last
+  # pre-cutover release).
+  - id: function-autoscaler
+    path: src/control-plane-services/function-autoscaler
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/optimization/autoscaler/rs-autoscaler.git
+      tag_prefix: v
+      umbrella_tag_prefix: nvcf-function-autoscaler-v
+    change_paths:
+      - src/control-plane-services/function-autoscaler/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-function-autoscaler
+      legacy_tag_prefix: nvcf-function-autoscaler-v
+      # Tag pipelines build the multi-arch image index, push to a
+      # staging registry, emit release-manifest.json, and trigger the
+      # private release repo which copies the staging digest by
+      # reference to nvcr.io/ema5hzr4ziav/nvcf_autoscaling (legacy
+      # autoscaling team; image name kept as nvcf_autoscaling with
+      # underscore to match the pre-Bazel DOCKER_IMAGE_NAME because
+      # deploy manifests and dashboards pin this path) and ncp-dev.
+      # NVCR destinations and NGC auth are owned by the private repo,
+      # not here.
+      staging:
+        images:
+          - name: nvcf-function-autoscaler
+            bazel_image_target: //crates/server:image_index
+            mr_push_targets:
+              - repository: nvcr.io/ema5hzr4ziav/nvcf_autoscaling
+                auth:
+                  type: vault
+                  vault_key: rs-autoscaler
+      slack_channel: C08S6KLCEJH
+  # nats-auth-callout is a native Bazel-built subtree (imports.yaml
+  # authoritative_source: native). Ships an image promoted through
+  # nvcf-internal and a Helm chart pushed directly to the nvcf-internal
+  # NGC org, matching the pre-monorepo ENABLE_HELM publish lane. Anchor
+  # tag in the umbrella is
+  # `nvcf-nats-auth-callout-service-v0.4.4` (matches the upstream's
+  # last pre-cutover release).
+  - id: nats-auth-callout
+    path: src/control-plane-services/nats-auth-callout
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/nvcf-nats-auth-callout-service.git
+      tag_prefix: v
+      umbrella_tag_prefix: nvcf-nats-auth-callout-service-v
+    change_paths:
+      - src/control-plane-services/nats-auth-callout/**/*
+      - deploy/helm/nats-auth-callout/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-nats-auth-callout-service
+      legacy_tag_prefix: nvcf-nats-auth-callout-service-v
+      # Tag pipelines build the multi-arch image index, push to a
+      # staging registry, emit release-manifest.json, and trigger the
+      # private release repo which copies the staging digest by
+      # reference to nvcf-production (NGC_NVCF_PRODUCTION_KEY, new) and
+      # ncp-dev (NGC_DEVOPS_API_KEY, already wired). NVCR destinations
+      # and NGC auth are owned by that private repo, never by this
+      # OSS tree.
+      staging:
+        images:
+          - name: nvcf-nats-auth-callout-service
+            bazel_image_target: //cmd/nvcf-nats-auth-callout-service:image_index
+      helm:
+        chart_path: ../../../deploy/helm/nats-auth-callout
+        push_targets:
+          - name: nvcf-internal
+            ngc_path: "0544956542906249"
+            ngc_key_var: NGC_PUSH_SERVICE_KEY_NVCF_INTERNAL
+      # Post-release notification to #nv-nvcf-cicd, matching the
+      # legacy upstream's SLACK_CHANNEL_ID. Posts via backstage-helper.
+      slack_channel: C08S6KLCEJH
+  # NATS auth callout Helm chart subtree. The chart was moved out of
+  # the Go image-source subtree so chart-only edits validate independently.
+  - id: nats-auth-callout-helm
+    path: deploy/helm/nats-auth-callout
+    change_paths:
+      - deploy/helm/nats-auth-callout/**/*
+    helm_validate:
+      chart_path: "."
+  # nvcf-unbound (formerly dns-cache) is a native Bazel-built subtree
+  # (imports.yaml authoritative_source: native). Ships TWO release
+  # artifacts:
+  #
+  #   1. A Go webhook binary (cmd/webhook) packaged as an OCI image
+  #      and pushed to nvcr.io. Two push destinations: nv-ngc-devops
+  #      (legacy) and ncp-dev (universal). Both reachable with the
+  #      shared NGC_DEVOPS_API_KEY CI variable (no per-service vault
+  #      entry).
+  #
+  #   2. The nvcf-unbound Helm chart at deploy/helm/nvcf-unbound/Chart.yaml, packaged
+  #      and pushed to nvcr.io. Three NGC orgs: ncp-dev (universal),
+  #      nv-ngc-devops (legacy), and nvcf-internal (NGC self-managed
+  #      org-root). Chart version stamps from semantic-release's
+  #      NEXT_VERSION via the cds-component's chart-version input.
+  #
+  # Anchor tag in the umbrella is nvcf-unbound-v0.7.18 (matches the
+  # upstream's last chart tag, re-namespaced under the new project
+  # name).
+  - id: nvcf-unbound
+    path: src/compute-plane-services/nvcf-unbound
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/nvcf-cache/nvcf-unbound.git
+      tag_prefix: ""
+      umbrella_tag_prefix: nvcf-unbound-v
+    change_paths:
+      - src/compute-plane-services/nvcf-unbound/**/*
+      - deploy/helm/nvcf-unbound/**/*
+    bazel: {}
+    helm_validate: {}
+    release:
+      service_name: nvcf-unbound
+      legacy_tag_prefix: nvcf-unbound-v
+      # Tag pipelines build the multi-arch image index, push to a
+      # staging registry, emit release-manifest.json, and trigger the
+      # private release repo which copies the staging digest by
+      # reference to nv-ngc-devops + ncp-dev (both via
+      # NGC_DEVOPS_API_KEY). The Helm chart below stays on its existing
+      # direct-push lane for now.
+      staging:
+        images:
+          # Image name is nvcf-unbound-webhook, not nvcf-unbound. The
+          # //cmd/webhook binary is the pod-mutator webhook, and the
+          # promote destination derives from this name
+          # (nvcr.io/<org>/<name>). Using nvcf-unbound here collided with
+          # the Helm chart's OCI coordinate
+          # (oci://nvcr.io/<org>/nvcf-unbound): the image push and chart
+          # push share one repo+tag and clobber each other, leaving the
+          # chart tag pointing at an image manifest. The -webhook suffix
+          # keeps the image on its own repo.
+          - name: nvcf-unbound-webhook
+            bazel_image_target: //cmd/webhook:image_index
+      helm:
+        chart_path: ../../../deploy/helm/nvcf-unbound
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+          - name: nv-ngc-devops
+            ngc_path: nv-ngc-devops
+            ngc_key_var: NGC_DEVOPS_API_KEY
+            # Also publish to NGC's classic chart registry
+            # (https://helm.ngc.nvidia.com/nv-ngc-devops/). Argo
+            # Applications for this chart pull from the classic surface,
+            # which the OCI push does not populate. See helm-push-ngc
+            # cds-component wiring in the generator.
+            classic_registry: true
+          - name: nvcf-internal
+            ngc_path: "0544956542906249"
+            ngc_key_var: NGC_PUSH_SERVICE_KEY_NVCF_INTERNAL
+      slack_channel: C08S6KLCEJH
+  # helm-reval is a native Bazel-built subtree (imports.yaml
+  # authoritative_source: native). Go binary + Helm chart at
+  # deploy/helm/helm-reval. Image publishes to two destinations:
+  #
+  #   1. nvcr.io/nv-ngc-devops/nvcf-helm-reval-api (NGC_DEVOPS_API_KEY)
+  #   2. nvcr.io/0651155215864979/ncp-dev/nvcf-helm-reval-api (universal
+  #      ncp-dev target, shared NGC_DEVOPS_API_KEY)
+  #
+  # Upstream's pre-cutover Bazel pipeline also pushed to
+  # nvcr.io/nvidian/kaze/nvcf-helm-reval-api via its own scoped
+  # NGC_REGISTRY_TOKEN CI variable; the umbrella does not yet have a
+  # vault key provisioned for this service, so the kaze push is
+  # dropped in this cutover (matches the nvcf-unbound precedent).
+  # Add back when the vault path is provisioned.
+  #
+  # Anchor tag in the umbrella is `nvcf-helm-reval-v0.1.0` (helm-reval
+  # upstream had no prior release tags).
+  - id: helm-reval
+    path: src/control-plane-services/helm-reval
+    change_paths:
+      - src/control-plane-services/helm-reval/**/*
+      - deploy/helm/helm-reval/**/*
+    bazel: {}
+    helm_validate: {}
+    release:
+      service_name: nvcf-helm-reval-api
+      legacy_tag_prefix: nvcf-helm-reval-api-v
+      # Tag pipelines build the multi-arch image index, push to a
+      # staging registry, emit release-manifest.json, and trigger the
+      # private release repo which copies the staging digest by
+      # reference to ncp-dev (NGC_DEVOPS_API_KEY). NVCR destinations
+      # and NGC auth are owned by that private repo, never by this
+      # OSS tree.
+      staging:
+        images:
+          - name: reval-server
+            bazel_image_target: //cmd/reval-service:image_index
+      helm:
+        chart_path: ../../../deploy/helm/helm-reval
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+          - name: nv-ngc-devops
+            ngc_path: nv-ngc-devops
+            ngc_key_var: NGC_DEVOPS_API_KEY
+          - name: nvcf-internal
+            ngc_path: "0544956542906249"
+            ngc_key_var: NGC_PUSH_SERVICE_KEY_NVCF_INTERNAL
+      slack_channel: C08S6KLCEJH
+  # ess-agent is a native Bazel-built subtree (imports.yaml
+  # authoritative_source: native). Image-only; no Helm chart.
+  # Publishes to two nvcr.io destinations:
+  #
+  #   1. nvcr.io/nv-ngc-devops/ess-agent (NGC_DEVOPS_API_KEY)
+  #   2. nvcr.io/0651155215864979/ncp-dev/ess-agent (universal
+  #      ncp-dev target, shared NGC_DEVOPS_API_KEY)
+  #
+  # The upstream pipeline also pushed nvcr.io/nvidian/kaze/ess-agent
+  # via vault key `ess-agent`, but the umbrella Vault role cannot read
+  # that path (MR !370 returned 404 from
+  # kv/gitlab/ngc-registry-auth/ess-agent). Add Kaze back after the
+  # vault path is provisioned for the umbrella.
+  #
+  # Anchor tag in the umbrella is `nvcf-ess-agent-v1.1.0` (matches
+  # the upstream's last v1.1.0 release tag).
+  - id: ess-agent
+    path: src/compute-plane-services/ess-agent
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/ess-agent.git
+      tag_prefix: v
+      umbrella_tag_prefix: nvcf-ess-agent-v
+    change_paths:
+      - src/compute-plane-services/ess-agent/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-ess-agent
+      legacy_tag_prefix: nvcf-ess-agent-v
+      # Tag pipelines build the multi-arch image index, push to a
+      # staging registry, emit release-manifest.json, and trigger the
+      # private release repo which copies the staging digest by
+      # reference to nv-ngc-devops + ncp-dev (both via
+      # NGC_DEVOPS_API_KEY). NVCR destinations and NGC auth are owned
+      # by that private repo, never by this OSS tree.
+      staging:
+        images:
+          - name: ess-agent
+            bazel_image_target: //:image_index
+      slack_channel: C08S6KLCEJH
+  # nvcf-container-cache is a native helm-only subtree (imports.yaml
+  # authoritative_source: native). No Go binary or Bazel build; just a
+  # Helm chart at deploy/helm/container-cache/deploy. The umbrella's
+  # release pipeline packages the chart via cds-components helm-package
+  # (with chart-version stamped from compute-next-release-version's NEXT_VERSION)
+  # and pushes to four NGC orgs:
+  #
+  #   1. ncp-dev (universal default, NGC_DEVOPS_API_KEY)
+  #   2. nv-ngc-devops (legacy, NGC_DEVOPS_API_KEY)
+  #   3. nvcf-internal (NGC self-managed org-root,
+  #      NGC_PUSH_SERVICE_KEY_NVCF_INTERNAL)
+  #   4. nvstaging/nvcf-byoc (legacy nvstaging publish, also
+  #      NGC_DEVOPS_API_KEY)
+  #
+  # No image_push_targets because there is no image to push. The
+  # generator emits the helm-package + helm-push-ngc include block
+  # but skips the <id>-image-push job (its template is wrapped in
+  # `{{- if .Targets }}`). slack-notify's needs on image-push is
+  # optional: true so it still fires after helm-package + semantic-
+  # release on tag pipelines.
+  #
+  # Anchor tag in the umbrella is `nvcf-container-cache-v0.25.17`
+  # (matches the upstream's last 0.25.17 chart tag).
+  # byoo-otel-collector is the pilot for split release publishing. It is
+  # a native Bazel-built subtree (imports.yaml authoritative_source:
+  # native). Source CI builds and stages two image indexes, emits
+  # release-manifest.json, and triggers nvcf-internal to promote the
+  # immutable digests to private NVCR destinations:
+  #   byoo-otel-collector  wrapper + collector, wrapper is ENTRYPOINT.
+  #   nvcf-otel-collector  collector only, used by the NVCA OTel sidecar.
+  #
+  # Private destination URLs and release credentials live in
+  # nvcf-internal/config/services/byoo-otel-collector.yaml, not in this
+  # source repo. Keep validation checks here; keep release promotion
+  # policy in nvcf-internal.
+  #
+  # Anchor tag in the umbrella is `byoo-otel-collector-v0.153.0`
+  # (above upstream's last 0.152.1 tag; the upstream did not use a
+  # `v` prefix on its semver tags, the umbrella prefixes for the
+  # standard semantic-release tagFormat).
+  - id: byoo-otel-collector
+    path: src/compute-plane-services/byoo-otel-collector
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/monitoring/byoo-otel-collector.git
+      tag_prefix: ""
+      umbrella_tag_prefix: byoo-otel-collector-v
+    change_paths:
+      - src/compute-plane-services/byoo-otel-collector/**/*
+    bazel: {}
+    needs_host_go: true
+    checks:
+      - id: check-version-modified
+        type: shell
+        image: golang:1.26.2-bookworm
+        skip_workspace_setup: true
+        command: "$CI_PROJECT_DIR/tools/ci/check-byoo-version-modified.sh"
+      - id: check-generated-examples
+        type: shell
+        image: golang:1.26.2-bookworm
+        skip_workspace_setup: true
+        command: GOTOOLCHAIN=auto bash scripts/update-examples.sh && git diff --exit-code examples/otelconfigs
+      - id: check-generated-configs
+        type: shell
+        image: ${CI_REGISTRY}/cds/cds-containers/tools:1.10.0
+        skip_workspace_setup: true
+        command: /bin/bash scripts/start-generator.sh && git diff --exit-code internal/otelconfig
+      - id: check-otelcol-generated
+        type: shell
+        image: golang:1.26.2-bookworm
+        skip_workspace_setup: true
+        command: ./tools/ci/check-otelcol-generated
+      - id: test-otel-configs-vm-container
+        type: shell
+        image: ${CI_REGISTRY}/cds/cds-containers/tools:1.10.0
+        skip_workspace_setup: true
+        command: >-
+          set -eu; GO_VERSION="1.23.4"; arch="$(uname -m)";
+          case "$arch" in
+          x86_64) arch=amd64; GO_SHA256=6924efde5de86fe277676e929dc9917d466efa02fb934197bc2eba35d5680971 ;;
+          aarch64|arm64) arch=arm64; GO_SHA256=16e5017863a7f6071363782b1b8042eb12c6ca4f4cd71528b2123f0a1275b13e ;;
+          *) echo "[test-otel-configs-vm-container] unsupported arch: $arch" >&2; exit 1 ;;
+          esac;
+          GO_TGZ="go${GO_VERSION}.linux-${arch}.tar.gz";
+          curl -fSL "https://go.dev/dl/${GO_TGZ}" -o "/tmp/${GO_TGZ}";
+          echo "${GO_SHA256}  /tmp/${GO_TGZ}" | sha256sum -c -;
+          tar -xz -C /usr/local -f "/tmp/${GO_TGZ}";
+          rm -f "/tmp/${GO_TGZ}";
+          export PATH="$PATH:/usr/local/go/bin" NGC_CLI_API_KEY="$NGC_API_KEY_PRD_nv_cf";
+          /bin/bash scripts/validate-otelconfig.sh vm-container
+      - id: test-otel-configs-vm-helm
+        type: shell
+        image: ${CI_REGISTRY}/cds/cds-containers/tools:1.10.0
+        skip_workspace_setup: true
+        command: >-
+          set -eu; GO_VERSION="1.23.4"; arch="$(uname -m)";
+          case "$arch" in
+          x86_64) arch=amd64; GO_SHA256=6924efde5de86fe277676e929dc9917d466efa02fb934197bc2eba35d5680971 ;;
+          aarch64|arm64) arch=arm64; GO_SHA256=16e5017863a7f6071363782b1b8042eb12c6ca4f4cd71528b2123f0a1275b13e ;;
+          *) echo "[test-otel-configs-vm-helm] unsupported arch: $arch" >&2; exit 1 ;;
+          esac;
+          GO_TGZ="go${GO_VERSION}.linux-${arch}.tar.gz";
+          curl -fSL "https://go.dev/dl/${GO_TGZ}" -o "/tmp/${GO_TGZ}";
+          echo "${GO_SHA256}  /tmp/${GO_TGZ}" | sha256sum -c -;
+          tar -xz -C /usr/local -f "/tmp/${GO_TGZ}";
+          rm -f "/tmp/${GO_TGZ}";
+          export PATH="$PATH:/usr/local/go/bin" NGC_CLI_API_KEY="$NGC_API_KEY_PRD_nv_cf";
+          /bin/bash scripts/validate-otelconfig.sh vm-helm
+      - id: test-otel-configs-k8s-container
+        type: shell
+        image: ${CI_REGISTRY}/cds/cds-containers/tools:1.10.0
+        skip_workspace_setup: true
+        command: >-
+          set -eu; GO_VERSION="1.23.4"; arch="$(uname -m)";
+          case "$arch" in
+          x86_64) arch=amd64; GO_SHA256=6924efde5de86fe277676e929dc9917d466efa02fb934197bc2eba35d5680971 ;;
+          aarch64|arm64) arch=arm64; GO_SHA256=16e5017863a7f6071363782b1b8042eb12c6ca4f4cd71528b2123f0a1275b13e ;;
+          *) echo "[test-otel-configs-k8s-container] unsupported arch: $arch" >&2; exit 1 ;;
+          esac;
+          GO_TGZ="go${GO_VERSION}.linux-${arch}.tar.gz";
+          curl -fSL "https://go.dev/dl/${GO_TGZ}" -o "/tmp/${GO_TGZ}";
+          echo "${GO_SHA256}  /tmp/${GO_TGZ}" | sha256sum -c -;
+          tar -xz -C /usr/local -f "/tmp/${GO_TGZ}";
+          rm -f "/tmp/${GO_TGZ}";
+          export PATH="$PATH:/usr/local/go/bin" NGC_CLI_API_KEY="$NGC_API_KEY_PRD_nv_cf";
+          /bin/bash scripts/validate-otelconfig.sh k8s-container
+      - id: test-otel-configs-k8s-helm
+        type: shell
+        image: ${CI_REGISTRY}/cds/cds-containers/tools:1.10.0
+        skip_workspace_setup: true
+        command: >-
+          set -eu; GO_VERSION="1.23.4"; arch="$(uname -m)";
+          case "$arch" in
+          x86_64) arch=amd64; GO_SHA256=6924efde5de86fe277676e929dc9917d466efa02fb934197bc2eba35d5680971 ;;
+          aarch64|arm64) arch=arm64; GO_SHA256=16e5017863a7f6071363782b1b8042eb12c6ca4f4cd71528b2123f0a1275b13e ;;
+          *) echo "[test-otel-configs-k8s-helm] unsupported arch: $arch" >&2; exit 1 ;;
+          esac;
+          GO_TGZ="go${GO_VERSION}.linux-${arch}.tar.gz";
+          curl -fSL "https://go.dev/dl/${GO_TGZ}" -o "/tmp/${GO_TGZ}";
+          echo "${GO_SHA256}  /tmp/${GO_TGZ}" | sha256sum -c -;
+          tar -xz -C /usr/local -f "/tmp/${GO_TGZ}";
+          rm -f "/tmp/${GO_TGZ}";
+          export PATH="$PATH:/usr/local/go/bin" NGC_CLI_API_KEY="$NGC_API_KEY_PRD_nv_cf";
+          /bin/bash scripts/validate-otelconfig.sh k8s-helm
+    release:
+      service_name: byoo-otel-collector
+      legacy_tag_prefix: byoo-otel-collector-v
+      version_file: VERSION
+      version_major_minor_source_file: otel-collector-build.yaml
+      staging:
+        images:
+          - name: byoo-otel-collector
+            bazel_image_target: //:byoo-otel-collector-image_index
+          - name: nvcf-otel-collector
+            bazel_image_target: //:nvcf-otel-collector-image_index
+  # nvca is native in imports.yaml. Validation entrypoints live under root
+  # tools/ and call the subtree scripts in place. Main-branch merges create
+  # src/compute-plane-services/nvca/v<VERSION>-dev.N tags, which stage the
+  # runtime images, emit release-manifest.json, and trigger nvcf-internal
+  # promotion. The manual release-branch-nvca job cuts the current
+  # release-src/compute-plane-services/nvca/vX.Y branch and opens the
+  # follow-up MR that advances VERSION on main to X.(Y+1).0. Explicit
+  # path-scoped rc/stable tags still work because tag pipelines derive the
+  # version directly from CI_COMMIT_TAG.
+  - id: nvca
+    path: src/compute-plane-services/nvca
+    profile: nvca-toolbox
+    # nvca releases are cut in its upstream repo (the v3.0.x line), not the
+    # umbrella, so its tags and per-release history are not reachable from
+    # nvcf/nvcf. Point the changelog browser at the upstream repo so nvca
+    # renders inline with the other services. Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/egx/intelligent-infra/nvca.git
+      tag_prefix: v
+      # nvca is now monorepo-native; future releases use POR path tags in
+      # the umbrella and merge with the frozen upstream v3.0.x line above.
+      umbrella_tag_prefix: nvca-v
+    change_paths:
+      - src/compute-plane-services/nvca/**/*
+      - tools/ci/run-nvca-check
+      - tools/ci/setup-subtree-envtest
+    needs_host_go: true
+    bazel:
+      setup_envtest: true
+      extra_build_targets:
+        - //cmd/nvca:image_index
+        - //cmd/nvca-operator:image_index
+        - //cmd/cluster-validator:image_index
+        - //cmd/tools:image_index
+    release:
+      service_name: nvca
+      legacy_tag_prefix: nvca-v
+      version_file: VERSION
+      dev_prerelease: true
+      rc_prerelease: true
+      staging:
+        images:
+          - name: nvca
+            bazel_image_target: //cmd/nvca:image_index
+          - name: nvca-operator
+            bazel_image_target: //cmd/nvca-operator:image_index
+          - name: cluster-validator
+            bazel_image_target: //cmd/cluster-validator:image_index
+          - name: tools
+            bazel_image_target: //cmd/tools:image_index
+      slack_channel: C08S6KLCEJH
+    checks:
+      - id: go-update
+        type: shell
+        image: $CI_REGISTRY_IMAGE/bazel-ci:$BAZEL_CI_VERSION
+        skip_workspace_setup: true
+        command: $CI_PROJECT_DIR/tools/ci/run-nvca-check go-update
+  - id: container-cache
+    path: deploy/helm/container-cache
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/nvcf/nvcf-cache/nvcf-container-cache.git
+      tag_prefix: ""
+      umbrella_tag_prefix: nvcf-container-cache-v
+    change_paths:
+      - deploy/helm/container-cache/**/*
+    helm_validate: {}
+    release:
+      service_name: nvcf-container-cache
+      legacy_tag_prefix: nvcf-container-cache-v
+      helm:
+        chart_path: deploy
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+          - name: nv-ngc-devops
+            ngc_path: nv-ngc-devops
+            ngc_key_var: NGC_DEVOPS_API_KEY
+            # Also publish to NGC's classic chart registry
+            # (https://helm.ngc.nvidia.com/nv-ngc-devops/). Argo
+            # Applications for this chart pull from the classic surface,
+            # which the OCI push does not populate. See helm-push-ngc
+            # cds-component wiring in the generator.
+            classic_registry: true
+          - name: nvcf-internal
+            ngc_path: "0544956542906249"
+            ngc_key_var: NGC_PUSH_SERVICE_KEY_NVCF_INTERNAL
+          - name: nvstaging-byoc
+            ngc_path: nvstaging/nvcf-byoc
+            ngc_key_var: NGC_DEVOPS_API_KEY
+      slack_channel: C08S6KLCEJH
+  # nats (helm-nvcf-nats) is a native Helm chart subtree. The upstream
+  # nvcf-nats-k8s repo had no CI: chart releases were manual via
+  # `make release` (Makefile + helm package + helm push). Maintainer
+  # James McNamee confirmed the new umbrella-driven flow should
+  # publish to nvcr.io/0651155215864979/ncp-dev (the same tenant the
+  # in-tree stack_test.go references for resolved chart OCI refs).
+  # Single-destination push -- chart is referenced by the self-managed
+  # stack from that single path; no nv-ngc-devops/nvcf-internal mirror
+  # historically. Legacy anchor tag in the umbrella is
+  # `helm-nvcf-nats-v0.6.1` (matches upstream's last released tag);
+  # new tags use the chart path.
+  - id: nats
+    path: deploy/helm/nats
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/infrastructure-services/nats/nvcf-nats-k8s.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-nvcf-nats-v
+    change_paths:
+      - deploy/helm/nats/**/*
+    helm_validate: {}
+    release:
+      service_name: helm-nvcf-nats
+      legacy_tag_prefix: helm-nvcf-nats-v
+      helm:
+        chart_path: "."
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # admin-token-issuer-proxy (helm-admin-token-issuer-proxy chart) is
+  # a native Helm chart subtree. Pre-cutover the upstream used the
+  # ncp-service-helm-release@1.7.0 cds-component, which packaged the
+  # chart at chart-version stamped from semantic-release and pushed
+  # to nvcr.io/0651155215864979/ncp-dev. The umbrella's helm-package +
+  # helm-push-ngc cds-components produce the same artifact, and the
+  # vault_ncp_dev auth wires the same kv/app/ncp/ngc-key fetch the
+  # upstream's cds-component used. Anchor tag in the umbrella is
+  # helm-admin-token-issuer-proxy-v1.3.2 (matches upstream's last
+  # released tag).
+  - id: admin-token-issuer-proxy
+    path: deploy/helm/admin-token-issuer-proxy
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/application-services/admin-token-issuer-proxy-chart.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-admin-token-issuer-proxy-v
+    change_paths:
+      - deploy/helm/admin-token-issuer-proxy/**/*
+      - tools/ci/helm-validate-values/admin-token-issuer-proxy.yaml
+    helm_validate:
+      values_file: tools/ci/helm-validate-values/admin-token-issuer-proxy.yaml
+    release:
+      service_name: helm-admin-token-issuer-proxy
+      legacy_tag_prefix: helm-admin-token-issuer-proxy-v
+      helm:
+        chart_path: chart
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # cassandra (helm-nvcf-cassandra chart) is a native Helm chart
+  # subtree. Pre-cutover the upstream used the
+  # ncp-service-helm-release@1.7.0 cds-component (same pattern as
+  # admin-token-issuer-proxy and nats) to package + publish to
+  # nvcr.io/0651155215864979/ncp-dev via the shared NCP SERVICE_KEY.
+  # Anchor tag helm-nvcf-cassandra-v0.14.8 (upstream's last released
+  # tag).
+  - id: cassandra
+    path: deploy/helm/cassandra
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/infrastructure-services/cassandra/nvcf-cassandra-k8s.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-nvcf-cassandra-v
+    change_paths:
+      - deploy/helm/cassandra/**/*
+      - tools/ci/helm-validate-values/cassandra.yaml
+    helm_validate:
+      values_file: tools/ci/helm-validate-values/cassandra.yaml
+    release:
+      service_name: helm-nvcf-cassandra
+      legacy_tag_prefix: helm-nvcf-cassandra-v
+      helm:
+        chart_path: helm
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # api-keys-colocated (helm-nvcf-api-keys chart) is a native Helm
+  # chart subtree. Pre-cutover the upstream used the
+  # ncp-service-helm-release@1.7.0 cds-component (same pattern as
+  # admin-token-issuer-proxy, nats, and cassandra) to package +
+  # publish to nvcr.io/0651155215864979/ncp-dev via the shared NCP
+  # SERVICE_KEY. Anchor tag helm-nvcf-api-keys-v1.5.1 (upstream's
+  # last released tag).
+  - id: api-keys-colocated
+    path: deploy/helm/api-keys-colocated
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/application-services/nvcf-api-keys-colocated-deploy.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-nvcf-api-keys-v
+    change_paths:
+      - deploy/helm/api-keys-colocated/**/*
+      - tools/ci/helm-validate-values/api-keys-colocated.yaml
+    helm_validate:
+      values_file: tools/ci/helm-validate-values/api-keys-colocated.yaml
+    release:
+      service_name: helm-nvcf-api-keys
+      legacy_tag_prefix: helm-nvcf-api-keys-v
+      helm:
+        chart_path: api-keys
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # openbao (helm-nvcf-openbao-server chart) is a native Helm chart
+  # subtree. Pre-cutover the upstream k8s-openbao used the
+  # ncp-service-helm-release@1.7.0 cds-component (same pattern as
+  # admin-token-issuer-proxy, nats, cassandra, and api-keys) to
+  # package + publish to nvcr.io/0651155215864979/ncp-dev via the
+  # shared NCP SERVICE_KEY. Anchor tag
+  # helm-nvcf-openbao-server-v0.30.15 (upstream's last released
+  # tag).
+  - id: openbao
+    path: deploy/helm/openbao
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/infrastructure-services/openbao/k8s-openbao.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-nvcf-openbao-server-v
+    change_paths:
+      - deploy/helm/openbao/**/*
+      - tools/ci/helm-validate-values/openbao.yaml
+    helm_validate:
+      values_file: tools/ci/helm-validate-values/openbao.yaml
+    release:
+      service_name: helm-nvcf-openbao-server
+      legacy_tag_prefix: helm-nvcf-openbao-server-v
+      helm:
+        chart_path: helm
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # cert-manager (helm-nvcf-cert-manager chart) is a native Helm chart
+  # subtree. Pre-cutover the upstream nvcf-cert-manager repo used the
+  # ncp-service-helm-release@1.7.0 cds-component to package + publish
+  # to nvcr.io/0651155215864979/ncp-dev via the shared NCP SERVICE_KEY.
+  # Anchor tag helm-nvcf-cert-manager-v0.1.0 matches the upstream's
+  # last released tag.
+  - id: cert-manager
+    path: deploy/helm/cert-manager
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/infrastructure-services/cert-manager/nvcf-cert-manager.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-nvcf-cert-manager-v
+    change_paths:
+      - deploy/helm/cert-manager/**/*
+    helm_validate: {}
+    release:
+      service_name: helm-nvcf-cert-manager
+      legacy_tag_prefix: helm-nvcf-cert-manager-v
+      helm:
+        chart_path: "."
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # LLM Request Router Helm chart subtree. Pre-cutover the upstream
+  # llm-request-router-colocated-deploy repo used the
+  # ncp-service-helm-release@1.7.0 cds-component to package + publish
+  # to nvcr.io/0651155215864979/ncp-dev via the shared NCP SERVICE_KEY.
+  # Anchor tag helm-nvcf-llm-request-router-v1.6.3 matches the
+  # upstream's last released tag.
+  - id: llm-request-router
+    path: deploy/helm/llm-request-router
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/application-services/llm-request-router-colocated-deploy.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-nvcf-llm-request-router-v
+    change_paths:
+      - deploy/helm/llm-request-router/**/*
+      - tools/ci/helm-validate-values/llm-request-router.yaml
+    helm_validate:
+      values_file: tools/ci/helm-validate-values/llm-request-router.yaml
+    release:
+      service_name: helm-nvcf-llm-request-router
+      legacy_tag_prefix: helm-nvcf-llm-request-router-v
+      helm:
+        chart_path: llm-request-router
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # gateway-routes (nvcf-gateway-routes chart) is a native Helm
+  # chart subtree. Pre-cutover the upstream used the
+  # ncp-service-helm-release@1.7.0 cds-component (same pattern as
+  # admin-token-issuer-proxy, nats, cassandra, api-keys, and
+  # openbao) to package + publish to
+  # nvcr.io/0651155215864979/ncp-dev via the shared NCP
+  # SERVICE_KEY. Anchor tag nvcf-gateway-routes-v1.13.0 (upstream's
+  # last released tag).
+  #
+  # The upstream's post-release trigger-stack-update@1.4.0 cds-component
+  # is deferred to a follow-up and not yet emitted by this generator.
+  # Chart render tests and the vanity-gateway template assertions now run
+  # in the gateway-routes subproject-validations child pipeline.
+  - id: gateway-routes
+    path: deploy/helm/gateway-routes
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/infrastructure-services/nvcf-gateway-routes.git
+      tag_prefix: ""
+      umbrella_tag_prefix: nvcf-gateway-routes-v
+    change_paths:
+      - deploy/helm/gateway-routes/**/*
+      - tools/ci/helm-validate-values/gateway-routes-vanity.yaml
+    helm_validate:
+      values_file: tools/ci/helm-validate-values/gateway-routes-vanity.yaml
+    checks:
+      - id: chart-render-tests
+        type: shell
+        skip_workspace_setup: true
+        command: apk add --no-cache helm make yq && make test
+      - id: validate-vanity-gateway-route
+        type: shell
+        image: ghcr.io/helmfile/helmfile:v1.1.0
+        skip_workspace_setup: true
+        command: sh ./scripts/test-vanity-gateway-route.sh
+    release:
+      service_name: nvcf-gateway-routes
+      legacy_tag_prefix: nvcf-gateway-routes-v
+      helm:
+        chart_path: chart
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # nvca-operator (helm-nvca-operator chart) is a native Helm chart
+  # subtree. Pre-cutover the upstream nvca-operator-deploy used the
+  # ncp-service-helm-release@1.7.0 cds-component (same pattern as
+  # admin-token-issuer-proxy, nats, cassandra, api-keys, openbao,
+  # and gateway-routes) to package + publish to
+  # nvcr.io/0651155215864979/ncp-dev via the shared NCP SERVICE_KEY.
+  # Anchor tag helm-nvca-operator-v1.11.1 (upstream's last released
+  # tag).
+  #
+  # The upstream's MR/default-branch validation checks run in the
+  # subproject-validations child pipeline. The tag-only
+  # build/package/release:manifest-assets SBOM/release-asset jobs and the
+  # post-release trigger-stack-update@1.4.0 cds-component are deferred to
+  # a follow-up; this cutover ships the chart-publish lane only.
+  - id: nvca-operator
+    path: deploy/helm/nvca-operator
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/application-services/nvca-operator-deploy.git
+      tag_prefix: ""
+      umbrella_tag_prefix: helm-nvca-operator-v
+    change_paths:
+      - deploy/helm/nvca-operator/**/*
+      - tools/ci/helm-validate-values/nvca-operator.yaml
+    helm_validate:
+      values_file: tools/ci/helm-validate-values/nvca-operator.yaml
+    checks:
+      - id: test-release-image-manifest
+        type: shell
+        skip_workspace_setup: true
+        command: >-
+          set -eu;
+          export NVCA_OPERATOR_VERSION=3.0.4
+          NVCA_VERSION=3.0.4
+          NVCA_SHARED_STORAGE_IMAGE_TAG=1.0.5;
+          apk add --no-cache bash helm jq make yq;
+          make test-build-release-assets;
+          make test-release-image-manifest;
+          make test-release-artifact-permissions;
+          make test-package-release-assets;
+          make test-attach-release-assets;
+          make test-release-sbom-wrapper;
+          make test-self-managed-nvca-image-reference
+      - id: check-vendor-chart
+        type: shell
+        skip_workspace_setup: true
+        command: >-
+          set -eu;
+          export NVCA_OPERATOR_VERSION=3.0.4
+          NVCA_VERSION=3.0.4
+          NVCA_SHARED_STORAGE_IMAGE_TAG=1.0.5;
+          apk add --no-cache git curl bash yq make;
+          make check-vendor-chart
+    release:
+      service_name: helm-nvca-operator
+      legacy_tag_prefix: helm-nvca-operator-v
+      helm:
+        chart_path: nvca-operator
+        lint: true
+        push_targets:
+          - name: ncp-dev
+            ngc_path: 0651155215864979/ncp-dev
+            auth:
+              type: vault_ncp_dev
+      slack_channel: C08S6KLCEJH
+  # cassandra-migrations + openbao-migrations are Dockerfile-based
+  # image-source subtrees, not Bazel and not Helm. The `release.dockerfile`
+  # block hooks the umbrella's compute-next-release-version +
+  # semantic-release scaffold to a buildah amd64/arm64 multi-arch
+  # manifest push (template added to the generator alongside this
+  # entry). Tags use each migration subtree path so versions don't
+  # collide with other services.
+  - id: cassandra-migrations
+    path: migrations/cassandra
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/infrastructure-services/cassandra/nvcf-cassandra-migrations.git
+      tag_prefix: ""
+      umbrella_tag_prefix: nvcf-cassandra-migrations-v
+    change_paths:
+      - migrations/cassandra/**/*
+    release:
+      service_name: nvcf-cassandra-migrations
+      legacy_tag_prefix: nvcf-cassandra-migrations-v
+      dockerfile:
+        # Internal Dockerfile variant; the public OSS mirror gets a
+        # sanitized copy via nvossctl, but builds happen from the
+        # internal one which adds the proprietary `migrate` binary.
+        dockerfile: Dockerfile.internal
+        image_name: nvcf-cassandra-migrations
+      slack_channel: C08S6KLCEJH
+  - id: openbao-migrations
+    path: migrations/openbao
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/ncp/nvcf/infrastructure-services/openbao/nvcf-openbao-migrations.git
+      tag_prefix: ""
+      umbrella_tag_prefix: nvcf-openbao-migrations-v
+    change_paths:
+      - migrations/openbao/**/*
+    release:
+      service_name: nvcf-openbao-migrations
+      legacy_tag_prefix: nvcf-openbao-migrations-v
+      dockerfile:
+        dockerfile: Dockerfile.internal
+        image_name: nvcf-openbao-migrations
+      slack_channel: C08S6KLCEJH
+  # nvcf-image-credential-helper is a native Bazel-built subtree
+  # (imports.yaml authoritative_source: native). Image-only release.
+  # Publishes the Go binary OCI image to three nvcr.io destinations:
+  #
+  #   1. nvcr.io/0544956542906249/nvcf-staging/nvcf-image-credential-helper
+  #      (vault key nvcf-components -- the NGC self-managed org)
+  #   2. nvcr.io/0544956542906249/nvcf-production/nvcf-image-credential-helper
+  #      (same vault key; production scope under same org)
+  #   3. nvcr.io/0651155215864979/ncp-dev/nvcf-image-credential-helper
+  #      (universal ncp-dev target, NGC_DEVOPS_API_KEY)
+  #
+  # Release tags use the GitHub First repo-relative format:
+  # src/compute-plane-services/image-credential-helper/vX.Y.Z
+  - id: image-credential-helper
+    path: src/compute-plane-services/image-credential-helper
+    # Pre-cutover releases are tagged in the upstream repo and are not
+    # reachable from nvcf/nvcf; merge them into the changelog page
+    # (dual-source, same pattern as nvca). Consumed only by
+    # tools/changelog-site; the CI generator ignores this key.
+    changelog:
+      upstream_repo: https://gitlab-master.nvidia.com/egx/intelligent-infra/nvcf-image-credential-helper.git
+      tag_prefix: ""
+      umbrella_tag_prefix: nvcf-image-credential-helper-v
+    change_paths:
+      - src/compute-plane-services/image-credential-helper/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-image-credential-helper
+      legacy_tag_prefix: nvcf-image-credential-helper-v
+      # Tag pipelines build the multi-arch image index, push to a
+      # staging registry, emit release-manifest.json, and trigger the
+      # private release repo which copies the staging digest by
+      # reference to nvcf-staging + nvcf-production (both via
+      # NGC_NVCF_COMPONENTS_KEY) and ncp-dev (NGC_DEVOPS_API_KEY).
+      # NVCR destinations and NGC auth are owned by that private repo,
+      # never by this OSS tree.
+      staging:
+        images:
+          - name: nvcf-image-credential-helper
+            bazel_image_target: //cmd/image-credential-helper:image_index
+      slack_channel: C08S6KLCEJH
+  # See the worker-init/utils/llm-credentials block above: GitHub-first
+  # staging release, promoted to NVCR by the private release repo.
+  - id: worker-task
+    path: src/compute-plane-services/worker-task
+    change_paths:
+      - src/compute-plane-services/worker-task/go.mod
+      - src/compute-plane-services/worker-task/go.sum
+      - src/compute-plane-services/worker-task/**/*
+    bazel: {}
+    release:
+      service_name: nvcf-worker-task
+      legacy_tag_prefix: nvcf-worker-task-v
+      staging:
+        images:
+          - name: nvcf-worker-task-oss
+            bazel_image_target: //cmd:image_index
+      slack_channel: C08S6KLCEJH
+  # nvcf-ui is a native Bazel-built subtree (imports.yaml authoritative_source: native).
+  # Ships a Go BFF + control-plane binary plus a React/Vite SPA in a single distroless
+  # OCI image via the go_web_oci_image macro. The Helm chart lives in deploy/helm/nvcf-ui.
+  # Not ready for OSS mirroring; no .oss-allowlist added.
+  - id: nvcf-ui
+    path: src/control-plane-services/nvcf-ui
+    change_paths:
+      - src/control-plane-services/nvcf-ui/**/*
+      - deploy/helm/nvcf-ui/**/*
+    checks:
+      - id: lint
+        type: shell
+        image: dockerhub.nvidia.com/node:24-alpine
+        skip_workspace_setup: true
+        command: >-
+          corepack enable &&
+          cd ui &&
+          pnpm install --frozen-lockfile &&
+          pnpm check
+      - id: typecheck
+        type: shell
+        image: dockerhub.nvidia.com/node:24-alpine
+        skip_workspace_setup: true
+        command: >-
+          corepack enable &&
+          cd ui &&
+          pnpm install --frozen-lockfile &&
+          pnpm tsc --noEmit
+    bazel:
+      dind: true
+    release:
+      service_name: nvcf-ui
+      tag_prefix: v
+      staging:
+        images:
+          - name: nvcf-ui
+            bazel_image_target: //:image_index
+      helm:
+        chart_path: ../../../deploy/helm/nvcf-ui
+        push_targets:
+          - name: nvcf-internal
+            ngc_path: "0544956542906249"
+            ngc_key_var: NGC_PUSH_SERVICE_KEY_NVCF_INTERNAL
+      slack_channel: C08S6KLCEJH
+  # nvcf-ui Helm chart subtree. Chart-only edits validate independently.
+  - id: nvcf-ui-helm
+    path: deploy/helm/nvcf-ui
+    change_paths:
+      - deploy/helm/nvcf-ui/**/*
+      - tools/ci/helm-validate-values/nvcf-ui.yaml
+    helm_validate:
+      chart_path: "."
+      values_file: tools/ci/helm-validate-values/nvcf-ui.yaml
