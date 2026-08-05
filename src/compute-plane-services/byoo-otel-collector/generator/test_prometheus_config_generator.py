@@ -34,6 +34,20 @@ EXPORTER_DIAGNOSTIC_METRICS = {
     ),
 }
 
+RAW_SELF_SCRAPE_COUNTER_METRICS = (
+    "otelcol_exporter_sent_metric_points",
+    "otelcol_exporter_sent_spans",
+    "otelcol_exporter_sent_log_records",
+    "otelcol_processor_incoming_items",
+    "otelcol_processor_outgoing_items",
+    "otelcol_receiver_accepted_log_records",
+    "otelcol_receiver_accepted_metric_points",
+    "otelcol_receiver_accepted_spans",
+    "otelcol_receiver_refused_log_records",
+    "otelcol_receiver_refused_spans",
+    "otelcol_receiver_refused_metric_points",
+)
+
 CONFIG_TEMPLATES = {
     "helm": ("generated_src-config-vm-helm.yaml.tmpl", "generated_src-config-k8s-helm.yaml.tmpl"),
     "container": (
@@ -73,6 +87,29 @@ class PrometheusConfigGeneratorTest(unittest.TestCase):
                             rendered_template,
                             f"{template_name} does not retain exporter diagnostics",
                         )
+
+    def test_raw_self_scrape_counter_names_are_rendered_in_keep_regexes(self) -> None:
+        variables = PrometheusConfigGenerator(SOURCE_CONFIG).build_variables()
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            TemplateBuilder(
+                str(SOURCE_CONFIG), str(SOURCE_TEMPLATES_DIR), output_dir
+            ).build()
+
+            for function_type, template_names in CONFIG_TEMPLATES.items():
+                with self.subTest(function_type=function_type):
+                    allow_list = variables[
+                        f"{function_type}_opentelemetry_collector_metric_allow_list"
+                    ].split("|")
+                    for metric_name in RAW_SELF_SCRAPE_COUNTER_METRICS:
+                        self.assertIn(metric_name, allow_list)
+
+                    for template_name in template_names:
+                        rendered_template = Path(output_dir, template_name).read_text(
+                            encoding="utf-8"
+                        )
+                        for metric_name in RAW_SELF_SCRAPE_COUNTER_METRICS:
+                            self.assertIn(metric_name, rendered_template)
 
 
 if __name__ == "__main__":

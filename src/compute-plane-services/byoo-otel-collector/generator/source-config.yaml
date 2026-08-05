@@ -456,6 +456,20 @@ metrics:
               - name: otelcol_receiver_refused_log_records_total
               - name: otelcol_receiver_refused_spans_total
               - name: otelcol_receiver_refused_metric_points_total
+          - catagory: raw-counter-inputs
+            docstring: Counter input names omit the Prometheus _total suffix. Keep both spellings for collector compatibility.
+            list:
+              - name: otelcol_exporter_sent_metric_points
+              - name: otelcol_exporter_sent_spans
+              - name: otelcol_exporter_sent_log_records
+              - name: otelcol_processor_incoming_items
+              - name: otelcol_processor_outgoing_items
+              - name: otelcol_receiver_accepted_log_records
+              - name: otelcol_receiver_accepted_metric_points
+              - name: otelcol_receiver_accepted_spans
+              - name: otelcol_receiver_refused_log_records
+              - name: otelcol_receiver_refused_spans
+              - name: otelcol_receiver_refused_metric_points
 
   - function_type: container
     jobs:
@@ -672,3 +686,17 @@ metrics:
               - name: otelcol_rpc_client_call_duration_seconds.*
               - name: otelcol_processor_incoming_items_total
               - name: otelcol_processor_outgoing_items_total
+          - catagory: raw-counter-inputs
+            docstring: Counter input names omit the Prometheus _total suffix. Keep both spellings for collector compatibility.
+            list:
+              - name: otelcol_receiver_refused_metric_points
+              - name: otelcol_receiver_refused_spans
+              - name: otelcol_receiver_refused_log_records
+              - name: otelcol_receiver_accepted_metric_points
+              - name: otelcol_receiver_accepted_spans
+              - name: otelcol_receiver_accepted_log_records
+              - name: otelcol_exporter_sent_metric_points
+              - name: otelcol_exporter_sent_spans
+              - name: otelcol_exporter_sent_log_records
+              - name: otelcol_processor_incoming_items
+              - name: otelcol_processor_outgoing_items

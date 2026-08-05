@@ -183,6 +183,20 @@ Always present for container and helm, NVCF and NVCT. The final list of metrics 
 * otelcol_receiver_refused_spans_total
 * otelcol_receiver_refused_metric_points_total
 
+##### raw-counter-inputs
+Counter input names omit the Prometheus _total suffix. Keep both spellings for collector compatibility.
+* otelcol_exporter_sent_metric_points
+* otelcol_exporter_sent_spans
+* otelcol_exporter_sent_log_records
+* otelcol_processor_incoming_items
+* otelcol_processor_outgoing_items
+* otelcol_receiver_accepted_log_records
+* otelcol_receiver_accepted_metric_points
+* otelcol_receiver_accepted_spans
+* otelcol_receiver_refused_log_records
+* otelcol_receiver_refused_spans
+* otelcol_receiver_refused_metric_points
+
 
 ## container
 ### nvcf-worker
@@ -300,4 +314,18 @@ Always present for container and helm, NVCF and NVCT. The final list of metrics 
 * otelcol_rpc_client_call_duration_seconds.*
 * otelcol_processor_incoming_items_total
 * otelcol_processor_outgoing_items_total
+
+##### raw-counter-inputs
+Counter input names omit the Prometheus _total suffix. Keep both spellings for collector compatibility.
+* otelcol_receiver_refused_metric_points
+* otelcol_receiver_refused_spans
+* otelcol_receiver_refused_log_records
+* otelcol_receiver_accepted_metric_points
+* otelcol_receiver_accepted_spans
+* otelcol_receiver_accepted_log_records
+* otelcol_exporter_sent_metric_points
+* otelcol_exporter_sent_spans
+* otelcol_exporter_sent_log_records
+* otelcol_processor_incoming_items
+* otelcol_processor_outgoing_items
 
