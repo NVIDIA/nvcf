@@ -66,6 +66,9 @@ global:
     invocationServiceURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy.
     grpcProxyWorkerConnectURL: ""
+    # Optional LLM request-router address override advertised to LLM worker
+    # sidecars. Empty uses llm-request-router.nvcf.svc.cluster.local:50071.
+    llmRequestRouterAddress: ""
 
   nodeSelectors:
     enabled: false
