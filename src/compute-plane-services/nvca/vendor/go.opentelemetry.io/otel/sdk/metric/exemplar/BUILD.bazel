@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "exemplar",
+    srcs = [
+        "doc.go",
+        "exemplar.go",
+        "filter.go",
+        "fixed_size_reservoir.go",
+        "histogram_reservoir.go",
+        "reservoir.go",
+        "storage.go",
+        "value.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/exemplar",
+    importpath = "go.opentelemetry.io/otel/sdk/metric/exemplar",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/go.opentelemetry.io/otel/attribute",
+        "//vendor/go.opentelemetry.io/otel/sdk/metric/internal/reservoir",
+        "//vendor/go.opentelemetry.io/otel/trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":exemplar",
+    visibility = ["//visibility:public"],
+)

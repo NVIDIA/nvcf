@@ -24,12 +24,16 @@ go_library(
         "//src/libraries/go/lib/pkg/core",
         "//src/libraries/go/lib/pkg/secret",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@io_opentelemetry_go_otel_metric//noop",
     ],
 )
 
 go_test(
     name = "auth_test",
-    srcs = ["auth_token_fetcher_test.go"],
+    srcs = [
+        "auth_token_fetcher_test.go",
+        "auth_transportwrapper_test.go",
+    ],
     data = glob(["test/**"]),
     embed = [":auth"],
     deps = [
