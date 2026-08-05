@@ -5,8 +5,9 @@
 """Promote the latest RC tag on a release branch to a stable tag.
 
 Reads RELEASE_VERSION_FILE_PATH to determine the target stable version (X.Y.Z),
-verifies at least one X.Y.Z-rc.N tag exists, then creates the stable GitLab
-Release tag at the current release-branch HEAD via the Releases API.
+verifies at least one X.Y.Z-rc.N tag at the current commit exists, then creates
+the stable GitLab Release tag at the current release-branch HEAD via the
+Releases API.
 """
 
 import json
@@ -42,43 +43,91 @@ def run_git(*args: str) -> str:
     return result.stdout
 
 
-def api_request(method: str, path: str, *, query=None, payload=None, ok=(200,)):
+def api_get(path: str) -> dict | None:
+    """GET a single GitLab API resource; return None on 404."""
     base_url = require_env("CI_API_V4_URL").rstrip("/")
     project_id = urllib.parse.quote(require_env("CI_PROJECT_ID"), safe="")
     url = f"{base_url}/projects/{project_id}{path}"
-    if query:
-        url = f"{url}?{urllib.parse.urlencode(query)}"
-    data = None
     headers = {"JOB-TOKEN": require_env("CI_JOB_TOKEN")}
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=data, method=method, headers=headers)
+    request = urllib.request.Request(url, method="GET", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        if err.code == 404:
+            return None
+        raise SystemExit(
+            f"[rc-promote] ERROR: GET {path} returned HTTP {err.code}: "
+            f"{err.read().decode('utf-8', 'replace')}"
+        ) from err
+    except (urllib.error.URLError, TimeoutError) as err:
+        raise SystemExit(f"[rc-promote] ERROR: GET {path} transport error: {err}") from err
+
+
+def api_post_release(path: str, payload: dict, current_sha: str, stable_tag: str) -> None:
+    """POST /releases with retry; reconcile 409 before failing."""
+    base_url = require_env("CI_API_V4_URL").rstrip("/")
+    project_id = urllib.parse.quote(require_env("CI_PROJECT_ID"), safe="")
+    url = f"{base_url}/projects/{project_id}{path}"
+    data = json.dumps(payload).encode("utf-8")
+    headers = {"JOB-TOKEN": require_env("CI_JOB_TOKEN"), "Content-Type": "application/json"}
+    request = urllib.request.Request(url, data=data, method="POST", headers=headers)
     last_error = None
     for attempt in range(3):
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                body = response.read()
-                if response.status not in ok:
-                    raise SystemExit(
-                        f"[rc-promote] ERROR: {method} {path} returned HTTP {response.status}: "
-                        f"{body.decode('utf-8', 'replace')}"
-                    )
-                return json.loads(body.decode("utf-8")) if body else None
+                if response.status == 201:
+                    return
+                raise SystemExit(
+                    f"[rc-promote] ERROR: POST {path} returned HTTP {response.status}"
+                )
         except urllib.error.HTTPError as err:
             body = err.read().decode("utf-8", "replace")
-            if err.code in ok:
-                return None
+            if err.code == 409:
+                # Release may have been created before the connection dropped.
+                # Reconcile: verify the tag points at current_sha.
+                _reconcile_existing_release(stable_tag, current_sha)
+                return
             if err.code < 500:
                 raise SystemExit(
-                    f"[rc-promote] ERROR: {method} {path} returned HTTP {err.code}: {body}"
+                    f"[rc-promote] ERROR: POST {path} returned HTTP {err.code}: {body}"
                 ) from err
             last_error = f"HTTP {err.code}: {body}"
         except (urllib.error.URLError, TimeoutError) as err:
             last_error = f"transport error: {err}"
         if attempt < 2:
+            # Before retrying, reconcile in case the request succeeded silently.
+            tag_info = api_get(f"/repository/tags/{urllib.parse.quote(stable_tag, safe='')}")
+            if tag_info and tag_info.get("commit", {}).get("id") == current_sha:
+                print(f"[rc-promote] reconciled: {stable_tag} already exists at {current_sha}")
+                return
             time.sleep(2 ** attempt)
-    raise SystemExit(f"[rc-promote] ERROR: {method} {path} failed after 3 attempts: {last_error}")
+    raise SystemExit(
+        f"[rc-promote] ERROR: POST {path} failed after 3 attempts: {last_error}"
+    )
+
+
+def _reconcile_existing_release(stable_tag: str, current_sha: str) -> None:
+    """On 409, verify the existing tag and release match the expected state."""
+    encoded = urllib.parse.quote(stable_tag, safe="")
+    tag_info = api_get(f"/repository/tags/{encoded}")
+    if not tag_info:
+        raise SystemExit(
+            f"[rc-promote] ERROR: 409 Conflict but tag {stable_tag} not found via API"
+        )
+    tag_sha = tag_info.get("commit", {}).get("id", "")
+    if tag_sha != current_sha:
+        raise SystemExit(
+            f"[rc-promote] ERROR: 409 Conflict and {stable_tag} points at {tag_sha}, "
+            f"not {current_sha}"
+        )
+    release_info = api_get(f"/releases/{encoded}")
+    if not release_info or release_info.get("tag_name") != stable_tag:
+        raise SystemExit(
+            f"[rc-promote] ERROR: 409 Conflict but release for {stable_tag} not found or "
+            f"tag_name mismatch"
+        )
+    print(f"[rc-promote] reconciled: {stable_tag} already released at {current_sha}")
 
 
 def git_tags_matching(pattern: str) -> list[str]:
@@ -100,13 +149,16 @@ def main() -> int:
 
     if not current_branch.startswith(branch_prefix):
         raise SystemExit(
-            f"[rc-promote] ERROR: must run on a release branch (prefix={branch_prefix}), got {current_branch}"
+            f"[rc-promote] ERROR: must run on a release branch (prefix={branch_prefix}), "
+            f"got {current_branch}"
         )
 
     version_path = project_dir / version_file_path
     raw_version = version_path.read_text(encoding="utf-8").strip().lstrip("v")
     if not SEMVER_RE.match(raw_version):
-        raise SystemExit(f"[rc-promote] ERROR: {version_file_path} must contain X.Y.Z, got {raw_version!r}")
+        raise SystemExit(
+            f"[rc-promote] ERROR: {version_file_path} must contain X.Y.Z, got {raw_version!r}"
+        )
 
     stable_version = raw_version
     stable_tag = f"{tag_prefix}{stable_version}"
@@ -114,14 +166,27 @@ def main() -> int:
 
     run_git("fetch", "--tags", "--quiet", "origin")
 
-    rc_tags = git_tags_matching(rc_glob)
-    if not rc_tags:
+    # Filter to numeric -rc.N tags that resolve to current_sha only.
+    all_rc = git_tags_matching(rc_glob)
+    valid_rc = []
+    for tag in all_rc:
+        if not RC_SUFFIX_RE.search(tag):
+            continue
+        tag_sha = run_git("rev-list", "-n", "1", tag).strip()
+        if tag_sha == current_sha:
+            valid_rc.append(tag)
+
+    if not valid_rc:
         raise SystemExit(
-            f"[rc-promote] ERROR: no RC tags found matching {rc_glob}; "
-            f"at least one RC must exist before promoting to stable"
+            f"[rc-promote] ERROR: no numeric RC tags at {current_sha} matching {rc_glob}; "
+            f"at least one RC from this commit must exist before promoting to stable"
         )
-    latest_rc = max(rc_tags, key=rc_sort_key)
-    print(f"[rc-promote] found {len(rc_tags)} RC tag(s): {', '.join(sorted(rc_tags, key=rc_sort_key))}")
+    valid_rc.sort(key=rc_sort_key)
+    latest_rc = valid_rc[-1]
+    print(
+        f"[rc-promote] found {len(valid_rc)} RC tag(s) at {current_sha}: "
+        f"{', '.join(valid_rc)}"
+    )
 
     existing = git_tags_matching(stable_tag)
     if existing:
@@ -130,7 +195,8 @@ def main() -> int:
             print(f"[rc-promote] {stable_tag} already points at {current_sha}; nothing to do")
             return 0
         raise SystemExit(
-            f"[rc-promote] ERROR: stable tag {stable_tag} already exists at {tag_sha}, not {current_sha}"
+            f"[rc-promote] ERROR: stable tag {stable_tag} already exists at {tag_sha}, "
+            f"not {current_sha}"
         )
 
     payload = {
@@ -139,7 +205,7 @@ def main() -> int:
         "ref": current_sha,
         "description": f"Release {stable_tag}\n\nPromoted from RC: {latest_rc}",
     }
-    api_request("POST", "/releases", payload=payload, ok=(201,))
+    api_post_release("/releases", payload, current_sha, stable_tag)
     print(f"[rc-promote] created GitLab Release for {stable_tag} at {current_sha}")
     return 0
 
