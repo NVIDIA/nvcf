@@ -89,18 +89,51 @@ protoc.toolchain(
 
 # ============================================================================
 # Go
+#
+# rules_go / gazelle / go_sdk / go_deps are root-only (dev_dependency). Spot and
+# other Java consumers depend on this module for icms-core / nv-boot source
+# labels; they must not evaluate go_deps.gazelle_override or the full Go
+# use_repo list, which fails outside the monorepo root.
 # ============================================================================
-bazel_dep(name = "rules_go", version = "0.60.0")
-bazel_dep(name = "gazelle", version = "0.48.0")
+bazel_dep(
+    name = "rules_go",
+    version = "0.60.0",
+    dev_dependency = True,
+)
+bazel_dep(
+    name = "gazelle",
+    version = "0.48.0",
+    dev_dependency = True,
+)
 
-go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+# Gazelle 0.48.0 hardcodes go.work child deps as non-dev
+# (_is_dev_dependency=False). That conflicts with the root-only
+# use_extension(..., dev_dependency=True) above: Bazel then fails with
+# "root_module_direct_deps must be empty". Patch inherits the parent
+# from_file(go_work) tag's own dev status.
+single_version_override(
+    module_name = "gazelle",
+    patch_strip = 1,
+    patches = ["//tools/bazel:patches/gazelle_go_work_dev_dependency.patch"],
+    version = "0.48.0",
+)
+
+go_sdk = use_extension(
+    "@rules_go//go:extensions.bzl",
+    "go_sdk",
+    dev_dependency = True,
+)
 
 # The Go toolchain version is declared once, in tools/go-toolchain/go.mod, and
 # derived here. Do not put a literal version in this file: it drifted from CI's
 # setup-go and from the bazel-ci image while each was maintained separately.
 go_sdk.from_file(go_mod = "//tools/go-toolchain:go.mod")
 
-go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps = use_extension(
+    "@gazelle//:extensions.bzl",
+    "go_deps",
+    dev_dependency = True,
+)
 go_deps.from_file(go_work = "//:go.work.bazel")
 
 # containerd/cgroups ships stats/v1/metrics.proto, which imports
@@ -385,6 +418,7 @@ oci.pull(
         "linux/arm64/v8",
     ],
 )
+
 # NVIDIA distroless cc: the base for Rust service images, which need a libc and
 # so cannot use distroless_static. arm64/v8, not arm64: nvcr.io/nvidia/distroless
 # publishes its aarch64 manifest under the v8 variant, and rules_oci matches the
@@ -613,7 +647,6 @@ maven.install(
         "com.amazonaws:aws-java-sdk-sns:1.12.696",
         "com.amazonaws:aws-java-sdk-sqs:1.12.696",
         "com.amazonaws:aws-java-sdk-sts:1.12.696",
-        "com.google.crypto.tink:tink:1.6.1",
         "com.vdurmont:semver4j:3.1.0",
         "io.nats:jwt-java:2.2.0",
         "net.logstash.logback:logstash-logback-encoder:8.1",

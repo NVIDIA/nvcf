@@ -32,4 +32,9 @@ sha="$(git -C "$fixture" rev-parse --short HEAD)"
 got="$( (cd "$fixture" && env -u NVCF_VERSION bash "$script") | stable_version )"
 [ "$got" = "mr-${sha}" ] || fail "path-prefixed tag at HEAD -> '$got' (want mr-${sha})"
 
+# STABLE_GIT_COMMIT_FULL is the full HEAD sha (clean fixture, no -dirty).
+full_sha="$(git -C "$fixture" rev-parse HEAD)"
+got="$( (cd "$fixture" && env -u NVCF_VERSION bash "$script") | awk '/^STABLE_GIT_COMMIT_FULL /{print $2}' )"
+[ "$got" = "${full_sha}" ] || fail "STABLE_GIT_COMMIT_FULL -> '$got' (want ${full_sha})"
+
 echo "test-workspace-status: PASS"

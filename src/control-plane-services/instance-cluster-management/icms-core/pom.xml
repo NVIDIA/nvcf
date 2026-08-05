@@ -301,12 +301,6 @@ limitations under the License.
             <scope>test</scope>
         </dependency>
         <dependency>
-            <artifactId>tink</artifactId>
-            <groupId>com.google.crypto.tink</groupId>
-            <version>1.6.1</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk-testing</artifactId>
             <scope>test</scope>

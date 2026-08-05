@@ -205,6 +205,9 @@ global:
     nvctServiceURL: ""             # CHANGE (multi-cluster): "http://tasks.${GATEWAY_ADDR}". Worker env NVCT_FQDN.
     nvctGrpcServiceURL: ""         # CHANGE (multi-cluster): "http://worker-tasks.${GATEWAY_ADDR}". Worker env NVCT_FQDN_GRPC.
     invocationServiceURL: ""       # Empty = in-cluster default. Workers use this for the invocation stream address.
+    # CHANGE (multi-cluster): worker-reachable request-router host:port. Empty
+    # uses llm-request-router.nvcf.svc.cluster.local:50071.
+    llmRequestRouterAddress: ""
 
   nodeSelectors:
     enabled: false                 # Pin system workloads to labeled node pools. Leave false unless nodes are labeled.
@@ -331,21 +334,29 @@ ingress:
 <Info>
 Multi-cluster worker endpoints and GRPCRoutes
 
-In single-cluster deployments, leave `workerEndpoints` empty and `grpc.enabled`
-false. Worker pods resolve control-plane services through in-cluster DNS.
+In single-cluster deployments, leave the URL fields under `workerEndpoints`
+empty and leave `grpc.enabled` false. Worker pods resolve control-plane
+services through in-cluster DNS. The LLM request-router address also defaults
+to its cluster-local service.
 
 In multi-cluster deployments, worker pods run on a separate compute cluster and
 cannot resolve in-cluster service names from the control-plane cluster. Set each
 `workerEndpoints` field to an externally resolvable address (the Gateway load
 balancer hostname with a per-service route hostname). Enable the `nvcfApi.grpc`
 and `nvctApi.grpc` GRPCRoutes so workers can reach the API and NVCT gRPC
-endpoints through the Gateway.
+endpoints through the Gateway. When the LLM addon is enabled, also set
+`llmRequestRouterAddress` to a request-router host and port that workers can
+reach.
 
 The `selfManaged.*Override` values in the compute-plane environment file
 configure the NVCA agent's own connections to the control plane. The
 `workerEndpoints` values configure the URLs that the control plane advertises
 into launched worker pods. Both layers are required for multi-cluster function
 execution.
+
+The stack maps the effective `llmRequestRouterAddress` to the NVCF API
+remote-config key `nvcf.llm-request-router.worker-address` only when the LLM
+addon is enabled. Do not place this value under `api.env`.
 </Info>
 
 ### Create the registry pull secret
@@ -617,9 +628,9 @@ are correct.
 | --- | --- | --- |
 | Clusters | One cluster for everything | Control plane on one cluster, NVCA on a separate GPU cluster |
 | Gateway | On the only cluster | On the control-plane cluster only |
-| Worker endpoints | Empty (in-cluster DNS) | Set to externally resolvable Gateway hostnames |
+| Worker endpoints | Use in-cluster defaults | Set to externally resolvable addresses |
 | Worker GRPCRoutes | Disabled | Enabled (`nvcfApi.grpc`, `nvctApi.grpc`) |
-| Control-plane env file | Sets the three NVCA Host-header overrides | Same, plus `workerEndpoints` and worker GRPCRoutes |
+| Control-plane env file | Sets the three NVCA Host-header overrides | Same, plus external `workerEndpoints` and worker GRPCRoutes |
 | Compute-plane env file | Required: uses endpoints reachable from the shared cluster | Required: uses endpoints reachable from the separate compute cluster |
 | Context before `register-cluster` | Control-plane context | Compute context (so JWKS is discovered from the compute cluster) |
 | `KUBECONFIG_FILE` | Not used | Compute-scoped kubeconfig passed to `register-cluster` and `install` |
