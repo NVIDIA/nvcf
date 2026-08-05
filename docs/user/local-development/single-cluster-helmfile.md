@@ -98,7 +98,9 @@ done
 
 Across the two files, the substitutions update `global.helm.sources.repository`
 and `global.image.repository`. The control-plane file also updates
-`api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE`. Set
+`api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE` and sets
+`global.workerEndpoints.llmRequestRouterAddress` to the cluster-local request
+router service. Set
 `global.imagePullSecrets[0].name` if your secret name differs from
 `nvcr-pull-secret`. The compute-plane environment provides the NVCA endpoint
 settings consumed by its Helmfile.

@@ -33,10 +33,14 @@ When enabled, the stack creates:
 
 ## Helmfile Configuration
 
-Add the LLM addon and `agentConfig` block to your Helmfile environment file
-before applying the stack:
+Add the LLM worker endpoint, addon, and `agentConfig` block to your Helmfile
+environment file before applying the stack:
 
 ```yaml
+global:
+  workerEndpoints:
+    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
+
 addons:
   llm:
     enabled: true
@@ -64,6 +68,18 @@ agentConfig:
 
 Use `replicaCount: 1` for local or single-node test clusters. Increase
 replica counts for shared or production environments.
+
+`global.workerEndpoints.llmRequestRouterAddress` is required when
+`addons.llm.enabled` is `true`. Use the cluster-local service address shown
+above when workers run in the same cluster as the control plane. For a split
+control-plane and compute-plane deployment, set a host and port that worker
+pods can reach.
+
+The stack maps this value to
+`api.remoteConfig.configData.nvcf.llm-request-router.worker-address`. The NVCF
+API then includes the address in LLM worker configuration. Do not configure
+the worker address under `api.env`. When the LLM addon is disabled, the stack
+does not pass a staged endpoint to the API chart.
 
 The request router uses `power-of-two` when no load-balancer configuration is
 set. Before a function selects a different routing method, configure the
@@ -179,6 +195,8 @@ mean the router knows the target but has no active eligible backend. Check:
 - `addons.llm.requestRouter.loadBalancer.config` includes the algorithm selected
   by the function's `models[].llmConfig.routingMethod`.
 - The `llm-worker` sidecar connected to `llm-request-router`.
+- `global.workerEndpoints.llmRequestRouterAddress` is reachable from the worker
+  cluster.
 - Local clusters using plaintext transport include both `grpcInsecure` and
   `stargateQUICInsecure`.
 
