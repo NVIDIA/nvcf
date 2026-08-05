@@ -765,7 +765,7 @@ include:
             exit 1
           fi
           git fetch --tags --quiet origin
-          if [ "${RELEASE_RC_PRERELEASE:-}" = "true" ]; then
+          if [ "${RELEASE_RC_PRERELEASE:-}" = "true" ] && [ -z "$(release_tag_for_version "${RELEASE_DEV_PRERELEASE_BASE_VERSION}" || true)" ]; then
             LAST_RC=-1
             for tag in $(release_tags_matching_suffix "${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.*"); do
               version="$(release_version_from_tag "${tag}")"
@@ -782,6 +782,7 @@ include:
             NEXT_VERSION="${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.${NEXT_RC}"
             echo "[compute-next] next RC prerelease is ${RELEASE_TAG_PREFIX}${NEXT_VERSION}"
           else
+            [ "${RELEASE_RC_PRERELEASE:-}" = "true" ] && echo "[compute-next] stable ${RELEASE_TAG_PREFIX}${RELEASE_DEV_PRERELEASE_BASE_VERSION} exists; switching to patch mode"
             LAST_PATCH=-1
             for tag in $(release_tags_matching_suffix "${RELEASE_TRAIN}.*"); do
               version="$(release_version_from_tag "${tag}")"
@@ -1286,7 +1287,7 @@ include:
             echo "[release-branch] ERROR: ${SUBTREE}/${RELEASE_VERSION_FILE} is ${RELEASE_DEV_PRERELEASE_BASE_VERSION}, but branch ${CI_COMMIT_BRANCH} is train ${RELEASE_TRAIN}" >&2
             exit 1
           fi
-          if [ "${RELEASE_RC_PRERELEASE:-}" = "true" ]; then
+          if [ "${RELEASE_RC_PRERELEASE:-}" = "true" ] && [ -z "$(release_tag_for_version "${RELEASE_DEV_PRERELEASE_BASE_VERSION}" || true)" ]; then
             LAST_RC=-1
             for tag in $(release_tags_matching_suffix "${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.*"); do
               version="$(release_version_from_tag "${tag}")"
@@ -1302,6 +1303,7 @@ include:
             NEXT_RC=$((LAST_RC + 1))
             VERSION="${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.${NEXT_RC}"
           else
+            [ "${RELEASE_RC_PRERELEASE:-}" = "true" ] && echo "[release-branch] stable ${RELEASE_TAG_PREFIX}${RELEASE_DEV_PRERELEASE_BASE_VERSION} exists; switching to patch mode"
             LAST_PATCH=-1
             for tag in $(release_tags_matching_suffix "${RELEASE_TRAIN}.*"); do
               version="$(release_version_from_tag "${tag}")"
