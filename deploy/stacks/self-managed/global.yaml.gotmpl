@@ -261,8 +261,19 @@ natsAuthCalloutService:
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
-{{- if and $llmEnabled (not $llmRequestRouterWorkerAddress) }}
+{{- if $llmEnabled }}
+{{- if not $llmRequestRouterWorkerAddress }}
 {{- fail "global.workerEndpoints.llmRequestRouterAddress is required when addons.llm.enabled is true" }}
+{{- end }}
+{{- $llmRequestRouterWorkerAddressPattern := `^(([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*|\[[0-9A-Fa-f]*:[0-9A-Fa-f]*:[0-9A-Fa-f:]*\]):[0-9]{1,5}$` }}
+{{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
+{{- if not (regexMatch $llmRequestRouterWorkerAddressPattern $llmRequestRouterWorkerAddress) }}
+{{- fail $llmRequestRouterWorkerAddressError }}
+{{- end }}
+{{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAddress | atoi }}
+{{- if or (lt $llmRequestRouterWorkerPort 1) (gt $llmRequestRouterWorkerPort 65535) }}
+{{- fail $llmRequestRouterWorkerAddressError }}
+{{- end }}
 {{- end }}
 {{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
 {{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
