@@ -97,6 +97,7 @@ These helpers use the `ngc` CLI today and target cloud NVCF. Porting them to sel
 | Variable | Description |
 |----------|-------------|
 | `OAI_COMPAT_URL` | OpenAI-compatible API endpoint. |
+| `TOKEN` | Optional Bearer token. Non-loopback endpoints must use HTTPS. |
 | `LLM_MODEL_NAME` | Model identifier. |
 | `OPENAI_RESPONSES_PROFILE` | `calibration` (default) or `load` for the Responses SSE benchmark. |
 | `OPENAI_RESPONSES_VUS` | Virtual users for the Responses SSE benchmark. Defaults to 1 for calibration and 10 for load. |
@@ -107,7 +108,6 @@ These helpers use the `ngc` CLI today and target cloud NVCF. Porting them to sel
 | `OPENAI_RESPONSES_EXPECTED_DELTAS` | Required text-delta count. Defaults to the configured output chunks for calibration and is disabled for load. |
 | `OPENAI_RESPONSES_CALIBRATION_TOLERANCE_MS` | Allowed early-observation tolerance for calibration timing checks. Defaults to 10 ms. |
 | `OPENAI_RESPONSES_INPUT` | Responses API input string. Defaults to `benchmark`. |
-| `OPENAI_RESPONSES_TIMEOUT` | Per-stream timeout. Defaults to `60s`. |
 | `LOAD_TESTER_QUEUE_DELAY_MS` | Maps to `X-Load-Tester-Queue-Delay-Ms`. Sent by default only in calibration. |
 | `LOAD_TESTER_TTFT_MS` | Maps to `X-Load-Tester-TTFT-Ms`. Sent by default only in calibration. |
 | `LOAD_TESTER_TTFT_JITTER_MS` | Maps to `X-Load-Tester-TTFT-Jitter-Ms`. Sent by default only in calibration. |

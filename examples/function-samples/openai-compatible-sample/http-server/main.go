@@ -274,6 +274,8 @@ func main() {
 		Addr:              ":8000",
 		Handler:           newRouter(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	log.Printf("listening on %s", server.Addr)
 	log.Fatal(server.ListenAndServe())
@@ -341,11 +343,7 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "model is required", "model")
 		return
 	}
-	chunks, err := outputChunks(tuning)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error(), "")
-		return
-	}
+	chunks := outputChunks(tuning)
 
 	response := newResponsesResponse(request.Model, strings.Join(chunks, ""))
 	if request.Stream {
@@ -378,11 +376,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "model is required", "model")
 		return
 	}
-	chunks, err := outputChunks(tuning)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error(), "")
-		return
-	}
+	chunks := outputChunks(tuning)
 
 	response := newChatCompletionResponse(request.Model, strings.Join(chunks, ""))
 	if request.Stream {
@@ -415,11 +409,7 @@ func handleCompletions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "model is required", "model")
 		return
 	}
-	chunks, err := outputChunks(tuning)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error(), "")
-		return
-	}
+	chunks := outputChunks(tuning)
 
 	response := newCompletionResponse(request.Model, strings.Join(chunks, ""))
 	if request.Stream {
@@ -652,7 +642,7 @@ func integerHeader(r *http.Request, name string, defaultValue, minimum, maximum 
 	return parsed, nil
 }
 
-func outputChunks(tuning benchmarkTuning) ([]string, error) {
+func outputChunks(tuning benchmarkTuning) []string {
 	chunks := make([]string, tuning.OutputChunks)
 	for index := range chunks {
 		chunk := tuning.Chunk
@@ -661,7 +651,7 @@ func outputChunks(tuning benchmarkTuning) ([]string, error) {
 		}
 		chunks[index] = chunk
 	}
-	return chunks, nil
+	return chunks
 }
 
 func randomText(size int) string {
@@ -878,9 +868,7 @@ func newModelInfo(model string) modelInfo {
 }
 
 func streamResponses(ctx context.Context, w http.ResponseWriter, response responsesResponse, chunks []string, tuning benchmarkTuning) {
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Connection", "keep-alive")
+	setSSEHeaders(w)
 	if !waitFor(ctx, tuning.TTFT, tuning.TTFTJitter) {
 		return
 	}
@@ -961,9 +949,7 @@ func streamResponses(ctx context.Context, w http.ResponseWriter, response respon
 }
 
 func streamChatCompletion(ctx context.Context, w http.ResponseWriter, response chatCompletionResponse, chunks []string, tuning benchmarkTuning, includeUsage bool) {
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Connection", "keep-alive")
+	setSSEHeaders(w)
 	if !waitFor(ctx, tuning.TTFT, tuning.TTFTJitter) {
 		return
 	}
@@ -1042,9 +1028,7 @@ func streamChatCompletion(ctx context.Context, w http.ResponseWriter, response c
 }
 
 func streamCompletion(ctx context.Context, w http.ResponseWriter, response completionResponse, chunks []string, tuning benchmarkTuning) {
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Connection", "keep-alive")
+	setSSEHeaders(w)
 	if !waitFor(ctx, tuning.TTFT, tuning.TTFTJitter) {
 		return
 	}
@@ -1129,6 +1113,11 @@ func writeLegacyStreamError(w http.ResponseWriter) {
 	}}); err != nil {
 		log.Printf("Streaming error event write failed: %v", err)
 	}
+}
+
+func setSSEHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Type", "text/event-stream")
 }
 
 func writeSSEJSON(w http.ResponseWriter, name string, data any) error {

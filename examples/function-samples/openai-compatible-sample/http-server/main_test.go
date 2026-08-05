@@ -244,13 +244,22 @@ func TestInjectedStatusAndStreamFailures(t *testing.T) {
 
 func TestConcurrencyLimit(t *testing.T) {
 	activeRequests.Store(0)
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	requestFinished := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-requestFinished:
+		case <-time.After(time.Second):
+		}
+		activeRequests.Store(0)
+	})
 	router := newRouter()
 	firstRequest := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
 	firstRequest.Header.Set("Content-Type", "application/json")
 	firstRequest.Header.Set(headerMaxConcurrency, "1")
 	firstRequest.Header.Set(headerTTFT, "100")
-	firstDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
+		defer close(requestFinished)
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, firstRequest)
 		firstDone <- recorder

@@ -216,7 +216,6 @@ function buildConfig() {
         token: stringEnv('TOKEN', ''),
         model: stringEnv('LLM_MODEL_NAME', 'test-model'),
         input: stringEnv('OPENAI_RESPONSES_INPUT', 'benchmark'),
-        timeout: stringEnv('OPENAI_RESPONSES_TIMEOUT', '60s'),
         vus: integerEnv('OPENAI_RESPONSES_VUS', isCalibration ? 1 : 10, 1),
         iterations: integerEnv('OPENAI_RESPONSES_ITERATIONS', 10, 1),
         calibrationMaxDuration: stringEnv('OPENAI_RESPONSES_MAX_DURATION', '10m'),
@@ -270,6 +269,7 @@ function requestParams() {
         'X-Load-Tester-Output-Chunks': String(config.outputChunks),
     }
     if (config.token !== '') {
+        validateCredentialURL(config.url)
         headers.Authorization = `Bearer ${config.token}`
     }
     addHeader(headers, 'X-Load-Tester-Queue-Delay-Ms', config.queueDelayMs)
@@ -287,13 +287,30 @@ function requestParams() {
             input: config.input,
             stream: true,
         }),
-        timeout: config.timeout,
         headers: headers,
         tags: {
             name: 'OpenAIResponsesSSE',
             profile: config.profile,
         },
     }
+}
+
+function validateCredentialURL(value) {
+    const parsed = /^([a-z][a-z0-9+.-]*):\/\/([^/?#:]+|\[[^\]]+\])(?::\d+)?(?:[/?#]|$)/i.exec(value)
+    if (parsed === null) {
+        throw new Error('OAI_COMPAT_URL must be an absolute URL when TOKEN is set')
+    }
+
+    const scheme = parsed[1].toLowerCase()
+    const host = parsed[2].replace(/^\[|\]$/g, '').toLowerCase()
+    if (scheme === 'https' || isLoopbackHost(host)) {
+        return
+    }
+    throw new Error('OAI_COMPAT_URL must use HTTPS when TOKEN is set, except for a loopback host')
+}
+
+function isLoopbackHost(host) {
+    return host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host)
 }
 
 function addHeader(headers, name, value) {

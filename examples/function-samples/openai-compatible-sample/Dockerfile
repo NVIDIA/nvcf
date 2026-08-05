@@ -24,7 +24,10 @@ RUN CGO_ENABLED=0 go build -o /openai-compatible-sample .
 FROM alpine:3.20
 
 COPY --from=build /openai-compatible-sample /app/openai-compatible-sample
+RUN adduser -D -H app && chown app:app /app/openai-compatible-sample
 
 EXPOSE 8000
+
+USER app
 
 CMD ["/app/openai-compatible-sample"]

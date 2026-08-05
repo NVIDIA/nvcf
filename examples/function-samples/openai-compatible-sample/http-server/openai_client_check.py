@@ -17,14 +17,21 @@
 """Check the sample through the public OpenAI Python client."""
 
 import os
+from urllib.parse import urlparse
 
+import httpx
 from openai import OpenAI
 
 
 BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://127.0.0.1:8000/v1")
+API_KEY = os.environ.get("OPENAI_API_KEY", "not-needed")
+if API_KEY != "not-needed" and urlparse(BASE_URL).scheme != "https":
+    raise ValueError("OPENAI_BASE_URL must use HTTPS when OPENAI_API_KEY is set")
+
 CLIENT = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY", "not-needed"),
+    api_key=API_KEY,
     base_url=BASE_URL,
+    http_client=httpx.Client(follow_redirects=False),
     _strict_response_validation=True,
 )
 
@@ -38,7 +45,8 @@ def main() -> None:
             "X-Load-Tester-Output-Chunks": "3",
         },
     )
-    assert response.output_text == "tokentokentoken"
+    if response.output_text != "tokentokentoken":
+        raise RuntimeError("unexpected Responses output")
 
     response_events = list(
         CLIENT.responses.create(
@@ -56,13 +64,15 @@ def main() -> None:
         for event in response_events
         if event.type == "response.output_text.delta"
     )
-    assert response_text == "streamstream"
+    if response_text != "streamstream":
+        raise RuntimeError("unexpected streamed Responses output")
 
     chat = CLIENT.chat.completions.create(
         model="test-model",
         messages=[{"role": "user", "content": "hello"}],
     )
-    assert chat.choices[0].message.content == "xxxx"
+    if chat.choices[0].message.content != "xxxx":
+        raise RuntimeError("unexpected chat completion output")
 
     chat_chunks = list(
         CLIENT.chat.completions.create(
@@ -80,21 +90,26 @@ def main() -> None:
         for chunk in chat_chunks
         for choice in chunk.choices
     )
-    assert chat_text == "chatchat"
+    if chat_text != "chatchat":
+        raise RuntimeError("unexpected streamed chat completion output")
 
     completion = CLIENT.completions.create(model="test-model", prompt="hello")
-    assert completion.choices[0].text == "xxxx"
+    if completion.choices[0].text != "xxxx":
+        raise RuntimeError("unexpected completion output")
 
     embedding = CLIENT.embeddings.create(
         model="test-model",
         input=["one", "two"],
         encoding_format="float",
     )
-    assert len(embedding.data) == 2
+    if len(embedding.data) != 2:
+        raise RuntimeError("unexpected embedding count")
 
     models = CLIENT.models.list()
-    assert any(model.id == "test-model" for model in models.data)
-    assert CLIENT.models.retrieve("test-model").id == "test-model"
+    if not any(model.id == "test-model" for model in models.data):
+        raise RuntimeError("test-model is missing from the model list")
+    if CLIENT.models.retrieve("test-model").id != "test-model":
+        raise RuntimeError("unexpected retrieved model")
 
     print("OpenAI client compatibility check passed")
 

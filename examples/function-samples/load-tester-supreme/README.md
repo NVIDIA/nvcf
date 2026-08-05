@@ -19,7 +19,7 @@ exposes tunable response behaviour.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `message` | string | Required | Payload content to echo back |
+| `message` | string | Required for HTTP | Payload content to echo back. gRPC accepts an omitted value and returns an empty string. |
 | `repeats` | int | 1 | Number of times to repeat the response |
 | `delay` | float | ~0 | Seconds to sleep between responses |
 | `size` | int | 0 | Generate a random string of this length instead of echoing `message` (HTTP only) |
