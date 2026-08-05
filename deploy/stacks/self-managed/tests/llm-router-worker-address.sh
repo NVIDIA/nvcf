@@ -138,6 +138,23 @@ assert_worker_address_rejected() {
   fi
 }
 
+assert_worker_address_accepted() {
+  local case_name="$1"
+  local worker_address="$2"
+  local values_file="$work_dir/$case_name-api-values.yaml"
+  local log_file="$work_dir/$case_name-render.log"
+
+  write_environment true "$worker_address"
+  if ! render_api_values "$values_file" >"$log_file" 2>&1; then
+    echo "llm-router-worker-address: enabled LLM rejected valid worker address: $worker_address" >&2
+    return 1
+  fi
+  if ! assert_remote_config_address "$values_file" "$worker_address"; then
+    echo "llm-router-worker-address: valid worker address was not rendered in API remote config: $worker_address" >&2
+    return 1
+  fi
+}
+
 wrong_owner_address='wrong-owner.example.com:50071'
 printf '%s\n' \
   'api:' \
@@ -190,6 +207,21 @@ assert_remote_config_address "$work_dir/ipv6-api-values.yaml" \
   "$ipv6_worker_address" ||
   fail "enabled LLM did not accept a bracketed IPv6 worker address"
 
+valid_ipv6_address_cases=(
+  'ipv6-full|[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:50071'
+  'ipv6-unspecified|[::]:50071'
+  'ipv6-loopback|[::1]:50071'
+  'ipv6-trailing-compression|[2001:db8::]:50071'
+  'ipv6-embedded-ipv4|[::ffff:192.0.2.128]:50071'
+  'ipv6-full-embedded-ipv4|[2001:db8:0:1:1:1:192.0.2.128]:50071'
+  'ipv6-compressed-embedded-ipv4|[2001:db8:3:4::192.0.2.33]:50071'
+)
+for valid_ipv6_address_case in "${valid_ipv6_address_cases[@]}"; do
+  IFS='|' read -r case_name worker_address <<<"$valid_ipv6_address_case"
+  assert_worker_address_accepted "$case_name" "$worker_address" ||
+    fail "enabled LLM rejected a valid bracketed IPv6 worker address"
+done
+
 minimum_port_worker_address='router.example.com:1'
 write_environment true "$minimum_port_worker_address"
 render_api_values "$work_dir/minimum-port-api-values.yaml" >/dev/null
@@ -221,6 +253,15 @@ invalid_address_cases=(
   'port-zero|router:0'
   'port-too-large|router:65536'
   'port-too-long|router:99999999999999999999999999999999999999'
+  'malformed-ipv6|[::::]:50071'
+  'incomplete-ipv6|[1:2:3]:50071'
+  'triple-colon-ipv6|[2001:db8:::1]:50071'
+  'multiple-compression-ipv6|[2001::db8::1]:50071'
+  'oversized-hextet-ipv6|[12345::1]:50071'
+  'too-many-hextets-ipv6|[1:2:3:4:5:6:7:8:9]:50071'
+  'too-few-hextets-ipv6|[1:2:3:4:5:6:7]:50071'
+  'invalid-embedded-ipv4-octet|[::ffff:256.0.2.1]:50071'
+  'incomplete-embedded-ipv4|[::ffff:192.0.2]:50071'
 )
 address_validation_failed=false
 for invalid_address_case in "${invalid_address_cases[@]}"; do
