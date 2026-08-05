@@ -459,7 +459,7 @@ func (r *Reconciler) saveWorkloadConfig(
 		return nil
 	}
 
-	spec := map[string]any{}
+	spec := map[string]any{"workloadConfig": nil}
 	if desired != nil {
 		workloadConfig, err := runtime.DefaultUnstructuredConverter.ToUnstructured(desired)
 		if err != nil {
