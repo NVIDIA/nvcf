@@ -243,9 +243,9 @@ global:
     # repository: <your-ecr-repository-name>
 
   workerEndpoints:
-    # Override this cluster-local default when LLM worker pods run in a
-    # different cluster.
-    llmRequestRouterAddress: "llm-request-router.nvcf.svc.cluster.local:50071"
+    # Optional. Empty uses the cluster-local request-router service. Set a
+    # worker-reachable host and port for a split-cluster deployment.
+    llmRequestRouterAddress: ""
 
   nodeSelectors:
     enabled: true # Set true when using dedicated node labels for NVCF workloads

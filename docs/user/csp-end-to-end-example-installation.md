@@ -205,8 +205,9 @@ global:
     nvctServiceURL: ""             # CHANGE (multi-cluster): "http://tasks.${GATEWAY_ADDR}". Worker env NVCT_FQDN.
     nvctGrpcServiceURL: ""         # CHANGE (multi-cluster): "http://worker-tasks.${GATEWAY_ADDR}". Worker env NVCT_FQDN_GRPC.
     invocationServiceURL: ""       # Empty = in-cluster default. Workers use this for the invocation stream address.
-    # CHANGE (multi-cluster): use a worker-reachable request-router host:port.
-    llmRequestRouterAddress: "llm-request-router.nvcf.svc.cluster.local:50071"
+    # CHANGE (multi-cluster): worker-reachable request-router host:port. Empty
+    # uses llm-request-router.nvcf.svc.cluster.local:50071.
+    llmRequestRouterAddress: ""
 
   nodeSelectors:
     enabled: false                 # Pin system workloads to labeled node pools. Leave false unless nodes are labeled.
