@@ -146,6 +146,26 @@ proxyService:
 # Disabled by default: behavior is identical to today.
 consistentHashRouting:
   enabled: false
+  # How long the relay waits for the owner pod's RESPONSE HEADER before giving
+  # up and failing over (proxy_read_timeout on @cc_relay). This is an
+  # inactivity-between-reads timeout, not a total transfer deadline.
+  #
+  # Sizing: on a cold cache the owner holds the cache lock while it fills the
+  # object from origin, and emits no header until it has something to send. So
+  # this must exceed a worst-case cold fill for the largest object a client
+  # requests, or followers time out and return 504 to the client while the
+  # owner is still working normally.
+  #
+  # 30s was sized for ~16MB chunks. NGC CLI 4.20.1 issues 512MiB Range
+  # requests, and a cold fill of one of those against a cache that is at its
+  # min_free eviction watermark can take minutes. 300s covers that while
+  # staying well under proxy_cache_lock_timeout (1200s), so a genuinely stuck
+  # owner still fails over rather than hanging the client for the full lock.
+  relayReadTimeout: 300s
+  # How long the relay waits to establish the TCP/TLS connection to the owner.
+  # Owner pods are in-cluster peers, so this stays short: a slow connect means
+  # the owner is down, and failing over fast is correct.
+  relayConnectTimeout: 2s
 
 # Metrics configuration.
 metrics:
