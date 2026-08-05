@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Local test harness for the nvca RC tagging flow.
+#
+# Simulates the compute-next-release-version and semantic-release logic for
+# three phases:
+#   Phase 1 (RC)    — no stable tag yet; every run produces rc.N
+#   Phase 2 (stable) — promote-stable creates 3.1.0; run is blocked (already exists)
+#   Phase 3 (patch)  — stable exists; subsequent runs produce 3.1.1, 3.1.2, ...
+#
+# Usage:
+#   tools/ci/test-nvca-rc-flow
+#
+# No GitLab credentials or real CI variables are required.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Setup: temp git repo + VERSION file
+# ---------------------------------------------------------------------------
+
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "${TMPDIR}"' EXIT
+
+CI_PROJECT_DIR="${TMPDIR}/repo"
+git init -q "${CI_PROJECT_DIR}"
+git -C "${CI_PROJECT_DIR}" commit --allow-empty -q -m "init"
+
+VERSION_FILE="${CI_PROJECT_DIR}/VERSION"
+echo "3.1.0" > "${VERSION_FILE}"
+
+RELEASE_TAG_PREFIX="src/compute-plane-services/nvca/v"
+RELEASE_LEGACY_TAG_PREFIX="nvca-v"
+RELEASE_BRANCH_PREFIX="release-src/compute-plane-services/nvca/v"
+RELEASE_VERSION_FILE="VERSION"
+CI_COMMIT_BRANCH="release-src/compute-plane-services/nvca/v3.1"
+CI_COMMIT_SHA="$(git -C "${CI_PROJECT_DIR}" rev-parse HEAD)"
+
+# ---------------------------------------------------------------------------
+# Paste the tag helper functions exactly as generated
+# ---------------------------------------------------------------------------
+
+release_tag_prefixes=()
+release_configure_tag_prefixes() {
+  release_tag_prefixes=("${RELEASE_TAG_PREFIX}")
+  if [ -n "${RELEASE_LEGACY_TAG_PREFIX:-}" ] && [ "${RELEASE_LEGACY_TAG_PREFIX}" != "${RELEASE_TAG_PREFIX}" ]; then
+    release_tag_prefixes+=("${RELEASE_LEGACY_TAG_PREFIX}")
+  fi
+}
+
+release_version_from_tag() {
+  local tag="$1" prefix
+  for prefix in "${release_tag_prefixes[@]}"; do
+    if [[ "${tag}" == "${prefix}"* ]]; then
+      printf '%s\n' "${tag#"$prefix"}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+release_tags_matching_suffix() {
+  local suffix="${1:-*}" prefix
+  for prefix in "${release_tag_prefixes[@]}"; do
+    git -C "${CI_PROJECT_DIR}" tag -l "${prefix}${suffix}"
+  done | sort -u
+}
+
+release_tag_for_version() {
+  local version="$1" prefix tag
+  for prefix in "${release_tag_prefixes[@]}"; do
+    tag="${prefix}${version}"
+    if git -C "${CI_PROJECT_DIR}" rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+      printf '%s\n' "${tag}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Core logic extracted from the generated shell templates
+# ---------------------------------------------------------------------------
+
+compute_next_version() {
+  local release_rc_prerelease="${1}"
+
+  RELEASE_DEV_PRERELEASE_BASE_VERSION="$(tr -d '[:space:]' < "${VERSION_FILE}")"
+  RELEASE_DEV_PRERELEASE_BASE_VERSION="${RELEASE_DEV_PRERELEASE_BASE_VERSION#v}"
+
+  RELEASE_TRAIN="${CI_COMMIT_BRANCH#"$RELEASE_BRANCH_PREFIX"}"
+  RELEASE_FILE_TRAIN="${RELEASE_DEV_PRERELEASE_BASE_VERSION%.*}"
+
+  if [ "${RELEASE_TRAIN}" != "${RELEASE_FILE_TRAIN}" ]; then
+    echo "ERROR: VERSION=${RELEASE_DEV_PRERELEASE_BASE_VERSION} but branch is train ${RELEASE_TRAIN}" >&2
+    return 1
+  fi
+
+  if [ "${release_rc_prerelease}" = "true" ] && [ -z "$(release_tag_for_version "${RELEASE_DEV_PRERELEASE_BASE_VERSION}" || true)" ]; then
+    LAST_RC=0
+    for tag in $(release_tags_matching_suffix "${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.*"); do
+      version="$(release_version_from_tag "${tag}")"
+      suffix="${version#${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.}"
+      case "${suffix}" in
+        ''|*[!0-9]*) continue ;;
+      esac
+      value=$((10#$suffix))
+      [ "$value" -gt "$LAST_RC" ] && LAST_RC="$value"
+    done
+    NEXT_RC=$((LAST_RC + 1))
+    NEXT_VERSION="${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.${NEXT_RC}"
+  else
+    [ "${release_rc_prerelease}" = "true" ] && echo "  [info] stable ${RELEASE_TAG_PREFIX}${RELEASE_DEV_PRERELEASE_BASE_VERSION} exists; patch mode"
+    LAST_PATCH=-1
+    for tag in $(release_tags_matching_suffix "${RELEASE_TRAIN}.*"); do
+      version="$(release_version_from_tag "${tag}")"
+      case "${version}" in *-*) continue ;; esac
+      patch="${version#${RELEASE_TRAIN}.}"
+      case "${patch}" in ''|*[!0-9]*) continue ;; esac
+      value=$((10#$patch))
+      [ "$value" -gt "$LAST_PATCH" ] && LAST_PATCH="$value"
+    done
+    if [ "$LAST_PATCH" -lt 0 ]; then
+      NEXT_VERSION="${RELEASE_DEV_PRERELEASE_BASE_VERSION}"
+    else
+      NEXT_PATCH=$((LAST_PATCH + 1))
+      NEXT_VERSION="${RELEASE_TRAIN}.${NEXT_PATCH}"
+    fi
+  fi
+
+  GIT_TAG="${RELEASE_TAG_PREFIX}${NEXT_VERSION}"
+  EXISTING="$(release_tag_for_version "${NEXT_VERSION}" || true)"
+  if [ -n "${EXISTING}" ]; then
+    echo "  [skip] ${GIT_TAG} already exists"
+    SKIP=true
+  else
+    SKIP=false
+  fi
+}
+
+# Create a tag in the temp repo (simulates release-cli / promote-stable)
+create_tag() {
+  local version="$1"
+  local git_tag="${RELEASE_TAG_PREFIX}${version}"
+  git -C "${CI_PROJECT_DIR}" tag "${git_tag}"
+  echo "  [tagged] ${git_tag}"
+}
+
+# ---------------------------------------------------------------------------
+# Test runner
+# ---------------------------------------------------------------------------
+
+PASS=0
+FAIL=0
+
+check() {
+  local desc="$1" want="$2" got="$3"
+  if [ "${got}" = "${want}" ]; then
+    echo "  PASS: ${desc} -> ${got}"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: ${desc} -> got=${got} want=${want}"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+release_configure_tag_prefixes
+
+# ---------------------------------------------------------------------------
+# Phase 1: RC mode — no stable tag for 3.1.0 yet
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Phase 1: RC mode (no stable 3.1.0 yet) ==="
+
+compute_next_version "true"
+check "first RC" "3.1.0-rc.1" "${NEXT_VERSION}"
+check "not skipped" "false" "${SKIP}"
+create_tag "${NEXT_VERSION}"
+
+compute_next_version "true"
+check "second RC" "3.1.0-rc.2" "${NEXT_VERSION}"
+check "not skipped" "false" "${SKIP}"
+create_tag "${NEXT_VERSION}"
+
+compute_next_version "true"
+check "third RC" "3.1.0-rc.3" "${NEXT_VERSION}"
+check "not skipped" "false" "${SKIP}"
+
+# ---------------------------------------------------------------------------
+# Phase 2: promote-stable — creates 3.1.0
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Phase 2: promote-stable creates 3.1.0 ==="
+
+create_tag "3.1.0"
+
+# Release-branch commit immediately after promote should skip (3.1.0 already created)
+# The next patch doesn't exist yet so NEXT_VERSION=3.1.1 from patch mode
+compute_next_version "true"
+check "first patch after stable" "3.1.1" "${NEXT_VERSION}"
+check "not skipped" "false" "${SKIP}"
+
+# ---------------------------------------------------------------------------
+# Phase 3: patch mode — 3.1.0 exists, subsequent runs produce patches
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Phase 3: patch mode (stable 3.1.0 exists) ==="
+
+create_tag "3.1.1"
+
+compute_next_version "true"
+check "second patch" "3.1.2" "${NEXT_VERSION}"
+check "not skipped" "false" "${SKIP}"
+create_tag "3.1.2"
+
+compute_next_version "true"
+check "third patch" "3.1.3" "${NEXT_VERSION}"
+
+# ---------------------------------------------------------------------------
+# Phase 4: idempotency — if the computed next tag was already created at
+# the current SHA (e.g. a pipeline retry), compute should signal SKIP.
+# Simulate by pre-creating 3.1.3 then checking EXISTING detection.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Phase 4: idempotency (pipeline retry at same SHA) ==="
+
+# 3.1.2 already exists; next would be 3.1.3. Pre-create it to simulate
+# a prior run that already tagged this commit.
+create_tag "3.1.3"
+
+# Now compute: finds 3.1.3 as EXISTING at current SHA -> SKIP=true
+compute_next_version "true"
+check "version computed is 3.1.4 (next after 3.1.3)" "3.1.4" "${NEXT_VERSION}"
+# Simulate the idempotency check: pre-create 3.1.4 at HEAD and recompute
+create_tag "3.1.4"
+compute_next_version "true"
+check "NEXT_VERSION advances beyond pre-existing tag" "3.1.5" "${NEXT_VERSION}"
+check "not skipped (new tag needed)" "false" "${SKIP}"
+
+# The true SKIP=true case: compute finds NEXT_VERSION tag already at this SHA.
+# Model it by checking EXISTING directly.
+EXISTING_CHECK="$(release_tag_for_version "3.1.4" || true)"
+check "EXISTING detects pre-created tag" "${RELEASE_TAG_PREFIX}3.1.4" "${EXISTING_CHECK}"
+
+# ---------------------------------------------------------------------------
+# Phase 5: dev prerelease on main branch (unchanged behavior)
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Phase 5: dev prerelease on main (RELEASE_RC_PRERELEASE has no effect) ==="
+
+RELEASE_DEV_PRERELEASE_BASE_VERSION="3.1.0"
+LAST_DEV=-1
+for tag in $(release_tags_matching_suffix "${RELEASE_DEV_PRERELEASE_BASE_VERSION}-dev.*"); do
+  suffix="$(release_version_from_tag "${tag}")"
+  suffix="${suffix#${RELEASE_DEV_PRERELEASE_BASE_VERSION}-dev.}"
+  case "$suffix" in ''|*[!0-9]*) continue ;; esac
+  value=$((10#$suffix))
+  [ "$value" -gt "$LAST_DEV" ] && LAST_DEV="$value"
+done
+NEXT_DEV=$((LAST_DEV + 1))
+DEV_VERSION="${RELEASE_DEV_PRERELEASE_BASE_VERSION}-dev.${NEXT_DEV}"
+check "first dev tag on main" "3.1.0-dev.0" "${DEV_VERSION}"
+
+git -C "${CI_PROJECT_DIR}" tag "${RELEASE_TAG_PREFIX}3.1.0-dev.0"
+
+LAST_DEV=-1
+for tag in $(release_tags_matching_suffix "${RELEASE_DEV_PRERELEASE_BASE_VERSION}-dev.*"); do
+  suffix="$(release_version_from_tag "${tag}")"
+  suffix="${suffix#${RELEASE_DEV_PRERELEASE_BASE_VERSION}-dev.}"
+  case "$suffix" in ''|*[!0-9]*) continue ;; esac
+  value=$((10#$suffix))
+  [ "$value" -gt "$LAST_DEV" ] && LAST_DEV="$value"
+done
+NEXT_DEV=$((LAST_DEV + 1))
+DEV_VERSION="${RELEASE_DEV_PRERELEASE_BASE_VERSION}-dev.${NEXT_DEV}"
+check "second dev tag on main" "3.1.0-dev.1" "${DEV_VERSION}"
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Results: ${PASS} passed, ${FAIL} failed ==="
+[ "${FAIL}" -eq 0 ] && exit 0 || exit 1

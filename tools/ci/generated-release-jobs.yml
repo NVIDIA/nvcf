@@ -455,7 +455,7 @@ include:
           fi
           git fetch --tags --quiet origin
           if [ "${RELEASE_RC_PRERELEASE:-}" = "true" ] && [ -z "$(release_tag_for_version "${RELEASE_DEV_PRERELEASE_BASE_VERSION}" || true)" ]; then
-            LAST_RC=-1
+            LAST_RC=0
             for tag in $(release_tags_matching_suffix "${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.*"); do
               version="$(release_version_from_tag "${tag}")"
               suffix="${version#${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.}"
@@ -977,7 +977,7 @@ include:
             exit 1
           fi
           if [ "${RELEASE_RC_PRERELEASE:-}" = "true" ] && [ -z "$(release_tag_for_version "${RELEASE_DEV_PRERELEASE_BASE_VERSION}" || true)" ]; then
-            LAST_RC=-1
+            LAST_RC=0
             for tag in $(release_tags_matching_suffix "${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.*"); do
               version="$(release_version_from_tag "${tag}")"
               suffix="${version#${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.}"
