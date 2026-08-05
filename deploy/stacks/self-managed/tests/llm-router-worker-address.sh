@@ -26,7 +26,7 @@ write_environment() {
     printf '%s\n' \
       'global:' \
       '  workerEndpoints:'
-    printf '    llmRequestRouterAddress: %s\n' "$worker_address"
+    printf "    llmRequestRouterAddress: '%s'\n" "$worker_address"
     printf '%s\n' \
       'addons:' \
       '  llm:'
@@ -93,6 +93,12 @@ read_remote_config_address() {
       if ($0 ~ /^          worker-address:[[:space:]]*/) {
         address = $0
         sub(/^          worker-address:[[:space:]]*/, "", address)
+        first = substr(address, 1, 1)
+        last = substr(address, length(address), 1)
+        if ((first == "\"" && last == "\"") ||
+            (first == sprintf("%c", 39) && last == sprintf("%c", 39))) {
+          address = substr(address, 2, length(address) - 2)
+        }
         print address
         found = 1
         exit
@@ -111,6 +117,25 @@ assert_remote_config_address() {
 
   actual_address="$(read_remote_config_address "$values_file")" || return 1
   test "$actual_address" = "$expected_address"
+}
+
+invalid_worker_address_error='global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535'
+
+assert_worker_address_rejected() {
+  local case_name="$1"
+  local worker_address="$2"
+  local values_file="$work_dir/$case_name-api-values.yaml"
+  local log_file="$work_dir/$case_name-render.log"
+
+  write_environment true "$worker_address"
+  if render_api_values "$values_file" >"$log_file" 2>&1; then
+    echo "llm-router-worker-address: enabled LLM accepted invalid worker address: $worker_address" >&2
+    return 1
+  fi
+  if ! grep -Fq "$invalid_worker_address_error" "$log_file"; then
+    echo "llm-router-worker-address: invalid worker address did not return the expected error: $worker_address" >&2
+    return 1
+  fi
 }
 
 wrong_owner_address='wrong-owner.example.com:50071'
@@ -151,7 +176,35 @@ assert_remote_config_address "$work_dir/external-api-values.yaml" \
   "$external_worker_address" ||
   fail "enabled LLM did not honor an explicit external worker address"
 
-write_environment true '""'
+ipv4_worker_address='192.0.2.10:50071'
+write_environment true "$ipv4_worker_address"
+render_api_values "$work_dir/ipv4-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/ipv4-api-values.yaml" \
+  "$ipv4_worker_address" ||
+  fail "enabled LLM did not accept an IPv4 worker address"
+
+ipv6_worker_address='[2001:db8::1]:50071'
+write_environment true "$ipv6_worker_address"
+render_api_values "$work_dir/ipv6-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/ipv6-api-values.yaml" \
+  "$ipv6_worker_address" ||
+  fail "enabled LLM did not accept a bracketed IPv6 worker address"
+
+minimum_port_worker_address='router.example.com:1'
+write_environment true "$minimum_port_worker_address"
+render_api_values "$work_dir/minimum-port-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/minimum-port-api-values.yaml" \
+  "$minimum_port_worker_address" ||
+  fail "enabled LLM did not accept worker-address port 1"
+
+maximum_port_worker_address='router.example.com:65535'
+write_environment true "$maximum_port_worker_address"
+render_api_values "$work_dir/maximum-port-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/maximum-port-api-values.yaml" \
+  "$maximum_port_worker_address" ||
+  fail "enabled LLM did not accept worker-address port 65535"
+
+write_environment true ''
 if render_api_values "$work_dir/blank-api-values.yaml" \
   >"$work_dir/blank-render.log" 2>&1; then
   fail "enabled LLM accepted a blank worker address"
@@ -160,6 +213,25 @@ grep -Fq \
   'global.workerEndpoints.llmRequestRouterAddress is required when addons.llm.enabled is true' \
   "$work_dir/blank-render.log" ||
   fail "enabled LLM blank worker address did not return the expected error"
+
+invalid_address_cases=(
+  'missing-port|router'
+  'missing-host|:50071'
+  'non-numeric-port|router:not-a-port'
+  'port-zero|router:0'
+  'port-too-large|router:65536'
+  'port-too-long|router:99999999999999999999999999999999999999'
+)
+address_validation_failed=false
+for invalid_address_case in "${invalid_address_cases[@]}"; do
+  IFS='|' read -r case_name worker_address <<<"$invalid_address_case"
+  if ! assert_worker_address_rejected "$case_name" "$worker_address"; then
+    address_validation_failed=true
+  fi
+done
+if "$address_validation_failed"; then
+  fail "enabled LLM accepted one or more invalid worker addresses"
+fi
 
 staged_worker_address='staged-router.example.com:50071'
 write_environment false "$staged_worker_address"
