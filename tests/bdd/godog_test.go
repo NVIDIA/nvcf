@@ -848,7 +848,6 @@ func seedHelmfileLocalBDDFixture(t *testing.T, repoRoot string) {
   workerEndpoints:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
-    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
 addons:
   llm:
     enabled: true
@@ -908,7 +907,6 @@ func seedHelmfileLocalBDDMultiFixture(t *testing.T, repoRoot string) {
   workerEndpoints:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
-    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
   nvcaOperator:
     selfManaged:
       icmsServiceURL: http://api.sis.svc.cluster.local:8080

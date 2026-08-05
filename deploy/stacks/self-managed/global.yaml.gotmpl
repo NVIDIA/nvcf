@@ -259,12 +259,10 @@ natsAuthCalloutService:
 {{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
-{{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim }}
+{{- $llmRequestRouterDefaultAddress := "llm-request-router.nvcf.svc.cluster.local:50071" }}
+{{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- if $llmEnabled }}
-{{- if not $llmRequestRouterWorkerAddress }}
-{{- fail "global.workerEndpoints.llmRequestRouterAddress is required when addons.llm.enabled is true" }}
-{{- end }}
 {{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
 {{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
 {{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}

@@ -173,11 +173,15 @@ if assert_remote_config_address "$work_dir/wrong-owner-values.yaml" \
 fi
 
 local_worker_address='llm-request-router.nvcf.svc.cluster.local:50071'
-write_environment true "$local_worker_address"
+printf '%s\n' \
+  'addons:' \
+  '  llm:' \
+  '    enabled: true' \
+  >"$environment_file"
 render_api_values "$work_dir/local-api-values.yaml" >/dev/null
 assert_remote_config_address "$work_dir/local-api-values.yaml" \
   "$local_worker_address" ||
-  fail "enabled local LLM did not render the worker address in API remote config"
+  fail "enabled local LLM did not default the worker address in API remote config"
 if grep -Eq 'NVCF_(LLM_REQUEST_ROUTER_WORKER_ADDRESS|STARGATE_ADDRESS)' \
   "$work_dir/local-api-values.yaml"; then
   fail "enabled LLM rendered the worker address through the legacy API env path"
@@ -237,14 +241,10 @@ assert_remote_config_address "$work_dir/maximum-port-api-values.yaml" \
   fail "enabled LLM did not accept worker-address port 65535"
 
 write_environment true ''
-if render_api_values "$work_dir/blank-api-values.yaml" \
-  >"$work_dir/blank-render.log" 2>&1; then
-  fail "enabled LLM accepted a blank worker address"
-fi
-grep -Fq \
-  'global.workerEndpoints.llmRequestRouterAddress is required when addons.llm.enabled is true' \
-  "$work_dir/blank-render.log" ||
-  fail "enabled LLM blank worker address did not return the expected error"
+render_api_values "$work_dir/default-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/default-api-values.yaml" \
+  "$local_worker_address" ||
+  fail "enabled LLM did not default the worker address to the cluster-local service"
 
 invalid_address_cases=(
   'missing-port|router'

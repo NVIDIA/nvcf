@@ -27,11 +27,6 @@ global:
   imagePullSecrets:
     - name: nvcr-pull-secret
 
-  # Used when addons.llm.enabled is true. The stack does not pass this staged
-  # value to the API chart while the addon is disabled.
-  workerEndpoints:
-    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
-
   # Disable node selectors for local development (pods schedule on any node)
   nodeSelectors:
     enabled: false

@@ -66,9 +66,9 @@ global:
     invocationServiceURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy.
     grpcProxyWorkerConnectURL: ""
-    # LLM request-router address advertised to LLM worker sidecars. Required
-    # when addons.llm.enabled is true.
-    llmRequestRouterAddress: ""
+    # LLM request-router address advertised to LLM worker sidecars. Override
+    # this cluster-local default when workers run in a different cluster.
+    llmRequestRouterAddress: "llm-request-router.nvcf.svc.cluster.local:50071"
 
   nodeSelectors:
     enabled: false
