@@ -16,7 +16,10 @@
 package main
 
 import (
+	"flag"
+	"io"
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -343,5 +346,24 @@ func TestDashboardHasNoExternalReferences(t *testing.T) {
 		if strings.Contains(out, marker) {
 			t.Errorf("dashboard must stay self-contained, found %q", marker)
 		}
+	}
+}
+
+// --runs, --history, --weeks and --prs all reach slice bounds, where a negative
+// value panics instead of erroring.
+func TestNegativeCountFlagsAreRejected(t *testing.T) {
+	for _, name := range []string{"runs", "history", "weeks", "prs"} {
+		t.Run(name, func(t *testing.T) {
+			flag.CommandLine = flag.NewFlagSet("ci-health", flag.ContinueOnError)
+			flag.CommandLine.SetOutput(io.Discard)
+			os.Args = []string{"ci-health", "--" + name + "=-1", "--repo", "o/r"}
+			err := run()
+			if err == nil {
+				t.Fatalf("--%s=-1 was accepted; it panics when used as a slice bound", name)
+			}
+			if !strings.Contains(err.Error(), "--"+name+" must be at least 1") {
+				t.Fatalf("error = %q, want it to name --%s", err, name)
+			}
+		})
 	}
 }

@@ -108,6 +108,16 @@ func parseFlags() *options {
 func run() error {
 	o := parseFlags()
 
+	// These reach slice bounds, so a negative value panics rather than erroring.
+	for _, c := range []struct {
+		name string
+		v    int
+	}{{"runs", o.runs}, {"history", o.history}, {"weeks", o.weeks}, {"prs", o.prs}} {
+		if c.v < 1 {
+			return fmt.Errorf("--%s must be at least 1, got %d", c.name, c.v)
+		}
+	}
+
 	workflow := o.workflow
 	if filepath.Ext(workflow) != ".yml" && filepath.Ext(workflow) != ".yaml" {
 		workflow += ".yml"
@@ -132,33 +142,40 @@ func run() error {
 		}
 		truncated = len(runsList) >= o.history
 	}
+	var sampled []Run
 	if needJobs {
-		sample := runsList
-		if len(sample) > o.runs {
-			sample = sample[:o.runs]
+		sampled = runsList
+		if len(sampled) > o.runs {
+			sampled = sampled[:o.runs]
 		}
-		jobs = fetchJobs(o.repo, sample, 8)
+		jobs = fetchJobs(o.repo, sampled, 8)
 	}
 
-	usage := struct {
-		Size  int64 `json:"active_caches_size_in_bytes"`
-		Count int   `json:"active_caches_count"`
-	}{}
-	if err := getJSON("actions/cache/usage", o.repo, &usage); err != nil {
-		return err
+	// --durations and --merge-times read no cache data, so they should neither
+	// pay for these calls nor fail when cache access does.
+	needCache := needJobs || (!o.why && !o.durations && !o.mergeTimes)
+	var cache CacheState
+	if needCache {
+		usage := struct {
+			Size  int64 `json:"active_caches_size_in_bytes"`
+			Count int   `json:"active_caches_count"`
+		}{}
+		if err := getJSON("actions/cache/usage", o.repo, &usage); err != nil {
+			return err
+		}
+		caches, err := fetchCaches(o.repo)
+		if err != nil {
+			return err
+		}
+		cache = summariseCaches(caches, usage.Size, usage.Count)
 	}
-	caches, err := fetchCaches(o.repo)
-	if err != nil {
-		return err
-	}
-	cache := summariseCaches(caches, usage.Size, usage.Count)
 
 	stats := analyseJobs(jobs)
 	poles, poleRuns := longPoles(jobs)
 	var causes []Cause
 	var wall float64
 	if needJobs {
-		causes, wall = diagnose(runsList, stats, poles, poleRuns, cache)
+		causes, wall = diagnose(sampled, stats, poles, poleRuns, cache)
 	}
 
 	if o.dashboard != "" {
@@ -179,7 +196,7 @@ func run() error {
 	}
 
 	if o.why || o.all {
-		printWhy(causes, wall, runsList)
+		printWhy(causes, wall, sampled)
 	}
 	if o.durations || o.all {
 		printDurations(runsList, workflow, o.weeks, truncated)

@@ -212,3 +212,55 @@ func TestJobDecodesNullTimestamps(t *testing.T) {
 		t.Fatal("created_at should have decoded")
 	}
 }
+
+// A run with more than 100 jobs used to report only the first page, and the
+// wide matrix runs are exactly the ones whose timings matter most.
+func TestFetchJobsPaginatesRunsWithManyJobs(t *testing.T) {
+	var calls []string
+	prev := fetch
+	fetch = func(path, repo string) ([]byte, error) {
+		calls = append(calls, path)
+		page := 1
+		if i := strings.Index(path, "&page="); i >= 0 {
+			fmt.Sscanf(path[i+len("&page="):], "%d", &page)
+		}
+		n := 100
+		if page == 2 {
+			n = 40
+		}
+		if page > 2 {
+			n = 0
+		}
+		jobs := make([]string, 0, n)
+		for i := 0; i < n; i++ {
+			jobs = append(jobs, `{"name":"bazel (x)","run_id":1,"conclusion":"success"}`)
+		}
+		return []byte(fmt.Sprintf(`{"total_count":140,"jobs":[%s]}`, strings.Join(jobs, ","))), nil
+	}
+	t.Cleanup(func() { fetch = prev })
+
+	got := fetchJobs("o/r", []Run{{ID: 1}}, 1)
+	if len(got) != 140 {
+		t.Fatalf("got %d jobs, want 140 (page 1 + page 2)", len(got))
+	}
+	if len(calls) != 2 {
+		t.Fatalf("made %d requests, want 2; must stop once total_count is reached", len(calls))
+	}
+}
+
+func TestFetchJobsStopsOnSinglePage(t *testing.T) {
+	var calls int
+	prev := fetch
+	fetch = func(path, repo string) ([]byte, error) {
+		calls++
+		return []byte(`{"total_count":1,"jobs":[{"name":"bazel (x)","run_id":1,"conclusion":"success"}]}`), nil
+	}
+	t.Cleanup(func() { fetch = prev })
+
+	if got := fetchJobs("o/r", []Run{{ID: 1}}, 1); len(got) != 1 {
+		t.Fatalf("got %d jobs, want 1", len(got))
+	}
+	if calls != 1 {
+		t.Fatalf("made %d requests, want 1; a short page means no more pages", calls)
+	}
+}
