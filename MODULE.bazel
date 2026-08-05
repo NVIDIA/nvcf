@@ -550,9 +550,19 @@ maven.install(
         # OTel / Cassandra / Testcontainers). Root coordinates only: BOM-managed
         # starters/modules, parent-owned explicit pins, and build/test tools.
         "at.yawk.lz4:lz4-java:1.10.3",
+        # ESS overrides the Spring Boot BOM version to include the current
+        # logback security fixes. Keep the runtime family aligned.
+        "ch.qos.logback:logback-classic:1.5.37",
+        "ch.qos.logback:logback-core:1.5.37",
         "com.github.ben-manes.caffeine:guava",
+        "com.google.code.gson:gson",
+        # Direct pin overrides the Spring Boot BOM, which manages this to
+        # 2.41.0. Without the pin the Maven resolver downgrades the shared
+        # graph from 2.49.0; keep the higher version across all services.
+        "com.google.errorprone:error_prone_annotations:2.49.0",
         "com.github.java-json-tools:json-patch:1.13",
         "com.jayway.jsonpath:json-path",
+        "com.nimbusds:nimbus-jose-jwt:10.9.1",
         "commons-codec:commons-codec",
         # nv-boot-parent overrides the Spring Boot BOM's lower version.
         "commons-logging:commons-logging:1.4.0",
@@ -562,6 +572,10 @@ maven.install(
         "io.nats:jnats:2.23.0",
         "io.opentelemetry:opentelemetry-exporter-otlp",
         "io.opentelemetry:opentelemetry-sdk-testing",
+        "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:2.21.0",
+        "io.projectreactor:reactor-core-micrometer",
+        "io.projectreactor:reactor-test",
+        "io.projectreactor:reactor-tools",
         "jakarta.servlet:jakarta.servlet-api",
         "org.apache.cassandra:java-driver-metrics-micrometer",
         "org.apache.commons:commons-collections4:4.5.0",
@@ -582,6 +596,7 @@ maven.install(
         "org.ow2.asm:asm-util:9.9",
         "org.projectlombok:lombok",
         "org.springdoc:springdoc-openapi-starter-webflux-api:3.0.3",
+        "org.springdoc:springdoc-openapi-starter-webflux-ui:3.0.3",
         "org.springdoc:springdoc-openapi-starter-webmvc-api:3.0.3",
         "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry",
         "org.springframework.boot:spring-boot-restclient",
@@ -590,7 +605,9 @@ maven.install(
         "org.springframework.boot:spring-boot-starter",
         "org.springframework.boot:spring-boot-starter-actuator",
         "org.springframework.boot:spring-boot-starter-actuator-test",
+        "org.springframework.boot:spring-boot-starter-cache",
         "org.springframework.boot:spring-boot-starter-data-cassandra",
+        "org.springframework.boot:spring-boot-starter-data-cassandra-reactive",
         "org.springframework.boot:spring-boot-starter-data-cassandra-test",
         "org.springframework.boot:spring-boot-starter-jackson",
         "org.springframework.boot:spring-boot-starter-security-oauth2-client",
@@ -601,6 +618,7 @@ maven.install(
         "org.springframework.boot:spring-boot-starter-webflux",
         "org.springframework.boot:spring-boot-starter-webflux-test",
         "org.springframework.boot:spring-boot-starter-webmvc-test",
+        "org.springframework.boot:spring-boot-testcontainers",
         "org.springframework.boot:spring-boot-webclient",
         "org.springframework.cloud:spring-cloud-commons",
         "org.springframework.cloud:spring-cloud-context",

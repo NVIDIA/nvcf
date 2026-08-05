@@ -264,6 +264,11 @@
       "service_name": "nvcf-api-keys"
     },
     {
+      "id": "ess",
+      "path": "src/control-plane-services/ess",
+      "service_name": "nvcf-ess"
+    },
+    {
       "id": "instance-cluster-management",
       "path": "src/control-plane-services/instance-cluster-management",
       "service_name": "nvcf-instance-cluster-management"
