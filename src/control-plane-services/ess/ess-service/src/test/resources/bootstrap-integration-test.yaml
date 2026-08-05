@@ -20,5 +20,9 @@ spring:
 
 nv-boot:
   reloadable-properties:
-    # a bit awkward without classpath being supported, see later if there is a better solution without using symlinks
-    file: file:target/test-classes/local_env/secrets/secrets.json
+    # Resolved relative to the Bazel test working directory. local_env is staged
+    # into runfiles by the test_local_env target with the
+    # src/control-plane-services/ess/ prefix stripped. The BUILD.bazel test
+    # targets also override this with an absolute runfiles path via
+    # -Dnv-boot.reloadable-properties.file.
+    file: file:local_env/secrets/secrets.json
