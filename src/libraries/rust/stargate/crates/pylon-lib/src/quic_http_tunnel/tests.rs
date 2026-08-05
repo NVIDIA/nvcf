@@ -1705,7 +1705,7 @@ async fn quic_tunnel_derives_dynamo_priority_from_x_priority() {
         tunnel_request_headers("/v1/chat/completions", "model-a", "req-dynamo-1", "11");
     headers.insert("x-priority", "7".parse().unwrap());
     headers.insert("x-dynamo-request-priority", "42".parse().unwrap());
-    headers.insert("x-dynamo-request-strict-priority", "true".parse().unwrap());
+    headers.insert("x-dynamo-request-strict-priority", "1".parse().unwrap());
     tunnel
         .send(headers, br#"{"messages":[],"stream":true}"#)
         .await;
@@ -1752,7 +1752,7 @@ async fn quic_tunnel_dynamo_priority_derivation_can_be_disabled() {
     let mut headers =
         tunnel_request_headers("/v1/chat/completions", "model-a", "req-dynamo-3", "11");
     headers.insert("x-priority", "7".parse().unwrap());
-    headers.insert("x-dynamo-request-strict-priority", "true".parse().unwrap());
+    headers.insert("x-dynamo-request-strict-priority", "1".parse().unwrap());
     tunnel
         .send(headers, br#"{"messages":[],"stream":true}"#)
         .await;
