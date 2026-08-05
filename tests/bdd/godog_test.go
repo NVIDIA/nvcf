@@ -577,7 +577,6 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 			" podmonitor/nvcf-default-monitors-worker" +
 			" --namespace monitoring --context k3d-ncp-local-compute-1"
 		collectorEnabledCommand = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o json | jq -r ".selfManaged.otelCollector.enabled"'`
-		featureGatesCommand     = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o json | jq -r ".selfManaged.featureGateValues[]"'`
 		serviceKeyCommand       = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
 			` kubectl --context k3d-ncp-local-compute-1 create secret generic ngc-service-api-key` +
 			` --namespace nvca-system --from-file=ngc-service-api-key=/dev/stdin --dry-run=client -o yaml |` +
@@ -595,7 +594,6 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 		serviceMonitorCommand:       {ExitCode: 0},
 		podMonitorCommand:           {ExitCode: 0},
 		collectorEnabledCommand:     {ExitCode: 0, Stdout: "true\n"},
-		featureGatesCommand:         {ExitCode: 0, Stdout: "DynamicGPUDiscovery\nBYOObservability\n"},
 		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {
 			ExitCode: 0,
 			Stdout:   observabilityComputeHelmListJSON(),
