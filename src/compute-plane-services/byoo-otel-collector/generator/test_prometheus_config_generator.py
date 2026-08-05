@@ -13,40 +13,14 @@ GENERATOR_DIR = Path(__file__).resolve().parent
 SOURCE_CONFIG = GENERATOR_DIR / "source-config.yaml"
 SOURCE_TEMPLATES_DIR = GENERATOR_DIR.parent / "internal" / "otelconfig" / "source_templates"
 
-EXPORTER_DIAGNOSTIC_METRICS = {
-    "helm": (
-        "otelcol_exporter_enqueue_failed_log_records_total",
-        "otelcol_exporter_enqueue_failed_spans_total",
-        "otelcol_exporter_enqueue_failed_metric_points_total",
-        "otelcol_exporter_queue_size",
-        "otelcol_exporter_queue_capacity",
-        "otelcol_http_client_request_duration_seconds.*",
-        "otelcol_rpc_client_call_duration_seconds.*",
-    ),
-    "container": (
-        "otelcol_exporter_enqueue_failed_metric_points_total",
-        "otelcol_exporter_enqueue_failed_spans_total",
-        "otelcol_exporter_enqueue_failed_log_records_total",
-        "otelcol_exporter_queue_size",
-        "otelcol_exporter_queue_capacity",
-        "otelcol_http_client_request_duration_seconds.*",
-        "otelcol_rpc_client_call_duration_seconds.*",
-    ),
-}
-
-RAW_SELF_SCRAPE_COUNTER_METRICS = (
-    "otelcol_exporter_sent_metric_points",
-    "otelcol_exporter_sent_spans",
-    "otelcol_exporter_sent_log_records",
-    "otelcol_processor_incoming_items",
-    "otelcol_processor_outgoing_items",
-    "otelcol_receiver_accepted_log_records",
-    "otelcol_receiver_accepted_metric_points",
-    "otelcol_receiver_accepted_spans",
-    "otelcol_receiver_refused_log_records",
-    "otelcol_receiver_refused_spans",
-    "otelcol_receiver_refused_metric_points",
-)
+SELF_SCRAPE_METRIC_MATCHER = "otelcol_.*"
+CADVISOR_POD_SELECTOR = 'container=~"inference|task|POD|"'
+CADVISOR_POD_NORMALIZATION = """            - source_labels: [container]
+              regex: "POD"
+              replacement: ""
+              target_label: container
+              action: replace
+"""
 
 CONFIG_TEMPLATES = {
     "helm": ("generated_src-config-vm-helm.yaml.tmpl", "generated_src-config-k8s-helm.yaml.tmpl"),
@@ -58,37 +32,7 @@ CONFIG_TEMPLATES = {
 
 
 class PrometheusConfigGeneratorTest(unittest.TestCase):
-    def test_exporter_diagnostics_are_rendered_in_keep_regexes(self) -> None:
-        variables = PrometheusConfigGenerator(SOURCE_CONFIG).build_variables()
-
-        with tempfile.TemporaryDirectory() as output_dir:
-            TemplateBuilder(
-                str(SOURCE_CONFIG), str(SOURCE_TEMPLATES_DIR), output_dir
-            ).build()
-
-            for function_type, diagnostic_metrics in EXPORTER_DIAGNOSTIC_METRICS.items():
-                with self.subTest(function_type=function_type):
-                    allow_list = variables[
-                        f"{function_type}_opentelemetry_collector_metric_allow_list"
-                    ].split("|")
-                    first_diagnostic = allow_list.index(diagnostic_metrics[0])
-                    self.assertEqual(
-                        list(diagnostic_metrics),
-                        allow_list[first_diagnostic:first_diagnostic + len(diagnostic_metrics)],
-                    )
-
-                    expected_regex = "|".join(diagnostic_metrics)
-                    for template_name in CONFIG_TEMPLATES[function_type]:
-                        rendered_template = Path(output_dir, template_name).read_text(
-                            encoding="utf-8"
-                        )
-                        self.assertIn(
-                            expected_regex,
-                            rendered_template,
-                            f"{template_name} does not retain exporter diagnostics",
-                        )
-
-    def test_raw_self_scrape_counter_names_are_rendered_in_keep_regexes(self) -> None:
+    def test_self_scrape_metric_family_is_rendered_in_keep_regexes(self) -> None:
         variables = PrometheusConfigGenerator(SOURCE_CONFIG).build_variables()
 
         with tempfile.TemporaryDirectory() as output_dir:
@@ -101,15 +45,39 @@ class PrometheusConfigGeneratorTest(unittest.TestCase):
                     allow_list = variables[
                         f"{function_type}_opentelemetry_collector_metric_allow_list"
                     ].split("|")
-                    for metric_name in RAW_SELF_SCRAPE_COUNTER_METRICS:
-                        self.assertIn(metric_name, allow_list)
+                    self.assertEqual([SELF_SCRAPE_METRIC_MATCHER], allow_list)
 
                     for template_name in template_names:
                         rendered_template = Path(output_dir, template_name).read_text(
                             encoding="utf-8"
                         )
-                        for metric_name in RAW_SELF_SCRAPE_COUNTER_METRICS:
-                            self.assertIn(metric_name, rendered_template)
+                        self.assertIn(
+                            f'regex: "({SELF_SCRAPE_METRIC_MATCHER})"',
+                            rendered_template,
+                        )
+
+    def test_k8s_container_cadvisor_keeps_and_normalizes_pod_sandbox_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as output_dir:
+            TemplateBuilder(
+                str(SOURCE_CONFIG), str(SOURCE_TEMPLATES_DIR), output_dir
+            ).build()
+
+            rendered_template = Path(
+                output_dir, "generated_src-config-k8s-container.yaml.tmpl"
+            ).read_text(encoding="utf-8")
+            cadvisor_start = rendered_template.index(
+                '        - job_name: "kubernetes-cadvisor"'
+            )
+            cadvisor_end = rendered_template.index(
+                '        - job_name: "kube-state-metrics"', cadvisor_start
+            )
+            cadvisor_config = rendered_template[cadvisor_start:cadvisor_end]
+            self.assertIn(CADVISOR_POD_SELECTOR, cadvisor_config)
+            self.assertIn(CADVISOR_POD_NORMALIZATION, cadvisor_config)
+            self.assertLess(
+                cadvisor_config.index(CADVISOR_POD_NORMALIZATION),
+                cadvisor_config.index("            - action: labelkeep"),
+            )
 
 
 if __name__ == "__main__":

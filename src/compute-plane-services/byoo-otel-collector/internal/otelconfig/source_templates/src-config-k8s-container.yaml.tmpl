@@ -48,7 +48,7 @@ receivers:
           params:
             "match[]":
               # kubelet (relabel rules aligned with byoo-prometheus servicemonitor_kubelet.yaml)
-              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"inference|task|", __name__=~"([[container_kubernetes_cadvisor_metric_allow_list]])"}'
+              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"inference|task|POD|", __name__=~"([[container_kubernetes_cadvisor_metric_allow_list]])"}'
           metric_relabel_configs:
             # for container_fs_.+ metrics
             - source_labels: [device]
@@ -59,6 +59,12 @@ receivers:
               regex: "kubelet"
               replacement: "kubernetes-cadvisor"
               target_label: job
+            # CRI-O reports the pod sandbox, which owns pod network metrics, as container="POD".
+            - source_labels: [container]
+              regex: "POD"
+              replacement: ""
+              target_label: container
+              action: replace
             - action: labelkeep
               regex: "([[container_kubernetes_cadvisor_attr_allow_list]])"
         - job_name: "kube-state-metrics"

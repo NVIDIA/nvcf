@@ -160,42 +160,8 @@ Always present for container and helm, NVCF and NVCT.
 * DCGM_FI_DEV_VGPU_MEMORY_USAGE
 
 ### opentelemetry-collector
-Always present for container and helm, NVCF and NVCT. The final list of metrics depends on telemetries received & exporter by function/task. For instance, if function is not publishing `otlp` logs then there will be no metrics related to logs.
-* otelcol_exporter_sent_metric_points_total
-* otelcol_exporter_sent_spans_total
-* otelcol_exporter_sent_log_records_total
-* otelcol_exporter_send_failed_log_records_total
-* otelcol_exporter_send_failed_spans_total
-* otelcol_exporter_send_failed_metric_points_total
-* otelcol_exporter_enqueue_failed_log_records_total
-* otelcol_exporter_enqueue_failed_spans_total
-* otelcol_exporter_enqueue_failed_metric_points_total
-* otelcol_exporter_queue_size
-* otelcol_exporter_queue_capacity
-* otelcol_http_client_request_duration_seconds.*
-* otelcol_rpc_client_call_duration_seconds.*
-* otelcol_processor_incoming_items_total
-* otelcol_processor_outgoing_items_total
-* otelcol_receiver_accepted_log_records_total
-* otelcol_receiver_accepted_metric_points_total
-* otelcol_receiver_accepted_spans_total
-* otelcol_receiver_refused_log_records_total
-* otelcol_receiver_refused_spans_total
-* otelcol_receiver_refused_metric_points_total
-
-##### raw-counter-inputs
-Counter input names omit the Prometheus _total suffix. Keep both spellings for collector compatibility.
-* otelcol_exporter_sent_metric_points
-* otelcol_exporter_sent_spans
-* otelcol_exporter_sent_log_records
-* otelcol_processor_incoming_items
-* otelcol_processor_outgoing_items
-* otelcol_receiver_accepted_log_records
-* otelcol_receiver_accepted_metric_points
-* otelcol_receiver_accepted_spans
-* otelcol_receiver_refused_log_records
-* otelcol_receiver_refused_spans
-* otelcol_receiver_refused_metric_points
+Keep all collector self-observability metrics. The final set depends on telemetry received and the exporter configured by each function or task.
+* otelcol_.*
 
 
 ## container
@@ -292,40 +258,6 @@ Only present if function has a pod k8s object, NVCF and NVCT. Please notice that
 * DCGM_FI_DEV_VGPU_MEMORY_USAGE
 
 ### opentelemetry-collector
-Always present for container and helm, NVCF and NVCT. The final list of metrics depends on telemetries received & exporter by function/task. For instance, if function is not publishing `otlp` logs then there will be no metrics related to logs.
-* otelcol_receiver_refused_metric_points_total
-* otelcol_receiver_refused_spans_total
-* otelcol_receiver_refused_log_records_total
-* otelcol_receiver_accepted_metric_points_total
-* otelcol_receiver_accepted_spans_total
-* otelcol_receiver_accepted_log_records_total
-* otelcol_exporter_sent_metric_points_total
-* otelcol_exporter_sent_spans_total
-* otelcol_exporter_sent_log_records_total
-* otelcol_exporter_send_failed_metric_points_total
-* otelcol_exporter_send_failed_spans_total
-* otelcol_exporter_send_failed_log_records_total
-* otelcol_exporter_enqueue_failed_metric_points_total
-* otelcol_exporter_enqueue_failed_spans_total
-* otelcol_exporter_enqueue_failed_log_records_total
-* otelcol_exporter_queue_size
-* otelcol_exporter_queue_capacity
-* otelcol_http_client_request_duration_seconds.*
-* otelcol_rpc_client_call_duration_seconds.*
-* otelcol_processor_incoming_items_total
-* otelcol_processor_outgoing_items_total
-
-##### raw-counter-inputs
-Counter input names omit the Prometheus _total suffix. Keep both spellings for collector compatibility.
-* otelcol_receiver_refused_metric_points
-* otelcol_receiver_refused_spans
-* otelcol_receiver_refused_log_records
-* otelcol_receiver_accepted_metric_points
-* otelcol_receiver_accepted_spans
-* otelcol_receiver_accepted_log_records
-* otelcol_exporter_sent_metric_points
-* otelcol_exporter_sent_spans
-* otelcol_exporter_sent_log_records
-* otelcol_processor_incoming_items
-* otelcol_processor_outgoing_items
+Keep all collector self-observability metrics. The final set depends on telemetry received and the exporter configured by each function or task.
+* otelcol_.*
 
