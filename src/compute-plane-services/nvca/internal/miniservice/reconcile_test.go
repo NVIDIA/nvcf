@@ -5418,3 +5418,66 @@ func TestPatchMiniService(t *testing.T) {
 		})
 	}
 }
+
+func TestSaveWorkloadConfigUsesTargetedSSA(t *testing.T) {
+	ctx := newTestContext()
+	stored := baseMiniServiceForPatchTest()
+	patchType := client.Merge.Type()
+	var patchData []byte
+	var patchOptions client.PatchOptions
+	crClient, _ := newFakeClientWithInterceptors(
+		mgrScheme,
+		interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				patchType = patch.Type()
+				for _, opt := range opts {
+					opt.ApplyToPatch(&patchOptions)
+				}
+				var err error
+				patchData, err = patch.Data(obj)
+				require.NoError(t, err)
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		},
+		stored,
+	)
+	r := &Reconciler{Client: crClient}
+
+	ms := &v1alpha1.MiniService{}
+	require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), ms))
+	wantSpec := ms.Spec.DeepCopy()
+	desired := &v1alpha1.WorkloadConfig{
+		FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+	}
+
+	require.NoError(t, r.saveWorkloadConfig(ctx, ms, desired))
+
+	got := &v1alpha1.MiniService{}
+	require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), got))
+	assert.Equal(t, client.Apply.Type(), patchType)
+	assert.Equal(t, managedByValue, patchOptions.FieldManager)
+	if assert.NotNil(t, patchOptions.Force) {
+		assert.True(t, *patchOptions.Force)
+	}
+
+	var gotPatch map[string]any
+	require.NoError(t, json.Unmarshal(patchData, &gotPatch))
+	assert.Equal(t, map[string]any{
+		"apiVersion": v1alpha1.SchemeGroupVersion.String(),
+		"kind":       "MiniService",
+		"metadata": map[string]any{
+			"name": stored.Name,
+		},
+		"spec": map[string]any{
+			"workloadConfig": map[string]any{
+				"featureFlags": map[string]any{
+					featureflag.StatusByWorkerReadiness: true,
+				},
+			},
+		},
+	}, gotPatch)
+	assert.Equal(t, wantSpec.Namespace, got.Spec.Namespace)
+	assert.Equal(t, wantSpec.ICMSRequestName, got.Spec.ICMSRequestName)
+	assert.Empty(t, cmp.Diff(wantSpec.HelmChartConfig, got.Spec.HelmChartConfig))
+	assert.Empty(t, cmp.Diff(desired, got.Spec.WorkloadConfig))
+}

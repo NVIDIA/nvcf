@@ -79,7 +79,7 @@ func (r *Reconciler) saveRevisionHistory(ctx context.Context, ms *v1alpha1.MiniS
 			},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: v1alpha1.SchemeGroupVersion.String(),
-				Kind:       "MiniService",
+				Kind:       miniServiceKind,
 				Name:       ms.Name,
 				UID:        ms.UID,
 			}},
