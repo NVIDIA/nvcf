@@ -13,15 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ngcImagePullSecretName: ""
-
-image:
-  repository: "<your-registry>/<namespace>/fastapi-echo-sample" # Replace with your own container image
-  tag: "latest"
-  pullPolicy: "IfNotPresent"
-
-inferencePort: 8000
-
-# When true, render nvcf-workload-config so NVCA uses worker container readiness
-# for instance health instead of all chart objects. See docs/user/helm-functions.md.
-statusByWorkerReadiness: false
+{{- if .Values.statusByWorkerReadiness }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvcf-workload-config
+data:
+  config.yaml: |
+    featureFlags:
+      StatusByWorkerReadiness: true
+{{- end }}
