@@ -131,7 +131,6 @@ nv_boot_library_test(
     include_classname = ".*IT",
     javacopts = ["-parameters", "--release", "25", "-Xep:ReturnValueIgnored:OFF"],
     jvm_flags = [
-        "-Dnv-boot.reloadable-properties.file=file:$(location //src/control-plane-services/ess:secrets_json)",
         "-Dspring.main.web-application-type=reactive",
     ],
     resource_strip_prefix = "src/control-plane-services/ess/ess-core/src/test/resources",

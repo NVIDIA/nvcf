@@ -49,9 +49,6 @@ nv_boot_library_test(
         "//src/control-plane-services/ess:secrets_json",
         "//src/control-plane-services/ess:test_local_env",
     ],
-    jvm_flags = [
-        "-Dnv-boot.reloadable-properties.file=file:$(location //src/control-plane-services/ess:secrets_json)",
-    ],
     resource_strip_prefix = "src/control-plane-services/ess/ess-service/src/test/resources",
     resources = ESS_SERVICE_TEST_RESOURCES,
     runtime_deps = [
