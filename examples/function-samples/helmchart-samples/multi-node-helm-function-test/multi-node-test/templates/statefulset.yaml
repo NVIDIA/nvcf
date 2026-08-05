@@ -45,9 +45,6 @@ spec:
     metadata:
       {{- with $profile.podAnnotations }}
       annotations:
-        # MNNVL scheduling on an NVLink-optimized cluster without KAI Scheduler.
-        #
-        # dra.nvcf.nvidia.io/required-nvlink-domain-index: "0"
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:

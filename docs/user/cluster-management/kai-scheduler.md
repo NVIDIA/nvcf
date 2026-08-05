@@ -1,32 +1,35 @@
 # KAI Scheduler Integration Guide
 
-[KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler) is an open source Kubernetes Native scheduler for AI workloads at large scale.
-To use the KAI Scheduler for NVCF Workloads the following configuration should be applied post the installation of the KAI Scheduler in the cluster and the [Optimized AI Workload Scheduling](./configuration.md) enabled on the
-cluster. NVCF Workloads deployed will be automatically BinPacked upon this cluster configuration changes.
+[KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler) is an open
+source Kubernetes scheduler for AI workloads. NVCF uses it for GPU bin-packing,
+queues, gang scheduling, and topology-aware placement.
 
-**KAI Scheduler Installation**
+## Install KAI Scheduler
 
 <Note>
-    Upgrade to latest [KAI Scheduler release](https://github.com/kai-scheduler/KAI-Scheduler/releases) is recommended to get latest fixes and security patches
-
+Use a tested [KAI Scheduler release](https://github.com/kai-scheduler/KAI-Scheduler/releases)
+that is compatible with the NVCF compute plane stack.
 </Note>
 
-When you enable `addons.kaiScheduler.enabled` in the `nvcf-compute-plane` Helmfile stack, the stack installs KAI Scheduler for you (release and namespace `kai-scheduler`). Enable that flag whenever you enable Grove or Dynamo. Skip the manual install below in that case.
+Set `addons.kaiScheduler.enabled` in the `nvcf-compute-plane` Helmfile
+environment to install KAI Scheduler as release and namespace `kai-scheduler`.
+Grove, Dynamo, and topology-aware scheduling require this add-on. Skip the
+manual installation below when the add-on is enabled.
 
-Use the manual install when you need KAI without the compute-plane add-on, for example when enabling only the NVCA `KAIScheduler` feature gate.
+Use the manual path when KAI is managed outside the compute plane stack.
 
-NVCA's KAI scheduler integration expects default queues to exist with names `default-parent-queue` (parent) and `default-queue` (child);
-other queues may exist in the cluster.
+NVCA expects a parent queue named `default-parent-queue` and a child queue
+named `default-queue`. Other queues may also exist.
 
 <Warning>
-One caveat is that NVCA expects all queues used to create NVCF workloads to have unlimited (`-1`) quotas and limits
-to ensure full cluster capacity utilization and accurate usage tracking. If the cluster is partitioned to serve both NVCF and non-NVCF workloads
-and KAI scheduler queue quotas/limits are limited to reflect this, then [Shared Cluster mode](./configuration.md#cluster-features) must be enabled so non-NVCF workload nodes
-are accurately excluded from tracking and scheduling by NVCA.
-
+Set unlimited (`-1`) quotas and limits on every queue used for NVCF workloads.
+This lets NVCA track the complete cluster capacity. If NVCF and non-NVCF
+workloads share a cluster with limited KAI queues, enable
+[Shared Cluster mode](./configuration.md#cluster-features) so NVCA excludes
+non-NVCF nodes from capacity tracking and scheduling.
 </Warning>
 
-Create `values.yaml` with [default queue](https://raw.githubusercontent.com/NVIDIA/KAI-Scheduler/refs/heads/main/docs/quickstart/default-queues.yaml) attributes:
+Create `values.yaml` with the required default queues:
 
 <Accordion title="kai-scheduler-queues.yaml">
 ```yaml title="kai-scheduler-queues.yaml"
@@ -80,85 +83,14 @@ defaultQueue:
 helm install kai-scheduler oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler -f values.yaml -n kai-scheduler --create-namespace --version v0.14.0
 ```
 
-## NVLink Clique Gang Scheduling
+## Schedule multi-Pod workloads
 
-On [NVLink-optimized clusters](./configuration.md#nvlink-optimized-clusters), a multi-node
-function must land entirely inside one NVLink clique to get the inter-node bandwidth it was
-sized for. Without a topology constraint, KAI Scheduler binds pods one at a time and
-bin-packs the first pod into the most saturated clique. If that clique cannot hold the rest
-of the replicas, the remaining pods stay `Pending` and the deployment never becomes ready.
-Redeploying may succeed only because placement happens to land somewhere else.
+KAI can hold a multi-Pod workload until all required members fit. Grove and
+Dynamo build on this behavior for multi-role inference services. See
+[Gang Scheduling](./gang-scheduling.md) for add-on configuration, workload
+examples, supported resource types, and troubleshooting.
 
-A cluster `Topology` fixes this. It tells KAI Scheduler which node labels describe the
-clique hierarchy, so it can hold placement until every replica of a workload fits in a
-single clique.
-
-### Install the Topology
-
-The compute plane stack ships this as an optional add-on. Enable it in
-`environments/<env>.yaml` and run `make apply`:
-
-```yaml
-addons:
-  topologyAwareScheduling:
-    enabled: true
-    topologies:
-      - name: nvcf-mnnvl-topology
-        levels:
-          - nodeLabel: nvidia.com/gpu.clique
-          - nodeLabel: kubernetes.io/hostname
-  kaiScheduler:
-    enabled: true
-```
-
-The add-on requires the `kai-scheduler` release (enable `addons.kaiScheduler.enabled`)
-and KAI Scheduler v0.12.0 or later, which is when the native `kai.scheduler/v1alpha1`
-Topology CRD was introduced. For each entry under `topologies` it creates a
-cluster-scoped resource such as:
-
-```yaml
-apiVersion: kai.scheduler/v1alpha1
-kind: Topology
-metadata:
-  name: nvcf-mnnvl-topology
-spec:
-  levels:
-  - nodeLabel: nvidia.com/gpu.clique
-  - nodeLabel: kubernetes.io/hostname
-```
-
-When `addons.groveOperator.enabled` is also true, the same
-`topologyAwareScheduling` toggle sets Grove `topologyAwareScheduling.enabled`
-and installs a `ClusterTopologyBinding` that references the primary KAI
-Topology (`nvcf-mnnvl-topology` by default). Grove `network.autoMNNVLEnabled`
-is not set by this toggle; configure it under `addons.groveOperator.network`
-when you need it.
-
-The `nvidia.com/gpu.clique` label is applied by the NVIDIA GPU DRA driver, which is already
-a prerequisite on NVLink-optimized clusters.
-
-Verify the resource exists:
-
-```bash
-kubectl get topologies.kai.scheduler nvcf-mnnvl-topology
-```
-
-When Grove is enabled, also verify the binding:
-
-```bash
-kubectl get clustertopologybindings.grove.io nvcf-mnnvl-topology-binding
-```
-
-### Opt a function in
-
-Creating the Topology changes nothing on its own. Each workload opts in through annotations
-on the StatefulSet, described in [Helm Functions](../helm-functions.md#multi-node-gang-scheduling).
-
-### Gang-scheduling object types
-
-Enabling the `KAIScheduler` feature gate adds the KAI `PodGroup` type to the cluster
-validation policy, and enabling the Grove add-on adds the `PodCliqueSet`, `PodClique`,
-`PodCliqueScalingGroup`, and `PodGang` types. The Cluster Agent needs these to render,
-admit, and clean up the objects the schedulers create for a function, and to grant itself
-the matching RBAC. Charts that ship their own gang-scheduling objects are validated against
-the same list.
+On NVLink-optimized clusters, KAI can also place the complete gang in one GPU
+clique. See
+[Topology-Aware Scheduling](./topology-aware-scheduling.md) for GPU DRA
+prerequisites, topology configuration, Grove bindings, and function examples.

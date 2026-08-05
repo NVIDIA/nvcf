@@ -9,7 +9,7 @@ Ensure that your helm charts version does not contain `-` For example `v1` is ok
 
 </Warning>
 
-1. The helm chart **must have a "mini-service" container defined, which will be used as the inference entry point.**
+1. The Helm chart must define a `mini-service` container as the inference entry point.
 2. The name of this service in your helm chart should be supplied by setting `helmChartServiceName` during the function definition. This allows Cloud Functions to communicate and make inference requests to the "mini-service" endpoint.
 
 <Warning>
@@ -35,11 +35,13 @@ All Pod specs in your helm chart will be updated with pull secrets at runtime, s
 
    - The `helmChart` property should be set to the OCI URL of the helm chart that will deploy the "mini-service". The helm chart URL should follow the format: `oci://${REGISTRY}/${REPOSITORY}/charts/$NAME-X.Y.Z.tgz`. The chart name should not contain `-` in the version string.
 
-   - The `helmChartServiceName` is used for checking if the "mini-service" is ready for inference and is also scraped for function metrics. At this time, templatized service names are not supported. **This must match the service name of your "mini-service" with the exposed entry point port.**
+   - NVCF uses `helmChartServiceName` for readiness checks and function
+     metrics. It must match the service that exposes the `mini-service` entry
+     point. Templated service names are not supported.
 
    - Important: The Helm chart name should not contain underscores or other special symbols, as that may cause issues during deployment.
 
-**Example Creation via API**
+### API example
 
 Please see our [sample helm chart used](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/helmchart-samples/inference-test-sample) in this example for reference.
 
@@ -75,88 +77,26 @@ To create a multi-node helm deployment, you need to use the following format for
 
 A sample helm chart for a multi-node deployment can be found [in the multi-node helm example](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/helmchart-samples/multi-node-helm-function-test/).
 
-#### Multi-node NVLink (MNNVL) Scheduling
+#### Multi-node NVLink scheduling
 
 <Note>
-The cluster must have the `NVLinkOptimized` cluster attribute applied during compute cluster registration
-to use MNNVL in NVCF compute clusters. See [configuration](../cluster-management/configuration.md) for details.
-
+The compute cluster must have the `NVLinkOptimized` attribute. See
+[NVLink-optimized clusters](./cluster-management/configuration.md#nvlink-optimized-clusters).
 </Note>
 
-NVCF has the ability to schedule a set of Pods from one multi-node Helm chart function into a single
-[NVLink partition (GPU clique)](https://developer.nvidia.com/blog/running-ai-workloads-on-rack-scale-supercomputers-from-hardware-to-topology-aware-scheduling/)
-using node `nvidia.com/gpu.clique` labels. NVCA automatically creates a
+NVCF can place the Pods from one multi-node Helm function in a single NVLink
+GPU clique. Use [Gang Scheduling](./cluster-management/gang-scheduling.md) when every Pod
+must be placed atomically. Use
+[Topology-Aware Scheduling](./cluster-management/topology-aware-scheduling.md)
+to place that gang in one GPU clique. The guides include examples for direct
+KAI StatefulSets and workloads managed through Grove and Dynamo.
+NVCA will create a
 [`ComputeDomain`](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html)
-to connect all GPU workload Pods via IMEX channel.
+to connect GPU workload Pods through IMEX.
 
 <Note>
-All Pods in your Helm chart must request an entire node's worth of GPUs to use MNNVL and the `ComputeDomain`
-without error.
-
+Each GPU-enabled Pod must request a full node of GPUs.
 </Note>
-
-There are several options on how to inform NVCF on how to schedule Pods.
-
-##### With KAI Scheduler
-
-On an NVLink-optimized cluster running KAI Scheduler, a multi-node workload should be placed
-all at once inside a single NVLink clique. Otherwise the scheduler can bind the first pod
-into a clique with no room for the rest, and those pods stay `Pending`.
-
-Request atomic placement by annotating the StatefulSet with `kai.scheduler/*` annotations
-on the StatefulSet's own `metadata.annotations`:
-
-```yaml
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  annotations:
-    kai.scheduler/topology: "nvcf-mnnvl-topology"
-    kai.scheduler/topology-required-placement: "nvidia.com/gpu.clique"
-```
-
-KAI Scheduler builds one `PodGroup` per StatefulSet and copies these annotations into its
-topology constraint. No pod in the StatefulSet binds to a node until every replica can land
-in one clique.
-
-Prerequisites, and how a cluster operator installs the `nvcf-mnnvl-topology` resource, are
-in the [KAI Scheduler guide](./cluster-management/kai-scheduler.md#nvlink-clique-gang-scheduling).
-Ask your cluster operator whether the Topology exists before relying on these annotations;
-if it is missing, KAI rejects the workload's topology constraint.
-
-<Warning>
-Gang scheduling this way only works for StatefulSets. KAI Scheduler puts every replica of a
-Deployment in its own `PodGroup`, so all Pod children of a Deployment cannot be gang scheduled.
-Use a StatefulSet for multi-node workloads.
-
-</Warning>
-
-##### Without KAI Scheduler
-
-<Warning>
-Using KAI Scheduler is advised to ensure atomicity in gang scheduling. Without KAI Scheduler,
-there is no guarantee that Pods will be scheduled into a GPU clique big enough to fit the set,
-even if one exists.
-
-</Warning>
-
-On an NVLink-optimized cluster without KAI Scheduler, you can use the `dra.nvcf.nvidia.io/required-nvlink-domain-index`
-Pod annotation to attempt to schedule a set of Pods onto a single GPU clique:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-spec:
-  template:
-    metadata:
-      annotations:
-        dra.nvcf.nvidia.io/required-nvlink-domain-index: "0"
-```
-
-NVCF will apply inter-pod affinities to all Pods with the same index value. For example, `"0"` and `"1"`
-indices will create two different inter-pod affinities, thus two sets of Pods that will likely land in
-different cliques.
-
 
 ## Limitations
 
@@ -182,7 +122,7 @@ it will only do so if modification will not break your chart when it is installe
 Possible areas amenable to modification will be noted in the restrictions section below.
 Any standard that cannot be enforced by modification will result in error(s) during function creation.
 
-**Restrictions**
+#### Restrictions
 
 - Supported k8s artifacts under Helm Chart Namespace are listed below; others will be rejected:
   - ConfigMaps
