@@ -25,10 +25,13 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/internal/compat"
 )
 
+// miniServiceSpecJSON is the compatibility wire representation of MiniServiceSpec.
+// It preserves legacy request-name decoding while carrying every persisted spec field.
 type miniServiceSpecJSON struct {
 	Namespace       string            `json:"namespace"`
 	ICMSRequestName string            `json:"icmsRequestName"`
 	HelmChartConfig common.HelmConfig `json:"helmChartConfig"`
+	WorkloadConfig  *WorkloadConfig   `json:"workloadConfig,omitempty"`
 }
 
 func (s MiniServiceSpec) MarshalJSON() ([]byte, error) {
@@ -36,6 +39,7 @@ func (s MiniServiceSpec) MarshalJSON() ([]byte, error) {
 		Namespace:       s.Namespace,
 		ICMSRequestName: s.ICMSRequestName,
 		HelmChartConfig: s.HelmChartConfig,
+		WorkloadConfig:  s.WorkloadConfig,
 	})
 }
 
@@ -61,6 +65,7 @@ func (s *MiniServiceSpec) UnmarshalJSON(data []byte) error {
 		Namespace:       payload.Namespace,
 		ICMSRequestName: payload.ICMSRequestName,
 		HelmChartConfig: payload.HelmChartConfig,
+		WorkloadConfig:  payload.WorkloadConfig,
 	}
 	return nil
 }
