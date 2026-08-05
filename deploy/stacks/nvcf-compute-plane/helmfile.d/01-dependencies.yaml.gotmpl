@@ -2,9 +2,11 @@
 #
 # Optional releases, installed once per GPU cluster:
 #   kai-scheduler:           addons.kaiScheduler.enabled (required by grove/dynamo)
-#   nvcf-cluster-topology:   KAI Topology + Grove ClusterTopologyBinding
-#                            (addons.topologyAwareScheduling.enabled)
+#   nvcf-kai-topology:       KAI Topology CRs
+#                            (topologyAwareScheduling + kaiScheduler)
 #   grove-operator:          topology-aware scheduling (addons.groveOperator.enabled)
+#   nvcf-grove-topology:     Grove ClusterTopologyBinding CRs
+#                            (topologyAwareScheduling + groveOperator; needs KAI Topology)
 #   dynamo-operator:         Dynamo inference framework scheduling (addons.dynamoOperator.enabled)
 #
 # CLUSTER_NAME is required and scopes the registration values handoff file.
@@ -230,42 +232,38 @@ releases:
     wait: true
     waitForJobs: true
 
-  - name: nvcf-cluster-topology
-    # Cluster-scoped KAI Topology and Grove ClusterTopologyBinding resources
-    # (optional; disabled by default).
+  - name: nvcf-kai-topology
+    # Cluster-scoped KAI Scheduler Topology resources (optional; disabled by
+    # default). Workloads opt in through the `kai.scheduler/topology`
+    # annotation so KAI places every replica of a StatefulSet inside a single
+    # clique instead of binding pods one at a time.
     #
-    # Enable per-environment: addons.topologyAwareScheduling.enabled: true
-    # Configure the Topology list under
-    # addons.topologyAwareScheduling.topologies.
+    # Installed when addons.topologyAwareScheduling.enabled and
+    # addons.kaiScheduler.enabled are both true. Configure the Topology list
+    # under addons.topologyAwareScheduling.topologies.
     #
-    # Requires addons.kaiScheduler.enabled (and KAI v0.12.0 or later) for the
-    # native `kai.scheduler/v1alpha1` Topology CRD. When Grove is also enabled,
-    # the release waits on grove-operator for the ClusterTopologyBinding CRD
-    # and renders a binding that references the primary KAI Topology.
+    # Requires the kai-scheduler release (and KAI v0.12.0 or later) for the
+    # native `kai.scheduler/v1alpha1` Topology CRD.
     #
     # Resources are cluster-scoped; the release lives in the nvca-operator
     # namespace so lifecycle stays with NVCA-owned resources.
     {{- $topoEnabled := dig "topologyAwareScheduling" "enabled" false .Values.addons }}
     {{- $kaiEnabled := dig "kaiScheduler" "enabled" false .Values.addons }}
-    {{- $groveEnabled := dig "groveOperator" "enabled" false .Values.addons }}
     {{- if and $topoEnabled (not $kaiEnabled) }}
     {{- fail "addons.topologyAwareScheduling.enabled requires addons.kaiScheduler.enabled" }}
     {{- end }}
-    condition: addons.topologyAwareScheduling.enabled
+    installed: {{ and $topoEnabled $kaiEnabled }}
     chart: ../charts/nvcf-cluster-topology
     namespace: nvca-operator
     needs:
       - kai-scheduler/kai-scheduler
-      {{- if $groveEnabled }}
-      - grove-system/grove-operator
-      {{- end }}
     values:
       - topologies:
         {{- toYaml (dig "topologyAwareScheduling" "topologies" list .Values.addons) | nindent 10 }}
         kaiScheduler:
-          enabled: {{ $kaiEnabled }}
+          enabled: true
         groveOperator:
-          enabled: {{ $groveEnabled }}
+          enabled: false
     labels:
       release-group: workers
     wait: true
@@ -345,6 +343,35 @@ releases:
         # Init container that SSAs Grove CRDs on every pod startup. Helm does not
         # upgrade CRDs on `helm upgrade`, so this covers both install and upgrade.
         crdInstaller:
+          enabled: true
+    labels:
+      release-group: workers
+    wait: true
+    waitForJobs: true
+
+  - name: nvcf-grove-topology
+    # Cluster-scoped Grove ClusterTopologyBinding resources (optional).
+    # Installed when addons.topologyAwareScheduling.enabled and
+    # addons.groveOperator.enabled are both true. Bindings are derived from
+    # addons.topologyAwareScheduling.topologies and reference the KAI Topology
+    # CRs created by nvcf-kai-topology.
+    #
+    # Waits on grove-operator (ClusterTopologyBinding CRD) and
+    # nvcf-kai-topology (Topology CRs referenced by topologyReference).
+    {{- $topoEnabled := dig "topologyAwareScheduling" "enabled" false .Values.addons }}
+    {{- $groveEnabled := dig "groveOperator" "enabled" false .Values.addons }}
+    installed: {{ and $topoEnabled $groveEnabled }}
+    chart: ../charts/nvcf-cluster-topology
+    namespace: nvca-operator
+    needs:
+      - grove-system/grove-operator
+      - nvca-operator/nvcf-kai-topology
+    values:
+      - topologies:
+        {{- toYaml (dig "topologyAwareScheduling" "topologies" list .Values.addons) | nindent 10 }}
+        kaiScheduler:
+          enabled: false
+        groveOperator:
           enabled: true
     labels:
       release-group: workers

@@ -89,7 +89,7 @@ make install CLUSTER_NAME=...   # downloads helmfile v1.1.9 + helm v3.15.4 on fi
 
 ## Optional Add-ons
 
-KAI Scheduler, Grove (topology-aware scheduling), Dynamo (inference framework
+KAI Scheduler, Grove (service orchestration), Dynamo (inference framework
 scheduling), and optional MNNVL topology-aware scheduling are disabled by
 default. Grove and Dynamo require KAI Scheduler (release and namespace
 `kai-scheduler`). Topology-aware scheduling also requires KAI Scheduler. Enable
@@ -112,14 +112,14 @@ Override KAI component resources under `addons.kaiScheduler.<component>.resource
 are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
 
 `addons.topologyAwareScheduling` installs cluster-scoped KAI `Topology`
-resources from `topologyAwareScheduling.topologies` when KAI is enabled. The
-default entry names the `nvidia.com/gpu.clique` and `kubernetes.io/hostname`
-node labels. Multi-node functions reference a Topology by name through the
-`kai.scheduler/topology` annotation so KAI places every replica of a workload
-inside one NVLink clique instead of binding pods one at a time. It requires
-KAI Scheduler v0.12.0 or later. When Grove is also enabled, the same toggle
-sets Grove `topologyAwareScheduling.enabled` and installs a
-`ClusterTopologyBinding` that points at the primary KAI Topology.
+resources from `topologyAwareScheduling.topologies` when KAI is enabled.
+When Grove is also enabled, the same toggle sets Grove
+`topologyAwareScheduling.enabled=true` and installs one `ClusterTopologyBinding` per KAI Topology.
+The default topology keys/node labels are `nvidia.com/gpu.clique` and `kubernetes.io/hostname`, in order.
+See [KAI-Scheculer docs](https://github.com/kai-scheduler/KAI-Scheduler/blob/main/docs/topology/README.md),
+[Grove Operator docs](https://github.com/ai-dynamo/grove/blob/main/docs/user-guide/topology-aware-scheduling.md),
+or [Dynamo Operator docs](https://docs.nvidia.com/dynamo/dev/knowledge-base/kubernetes/multinode/topology-aware-scheduling)
+for topology-aware scheduling configuration for Helm chart functions using respective component(s).
 
 Enabling `addons.kaiScheduler.enabled` or `addons.dynamoOperator.enabled` also
 adds the matching NVCA feature gates (`KAIScheduler`, `DynamoOperatorSupport`).
