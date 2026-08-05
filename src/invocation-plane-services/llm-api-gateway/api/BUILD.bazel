@@ -88,6 +88,7 @@ go_test(
         "priority_guard_test.go",
         "rate_limit_accounting_test.go",
         "responses_handler_test.go",
+        "routing_key_case_test.go",
         "session_affinity_test.go",
         "token_count_test.go",
     ],
