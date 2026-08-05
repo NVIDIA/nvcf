@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"nvcf-grpc-proxy/proxy/consts"
+	"nvcf-grpc-proxy/proxy/metrics"
 	"nvcf-grpc-proxy/proxy/pool"
 	"nvcf-grpc-proxy/proxy/rp"
 	"sync"
@@ -48,13 +49,31 @@ func NewWorkerConnection(requestId uuid.UUID, functionId, functionVersionId stri
 	}
 }
 
+// SetCloseOrigin records why this tunnel is being torn down. First writer
+// wins, so the original cause survives any later cascading close.
+func (w *WorkerConnection) SetCloseOrigin(origin string) {
+	w.closeOrigin.CompareAndSwap(nil, origin)
+}
+
+// CloseOrigin returns the recorded teardown origin, or "" if none was set.
+func (w *WorkerConnection) CloseOrigin() string {
+	if v, ok := w.closeOrigin.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
 type WorkerConnection struct {
 	RequestId         uuid.UUID
 	FunctionId        string
 	FunctionVersionId string
 	// CreatedAt is when this connection entered the worker connection cache.
 	// Used to report how long a tunnel stayed open when it is closed.
-	CreatedAt       time.Time
+	CreatedAt time.Time
+	// closeOrigin records which side initiated the teardown, set by whoever
+	// calls onInactive. Without it the eviction handler only sees "deleted"
+	// and cannot tell a client hang-up from a worker hang-up.
+	closeOrigin     atomic.Value
 	connSetOnce     sync.Once
 	connPopulated   chan struct{}
 	handler         atomic.Pointer[httputil.ReverseProxy]
@@ -89,7 +108,10 @@ func (w *WorkerConnection) SetConnection(conn net.Conn) error {
 	var err error
 	set := false
 	w.connSetOnce.Do(func() {
-		conn := CloseFuncConn{Conn: conn, onClose: w.onInactive}
+		conn := CloseFuncConn{Conn: conn, onClose: func() {
+			w.SetCloseOrigin(metrics.CloseReasonWorkerClosed)
+			w.onInactive()
+		}}
 		dialOnce := atomic.Bool{}
 		dialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if !dialOnce.Swap(true) {
