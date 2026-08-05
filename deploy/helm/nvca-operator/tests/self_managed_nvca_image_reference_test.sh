@@ -79,22 +79,24 @@ image_credential_helper_repository="$(yq -r '.selfManaged.imageCredHelper.imageR
 image_credential_helper_tag="$(yq -r '.selfManaged.imageCredHelper.imageTag' "${repo_root}/nvca-operator/values.yaml")"
 samba_repository="$(yq -r '.selfManaged.sharedStorage.imageRepository' "${repo_root}/values.release-sbom.yaml")"
 samba_tag="$(yq -r '.selfManaged.sharedStorage.imageTag' "${repo_root}/nvca-operator/values.yaml")"
-otel_collector_tag="$(
+expected_operator_otel_collector_tag="$(yq -r '.otelCollector.imageTag' "${repo_root}/nvca-operator/values.yaml")"
+expected_backend_otel_collector_tag="$(yq -r '.selfManaged.otelCollector.imageTag' "${repo_root}/nvca-operator/values.yaml")"
+rendered_operator_otel_collector_tag="$(
   yq -r 'select(.kind == "Deployment" and .metadata.name == "nvca-operator") | .spec.template.spec.containers[] | select(.name == "nvca-operator") | .env[] | select(.name == "OTEL_COLLECTOR_IMAGE_TAG") | .value' \
     "${manifest}"
 )"
-backend_otel_collector_tag="$(
+rendered_backend_otel_collector_tag="$(
   yq -r 'select(.kind == "ConfigMap" and .metadata.name == "nvcfbackend-self-managed") | .data."cluster-dto.yaml" | from_yaml | .otelCollector.imageConfig.tag' \
     "${manifest}"
 )"
 
-if [[ "${otel_collector_tag}" != "0.157.9" ]]; then
-  echo "expected operator collector default 0.157.9, got ${otel_collector_tag}" >&2
+if [[ "${rendered_operator_otel_collector_tag}" != "${expected_operator_otel_collector_tag}" ]]; then
+  echo "expected rendered operator collector tag ${expected_operator_otel_collector_tag}, got ${rendered_operator_otel_collector_tag}" >&2
   exit 1
 fi
 
-if [[ "${backend_otel_collector_tag}" != "0.157.9" ]]; then
-  echo "expected self-managed backend collector default 0.157.9, got ${backend_otel_collector_tag}" >&2
+if [[ "${rendered_backend_otel_collector_tag}" != "${expected_backend_otel_collector_tag}" ]]; then
+  echo "expected rendered self-managed collector tag ${expected_backend_otel_collector_tag}, got ${rendered_backend_otel_collector_tag}" >&2
   exit 1
 fi
 

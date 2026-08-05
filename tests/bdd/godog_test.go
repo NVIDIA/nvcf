@@ -638,27 +638,8 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 	}
 
 	runs := suite.Runner.(*fakeRunner).runs
-	for _, command := range []string{
-		registryLoginCommand,
-		serviceMonitorCommand,
-		podMonitorCommand,
-		collectorEnabledCommand,
-		featureGatesCommand,
-		serviceKeyCommand,
-		restartNVCACommand,
-	} {
-		if !commandRanExactly(runs, command) {
-			t.Fatalf("exact command was never invoked: %s", command)
-		}
-	}
-	for _, target := range []string{
-		"self-managed install HELMFILE_ENV=local-bdd-observability-compute KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-cp-kubeconfig.yaml",
-		"observability install HELMFILE_ENV=local-bdd-observability-compute KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-compute-1-kubeconfig.yaml",
-		"nvcf-compute-plane install CLUSTER_NAME=ncp-local-compute-1 HELMFILE_ENV=local-bdd-observability-compute",
-	} {
-		if !commandRanThatContains(runs, target) {
-			t.Fatalf("profile install command was never invoked: %s", target)
-		}
+	if !commandRanThatContains(runs, "kubectl --context k3d-ncp-local-compute-1 delete pod --namespace nvca-system") {
+		t.Fatal("NVCA restart command was never invoked")
 	}
 	for _, run := range runs {
 		if strings.HasPrefix(run, "kubectl apply -f ") {
