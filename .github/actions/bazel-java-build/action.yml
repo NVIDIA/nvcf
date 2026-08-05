@@ -62,6 +62,14 @@ runs:
   - name: Prepare remote cache
     shell: bash
     run: |
+      # The token travels as a bearer header, so require a TLS scheme. An
+      # http:// or grpc:// endpoint would put it on the wire in cleartext;
+      # blank the endpoint so we fall through to the cacheless path.
+      case "$CACHE_ENDPOINT" in
+        grpcs://*|https://*) ;;
+        "") ;;
+        *) echo "::warning::ignoring non-TLS cache endpoint scheme"; CACHE_ENDPOINT="" ;;
+      esac
       if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ] && [ -n "$CACHE_CA" ]; then
         printf '%s\n' "$CACHE_CA" > "$RUNNER_TEMP/cache-ca.pem"
         echo "CACHE_READY=1" >> "$GITHUB_ENV"

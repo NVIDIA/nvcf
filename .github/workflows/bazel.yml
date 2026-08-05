@@ -149,8 +149,7 @@ jobs:
           helm-reval|src/control-plane-services/helm-reval|false|go-root|build-container
           stargate|src/libraries/rust/stargate|false|go-root|build-container
           nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container
-          image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container
-            nvcf-ui|src/uis/nvcf-ui|false|go-root|build-container'
+          image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container'
 
           # Java rows are discovered from component-local bazel-java-ci.json
           # descriptors. The descriptor's parent directory is the component
@@ -543,6 +542,12 @@ jobs:
         if: steps.precheck.outputs.skip == 'false'
         run: |
           upload=false
+          # The token travels as a bearer header, so require a TLS scheme.
+          case "$CACHE_ENDPOINT" in
+            grpcs://*|https://*) ;;
+            "") ;;
+            *) echo "::warning::ignoring non-TLS cache endpoint scheme"; CACHE_ENDPOINT="" ;;
+          esac
           if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
             printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
