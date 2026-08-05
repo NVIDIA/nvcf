@@ -39,7 +39,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
-	nvcfversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 
 	"ratelimiter"
 )
@@ -152,7 +152,7 @@ func newHealthServeMux(rateLimiter *ratelimiter.RateLimiter) *http.ServeMux {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/info", nvcfversion.Handler().ServeHTTP)
+	mux.HandleFunc("/info", golibversion.Handler().ServeHTTP)
 	return mux
 }
 
