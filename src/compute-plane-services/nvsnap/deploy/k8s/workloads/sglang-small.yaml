@@ -1,8 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# SGLang with TinyLlama for checkpoint/restore testing
-# Tests that our sigaction guard works with SGLang (asyncio-based, like vLLM)
+# SGLang with TinyLlama-1.1B (single GPU) — criu-v2 checkpoint/restore.
+#
+# No injection stack: the criu-v2 in-namespace CRIU engine handles the process
+# at the OS level, so the container just runs stock SGLang under setsid.
+# Restore lands in a dumb placeholder pod driven by the agent.
+#
+# The legacy interception stack this used to carry is incompatible with
+# criu-v2: /etc/ld.so.preload is mount-namespace wide, and criu-v2 nsenters
+# CRIU into that namespace, so the loader force-loaded the intercept library
+# into CRIU itself and the dump hung before finishing seize.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -28,119 +36,42 @@ spec:
   imagePullSecrets:
     - name: nvsnap-pull-secret
 
-  initContainers:
-  # Extract patched uvloop
-    - name: get-uvloop
-      image: nvcr.io/0651155215864979/ncp-dev/uvloop-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          set -eu
-          for whl in /wheels/uvloop-*.whl; do
-              tag=$(echo "$whl" | grep -oE 'cp3[0-9]+' | head -1)
-              mkdir -p "/nvsnap-lib/site-packages-${tag}"
-              python3 -m zipfile -e "$whl" "/nvsnap-lib/site-packages-${tag}/"
-          done
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-  # Copy patched libuv (fixes c10d LibUVStoreDaemon segfault after CRIU restore)
-    - name: get-libuv
-      image: nvcr.io/0651155215864979/ncp-dev/libuv-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp /usr/local/lib/libuv.so* /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
-  # Copy patched libzmq
-    - name: get-libzmq
-      image: nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp /usr/local/lib/libzmq.so* /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-  # Copy intercept lib from agent
-    - name: get-intercept-lib
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.26
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          cp /criu-bundle/lib/libnvsnap_intercept.so /nvsnap-lib/
-      volumeMounts:
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
-
   containers:
     - name: sglang
-      image: lmsysorg/sglang:v0.4.5.post3-cu125
+      image: lmsysorg/sglang:v0.5.15.post1-cu129
       imagePullPolicy: IfNotPresent
       command: ["/bin/bash", "-lc"]
       args:
         - |
+          set -e
           ulimit -c unlimited
-          # SGLang uses Python 3.12 in latest image
-          PYTAG=$(python3 -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
-          SITE=$(python3 -c "import site; print(site.getsitepackages()[0])")
-          if [ -d "/nvsnap-lib/site-packages-${PYTAG}" ]; then
-            cp -a /nvsnap-lib/site-packages-${PYTAG}/* "$SITE/" 2>/dev/null || true
-          fi
-          if [ -f /nvsnap-lib/libzmq.so.5 ]; then
-            cp /nvsnap-lib/libzmq.so* /usr/local/lib/
-          fi
-          if [ -f /nvsnap-lib/libuv.so.1 ]; then
-            cp /nvsnap-lib/libuv.so* /usr/local/lib/
-          fi
-          ldconfig
-          if [ -f /nvsnap-lib/libnvsnap_intercept.so ]; then
-            echo "/nvsnap-lib/libnvsnap_intercept.so" > /etc/ld.so.preload
-          fi
-          python3 -m sglang.launch_server \
+          # criu-v2 convention: launch the workload in its own session via
+          # setsid — the agent dumps the GPU leader's session, never container
+          # init. Stdio goes to a rootfs file so CRIU restores those fds as
+          # plain files; bash stays pid1 to reap orphans and tails the file so
+          # kubectl logs keeps working.
+          nohup setsid python3 -m sglang.launch_server \
             --model-path TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
             --host 0.0.0.0 \
             --port 30000 \
-            --mem-fraction-static 0.8
+            --mem-fraction-static 0.8 \
+            --disable-prefill-cuda-graph > /sglang.out 2>&1 < /dev/null &
+          tail -F /sglang.out &
+          while true; do sleep 30; done
       env:
-        - name: LD_LIBRARY_PATH
-          value: "/nvsnap-lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
-        - name: LD_PRELOAD
-          value: "/nvsnap-lib/libnvsnap_intercept.so"
-        - name: PYTHONFAULTHANDLER
-          value: "1"
-        - name: PYTHONUNBUFFERED
-          value: "1"
-        - name: NVSNAP_LOG_LEVEL
-          value: "3"
-        - name: NVSNAP_QUIESCE_SIGNALS
-          value: "1"
-        - name: NVSNAP_QUIESCE_METADATA_ONLY
-          value: "1"
-        - name: NVSNAP_ZMQ_INTERCEPT
-          value: "0"
-        - name: NVSNAP_SECCOMP_ENABLED
-          value: "0"
-        - name: CUDA_VISIBLE_DEVICES
-          value: "0"
-        - name: HF_HUB_DISABLE_XET
-          value: "1"
-        - name: HF_HUB_ENABLE_HF_TRANSFER
-          value: "0"
-        - name: TORCH_CPP_LOG_LEVEL
-          value: "INFO"
-        - name: TORCH_SHOW_CPP_STACKTRACES
-          value: "1"
-        - name: USE_LIBUV
-          value: "0"
+        - { name: LD_LIBRARY_PATH, value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PYTHONFAULTHANDLER, value: "1" }
+        - { name: PYTHONUNBUFFERED,   value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,     value: "3" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - { name: TORCH_CPP_LOG_LEVEL, value: "INFO" }
+        - { name: TORCH_SHOW_CPP_STACKTRACES, value: "1" }
+        # Keep torch off the libuv TCPStore backend: the patched libuv that
+        # used to be injected here is gone with the rest of the stack.
+        - { name: USE_LIBUV, value: "0" }
       ports:
         - containerPort: 30000
           name: http
@@ -160,17 +91,12 @@ spec:
       securityContext:
         privileged: true
       volumeMounts:
-        - name: shm
-          mountPath: /dev/shm
-        - name: nvsnap-lib
-          mountPath: /nvsnap-lib
+        - { name: shm, mountPath: /dev/shm }
 
   volumes:
     - name: shm
       emptyDir:
         medium: Memory
         sizeLimit: 16Gi
-    - name: nvsnap-lib
-      emptyDir: {}
 
   restartPolicy: Never

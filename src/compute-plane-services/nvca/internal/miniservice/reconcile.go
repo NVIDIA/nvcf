@@ -920,7 +920,7 @@ func needsWorkloadUpdate(ms *v1alpha1.MiniService) bool {
 func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 	ms *v1alpha1.MiniService,
 	icmsReq *nvcav2beta1.ICMSRequest,
-) ([]client.Object, []v1alpha1.ResourceStatus, string, string, error) {
+) ([]client.Object, []v1alpha1.ResourceStatus, *v1alpha1.WorkloadConfig, string, string, error) {
 	log := logf.FromContext(ctx)
 
 	log.Info("Preparing MiniService workload update", "revision", ms.Status.Revision)
@@ -928,18 +928,18 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 	funcLaunchSpec := icmsReq.Spec.CreationMsgInfo.FunctionLaunchSpecification
 	taskLaunchSpec := icmsReq.Spec.CreationMsgInfo.TaskLaunchSpecification
 	if funcLaunchSpec == nil && taskLaunchSpec == nil {
-		return nil, nil, "", "", reconcile.TerminalError(
+		return nil, nil, nil, "", "", reconcile.TerminalError(
 			fmt.Errorf("both function and task launch specs are empty in ICMSRequest %s", icmsReq.Name))
 	}
 
 	functionName, taskName, err := getFunctionNameAndTaskName(funcLaunchSpec, taskLaunchSpec)
 	if err != nil {
-		return nil, nil, "", "", reconcile.TerminalError(fmt.Errorf("failed to get function name and task name: %w", err))
+		return nil, nil, nil, "", "", reconcile.TerminalError(fmt.Errorf("failed to get function name and task name: %w", err))
 	}
 
 	objsData, isRendered, err := r.getRenderedData(ctx, ms)
 	if err != nil {
-		return nil, nil, "", "", err
+		return nil, nil, nil, "", "", err
 	}
 
 	if !isRendered {
@@ -953,14 +953,14 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 		failed := r.failedWorkloadUpdateRevisionCache[failedWorkloadUpdateRevisionCacheKey]
 		r.failedWorkloadUpdateRevisionCacheLock.RUnlock()
 		if failed != nil {
-			return nil, nil, "", "", failed
+			return nil, nil, nil, "", "", failed
 		}
 
 		if objsData, err = r.render(ctx, ms, icmsReq); err != nil {
 			r.failedWorkloadUpdateRevisionCacheLock.Lock()
 			r.failedWorkloadUpdateRevisionCache[failedWorkloadUpdateRevisionCacheKey] = err
 			r.failedWorkloadUpdateRevisionCacheLock.Unlock()
-			return nil, nil, "", "", err
+			return nil, nil, nil, "", "", err
 		}
 
 		// Clear the cache on a successful render for prior revisions to this MiniService
@@ -972,16 +972,16 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 		r.failedWorkloadUpdateRevisionCacheLock.Unlock()
 
 		if err := r.saveRenderedData(ctx, ms, objsData); err != nil {
-			return nil, nil, "", "", err
+			return nil, nil, nil, "", "", err
 		}
 	}
 
-	workloadObjs, resources, _, err := decodeObjects(ctx, r.Decoder, objsData)
+	workloadObjs, resources, workloadConfig, err := decodeObjects(ctx, r.Decoder, objsData)
 	if err != nil {
-		return nil, nil, "", "", err
+		return nil, nil, nil, "", "", err
 	}
 
-	return workloadObjs, resources, functionName, taskName, nil
+	return workloadObjs, resources, workloadConfig, functionName, taskName, nil
 }
 
 // doUpdateWorkload performs a workload update for a MiniService, doing almost the same operations as doInstall,
@@ -993,7 +993,7 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 ) (reconcile.Result, error) {
 	log := logf.FromContext(ctx)
 
-	workloadObjs, resources, functionName, taskName, err := r.prepareUpdateWorkload(ctx, ms, icmsReq)
+	workloadObjs, resources, workloadConfig, functionName, taskName, err := r.prepareUpdateWorkload(ctx, ms, icmsReq)
 	if err != nil {
 		// Workload preparation may result in terminal errors that would cause workload cleanup.
 		// To let the un-updated workload continue running, warn the user with a non-terminal error.
@@ -1049,6 +1049,10 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 			log.Error(err, "Failed to apply workload objects with terminal error. MiniService must be updated with new values to progress update; "+
 				"successfully applied objects prior to this error may need to be cleaned up manually")
 		}
+		return reconcile.Result{}, err
+	}
+
+	if err := r.saveWorkloadConfig(ctx, ms, workloadConfig); err != nil {
 		return reconcile.Result{}, err
 	}
 

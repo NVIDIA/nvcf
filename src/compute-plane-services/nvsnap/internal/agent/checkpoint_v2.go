@@ -186,13 +186,12 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}).Info("criu-v2: dumping in-namespace")
 
 	// 5. nsenter into the container's mnt/pid/net/ipc/uts namespaces and
-	// dump. Environment is deliberately minimal: PATH covers the staged bundle so
-	// the CUDA plugin finds cuda-checkpoint, and LD_LIBRARY_PATH points at
-	// the bundle's own glibc stack — criu's RUNPATH covers only its direct
-	// deps, not transitive ones (libnftables -> libmnl failed without it).
-	// No agent driver-lib paths (those are poison inside the container);
-	// /criu-bundle/lib carries no driver libs, so cuda-checkpoint still
-	// resolves libcuda from the container's own search paths.
+	// dump. Environment is deliberately minimal: PATH covers the staged bundle
+	// so the CUDA plugin finds cuda-checkpoint. LD_LIBRARY_PATH is deliberately
+	// NOT set — the bundle's libraries carry RPATH=$ORIGIN (see Dockerfile.base),
+	// so criu resolves its whole dependency graph, transitive deps included,
+	// from /criu-bundle/lib on its own. Setting it here would leak the bundle's
+	// glibc into cuda-checkpoint and abort restore into newer-glibc containers.
 	// -r/-w: root and cwd must follow the entered mount namespace — without
 	// them nsenter keeps the agent's root and the staged bundle path
 	// resolves against the wrong filesystem ("No such file or directory").
@@ -284,12 +283,28 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	return nil
 }
 
+// gpuDevPatterns are the character devices a GPU workload may hold open that
+// CRIU cannot dump itself and must be told to treat as external.
+//
+// gdrdrv is the GPUDirect RDMA (gdrcopy) node. It does not match nvidia*, so
+// globbing only that prefix left it undeclared and any workload holding an fd
+// on it failed the dump with "Can't dump file N of that type (chr 506:0)" --
+// observed on NIM, which uses gdrcopy where the other engines do not. Match on
+// the device names rather than major numbers: the NVIDIA majors are
+// dynamically allocated and differ per node (nvidia-uvm was 507 on one host
+// and is documented as 511 elsewhere), while the names are stable.
+var gpuDevPatterns = []string{"nvidia*", "gdrdrv"}
+
 // nvidiaDevExternals builds CRIU --external dev[maj/min]:name entries for
-// every /dev/nvidia* character device visible in the container.
+// every GPU character device visible in the container.
 func nvidiaDevExternals(devDir string) ([]string, error) {
-	matches, err := filepath.Glob(filepath.Join(devDir, "nvidia*"))
-	if err != nil {
-		return nil, err
+	var matches []string
+	for _, pat := range gpuDevPatterns {
+		m, err := filepath.Glob(filepath.Join(devDir, pat))
+		if err != nil {
+			return nil, fmt.Errorf("glob GPU device pattern %q in %s: %w", pat, devDir, err)
+		}
+		matches = append(matches, m...)
 	}
 	var exts []string
 	for _, m := range matches {
@@ -305,7 +320,7 @@ func nvidiaDevExternals(devDir string) ([]string, error) {
 		exts = append(exts, fmt.Sprintf("dev[%d/%d]:%s", maj, min, filepath.Base(m)))
 	}
 	if len(exts) == 0 {
-		return nil, fmt.Errorf("no nvidia devices under %s", devDir)
+		return nil, fmt.Errorf("no GPU devices under %s", devDir)
 	}
 	return exts, nil
 }
