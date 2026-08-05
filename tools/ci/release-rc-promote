@@ -95,12 +95,17 @@ def api_post_release(path: str, payload: dict, current_sha: str, stable_tag: str
             last_error = f"HTTP {err.code}: {body}"
         except (urllib.error.URLError, TimeoutError) as err:
             last_error = f"transport error: {err}"
-        if attempt < 2:
-            # Before retrying, reconcile in case the request succeeded silently.
-            tag_info = api_get(f"/repository/tags/{urllib.parse.quote(stable_tag, safe='')}")
-            if tag_info and tag_info.get("commit", {}).get("id") == current_sha:
-                print(f"[rc-promote] reconciled: {stable_tag} already exists at {current_sha}")
+        # Reconcile after every failed attempt — including the last — in case
+        # the request succeeded before the connection dropped. Require both the
+        # tag commit and the Release record to be present.
+        encoded = urllib.parse.quote(stable_tag, safe="")
+        tag_info = api_get(f"/repository/tags/{encoded}")
+        if tag_info and tag_info.get("commit", {}).get("id") == current_sha:
+            release_info = api_get(f"/releases/{encoded}")
+            if release_info and release_info.get("tag_name") == stable_tag:
+                print(f"[rc-promote] reconciled: {stable_tag} already released at {current_sha}")
                 return
+        if attempt < 2:
             time.sleep(2 ** attempt)
     raise SystemExit(
         f"[rc-promote] ERROR: POST {path} failed after 3 attempts: {last_error}"
