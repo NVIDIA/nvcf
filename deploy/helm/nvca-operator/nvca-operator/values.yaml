@@ -37,7 +37,7 @@ nvcaImage:
 otelCollector:
   enabled: false
   imageRepository: ""
-  imageTag: 0.143.2
+  imageTag: 0.157.9
   resources:
     limits:
       cpu: 1000m
@@ -311,7 +311,7 @@ helmManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.143.2
+    imageTag: 0.157.9
 ## @section Self Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "self-managed"
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
@@ -335,7 +335,7 @@ selfManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.143.2
+    imageTag: 0.157.9
   ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
   icmsServiceURL: "http://icms.example.invalid:8080"
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.

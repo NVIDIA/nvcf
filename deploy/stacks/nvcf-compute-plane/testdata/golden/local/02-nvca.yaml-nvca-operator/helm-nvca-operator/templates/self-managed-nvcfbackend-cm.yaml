@@ -70,7 +70,7 @@ data:
       enabled: true
       imageConfig:
         repository: "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
-        tag: "0.143.2"
+        tag: "0.157.9"
     agent:
       natsURL: "nats://nats.nats-system.svc.cluster.local:4222"
       helmReValStageOAuthTokenURL: ""

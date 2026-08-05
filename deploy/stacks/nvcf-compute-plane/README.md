@@ -68,8 +68,9 @@ global:
 ## Chart and Image Sources
 
 The stack pins the NVCA operator chart in
-`helmfile.d/02-nvca.yaml.gotmpl`. The chart supplies the default NVCA,
-NVCA operator, image credential helper, and shared storage image tags.
+`helmfile.d/02-nvca.yaml.gotmpl`. Compute-plane base values supply the tested
+NVCA, NVCA operator, and OTel collector image tags. The chart supplies the
+image credential helper and shared storage image tags.
 
 Use `global.helm.sources` for chart repository location and `global.image` for
 container image repository location. The stack rewrites repositories through
