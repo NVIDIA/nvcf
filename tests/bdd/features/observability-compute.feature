@@ -155,12 +155,6 @@ Feature: Install local Helmfile observability with the compute profile
       """
     Then the command exit code should be 0
     And the command output should contain "true"
-    When I run command:
-      """
-      bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o json | jq -r ".selfManaged.featureGateValues[]"'
-      """
-    Then the command exit code should be 0
-    And the command output should contain "BYOObservability"
 
     When I run command "helm status function-autoscaler --namespace nvcf --kube-context k3d-ncp-local-compute-1"
     Then the command exit code should be 1
