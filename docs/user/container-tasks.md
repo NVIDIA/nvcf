@@ -17,6 +17,12 @@ on an appropriate CUDA base image for your workload.
 
 ## Creating a container task
 
+<Warning>
+Result upload to a registry is not supported on self-hosted NVCF. Always set
+`resultHandlingStrategy` to `NONE`. Omitting it defaults to `UPLOAD`, which
+will be rejected at creation time.
+</Warning>
+
 ```bash
 # Minimal example using CLI flags
 nvcf-cli task create \
@@ -34,10 +40,9 @@ nvcf-cli task create \
   --container-args "--epochs 10 --batch-size 32" \
   --container-env DATASET_PATH=/data/train \
   --container-env LOG_LEVEL=info \
-  --secrets NGC_API_KEY=nvapi-... \
+  --secrets S3_ACCESS_KEY=... \
   --max-runtime PT4H \
-  --result-strategy UPLOAD \
-  --results-location my-org/my-team/my-model
+  --result-strategy NONE
 
 # From a JSON file (recommended for repeatable configurations)
 nvcf-cli task create --input-file task.json
@@ -48,10 +53,11 @@ nvcf-cli task create --input-file task.json
 ```json
 {
   "name": "my-training-job",
+  "description": "Fine-tuning run for Q4 experiment",
+  "tags": ["training", "q4"],
   "gpuSpecification": {
     "gpu": "H100",
-    "instanceType": "GPU.H100_1x",
-    "backend": "GFN"
+    "instanceType": "GPU.H100_1x"
   },
   "containerImage": "my-registry/training:latest",
   "containerArgs": "--epochs 10 --batch-size 32",
@@ -61,13 +67,25 @@ nvcf-cli task create --input-file task.json
   ],
   "maxRuntimeDuration": "PT4H",
   "maxQueuedDuration": "PT72H",
-  "resultHandlingStrategy": "UPLOAD",
-  "resultsLocation": "my-org/my-team/my-model",
+  "resultHandlingStrategy": "NONE",
   "secrets": [
-    {"name": "NGC_API_KEY", "value": "nvapi-..."}
+    {"name": "S3_ACCESS_KEY", "value": "..."},
+    {"name": "S3_SECRET_KEY", "value": "..."}
   ]
 }
 ```
+
+## Environment variables
+
+The task system injects the following environment variables into the container:
+
+| Variable | Description |
+| --- | --- |
+| `NVCT_TASK_ID` | Unique task ID; useful for including in logs |
+| `NVCT_TASK_NAME` | Task name |
+| `NVCT_NCA_ID` | NCA ID that owns the task |
+| `NVCT_PROGRESS_FILE_PATH` | Absolute path where the container must write the progress file |
+| `NVCT_RESULTS_DIR` | Root directory under which the container creates result subdirectories |
 
 ## GPU specification
 
@@ -95,12 +113,22 @@ no time limit.
 
 ## Secrets
 
-Secrets are passed to the container as environment variables. Provide them via
-`--secrets NAME=value` on the CLI or as a `secrets` array in the JSON file.
-Secret values are stored encrypted and are not returned by default in task
-detail responses.
+Secrets are delivered to the container as a JSON file at
+`/var/secrets/secrets.json`. The file has the form:
 
-To update secrets on a running task:
+```json
+{
+  "SECRET_NAME": "secret-value",
+  "ANOTHER_SECRET": "another-value"
+}
+```
+
+Provide secrets via `--secrets NAME=value` on the CLI or as a `secrets` array
+in the JSON file. Secret values are stored encrypted and are not returned by
+default in task detail responses.
+
+To rotate secrets on a running task, use `update-secrets`. The file at
+`/var/secrets/secrets.json` is refreshed automatically with the new values:
 
 ```bash
 nvcf-cli task update-secrets --secrets NEW_KEY=new-value
@@ -110,15 +138,74 @@ nvcf-cli task update-secrets --secrets NEW_KEY=new-value
 
 Attach model or resource artifacts to a task using the `--models` and
 `--resources` flags (format: `name:version:uri`) or via the JSON `models` and
-`resources` arrays. These are made available to the container at runtime.
+`resources` arrays. The task system downloads and mounts them before the
+container starts:
+
+- Models are available at `/config/models/{modelName}`
+- Resources are available at `/config/resources/{resourceName}`
+
+## Progress file
+
+The progress file is the primary mechanism for signaling task progress and
+completion. The task system reads it to determine whether the container is alive
+and when to transition the task to `COMPLETED`.
+
+The container must write a JSON object to `NVCT_PROGRESS_FILE_PATH`:
+
+```json
+{
+  "taskId": "579ad430-34b9-4a6e-9537-a060db4a9e6c",
+  "percentComplete": 42,
+  "name": "checkpoint-step-1000",
+  "metadata": {
+    "step": 1000,
+    "loss": 0.312
+  },
+  "lastUpdatedAt": "2025-01-02T15:04:05.999999999Z"
+}
+```
+
+Field requirements:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `taskId` | No | Task ID; if omitted the worker fills it in from `NVCT_TASK_ID`. If present, must match `NVCT_TASK_ID`. |
+| `percentComplete` | Yes | Integer 1-100; must be non-decreasing (equal values are permitted) |
+| `name` | No | Name of the current result. Required and validated for `UPLOAD` (1-190 characters, allowed: letters, digits, `!`, `-`, `_`, `.`, `*`, `'`, `(`, `)`; no `./` or `../` prefix). Informational for `NONE`. |
+| `metadata` | No | Arbitrary key-value pairs surfaced in task details |
+| `lastUpdatedAt` | Yes | RFC3339Nano timestamp; must be refreshed at least every 3 minutes |
+
+**Heartbeat:** If `lastUpdatedAt` falls more than 5 minutes behind the current
+time and `percentComplete` is not 100, the task moves to `ERRORED`.
+
+**Completion:** Set `percentComplete` to `100` when the workload finishes. That
+write transitions the task to `COMPLETED`. A container that exits without
+writing `100` will not reach `COMPLETED`.
+
+**Intermediate results:** For checkpoints or partial outputs, write
+`percentComplete` between 1 and 99 with a `name` for each checkpoint. When
+using `UPLOAD`, each checkpoint name must be unique and you must not write to
+a result directory after updating `name` to a new value, since the system reads
+`resultsDir` to upload files by name. With `NONE`, there is no write-ordering
+constraint on the results directory.
+
+**Atomic writes:** Write to a temporary file and rename it over
+`NVCT_PROGRESS_FILE_PATH` to avoid the task system reading a partial file.
+In Python: `os.rename(tmp_path, progress_path)`.
 
 ## Result handling
 
-Note: result upload is not yet supported in this release.
+<Warning>
+Result upload to a registry is not supported on self-hosted NVCF in this
+release. Set `resultHandlingStrategy` to `NONE`.
+</Warning>
 
-When `resultHandlingStrategy` is `UPLOAD`, the task uploads outputs to the
-registry location specified in `resultsLocation`. After the task completes,
-retrieve the results:
+With `NONE`, the container is responsible for delivering its own outputs --
+for example, writing to a volume or pushing to external storage using
+credentials from task secrets. The task system does not upload anything but
+still tracks progress through the progress file.
+
+After the task completes, list any result names the container reported:
 
 ```bash
 nvcf-cli task results
@@ -127,9 +214,24 @@ nvcf-cli task results
 ## Monitoring a task
 
 ```bash
-# Check status
+# Check status and progress
 nvcf-cli task get
 
 # Stream lifecycle events
 nvcf-cli task events
+```
+
+A `task get` response includes `percentComplete` and `healthInfo` (the GPU type,
+instance type, and any error message from the platform) in addition to the
+lifecycle status.
+
+To stop a running or queued task:
+
+```bash
+# Stop execution gracefully; task moves to CANCELED
+nvcf-cli task cancel
+
+# Remove the task and its secrets; allows the container to finish within
+# terminationGracePeriodDuration before the instance is terminated
+nvcf-cli task delete
 ```
