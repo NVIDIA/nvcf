@@ -27,7 +27,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/utils/ptr"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
@@ -97,6 +96,12 @@ func (m *Mutator) emitMountPrepInitContainer(
 	// binding hostPort. AgentBaseURL replaces it with the
 	// internalTrafficPolicy:Local Service under pod networking, which routes
 	// to the node-local endpoint with no node-wide listener (GH #490).
+	// Addressable true for the Secret's Optional field. Inlined rather than
+	// pulling in k8s.io/utils/ptr for a single call: bazel enforces strict
+	// deps, so one import here means a new external dependency in the build
+	// graph for something the language expresses in a line.
+	secretOptional := true
+
 	agentURL := fmt.Sprintf("http://$(NVSNAP_HOST_IP):%d", agentPort)
 	if m.AgentBaseURL != "" {
 		agentURL = strings.TrimRight(m.AgentBaseURL, "/")
@@ -127,7 +132,7 @@ func (m *Mutator) emitMountPrepInitContainer(
 				SecretKeyRef: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{Name: AgentTokenSecretName},
 					Key:                  AgentTokenSecretKey,
-					Optional:             ptr.To(true),
+					Optional:             &secretOptional,
 				},
 			}},
 		},
