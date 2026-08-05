@@ -1257,10 +1257,24 @@ func TestRenderReleasePipelineEmitsDevPrereleaseStagingJobs(t *testing.T) {
 		"compute-next-release-version-nvca",
 		"semantic-release-nvca",
 		"release-branch-nvca",
+		"promote-stable-nvca",
 	} {
 		section := extractJobBlock(t, rendered, job)
 		if !strings.Contains(section, cleanupScheduleSkipRule) {
 			t.Errorf("%s should skip cleanup-only schedules\n---\n%s\n---", job, section)
+		}
+	}
+
+	promoteBlock := extractJobBlock(t, rendered, "promote-stable-nvca")
+	for _, want := range []string{
+		"stage: Release-Branch",
+		"if: $CI_COMMIT_BRANCH =~ /^release-src\\/compute-plane-services\\/nvca\\/v[0-9]+\\.[0-9]+$/",
+		"when: manual",
+		"allow_failure: true",
+		"python3 tools/ci/release-rc-promote",
+	} {
+		if !strings.Contains(promoteBlock, want) {
+			t.Errorf("promote-stable-nvca missing %q\n---\n%s\n---", want, promoteBlock)
 		}
 	}
 

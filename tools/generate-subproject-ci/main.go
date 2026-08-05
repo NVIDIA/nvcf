@@ -765,7 +765,7 @@ include:
             exit 1
           fi
           git fetch --tags --quiet origin
-          if [ "${RELEASE_RC_PRERELEASE:-}" = "true" ] && [ -z "$(release_tag_for_version "${RELEASE_DEV_PRERELEASE_BASE_VERSION}" || true)" ]; then
+          if [ "${RELEASE_RC_PRERELEASE:-}" = "true" ] && ! git -C "${CI_PROJECT_DIR}" rev-parse -q --verify "refs/tags/${RELEASE_TAG_PREFIX}${RELEASE_DEV_PRERELEASE_BASE_VERSION}" >/dev/null 2>&1; then
             LAST_RC=0
             for tag in $(release_tags_matching_suffix "${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.*"); do
               version="$(release_version_from_tag "${tag}")"
@@ -1287,7 +1287,7 @@ include:
             echo "[release-branch] ERROR: ${SUBTREE}/${RELEASE_VERSION_FILE} is ${RELEASE_DEV_PRERELEASE_BASE_VERSION}, but branch ${CI_COMMIT_BRANCH} is train ${RELEASE_TRAIN}" >&2
             exit 1
           fi
-          if [ "${RELEASE_RC_PRERELEASE:-}" = "true" ] && [ -z "$(release_tag_for_version "${RELEASE_DEV_PRERELEASE_BASE_VERSION}" || true)" ]; then
+          if [ "${RELEASE_RC_PRERELEASE:-}" = "true" ] && ! git -C "${CI_PROJECT_DIR}" rev-parse -q --verify "refs/tags/${RELEASE_TAG_PREFIX}${RELEASE_DEV_PRERELEASE_BASE_VERSION}" >/dev/null 2>&1; then
             LAST_RC=0
             for tag in $(release_tags_matching_suffix "${RELEASE_DEV_PRERELEASE_BASE_VERSION}-rc.*"); do
               version="$(release_version_from_tag "${tag}")"
@@ -3762,6 +3762,9 @@ func validateRelease(sp subproject) error {
 		if strings.TrimSpace(rel.VersionFile) == "" {
 			return fmt.Errorf("subproject %q release.dev_prerelease requires release.version_file", id)
 		}
+	}
+	if rel.RCPrerelease && !rel.DevPrerelease {
+		return fmt.Errorf("subproject %q release.rc_prerelease requires release.dev_prerelease: true", id)
 	}
 	if rel.Dockerfile != nil {
 		hasName := strings.TrimSpace(rel.Dockerfile.ImageName) != ""
