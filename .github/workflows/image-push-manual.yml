@@ -15,6 +15,14 @@
 name: image-push (manual)
 
 on:
+  # Label a PR with deploy-to-stg and every subsequent push builds and pushes a
+  # dev image automatically. Removing the label stops it. `labeled` covers the
+  # first build, `synchronize` each push after that, `reopened` a revived PR.
+  #
+  # Fork PRs receive no secrets, so the push fails closed rather than leaking
+  # the registry token. Same-repo PRs get them, matching the bazel matrix.
+  pull_request:
+    types: [labeled, synchronize, reopened]
   workflow_dispatch:
     inputs:
       service_path:
@@ -31,12 +39,67 @@ permissions:
   packages: read
 
 concurrency:
-  group: image-push-${{ github.event.inputs.service_path }}-${{ github.ref }}
+  group: image-push-${{ github.event.inputs.service_path || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    name: resolve subtree
+    runs-on: ubuntu-latest
+    # Skip PRs that are not labelled, without failing them.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'deploy-to-stg')
+    outputs:
+      service_path: ${{ steps.pick.outputs.service_path }}
+      found: ${{ steps.pick.outputs.found }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick the subtree to build
+        id: pick
+        env:
+          INPUT_PATH: ${{ github.event.inputs.service_path }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_PATH}" ]; then
+            echo "service_path=${INPUT_PATH}" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "dispatch: ${INPUT_PATH}"
+            exit 0
+          fi
+
+          # A PR event carries no path input, so derive it from what changed.
+          # Service subtrees are src/<plane>/<service>; take that prefix from
+          # every changed file and require exactly one, because a dev image is
+          # for one service and guessing between several would be wrong.
+          mapfile -t subtrees < <(
+            git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
+              | grep -E '^src/[^/]+/[^/]+/' \
+              | cut -d/ -f1-3 | sort -u
+          )
+          if [ "${#subtrees[@]}" -eq 1 ] && [ -f "${subtrees[0]}/BUILD.bazel" ]; then
+            echo "service_path=${subtrees[0]}" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "resolved from changed files: ${subtrees[0]}"
+            exit 0
+          fi
+
+          echo "found=false" >> "$GITHUB_OUTPUT"
+          if [ "${#subtrees[@]}" -eq 0 ]; then
+            echo "::notice::No service subtree changed; nothing to push."
+          else
+            echo "::notice::Changed ${#subtrees[@]} subtrees (${subtrees[*]}); a dev image targets one. Use workflow_dispatch to choose."
+          fi
+
   push:
     name: push to ncp-dev
+    needs: resolve
+    if: needs.resolve.outputs.found == 'true'
     runs-on: ubuntu-latest
     # Same public EC2 Buildbarn cache the matrix build uses. workflow_dispatch
     # is restricted to users with write access, so the secret is available;
@@ -58,7 +121,7 @@ jobs:
       - name: Resolve service name for cache keys
         id: svc
         env:
-          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SVC_PATH: ${{ needs.resolve.outputs.service_path }}
         run: |
           set -euo pipefail
           echo "name=$(basename "$SVC_PATH")" >> "$GITHUB_OUTPUT"
@@ -163,7 +226,7 @@ jobs:
       - name: Resolve Bazel module layout
         id: layout
         env:
-          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SVC_PATH: ${{ needs.resolve.outputs.service_path }}
         run: |
           set -euo pipefail
           if [ ! -d "$SVC_PATH" ]; then
@@ -185,7 +248,7 @@ jobs:
       - name: Build and push multi-arch image(s)
         working-directory: ${{ steps.layout.outputs.workdir }}
         env:
-          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SVC_PATH: ${{ needs.resolve.outputs.service_path }}
           SCOPE: ${{ steps.layout.outputs.scope }}
           TAG: ${{ steps.meta.outputs.tag }}
           REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
