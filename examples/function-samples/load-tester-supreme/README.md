@@ -2,7 +2,7 @@
 
 A dual-protocol echo server (HTTP + gRPC) purpose-built for load and throughput
 testing of NVCF deployments. Use this instead of the simpler `grpc-echo-sample`
-for any real load testing — it ships with 500 gRPC worker threads (vs 10) and
+for real load testing. It ships with 500 gRPC worker threads (vs 10) and
 exposes tunable response behaviour.
 
 ## What's included
@@ -19,7 +19,7 @@ exposes tunable response behaviour.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `message` | string | — | Payload content to echo back |
+| `message` | string | Required | Payload content to echo back |
 | `repeats` | int | 1 | Number of times to repeat the response |
 | `delay` | float | ~0 | Seconds to sleep between responses |
 | `size` | int | 0 | Generate a random string of this length instead of echoing `message` (HTTP only) |
