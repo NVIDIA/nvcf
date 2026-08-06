@@ -301,30 +301,98 @@ func TestResponsesStreamWaitsAfterSlowDeltaWrite(t *testing.T) {
 	}
 }
 
+func TestLoadServerConfig(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		value   string
+		want    int
+		wantErr bool
+	}{
+		{name: "unset defaults", want: defaultMaxOutputChunks},
+		{name: "valid override", value: "12000", want: 12000},
+		{name: "non numeric rejected", value: "many", wantErr: true},
+		{name: "zero rejected", value: "0", wantErr: true},
+		{name: "above hard maximum rejected", value: "60001", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, err := loadServerConfig(func(name string) string {
+				if name == maxOutputChunksEnv {
+					return test.value
+				}
+				return ""
+			})
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("loadServerConfig() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadServerConfig() error = %v", err)
+			}
+			if config.maxOutputChunks != test.want {
+				t.Fatalf("max output chunks = %d, want %d", config.maxOutputChunks, test.want)
+			}
+		})
+	}
+}
+
 func TestOutputChunksLimit(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		value string
 		want  bool
 	}{
-		{name: "maximum accepted", value: "6000", want: true},
-		{name: "above maximum rejected", value: "6001", want: false},
+		{name: "default maximum accepted", value: "6000", want: true},
+		{name: "above default maximum rejected", value: "6001", want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			request.Header.Set(headerOutputChunks, test.value)
-			tuning, err := resolveBenchmarkTuning(request)
+			tuning, err := resolveBenchmarkTuning(request, defaultMaxOutputChunks)
 			if test.want {
 				if err != nil {
 					t.Fatalf("resolveBenchmarkTuning() error = %v", err)
 				}
-				if tuning.OutputChunks != maxOutputChunks {
-					t.Fatalf("output chunks = %d, want %d", tuning.OutputChunks, maxOutputChunks)
+				if tuning.OutputChunks != defaultMaxOutputChunks {
+					t.Fatalf("output chunks = %d, want %d", tuning.OutputChunks, defaultMaxOutputChunks)
 				}
 				return
 			}
 			if err == nil {
 				t.Fatal("resolveBenchmarkTuning() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestConfiguredOutputChunksLimit(t *testing.T) {
+	config, err := loadServerConfig(func(name string) string {
+		if name == maxOutputChunksEnv {
+			return "12000"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("loadServerConfig() error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name       string
+		output     string
+		wantStatus int
+	}{
+		{name: "configured maximum accepted", output: "12000", wantStatus: http.StatusOK},
+		{name: "above configured maximum rejected", output: "12001", wantStatus: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test-model"}`))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set(headerOutputChunks, test.output)
+			recorder := httptest.NewRecorder()
+			newRouterWithConfig(config).ServeHTTP(recorder, request)
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", recorder.Code, test.wantStatus, recorder.Body.String())
 			}
 		})
 	}

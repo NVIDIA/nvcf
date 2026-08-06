@@ -28,6 +28,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,12 +39,14 @@ import (
 const (
 	maxRequestBytes        = 10 << 20
 	maxOutputBytes         = 1 << 20
-	maxOutputChunks        = 6000
+	defaultMaxOutputChunks = 6000
+	hardMaxOutputChunks    = 60000
 	maxEmbeddingItems      = 2048
 	maxControlMilliseconds = 5 * 60 * 1000
 	maxConcurrencyLimit    = 100000
 	defaultChunk           = "xxxx"
 	defaultModel           = "test-model"
+	maxOutputChunksEnv     = "LOAD_TESTER_MAX_OUTPUT_CHUNKS"
 
 	headerQueueDelay          = "X-Load-Tester-Queue-Delay-Ms"
 	headerTTFT                = "X-Load-Tester-TTFT-Ms"
@@ -79,6 +82,10 @@ type benchmarkTuning struct {
 	StreamErrorAfter    int
 	StreamTruncateAfter int
 	MaxConcurrency      int
+}
+
+type serverConfig struct {
+	maxOutputChunks int
 }
 
 type responsesRequest struct {
@@ -282,26 +289,34 @@ type responsesDeltaWriter struct {
 }
 
 func main() {
+	config, err := loadServerConfig(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
 	server := &http.Server{
 		Addr:              ":8000",
-		Handler:           newRouter(),
+		Handler:           newRouterWithConfig(config),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-	log.Printf("listening on %s", server.Addr)
+	log.Printf("listening on %s with max output chunks %d", server.Addr, config.maxOutputChunks)
 	log.Fatal(server.ListenAndServe())
 }
 
 func newRouter() http.Handler {
+	return newRouterWithConfig(serverConfig{maxOutputChunks: defaultMaxOutputChunks})
+}
+
+func newRouterWithConfig(config serverConfig) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/v1/models", handleModels)
 	mux.HandleFunc("/v1/models/", handleModel)
-	mux.HandleFunc("/v1/responses", handleResponses)
-	mux.HandleFunc("/v1/chat/completions", handleChatCompletions)
-	mux.HandleFunc("/v1/completions", handleCompletions)
-	mux.HandleFunc("/v1/embeddings", handleEmbeddings)
+	mux.HandleFunc("/v1/responses", func(w http.ResponseWriter, r *http.Request) { handleResponses(w, r, config) })
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) { handleChatCompletions(w, r, config) })
+	mux.HandleFunc("/v1/completions", func(w http.ResponseWriter, r *http.Request) { handleCompletions(w, r, config) })
+	mux.HandleFunc("/v1/embeddings", func(w http.ResponseWriter, r *http.Request) { handleEmbeddings(w, r, config) })
 	return mux
 }
 
@@ -336,11 +351,11 @@ func handleModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newModelInfo(model))
 }
 
-func handleResponses(w http.ResponseWriter, r *http.Request) {
+func handleResponses(w http.ResponseWriter, r *http.Request, config serverConfig) {
 	if !requirePost(w, r) {
 		return
 	}
-	tuning, release, ok := startBenchmark(w, r)
+	tuning, release, ok := startBenchmark(w, r, config)
 	if !ok {
 		return
 	}
@@ -368,11 +383,11 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+func handleChatCompletions(w http.ResponseWriter, r *http.Request, config serverConfig) {
 	if !requirePost(w, r) {
 		return
 	}
-	tuning, release, ok := startBenchmark(w, r)
+	tuning, release, ok := startBenchmark(w, r, config)
 	if !ok {
 		return
 	}
@@ -401,11 +416,11 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func handleCompletions(w http.ResponseWriter, r *http.Request) {
+func handleCompletions(w http.ResponseWriter, r *http.Request, config serverConfig) {
 	if !requirePost(w, r) {
 		return
 	}
-	tuning, release, ok := startBenchmark(w, r)
+	tuning, release, ok := startBenchmark(w, r, config)
 	if !ok {
 		return
 	}
@@ -433,11 +448,11 @@ func handleCompletions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func handleEmbeddings(w http.ResponseWriter, r *http.Request) {
+func handleEmbeddings(w http.ResponseWriter, r *http.Request, config serverConfig) {
 	if !requirePost(w, r) {
 		return
 	}
-	tuning, release, ok := startBenchmark(w, r)
+	tuning, release, ok := startBenchmark(w, r, config)
 	if !ok {
 		return
 	}
@@ -512,8 +527,8 @@ func requireGet(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-func startBenchmark(w http.ResponseWriter, r *http.Request) (benchmarkTuning, func(), bool) {
-	tuning, err := resolveBenchmarkTuning(r)
+func startBenchmark(w http.ResponseWriter, r *http.Request, config serverConfig) (benchmarkTuning, func(), bool) {
+	tuning, err := resolveBenchmarkTuning(r, config.maxOutputChunks)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error(), "")
 		return benchmarkTuning{}, nil, false
@@ -540,7 +555,7 @@ func startBenchmark(w http.ResponseWriter, r *http.Request) (benchmarkTuning, fu
 	return tuning, release, true
 }
 
-func resolveBenchmarkTuning(r *http.Request) (benchmarkTuning, error) {
+func resolveBenchmarkTuning(r *http.Request, maxOutputChunks int) (benchmarkTuning, error) {
 	tuning := benchmarkTuning{
 		Chunk:               defaultChunk,
 		OutputChunks:        1,
@@ -610,6 +625,20 @@ func resolveBenchmarkTuning(r *http.Request) (benchmarkTuning, error) {
 		return benchmarkTuning{}, fmt.Errorf("configured output exceeds %d bytes", maxOutputBytes)
 	}
 	return tuning, nil
+}
+
+func loadServerConfig(getenv func(string) string) (serverConfig, error) {
+	config := serverConfig{maxOutputChunks: defaultMaxOutputChunks}
+	value := getenv(maxOutputChunksEnv)
+	if value == "" {
+		return config, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 || parsed > hardMaxOutputChunks {
+		return serverConfig{}, fmt.Errorf("%s must be an integer from 1 through %d", maxOutputChunksEnv, hardMaxOutputChunks)
+	}
+	config.maxOutputChunks = parsed
+	return config, nil
 }
 
 func oneHeader(r *http.Request, name string) (string, bool, error) {

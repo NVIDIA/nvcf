@@ -113,7 +113,7 @@ These helpers use the `ngc` CLI today and target cloud NVCF. Porting them to sel
 | `LOAD_TESTER_TTFT_JITTER_MS` | Maps to `X-Load-Tester-TTFT-Jitter-Ms`. Sent by default only in calibration. |
 | `LOAD_TESTER_ITL_MS` | Maps to `X-Load-Tester-ITL-Ms`. Sent by default only in calibration. |
 | `LOAD_TESTER_ITL_JITTER_MS` | Maps to `X-Load-Tester-ITL-Jitter-Ms`. Sent by default only in calibration. |
-| `LOAD_TESTER_OUTPUT_CHUNKS` | Maps to `X-Load-Tester-Output-Chunks`. Defaults to 8. |
+| `LOAD_TESTER_OUTPUT_CHUNKS` | Maps to `X-Load-Tester-Output-Chunks`. Defaults to 8 and must not exceed the sample's startup chunk limit. |
 | `LOAD_TESTER_CHUNK` | Maps to `X-Load-Tester-Chunk`. Defaults to `xxxx`. |
 | `LOAD_TESTER_STREAM_ERROR_AFTER_CHUNKS` | Maps to `X-Load-Tester-Stream-Error-After-Chunks` for failure-path validation. |
 | `LOAD_TESTER_STREAM_TRUNCATE_AFTER_CHUNKS` | Maps to `X-Load-Tester-Stream-Truncate-After-Chunks` for truncated-stream validation. |
@@ -216,9 +216,10 @@ The load profile leaves queue, TTFT, and ITL delays unset unless their
   -e OPENAI_RESPONSES_DURATION=30s
 ```
 
-For a 30-second per-connection capacity run at 5 ms ITL, use calibration mode
-with 6000 chunks and two iterations per VU. Raise the generator file-descriptor
-limit before a high-concurrency run. Set `OAI_COMPAT_URL` to the full
+For a 60-second per-connection capacity run at 5 ms ITL, start the sample with
+`LOAD_TESTER_MAX_OUTPUT_CHUNKS=12000`, then use calibration mode with 12000
+chunks and two iterations per VU. Raise the generator file-descriptor limit
+before a high-concurrency run. Set `OAI_COMPAT_URL` to the full
 `/v1/responses` endpoint.
 
 ```bash
@@ -228,10 +229,10 @@ ulimit -n 65536
   --summary-export responses-sse-summary.json \
   -e OAI_COMPAT_URL=$OAI_COMPAT_URL \
   -e OPENAI_RESPONSES_PROFILE=calibration \
-  -e OPENAI_RESPONSES_VUS=1792 \
+  -e OPENAI_RESPONSES_VUS=1024 \
   -e OPENAI_RESPONSES_ITERATIONS=2 \
-  -e OPENAI_RESPONSES_MAX_DURATION=3m \
-  -e OPENAI_RESPONSES_EXPECTED_DELTAS=6000 \
+  -e OPENAI_RESPONSES_MAX_DURATION=5m \
+  -e OPENAI_RESPONSES_EXPECTED_DELTAS=12000 \
   -e OPENAI_RESPONSES_CALIBRATION_TOLERANCE_MS=1 \
   -e LOAD_TESTER_QUEUE_DELAY_MS=0 \
   -e LOAD_TESTER_TTFT_MS=1 \
@@ -239,7 +240,7 @@ ulimit -n 65536
   -e LOAD_TESTER_ITL_MS=5 \
   -e LOAD_TESTER_ITL_JITTER_MS=0 \
   -e LOAD_TESTER_CHUNK=xxxx \
-  -e LOAD_TESTER_OUTPUT_CHUNKS=6000
+  -e LOAD_TESTER_OUTPUT_CHUNKS=12000
 ```
 
 The high-concurrency profile opens a new connection for each iteration. Check
