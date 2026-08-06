@@ -17,8 +17,12 @@ FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.0.8
 
 # Add the service jar
 ARG APP_JAR=target/app.jar
-ADD ${APP_JAR} /app/app.jar
+COPY ${APP_JAR} /usr/share/app.jar
+
+# enable setting the ulimit to max on boot
+ENV ULIMIT_FLAG=1
 
 ENV JAVA_TOOL_OPTIONS="-XX:+PrintFlagsFinal -XX:InitialRAMPercentage=60 -XX:MaxRAMPercentage=60 -XX:+EnableDynamicAgentLoading"
 
-CMD ["java", "-jar", "/app/app.jar"]
+WORKDIR /home/app
+CMD ["java", "-jar", "/usr/share/app.jar"]
