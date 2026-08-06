@@ -171,12 +171,12 @@ releases:
 {{ toYaml . | nindent 10 }}
         {{- end }}
         {{- $nvcaOp := dig "nvcaOperator" dict .Values.global }}
-        {{- if .Values.global.nodeSelector.enabled -}}
+        {{- if .Values.global.nodeSelector.enabled }}
         nodeSelector:
-          key: {{ .Values.global.nodeSelector.key }}
-          value: {{ .Values.global.nodeSelector.value }}
+          key: {{ .Values.global.nodeSelector.key | quote }}
+          value: {{ .Values.global.nodeSelector.value | quote }}
         {{- end }}
-        {{- if not (empty .Values.global.tolerations) -}}
+        {{- if not (empty .Values.global.tolerations) }}
         tolerations:
         {{- toYaml .Values.global.tolerations | nindent 8 }}
         {{- end }}

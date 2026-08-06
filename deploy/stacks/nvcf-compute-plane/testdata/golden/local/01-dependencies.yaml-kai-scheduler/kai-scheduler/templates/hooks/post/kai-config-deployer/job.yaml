@@ -54,4 +54,3 @@ spec:
       - name: manifest
         configMap:
           name: kai-config-manifest
-
