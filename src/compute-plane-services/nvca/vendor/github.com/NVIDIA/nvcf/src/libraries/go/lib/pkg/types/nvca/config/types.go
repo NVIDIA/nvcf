@@ -846,6 +846,7 @@ type TransportTLSConfig struct {
 	TrustBundleFingerprint   string    `yaml:"trustBundleFingerprint"`
 	TrustBundlePEM           string    `yaml:"trustBundlePem"`
 	InstallerImage           string    `yaml:"installerImage"`
+	InstalledBundleMountPath string    `yaml:"installedBundleMountPath"`
 }
 
 func (t WorkloadConfig) Complete() WorkloadConfig {
