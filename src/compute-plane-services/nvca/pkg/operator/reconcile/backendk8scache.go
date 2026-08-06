@@ -581,18 +581,13 @@ func configMapUpdateForcesNVCAReconcile(name string) bool {
 	}
 }
 
-func configMapAddForcesNVCAReconcile(name string) bool {
-	return name == nvcaOperatorConfigMapName
-}
-
 func (c *BackendK8sCache) syncCurrentBackendForConfigMapChange(ctx context.Context, log *logrus.Entry) error {
 	if err := c.SyncNVCFCurrentBackend(ctx, true); err != nil {
 		if nvcaoperatorerrors.IsFatal(err) {
 			nvcaoperatorerrors.ExitReason(ctx, err)
 			log.WithError(err).Fatalf("failed to sync current NVCFBackend, will not be requeued, NVCA operator will exit")
 		}
-		log.WithError(err).Error("failed to sync current NVCFBackend")
-		return err
+		return fmt.Errorf("sync current NVCFBackend: %w", err)
 	}
 	log.Debug("successfully synced current NVCFBackend")
 	return nil
@@ -608,10 +603,6 @@ func (c *BackendK8sCache) handleConfigMapAdd(ctx context.Context, obj interface{
 	if cm.Name == cleanup.ShutdownSentinelConfigMapName {
 		log.Debugf("found %s configmap update, skipping", cm.Name)
 		return nil
-	}
-	if configMapAddForcesNVCAReconcile(cm.Name) {
-		log.Debugf("found %s ConfigMap creation, syncing current NVCFBackend", cm.Name)
-		return c.syncCurrentBackendForConfigMapChange(ctx, log)
 	}
 	return nil
 }
@@ -692,7 +683,7 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			_ = cmnotel.InvokeWithSpan(ctx, c.tracer, "nvca-operator.BackendK8sCache.ConfigMapInformer.UpdateHandler",
-				func(_ context.Context) error {
+				func(ctx context.Context) error {
 					return c.handleConfigMapUpdate(ctx, oldObj, newObj)
 				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer))
 		},

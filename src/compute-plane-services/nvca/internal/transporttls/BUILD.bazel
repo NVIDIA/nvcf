@@ -9,7 +9,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls",
     visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
     deps = [
-        "//src/compute-plane-services/nvca/internal/transporttls/trustbundle",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle",
         "//src/compute-plane-services/nvca/internal/util/k8sutil",
         "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
         "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",

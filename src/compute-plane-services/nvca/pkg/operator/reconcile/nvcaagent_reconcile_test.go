@@ -5164,7 +5164,6 @@ func TestSetupAgentConfigConfigMapMergesTransportTLSFromAgentConfigMergeConfigMa
 				TrustBundleKey:           "nvcf-ca-bundle.pem",
 				TrustBundleFingerprint:   "sha256:9a7814909424061a68756ee5c26aa1a1491b8d20a7b813fb24fa7e73b2fa1c93",
 				TrustBundlePEM:           "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
-				InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:2.51.0",
 			},
 		},
 	}
@@ -5207,59 +5206,6 @@ func TestSetupAgentConfigConfigMapMergesTransportTLSFromAgentConfigMergeConfigMa
 		gotCfg.Workload.TransportTLS.TrustBundleFingerprint)
 	assert.Equal(t, "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
 		gotCfg.Workload.TransportTLS.TrustBundlePEM)
-	assert.Equal(t, "nvcr.io/nvidia/nvcf-byoc/nvca:2.51.0", gotCfg.Workload.TransportTLS.InstallerImage)
-}
-
-func TestSetupAgentConfigConfigMapDefaultsTransportTLSInstallerImageFromNVCFBackend(t *testing.T) {
-	ctx := newTestContext()
-	clients := mockKubeClientsForIntegrationTests()
-	bc := &BackendK8sCache{
-		clients:           clients,
-		envType:           nvidiaiov1.EnvTypeStage,
-		operatorNamespace: NVCAOperatorNamespace,
-	}
-
-	mergeCfg := nvcaconfig.Config{
-		Workload: nvcaconfig.WorkloadConfig{
-			TransportTLS: &nvcaconfig.TransportTLSConfig{
-				TrustMode:                nvcaconfig.TrustModeBundle,
-				TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
-				TrustBundleKey:           "nvcf-ca-bundle.pem",
-				TrustBundleFingerprint:   "sha256:9a7814909424061a68756ee5c26aa1a1491b8d20a7b813fb24fa7e73b2fa1c93",
-				TrustBundlePEM:           "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
-			},
-		},
-	}
-	mergeCfgBytes, err := nvcaconfig.EncodeConfig(mergeCfg)
-	require.NoError(t, err)
-
-	_, err = clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      agentConfigMergeConfigMapName,
-			Namespace: NVCAOperatorNamespace,
-		},
-		Data: map[string]string{
-			agentConfigFile: string(mergeCfgBytes),
-		},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
-
-	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
-	nb.Spec.NVCAImageConfig.Repository = "nvcr.io/nvidia/nvcf-byoc/nvca"
-	nb.Spec.Version = "2.51.0"
-
-	cfg, err := bc.newAgentConfig(ctx, nb)
-	require.NoError(t, err)
-	err = bc.setupAgentConfigConfigMap(ctx, nb, cfg)
-	require.NoError(t, err)
-
-	gotCM, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
-	require.NoError(t, err)
-
-	gotCfg, err := nvcaconfig.DecodeConfig([]byte(gotCM.Data[agentConfigFile]))
-	require.NoError(t, err)
-	require.NotNil(t, gotCfg.Workload.TransportTLS)
-	assert.Equal(t, "nvcr.io/nvidia/nvcf-byoc/nvca:2.51.0", gotCfg.Workload.TransportTLS.InstallerImage)
 }
 
 func TestGetChartDefaultAgentConfig(t *testing.T) {

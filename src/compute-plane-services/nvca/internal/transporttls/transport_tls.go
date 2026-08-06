@@ -23,8 +23,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls/trustbundle"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -41,10 +41,11 @@ const (
 	DefaultTrustBundleKey           = "nvcf-ca-bundle.pem"
 	TrustBundleFingerprintKey       = "fingerprint"
 
-	TrustBundleVolumeName = "nvcf-transport-trust-bundle"
-	MergedCertsVolumeName = "nvcf-trust-merged-certs"
-	InstallContainerName  = "nvcf-trust-bundle-install"
-	InstallCommandPath    = "/usr/bin/nvcf-trust-bundle-install"
+	TrustBundleVolumeName   = "nvcf-transport-trust-bundle"
+	MergedCertsVolumeName   = "nvcf-trust-merged-certs"
+	InstallContainerName    = "nvcf-trust-bundle-install"
+	InstallCommandPath      = "/usr/bin/nvcf-trust-bundle-install"
+	WorkerInitContainerName = "init"
 
 	TrustBundleMountPath = "/nvcf/trust"
 	MergedCertsMountPath = "/merged-certs"
@@ -148,7 +149,7 @@ func InjectIntoPodSpec(podSpec *corev1.PodSpec, cfg nvcaconfig.TransportTLSConfi
 		return nil
 	}
 
-	installImage, installImagePullPolicy, err := resolveInstallContainerImage(podSpec, cfg)
+	installImage, installImagePullPolicy, err := resolveInstallContainerImage(podSpec)
 	if err != nil {
 		return err
 	}
@@ -196,17 +197,17 @@ func mountPathsOverlap(first, second string) bool {
 
 func resolveInstallContainerImage(
 	podSpec *corev1.PodSpec,
-	cfg nvcaconfig.TransportTLSConfig,
 ) (string, corev1.PullPolicy, error) {
-	if image := strings.TrimSpace(cfg.InstallerImage); image != "" {
-		return image, corev1.PullIfNotPresent, nil
-	}
 	for _, c := range podSpec.InitContainers {
-		if c.Name == InstallContainerName && c.Image != "" {
+		if c.Name != WorkerInitContainerName {
+			continue
+		}
+		if strings.TrimSpace(c.Image) != "" {
 			return c.Image, c.ImagePullPolicy, nil
 		}
+		break
 	}
-	return "", "", fmt.Errorf("transportTls.installerImage is required when injecting the transport trust bundle")
+	return "", "", fmt.Errorf("transport TLS injection requires regular init container %q with an image", WorkerInitContainerName)
 }
 
 func upsertVolumes(podSpec *corev1.PodSpec, cfg nvcaconfig.TransportTLSConfig) {
