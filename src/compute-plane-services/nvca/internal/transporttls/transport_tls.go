@@ -182,8 +182,8 @@ func validateInstalledBundleMountConflict(container *corev1.Container, mountPath
 }
 
 // mountPathsOverlap reports whether either mount hides the other. Kubernetes
-// permits nested mounts, but using them for the NVCA bundle would make the
-// installed certificate file ambiguous or inaccessible to the llm worker.
+// permits nested mounts, but using them for the NVCA bundle can make its
+// installed certificate file ambiguous or inaccessible to the LLM worker.
 func mountPathsOverlap(first, second string) bool {
 	first = path.Clean(first)
 	second = path.Clean(second)
