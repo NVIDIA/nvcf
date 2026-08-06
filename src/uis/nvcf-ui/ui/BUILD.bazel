@@ -14,6 +14,8 @@
 # limitations under the License.
 
 load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//src/uis/nvcf-ui/ui:@biomejs/biome/package_json.bzl", biome_bin = "bin")
+load("@npm//src/uis/nvcf-ui/ui:typescript/package_json.bzl", tsc_bin = "bin")
 load("@npm//src/uis/nvcf-ui/ui:vite/package_json.bzl", vite_bin = "bin")
 load("@npm//src/uis/nvcf-ui/ui:vitest/package_json.bzl", vitest_bin = "bin")
 
@@ -56,6 +58,31 @@ vite_bin.vite(
     out_dirs = ["ui"],
     tags = ["no-sandbox"],
     visibility = ["//visibility:public"],
+)
+
+# Biome lint and format check. --config-path=. uses ui/biome.json directly as root.
+biome_bin.biome_test(
+    name = "lint",
+    args = ["check", "--config-path=."],
+    chdir = package_name(),
+    data = SRCS + [
+        "biome.json",
+        "orval.config.ts",
+        ":node_modules",
+    ],
+    tags = ["no-sandbox"],
+)
+
+# TypeScript type check. no-sandbox so tsc can resolve the full source tree.
+tsc_bin.tsc_test(
+    name = "typecheck",
+    args = ["--noEmit"],
+    chdir = package_name(),
+    data = SRCS + [
+        "vitest.setup.ts",
+        ":node_modules",
+    ],
+    tags = ["no-sandbox"],
 )
 
 # Vitest suite. no-sandbox for the same Vite 8/Rolldown reason as //ui;

@@ -36,10 +36,10 @@ import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { MonitorCog, Moon, Sun } from "lucide-react";
 import { Suspense } from "react";
 
-import { AccountSwitcher } from "./features/accounts/components/AccountSwitcher";
-import { AccountSwitcherSkeleton } from "./features/accounts/components/AccountSwitcherSkeleton";
-import { getGetCloudAccountsQueryOptions } from "./generated/api/account/account";
-import { useThemePreference } from "./hooks/useThemePreference";
+import { AccountSwitcher } from "~/features/accounts/components/AccountSwitcher";
+import { AccountSwitcherSkeleton } from "~/features/accounts/components/AccountSwitcherSkeleton";
+import { getGetCloudAccountsQueryOptions } from "~/generated/api/account/account";
+import { useThemePreference } from "~/hooks/useThemePreference";
 
 type NavItem = HorizontalNavItem & { href: LinkProps["to"] };
 

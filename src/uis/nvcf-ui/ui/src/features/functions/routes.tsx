@@ -44,7 +44,7 @@ export const functionsListRoute = createRoute({
 	pendingComponent: FunctionsListPending,
 	loader: async ({ context: { queryClient } }) => {
 		const ncaId = await getActiveNcaId(queryClient);
-		const [functionsResult] = await Promise.allSettled([
+		await Promise.all([
 			queryClient.ensureQueryData({
 				...getGetAllFunctionsQueryOptions(ncaId),
 				revalidateIfStale: true,
@@ -54,11 +54,6 @@ export const functionsListRoute = createRoute({
 				revalidateIfStale: true,
 			}),
 		]);
-		// Deployments are best-effort — only a functions failure hard-fails the
-		// route; the list still renders without deployment enrichment.
-		if (functionsResult.status === "rejected") {
-			throw functionsResult.reason;
-		}
 		return { ncaId };
 	},
 }).lazy(() => import("./FunctionsList").then((m) => m.FunctionListRoute));

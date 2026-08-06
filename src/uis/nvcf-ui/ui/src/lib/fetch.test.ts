@@ -49,13 +49,12 @@ describe("customFetch", () => {
 		});
 	});
 
-	it("returns null when response body is not valid JSON", async () => {
+	it("rejects when response body is not valid JSON on a successful response", async () => {
 		server.use(
 			http.get(TEST_URL, () => new HttpResponse("not json", { status: 200 })),
 		);
 
-		const data = await customFetch(TEST_URL, { method: "GET" });
-		expect(data).toBeNull();
+		await expect(customFetch(TEST_URL, { method: "GET" })).rejects.toThrow();
 	});
 
 	it("returns null for 204 No Content", async () => {

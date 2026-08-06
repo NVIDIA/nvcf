@@ -207,7 +207,7 @@ function FunctionDetail() {
 
 	const invocationCommand = [
 		"curl --request POST \\",
-		`  --url "http://\${GATEWAY_ADDR}/echo" \\`,
+		`  --url "https://\${GATEWAY_ADDR}/echo" \\`,
 		`  --header "Host: ${fn.id}.invocation.\${GATEWAY_ADDR}" \\`,
 		`  --header "Authorization: Bearer \${API_KEY}" \\`,
 		'  --header "Content-Type: application/json" \\',

@@ -32,7 +32,7 @@ import { filterFns } from "./utils";
 
 interface DataTableProps<TData extends RowData> {
 	data: TData[];
-	// biome-ignore lint/suspicious/noExplicitAny: column value types vary per column; TData is the only relevant constraint here
+	// biome-ignore lint/suspicious/noExplicitAny: ColumnDef is invariant in TValue so unknown breaks cell getValue() calls; any is intentional to allow heterogeneous column arrays
 	columns: ColumnDef<TData, any>[];
 	children: ReactNode;
 	reactTableOptions?: Partial<TableOptions<TData>>;

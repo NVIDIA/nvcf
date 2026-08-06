@@ -39,22 +39,24 @@ async function enableMocking() {
 	});
 }
 
-enableMocking().then(() => {
-	const rootElement = document.getElementById("app");
-	if (rootElement && !rootElement.innerHTML) {
-		const root = ReactDOM.createRoot(rootElement);
-		root.render(
-			<ThemeProvider
-				density="standard"
-				global
-				target="html"
-				theme={getStoredTheme()}
-			>
-				<QueryClientProvider client={queryClient}>
-					<RouterProvider context={{ queryClient }} router={router} />
-					<ReactQueryDevtools />
-				</QueryClientProvider>
-			</ThemeProvider>,
-		);
-	}
-});
+enableMocking()
+	.catch((err) => console.error("[mock] Failed to start MSW worker:", err))
+	.then(() => {
+		const rootElement = document.getElementById("app");
+		if (rootElement && !rootElement.innerHTML) {
+			const root = ReactDOM.createRoot(rootElement);
+			root.render(
+				<ThemeProvider
+					density="standard"
+					global
+					target="html"
+					theme={getStoredTheme()}
+				>
+					<QueryClientProvider client={queryClient}>
+						<RouterProvider context={{ queryClient }} router={router} />
+						{import.meta.env.DEV && <ReactQueryDevtools />}
+					</QueryClientProvider>
+				</ThemeProvider>,
+			);
+		}
+	});

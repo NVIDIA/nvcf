@@ -15,7 +15,7 @@ There is no local backend — the app either runs against a real cluster or uses
 ## Mocked mode (default for local dev)
 
 ```bash
-VITE_MOCK=true task dev
+VITE_MOCK=true task ui:dev
 ```
 
 Starts Vite at `http://localhost:5173` with MSW intercepting all API requests using the seeded in-memory store. No cluster required. Use this for UI development.
@@ -23,7 +23,7 @@ Starts Vite at `http://localhost:5173` with MSW intercepting all API requests us
 To layer a scenario on top of the baseline store:
 
 ```bash
-VITE_MOCK=true VITE_SCENARIO=functions:empty-list task dev
+VITE_MOCK=true VITE_SCENARIO=functions:empty-list task ui:dev
 ```
 
 Multiple scenarios are comma-separated: `VITE_SCENARIO=functions:empty-list,tasks:launching-task`.
@@ -31,7 +31,7 @@ Multiple scenarios are comma-separated: `VITE_SCENARIO=functions:empty-list,task
 ## Against a real cluster
 
 ```bash
-task dev
+task ui:dev
 ```
 
 No `VITE_MOCK` — requests proxy to the configured upstream. Requires cluster access. Check `ui/vite.config.ts` for the proxy target.

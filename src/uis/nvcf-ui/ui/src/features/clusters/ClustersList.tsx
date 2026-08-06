@@ -39,17 +39,20 @@ const columnHelper = createColumnHelper<GetClusterResponse>();
 const columns = [
 	columnHelper.accessor("clusterName", {
 		header: "Name",
-		cell: ({ row, getValue }) => (
-			<Anchor asChild>
-				<Link
-					params={{ clusterId: row.original.clusterId ?? "" }}
-					to="/clusters/$clusterId"
-					viewTransition
-				>
-					{getValue() ?? row.original.clusterId ?? "—"}
-				</Link>
-			</Anchor>
-		),
+		cell: ({ row, getValue }) =>
+			row.original.clusterId ? (
+				<Anchor asChild>
+					<Link
+						params={{ clusterId: row.original.clusterId }}
+						to="/clusters/$clusterId"
+						viewTransition
+					>
+						{getValue() ?? row.original.clusterId}
+					</Link>
+				</Anchor>
+			) : (
+				(getValue() ?? "—")
+			),
 	}),
 	columnHelper.accessor(
 		(cluster) =>

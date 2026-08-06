@@ -33,11 +33,12 @@ export async function customFetch<T>(
 ): Promise<T> {
 	const res = await fetch(url, options);
 
-	const body = [204, 205, 304].includes(res.status)
-		? null
-		: await res.json().catch(() => null);
+	if ([204, 205, 304].includes(res.status)) return null as T;
 
-	if (!res.ok) throw new HttpError(res, body);
+	if (!res.ok) {
+		const body = await res.json().catch(() => null);
+		throw new HttpError(res, body);
+	}
 
-	return body as T;
+	return res.json() as Promise<T>;
 }

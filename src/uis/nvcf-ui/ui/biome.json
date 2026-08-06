@@ -1,6 +1,6 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.4.5/schema.json",
-	"root": false,
+	"root": true,
 	"vcs": {
 		"enabled": false,
 		"clientKind": "git",
@@ -22,7 +22,11 @@
 		"indentStyle": "tab",
 		"indentWidth": 2
 	},
-	"assist": { "actions": { "source": { "organizeImports": "on", "useSortedAttributes": "on" } } },
+	"assist": {
+		"actions": {
+			"source": { "organizeImports": "on", "useSortedAttributes": "on" }
+		}
+	},
 	"linter": {
 		"enabled": true,
 		"rules": {
