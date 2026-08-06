@@ -91,6 +91,31 @@ assert_pre_delete_cleanup_rbac() {
     "pre-delete cleanup hook RBAC is kept for the running Job"
 }
 
+# The Bazel-built NVCA operator image is distroless, so the rendered workload
+# commands must execute the packaged binaries directly. A /tini wrapper would
+# fail at container startup because that binary is not present in the image.
+assert_distroless_operator_commands() {
+  local chart_dir=${1}
+  local chart_label=${2}
+  local rendered
+  rendered="$(mktemp)"
+  trap 'rm -f "${rendered}"' RETURN
+
+  helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" >"${rendered}"
+
+  assert_eq "/usr/bin/nvca-operator" \
+    "$(yq 'select(.kind == "Deployment") | .spec.template.spec.containers[0].args[0]' "${rendered}")" \
+    "${chart_label} operator starts the packaged binary directly"
+  assert_eq "/usr/bin/nvca-mirror" \
+    "$(yq 'select(.kind == "Deployment") | .spec.template.spec.containers[1].args[0]' "${rendered}")" \
+    "${chart_label} mirror starts the packaged binary directly"
+  assert_eq "/usr/bin/nvca-operator-cleanup" \
+    "$(yq 'select(.kind == "Job") | .spec.template.spec.containers[0].args[0]' "${rendered}")" \
+    "${chart_label} cleanup Job starts the packaged binary directly"
+}
+
+assert_distroless_operator_commands "${repo_root}/deployments/nvca-operator" "service chart"
+assert_distroless_operator_commands "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
 install_kubeconform
 assert_pre_delete_cleanup_rbac
 run_lint nvca-operator --set "ngcConfig.serviceKey=fakekey"
