@@ -137,6 +137,10 @@ func TestNVCAConfigMapper_ValidatesSecretBackedTransportTLS(t *testing.T) {
 `,
 		},
 		{
+			name:   "comment-only configuration is a no-op",
+			config: "# transport trust is intentionally not configured\n",
+		},
+		{
 			name:          "selected Secret must exist",
 			config:        fmt.Sprintf(sourceConfig, ""),
 			wantErrSubstr: "read transport TLS Secret",
@@ -251,13 +255,7 @@ func createTransportTrustSource(t *testing.T, ctx context.Context, clients *kube
 	t.Helper()
 	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: nvcaOperatorConfigMapName},
-		Data: map[string]string{agentConfigFile: `workload:
-  transportTLS:
-    trustBundle:
-      secretKeyRef:
-        name: nvcf-trust
-        key: ca.crt
-`},
+		Data:       map[string]string{agentConfigFile: transportTrustSourceConfig("")},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	_, err = clients.K8s.CoreV1().Secrets(NVCAOperatorNamespace).Create(ctx, &corev1.Secret{
@@ -265,6 +263,20 @@ func createTransportTrustSource(t *testing.T, ctx context.Context, clients *kube
 		Data:       map[string][]byte{"ca.crt": []byte(transportTrustTestPEM)},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
+}
+
+func transportTrustSourceConfig(mountPath string) string {
+	config := `workload:
+  transportTLS:
+    trustBundle:
+      secretKeyRef:
+        name: nvcf-trust
+        key: ca.crt
+`
+	if mountPath == "" {
+		return config
+	}
+	return config + "    installedBundleMountPath: " + mountPath + "\n"
 }
 
 func setTransportTrustInstalledBundleMountPath(
@@ -277,7 +289,7 @@ func setTransportTrustInstalledBundleMountPath(
 	configMap, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(ctx, nvcaOperatorConfigMapName,
 		metav1.GetOptions{})
 	require.NoError(t, err)
-	configMap.Data[agentConfigFile] += "    installedBundleMountPath: " + mountPath + "\n"
+	configMap.Data[agentConfigFile] = transportTrustSourceConfig(mountPath)
 	_, err = clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Update(ctx, configMap, metav1.UpdateOptions{})
 	require.NoError(t, err)
 }

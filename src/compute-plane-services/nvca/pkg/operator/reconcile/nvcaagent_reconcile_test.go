@@ -5038,10 +5038,10 @@ func Test_setupAgentConfigConfigMap(t *testing.T) {
 		},
 	}
 
-	agentCfg, err := bc.newAgentConfig(ctx, inNVCFBackend)
+	desiredConfigMap, err := bc.newAgentConfigConfigMap(ctx, inNVCFBackend)
 	require.NoError(t, err)
 
-	err = bc.setupAgentConfigConfigMap(ctx, inNVCFBackend, agentCfg)
+	err = bc.setupAgentConfigConfigMap(ctx, desiredConfigMap)
 	require.NoError(t, err)
 
 	gotCM, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
@@ -5188,7 +5188,9 @@ func TestSetupAgentConfigConfigMapMergesTransportTLSFromAgentConfigMergeConfigMa
 	require.NoError(t, err)
 	assert.Nil(t, cfg.Workload.TransportTLS)
 
-	err = bc.setupAgentConfigConfigMap(ctx, nb, cfg)
+	desiredConfigMap, err := bc.newAgentConfigConfigMap(ctx, nb)
+	require.NoError(t, err)
+	err = bc.setupAgentConfigConfigMap(ctx, desiredConfigMap)
 	require.NoError(t, err)
 
 	gotCM, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})

@@ -595,15 +595,13 @@ func (c *BackendK8sCache) syncCurrentBackendForConfigMapChange(ctx context.Conte
 
 func (c *BackendK8sCache) handleConfigMapAdd(ctx context.Context, obj interface{}) error {
 	log := core.GetLogger(ctx)
-	cm, ok := obj.(*corev1.ConfigMap)
+	_, ok := obj.(*corev1.ConfigMap)
 	if !ok {
 		log.Errorf("Wrong object in ConfigMap informer Add handler: %v", obj)
 		return fmt.Errorf("invalid object received")
 	}
-	if cm.Name == cleanup.ShutdownSentinelConfigMapName {
-		log.Debugf("found %s configmap update, skipping", cm.Name)
-		return nil
-	}
+	// Add events include the informer's initial list, so valid ConfigMaps must
+	// not trigger a rollout until their data subsequently changes.
 	return nil
 }
 
@@ -635,27 +633,20 @@ func (c *BackendK8sCache) handleConfigMapUpdate(ctx context.Context, oldObj, new
 			log.Info("configmap data has changed, forcing rollout")
 			return c.syncCurrentBackendForConfigMapChange(ctx, log)
 		}
-		log.Debug("successfully synced current NVCFBackend")
+		log.Debug("configmap data unchanged, skipping sync of current NVCFBackend")
 		return nil
-	case newCM.Name == nvcfBackendHelmManagedConfigMapName:
+	case newCM.Name == nvcfBackendHelmManagedConfigMapName,
+		newCM.Name == nvcfBackendSelfManagedConfigMapName:
 		log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
 		diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
 		log.WithField("diff", diff).Debugf("configmap data diff")
 		if diff != "" {
 			log.Infof("configmap %s data has changed, dispatch cluster reconcile event", newCM.Name)
 			c.dispatchReconcileClusterFunc(ctx)
+			log.Debug("successfully dispatched cluster reconcile event")
+			return nil
 		}
-		log.Debug("successfully dispatched cluster reconcile event")
-		return nil
-	case newCM.Name == nvcfBackendSelfManagedConfigMapName:
-		log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
-		diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
-		log.WithField("diff", diff).Debugf("configmap data diff")
-		if diff != "" {
-			log.Infof("configmap %s data has changed, dispatch cluster reconcile event", newCM.Name)
-			c.dispatchReconcileClusterFunc(ctx)
-		}
-		log.Debug("successfully dispatched cluster reconcile event")
+		log.Debug("configmap data unchanged, skipping cluster reconcile event")
 		return nil
 	case newCM.Name == cleanup.ShutdownSentinelConfigMapName:
 		log.Debugf("found %s configmap update, skipping", newCM.Name)
@@ -682,10 +673,12 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer))
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			_ = cmnotel.InvokeWithSpan(ctx, c.tracer, "nvca-operator.BackendK8sCache.ConfigMapInformer.UpdateHandler",
+			if err := cmnotel.InvokeWithSpan(ctx, c.tracer, "nvca-operator.BackendK8sCache.ConfigMapInformer.UpdateHandler",
 				func(ctx context.Context) error {
 					return c.handleConfigMapUpdate(ctx, oldObj, newObj)
-				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer))
+				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer)); err != nil {
+				log.WithError(err).Error("failed to handle ConfigMap update")
+			}
 		},
 	})
 	if err != nil {
@@ -1124,7 +1117,12 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 	// Always check if additional image pull secrets have changed (handles additions, removals, and changes)
 	nvcaRolloutChecks = append(nvcaRolloutChecks, hasAdditionalImagePullSecretsChanged(ctx, bc.additionalImagePullSecrets, nbMerged.Status))
 
-	cfgCheck, err := bc.newAgentConfigChangedCheck(ctx, nbMerged)
+	desiredAgentConfigCM, err := bc.newAgentConfigConfigMap(ctx, nbMerged)
+	if err != nil {
+		log.WithError(err).Error("Failed to create desired agent config ConfigMap")
+		return err
+	}
+	cfgCheck, err := bc.newAgentConfigChangedCheck(ctx, nbMerged, desiredAgentConfigCM)
 	if err != nil {
 		log.WithError(err).Error("Failed to create new agent config check")
 		return err
@@ -1153,7 +1151,7 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 				string(nvcaoptypes.EventCategoryUpgrade), "%s periodic sync", AgentName)
 		}
 
-		err = bc.setupNVCAAgentInfra(ctx, nbMerged)
+		err = bc.setupNVCAAgentInfra(ctx, nbMerged, desiredAgentConfigCM)
 		if err != nil {
 			return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", AgentName, nbMerged.Namespace, nbMerged.Name, err)
 		}

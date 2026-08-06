@@ -31,7 +31,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
-	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
 )
 
 const (
@@ -312,15 +311,11 @@ func hasOTelCollectorConfigChangedCheck(ctx context.Context,
 	}
 }
 
-func (bc *BackendK8sCache) newAgentConfigChangedCheck(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (func() bool, error) {
-	genCfg, err := bc.newAgentConfig(ctx, nb)
-	if err != nil {
-		return nil, nvcaoperatorerrors.FatalError(err)
-	}
-	desiredCfgCM, err := bc.newAgentConfigConfigMap(ctx, nb, genCfg)
-	if err != nil {
-		return nil, err
-	}
+func (bc *BackendK8sCache) newAgentConfigChangedCheck(
+	ctx context.Context,
+	nb *nvidiaiov1.NVCFBackend,
+	desiredCfgCM *corev1.ConfigMap,
+) (func() bool, error) {
 	existingCfgCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
 	switch {
 	case k8serrors.IsNotFound(err),

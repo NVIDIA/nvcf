@@ -22,6 +22,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -185,10 +186,13 @@ func decodeNVCAOperatorConfig(data []byte) (nvcaOperatorConfigDTO, error) {
 
 	var config nvcaOperatorConfigDTO
 	if err := decoder.Decode(&config); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nvcaOperatorConfigDTO{}, nil
+		}
 		return nvcaOperatorConfigDTO{}, err
 	}
 	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return nvcaOperatorConfigDTO{}, fmt.Errorf("expected a single YAML document")
 		}

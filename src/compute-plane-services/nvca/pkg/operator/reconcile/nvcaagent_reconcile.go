@@ -494,7 +494,11 @@ func (bc *BackendK8sCache) validateNVCFBackendParams(ctx context.Context, nb *nv
 	return nil
 }
 
-func (bc *BackendK8sCache) setupNVCAAgentInfra(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
+func (bc *BackendK8sCache) setupNVCAAgentInfra(
+	ctx context.Context,
+	nb *nvidiaiov1.NVCFBackend,
+	desiredAgentConfigCM *corev1.ConfigMap,
+) error {
 	var err error
 	log := core.GetLogger(ctx)
 	log.Infof("setting-up NVCAAgent infra %v", nvcaoptypes.NVCAModuleName)
@@ -521,11 +525,7 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(ctx context.Context, nb *nvidiaio
 			nb.Namespace, nb.Name, err)
 	}
 
-	agentCfg, err := bc.newAgentConfig(ctx, nb)
-	if err != nil {
-		return err
-	}
-	if err := bc.setupAgentConfigConfigMap(ctx, nb, agentCfg); err != nil {
+	if err := bc.setupAgentConfigConfigMap(ctx, desiredAgentConfigCM); err != nil {
 		return fmt.Errorf("failed to setup agent config ConfigMap: %w", err)
 	}
 
@@ -1277,24 +1277,22 @@ func (bc *BackendK8sCache) setupOAuthClientIDSecret(ctx context.Context, nb *nvi
 
 func (bc *BackendK8sCache) setupAgentConfigConfigMap(
 	ctx context.Context,
-	nb *nvidiaiov1.NVCFBackend,
-	cfg nvcaconfig.Config,
+	cm *corev1.ConfigMap,
 ) error {
-	cm, err := bc.newAgentConfigConfigMap(ctx, nb, cfg)
-	if err != nil {
-		return err
-	}
 	return bc.createOrUpdateConfigMap(ctx, cm)
 }
 
-// newAgentConfigConfigMap maps a generated NVCA configuration resource to the
-// ConfigMap consumed by the agent. Keeping this mapping in one place ensures
-// reconcile setup and rollout comparison use identical configuration bytes.
+// newAgentConfigConfigMap generates and maps the NVCA configuration resource
+// to the ConfigMap consumed by the agent. Callers reuse the resulting ConfigMap
+// for both rollout comparison and setup so source data is read once per sync.
 func (bc *BackendK8sCache) newAgentConfigConfigMap(
 	ctx context.Context,
 	nb *nvidiaiov1.NVCFBackend,
-	cfg nvcaconfig.Config,
 ) (*corev1.ConfigMap, error) {
+	cfg, err := bc.newAgentConfig(ctx, nb)
+	if err != nil {
+		return nil, nvcaoperatorerrors.FatalError(err)
+	}
 	mergeCfg, _, err := bc.getAgentConfigToMerge(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get agent config to merge: %w", err)
