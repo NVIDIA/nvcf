@@ -56,6 +56,7 @@ reviews:
     - "!**/*.tgz"
     - "!**/*.png"
     - "!**/*.jpg"
+    - "!**/pnpm-lock.yaml"
     - "!tools/ci/generated-release-jobs.yml"
   path_instructions:
     - path: "src/**/*.go"
@@ -71,12 +72,41 @@ reviews:
       instructions: >-
         Cassandra DDL migrations are forward-only and one keyspace per
         subdirectory. Flag destructive statements and missing IF NOT EXISTS.
+    - path: "src/uis/nvcf-ui/ui/src/features/**/*.tsx"
+      instructions: >-
+        Suspense hook variants (useGetFooSuspense) are expected when data is prefetched in
+        a route loader; regular useQuery is fine for secondary or deferred fetches.
+        Route loaders use ensureQueryData with revalidateIfStale: true for blocking data.
+        void prefetchQuery is intentional for fire-and-forget child-route cache warming.
+        No manual fetch calls for endpoints that have generated hooks in ui/src/generated/.
+        Prefer KUI components from @nvidia/foundations-react-core over plain HTML where a
+        natural fit exists — flag clear misses but use judgment.
+        New components should have co-located tests.
+    - path: "src/uis/nvcf-ui/ui/src/**/*.test.tsx"
+      instructions: >-
+        Route-level views must use renderWithRouter from ~/testing/render, not standard render.
+        Tests should cover happy path, error state, and empty state — not just the happy path.
+        Prefer accessible queries (getByRole, getByText) over test IDs.
+    - path: "src/uis/nvcf-ui/ui/src/generated/**"
+      instructions: >-
+        This is generated code (from control-plane-openapi.yaml / nvcf-openapi.yaml / sis-openapi.yaml).
+        Do NOT comment on code style, naming, or general best practices — Biome enforces formatting via CI.
+        ONLY flag spec-consistency issues: generated code that doesn't match the current spec
+        (e.g., missing or renamed fields, changed types, endpoints absent from codegen output),
+        OR generated files that appear to have been manually edited without a corresponding spec change.
+    - path: "src/uis/nvcf-ui/spec/*.yaml"
+      instructions: >-
+        These are the source of truth for the API. Generated output lives in
+        ui/src/generated/ and must never be edited directly. Flag any PR that touches
+        ui/src/generated/ without a corresponding spec change that justifies it.
   tools:
     shellcheck:
       enabled: true
     yamllint:
       enabled: true
     golangci-lint:
+      enabled: true
+    biome:
       enabled: true
 chat:
   auto_reply: true

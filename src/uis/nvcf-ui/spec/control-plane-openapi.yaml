@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+openapi: 3.1.0
+info:
+  title: NVCF UI Shim API
+  version: 0.1.0
+  description: API for the NVCF UI shim service
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+paths:
+  /v1/control-plane:
+    get:
+      operationId: getControlPlaneStatus
+      summary: Get control plane component health statuses
+      tags:
+        - Control Plane
+      security: []
+      responses:
+        "200":
+          description: List of control plane component health statuses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ControlPlaneComponentStatus"
+              example:
+                - componentName: sis-api
+                  namespace: sis
+                  status: healthy
+                  timestamp: "2026-06-27T10:00:00Z"
+                - componentName: ess-api
+                  namespace: ess
+                  status: unhealthy
+                  timestamp: "2026-06-27T10:00:00Z"
+
+components:
+  schemas:
+    ControlPlaneComponentStatus:
+      type: object
+      description: Health status of a single control plane component
+      properties:
+        componentName:
+          type: string
+          description: Name of the control plane component
+        namespace:
+          type: string
+          description: Kubernetes namespace the component lives in
+        status:
+          type: string
+          description: Health status of the component
+          enum:
+            - healthy
+            - unhealthy
+        timestamp:
+          type: string
+          format: date-time
+          description: Time at which the status was recorded (RFC 3339 / ISO 8601)
+      required:
+        - componentName
+        - namespace
+        - status
+        - timestamp
