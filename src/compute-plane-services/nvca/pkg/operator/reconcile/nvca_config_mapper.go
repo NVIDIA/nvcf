@@ -46,8 +46,9 @@ type nvcaOperatorWorkloadConfigDTO struct {
 }
 
 type nvcaOperatorTransportTLSConfigDTO struct {
-	TrustBundle *nvcaOperatorTrustBundleConfigDTO `yaml:"trustBundle"`
-	Fingerprint string                            `yaml:"fingerprint"`
+	TrustBundle              *nvcaOperatorTrustBundleConfigDTO `yaml:"trustBundle"`
+	Fingerprint              string                            `yaml:"fingerprint"`
+	InstalledBundleMountPath string                            `yaml:"installedBundleMountPath"`
 }
 
 type nvcaOperatorTrustBundleConfigDTO struct {
@@ -164,11 +165,16 @@ func withSecretBackedTransportTLSMapper(namespace string, secrets corev1client.S
 			return false, fmt.Errorf("transport TLS fingerprint %q does not match computed fingerprint %q", supplied, fingerprint)
 		}
 
-		destination.Workload.TransportTLS = &nvcaconfig.TransportTLSConfig{
-			TrustMode:              nvcaconfig.TrustModeBundle,
-			TrustBundleFingerprint: fingerprint,
-			TrustBundlePEM:         string(pemData),
+		transportTLSConfig := nvcaconfig.TransportTLSConfig{
+			TrustMode:                nvcaconfig.TrustModeBundle,
+			TrustBundleFingerprint:   fingerprint,
+			TrustBundlePEM:           string(pemData),
+			InstalledBundleMountPath: source.Workload.TransportTLS.InstalledBundleMountPath,
 		}
+		if err := transporttls.ValidateConfig(transporttls.NormalizeConfig(transportTLSConfig)); err != nil {
+			return false, fmt.Errorf("validate transport TLS configuration: %w", err)
+		}
+		destination.Workload.TransportTLS = &transportTLSConfig
 		return true, nil
 	}
 }

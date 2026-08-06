@@ -84,6 +84,7 @@ func TestSecretBackedTransportTLS_UsesIdenticalEncodingAcrossClusterModes(t *tes
 				operatorNamespace: NVCAOperatorNamespace,
 			}
 			createTransportTrustSource(t, ctx, clients)
+			setTransportTrustInstalledBundleMountPath(t, ctx, clients, "/nvcf/transport-tls")
 
 			nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
 			nb.Spec.ClusterSource = clusterSource
@@ -103,12 +104,43 @@ func TestSecretBackedTransportTLS_UsesIdenticalEncodingAcrossClusterModes(t *tes
 			assert.Equal(t, nvcaconfig.TrustModeBundle, decodedConfig.Workload.TransportTLS.TrustMode)
 			assert.Equal(t, transportTrustTestPEM, decodedConfig.Workload.TransportTLS.TrustBundlePEM)
 			assert.Equal(t, "registry.example.test/nvca:2.52.0", decodedConfig.Workload.TransportTLS.InstallerImage)
+			assert.Equal(t, "/nvcf/transport-tls", decodedConfig.Workload.TransportTLS.InstalledBundleMountPath)
 
 			checker, err := bc.newAgentConfigChangedCheck(ctx, nb)
 			require.NoError(t, err)
 			assert.False(t, checker(), "setup and rollout comparison must encode the same configuration")
 		})
 	}
+}
+
+func TestSecretBackedTransportTLS_InstalledBundleMountPathChangeTriggersAgentRollout(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		envType:           nvidiaiov1.EnvTypeStage,
+		operatorNamespace: NVCAOperatorNamespace,
+	}
+	createTransportTrustSource(t, ctx, clients)
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	nb.Spec.NVCAImageConfig = nvidiaiov1.ImageConfig{Repository: "registry.example.test/nvca", Tag: "2.52.0"}
+	agentCfg, err := bc.newAgentConfig(ctx, nb)
+	require.NoError(t, err)
+	require.NoError(t, bc.setupAgentConfigConfigMap(ctx, nb, agentCfg))
+
+	setTransportTrustInstalledBundleMountPath(t, ctx, clients, "/nvcf/transport-tls")
+	checker, err := bc.newAgentConfigChangedCheck(ctx, nb)
+	require.NoError(t, err)
+	assert.True(t, checker())
+	require.NoError(t, bc.setupAgentConfigConfigMap(ctx, nb, agentCfg))
+
+	storedConfig, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName,
+		metav1.GetOptions{})
+	require.NoError(t, err)
+	decodedConfig, err := nvcaconfig.DecodeConfig([]byte(storedConfig.Data[agentConfigFile]))
+	require.NoError(t, err)
+	require.NotNil(t, decodedConfig.Workload.TransportTLS)
+	assert.Equal(t, "/nvcf/transport-tls", decodedConfig.Workload.TransportTLS.InstalledBundleMountPath)
 }
 
 func TestGetAgentConfigToMerge_RejectsTransportTLSSourceConflict(t *testing.T) {
@@ -208,6 +240,49 @@ func TestSetupAgentConfigConfigMap_SecretTrustFailurePreservesLastGoodConfig(t *
 	assert.Contains(t, err.Error(), "contains non-PEM data")
 
 	storedConfig, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, lastGoodData, storedConfig.Data[agentConfigFile])
+}
+
+func TestSetupAgentConfigConfigMap_InvalidInstalledBundleMountPathPreservesLastGoodConfig(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		envType:           nvidiaiov1.EnvTypeStage,
+		operatorNamespace: NVCAOperatorNamespace,
+	}
+	createTransportTrustSource(t, ctx, clients)
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	agentCfg, err := bc.newAgentConfig(ctx, nb)
+	require.NoError(t, err)
+	require.NoError(t, bc.setupAgentConfigConfigMap(ctx, nb, agentCfg))
+
+	lastGoodConfig, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName,
+		metav1.GetOptions{})
+	require.NoError(t, err)
+	lastGoodData := lastGoodConfig.Data[agentConfigFile]
+
+	operatorConfig, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(ctx, nvcaOperatorConfigMapName,
+		metav1.GetOptions{})
+	require.NoError(t, err)
+	operatorConfig.Data[agentConfigFile] = `workload:
+  transportTLS:
+    trustBundle:
+      secretKeyRef:
+        name: nvcf-trust
+        key: ca.crt
+    installedBundleMountPath: nvcf/transport-tls
+`
+	_, err = clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Update(ctx, operatorConfig, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	err = bc.setupAgentConfigConfigMap(ctx, nb, agentCfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "installedBundleMountPath must be absolute")
+
+	storedConfig, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName,
+		metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, lastGoodData, storedConfig.Data[agentConfigFile])
 }

@@ -188,7 +188,8 @@ assert_transport_trust_config() {
   local label="${1}"
   local expected_name="${2}"
   local expected_fingerprint="${3}"
-  shift 3
+  local expected_mount_path="${4}"
+  shift 4
   local render_output
   render_output="$(mktemp)"
 
@@ -206,16 +207,30 @@ assert_transport_trust_config() {
     rm -f "${render_output}"
     exit 1
   fi
+  if [[ -z "${expected_mount_path}" ]]; then
+    if grep -Fq "installedBundleMountPath:" "${render_output}"; then
+      echo "Expected ${label} workload transport trust configuration to omit installedBundleMountPath"
+      cat "${render_output}"
+      rm -f "${render_output}"
+      exit 1
+    fi
+  elif ! grep -Fq "installedBundleMountPath: \"${expected_mount_path}\"" "${render_output}"; then
+    echo "Expected ${label} workload transport trust configuration to set installedBundleMountPath"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
   rm -f "${render_output}"
   echo "✓ ${label} workload transport trust ConfigMap renders"
 }
 
-assert_transport_trust_config "default" "" "" --set "ngcConfig.serviceKey=fakekey"
-assert_transport_trust_config "configured" "nvcf-trust" "sha256:example" \
+assert_transport_trust_config "default" "" "" "" --set "ngcConfig.serviceKey=fakekey"
+assert_transport_trust_config "configured" "nvcf-trust" "sha256:example" "/nvcf/transport-tls" \
   --set "ngcConfig.serviceKey=fakekey" \
   --set "operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name=nvcf-trust" \
-  --set "operatorConfig.workload.transportTLS.fingerprint=sha256:example"
-assert_transport_trust_config "reuse-values upgrade simulation" "" "" \
+  --set "operatorConfig.workload.transportTLS.fingerprint=sha256:example" \
+  --set "operatorConfig.workload.transportTLS.installedBundleMountPath=/nvcf/transport-tls"
+assert_transport_trust_config "reuse-values upgrade simulation" "" "" "" \
   --set "ngcConfig.serviceKey=fakekey" \
   --values "${reuse_values_file}" \
   --set "operatorConfig=null"

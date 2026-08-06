@@ -62,6 +62,39 @@ func TestNVCAConfigMapper_MapsSecretBackedTransportTLSToAgentConfig(t *testing.T
 		config.Workload.TransportTLS.TrustBundleFingerprint)
 }
 
+func TestNVCAConfigMapper_MapsInstalledBundleMountPathToAgentConfig(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: nvcaOperatorConfigMapName},
+		Data: map[string]string{agentConfigFile: `workload:
+  transportTLS:
+    trustBundle:
+      secretKeyRef:
+        name: nvcf-trust
+        key: ca.crt
+    installedBundleMountPath: /nvcf/transport-tls
+`},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = clients.K8s.CoreV1().Secrets(NVCAOperatorNamespace).Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvcf-trust"},
+		Data:       map[string][]byte{"ca.crt": []byte(transportTrustTestPEM)},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	config, found, err := newNVCAOperatorConfigMapMapper(
+		NVCAOperatorNamespace,
+		clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace),
+		clients.K8s.CoreV1().Secrets(NVCAOperatorNamespace),
+	).getConfig(ctx)
+
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, config.Workload.TransportTLS)
+	assert.Equal(t, "/nvcf/transport-tls", config.Workload.TransportTLS.InstalledBundleMountPath)
+}
+
 func TestNVCAConfigMapper_MissingConfigIsNoop(t *testing.T) {
 	ctx := newTestContext()
 	clients := mockKubeClientsForIntegrationTests()
@@ -231,5 +264,20 @@ func createTransportTrustSource(t *testing.T, ctx context.Context, clients *kube
 		ObjectMeta: metav1.ObjectMeta{Name: "nvcf-trust"},
 		Data:       map[string][]byte{"ca.crt": []byte(transportTrustTestPEM)},
 	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+}
+
+func setTransportTrustInstalledBundleMountPath(
+	t *testing.T,
+	ctx context.Context,
+	clients *kubeclients.KubeClients,
+	mountPath string,
+) {
+	t.Helper()
+	configMap, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(ctx, nvcaOperatorConfigMapName,
+		metav1.GetOptions{})
+	require.NoError(t, err)
+	configMap.Data[agentConfigFile] += "    installedBundleMountPath: " + mountPath + "\n"
+	_, err = clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Update(ctx, configMap, metav1.UpdateOptions{})
 	require.NoError(t, err)
 }

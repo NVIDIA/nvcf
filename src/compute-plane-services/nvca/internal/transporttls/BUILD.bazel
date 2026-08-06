@@ -30,10 +30,12 @@ go_test(
     srcs = ["transport_tls_test.go"],
     embed = [":transporttls"],
     deps = [
+        "//vendor/github.com/evanphx/json-patch/v5:json-patch",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
         "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
         "//vendor/github.com/stretchr/testify/assert",
         "//vendor/github.com/stretchr/testify/require",
         "//vendor/k8s.io/api/core/v1:core",
+        "//vendor/k8s.io/apimachinery/pkg/util/strategicpatch",
     ],
 )

@@ -33,3 +33,6 @@ data:
             name: {{ $secretKeyRef.name | default "" | quote }}
             key: {{ $secretKeyRef.key | default "ca.crt" | quote }}
         fingerprint: {{ $transportTLS.fingerprint | default "" | quote }}
+        {{- if $transportTLS.installedBundleMountPath }}
+        installedBundleMountPath: {{ $transportTLS.installedBundleMountPath | quote }}
+        {{- end }}
