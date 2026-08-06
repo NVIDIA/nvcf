@@ -41,6 +41,8 @@ import (
 )
 
 const (
+	embeddingsEndpointPath = "/v1/embeddings"
+
 	MaxEmbeddingInputs = 2048
 	MaxRerankingDocs   = 100
 	ttsMaxInputLength  = 10000
@@ -322,6 +324,9 @@ func (h *OpenAIProxyHandlers) validateEmbeddingRequest(
 			http.StatusBadRequest,
 			fmt.Sprintf("the model `%s` does not support embeddings", requestModel),
 		)
+	}
+	if err := requireModelURI(reqCtx, reqCtx.Model, embeddingsEndpointPath); err != nil {
+		return "", err
 	}
 	if len(request.Input) == 0 {
 		return "", echo.NewHTTPError(http.StatusBadRequest, "'input' array must not be empty")

@@ -182,6 +182,10 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 }
 
 func requireResponsesURI(reqCtx *requestctx.RequestContext, model string) error {
+	return requireModelURI(reqCtx, model, responsesEndpointPath)
+}
+
+func requireModelURI(reqCtx *requestctx.RequestContext, model, endpointPath string) error {
 	if reqCtx == nil || reqCtx.ModelSpecs == nil {
 		return nil
 	}
@@ -192,14 +196,14 @@ func requireResponsesURI(reqCtx *requestctx.RequestContext, model string) error 
 	}
 
 	for _, uri := range spec.URIs {
-		if normalizeModelURI(uri) == responsesEndpointPath {
+		if normalizeModelURI(uri) == endpointPath {
 			return nil
 		}
 	}
 
 	return echo.NewHTTPError(
 		http.StatusBadRequest,
-		fmt.Sprintf("model %q does not support %s", model, responsesEndpointPath),
+		fmt.Sprintf("model %q does not support %s", model, endpointPath),
 	)
 }
 

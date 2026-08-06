@@ -28,6 +28,7 @@ import (
 	echo "github.com/labstack/echo/v4"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
@@ -116,6 +117,115 @@ func TestProxyEmbeddingsForwardsBodyAndHeaders(t *testing.T) {
 	}
 	if got.BodyModel != "company-name/model-name" {
 		t.Fatalf("body model = %q, want company-name/model-name", got.BodyModel)
+	}
+}
+
+func TestEmbeddingsRejectsModelWithoutEmbeddingsURI(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		_, _ = io.WriteString(w, `{"object":"list","data":[]}`)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Default()
+	proxyProvider, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})
+	if err != nil {
+		t.Fatalf("new stargate provider: %v", err)
+	}
+	e := echo.New()
+	e.Use(NewContextMiddleware(cfg))
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(ec echo.Context) error {
+			if gc, ok := ec.(*GatewayContext); ok && gc.RequestContext() != nil {
+				gc.RequestContext().ModelSpecs = map[string]nvcf.ModelSpec{
+					"company-name/model-name": {
+						URIs: []string{"/v1/chat/completions"},
+					},
+				}
+			}
+			return next(ec)
+		}
+	})
+	RegisterRoutes(
+		e,
+		NewHandlers(
+			cfg,
+			proxyProvider,
+			nil,
+			nil,
+		),
+	)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/embeddings",
+		strings.NewReader(`{"model":"fn-alpha/company-name/model-name","input":"hello"}`),
+	)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "/v1/embeddings") {
+		t.Fatalf("response body missing endpoint: %s", rec.Body.String())
+	}
+}
+
+func TestEmbeddingsAllowsModelWithEmbeddingsURI(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		_, _ = io.WriteString(w, `{"object":"list","data":[]}`)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Default()
+	proxyProvider, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})
+	if err != nil {
+		t.Fatalf("new stargate provider: %v", err)
+	}
+	e := echo.New()
+	e.Use(NewContextMiddleware(cfg))
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(ec echo.Context) error {
+			if gc, ok := ec.(*GatewayContext); ok && gc.RequestContext() != nil {
+				gc.RequestContext().ModelSpecs = map[string]nvcf.ModelSpec{
+					"company-name/model-name": {
+						URIs: []string{"/v1/chat/completions", "/v1/embeddings"},
+					},
+				}
+			}
+			return next(ec)
+		}
+	})
+	RegisterRoutes(
+		e,
+		NewHandlers(
+			cfg,
+			proxyProvider,
+			nil,
+			nil,
+		),
+	)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/embeddings",
+		strings.NewReader(`{"model":"fn-alpha/company-name/model-name","input":"hello"}`),
+	)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 }
 
