@@ -38,7 +38,6 @@ go_oci_multi_binary_image(
     base = "@distroless_go",
     binaries = {
         ":nvca": "/usr/bin/nvca",
-        "//cmd/nvcf-trust-bundle-install:nvcf-trust-bundle-install": "/usr/bin/nvcf-trust-bundle-install",
         "//cmd/webhook-server:webhook-server": "/usr/bin/webhook-server",
         "//cmd/spiffe-token-fetcher:spiffe-token-fetcher": "/usr/bin/spiffe-token-fetcher",
     },

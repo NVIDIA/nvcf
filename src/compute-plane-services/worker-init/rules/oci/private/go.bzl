@@ -15,7 +15,7 @@
 
 "OCI image rules for Go binaries."
 
-load("@rules_pkg//pkg:mappings.bzl", "strip_prefix")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "strip_prefix")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("//rules/oci/private:common.bzl", "DEFAULT_BASE", "create_oci_image")
 
@@ -78,6 +78,69 @@ go_oci_image = macro(
         ),
         "tags": attr.string_list(
             doc = "Tags for generated targets. 'manual' is always added.",
+            configurable = False,
+        ),
+    },
+)
+
+def _go_oci_multi_binary_image_impl(name, visibility, binaries, base, entrypoint, registry, tags):
+    """Packages multiple Go binaries into one OCI image layer."""
+    files_targets = []
+    for i, (bin_label, bin_path) in enumerate(binaries.items()):
+        parts = bin_path.rsplit("/", 1)
+        pkg_dir = parts[0] if parts[0] else "/"
+        files_name = name + "_files_" + str(i)
+        pkg_files(
+            name = files_name,
+            srcs = [bin_label],
+            prefix = pkg_dir,
+            renames = {bin_label: parts[1]},
+            attributes = pkg_attributes(mode = "0755"),
+            visibility = ["//visibility:private"],
+        )
+        files_targets.append(":" + files_name)
+
+    layer_name = name + "_layer"
+    pkg_tar(
+        extension = "tar.gz",
+        name = layer_name,
+        srcs = files_targets,
+        visibility = ["//visibility:private"],
+    )
+    create_oci_image(
+        name = name,
+        tars = [layer_name],
+        base = base,
+        entrypoint = entrypoint,
+        visibility = visibility,
+        registry = registry,
+        tags = tags,
+    )
+
+go_oci_multi_binary_image = macro(
+    doc = "Packages multiple Go binaries into one multi-arch OCI image.",
+    implementation = _go_oci_multi_binary_image_impl,
+    attrs = {
+        "binaries": attr.label_keyed_string_dict(
+            doc = "Map of Go binary label to absolute path inside the image.",
+            mandatory = True,
+            configurable = False,
+        ),
+        "base": attr.label(
+            doc = "Base OCI image.",
+            default = DEFAULT_BASE,
+            configurable = False,
+        ),
+        "entrypoint": attr.string_list(
+            doc = "Container entrypoint.",
+            configurable = False,
+        ),
+        "registry": attr.string(
+            doc = "Registry to push to.",
+            configurable = False,
+        ),
+        "tags": attr.string_list(
+            doc = "Tags for generated targets.",
             configurable = False,
         ),
     },

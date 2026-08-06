@@ -2,6 +2,8 @@ module github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init
 
 go 1.25.0
 
+replace github.com/NVIDIA/nvcf/src/libraries/go/lib => ../../libraries/go/lib
+
 require (
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3
 	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260710034659-973443ac16c3

@@ -28,6 +28,7 @@ import (
 	nvcaopotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/otel"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -88,10 +89,6 @@ func TestSecretBackedTransportTLS_UsesIdenticalEncodingAcrossClusterModes(t *tes
 
 			nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
 			nb.Spec.ClusterSource = clusterSource
-			nb.Spec.NVCAImageConfig = nvidiaiov1.ImageConfig{
-				Repository: "registry.example.test/nvca",
-				Tag:        "2.52.0",
-			}
 			agentCfg, err := bc.newAgentConfig(ctx, nb)
 			require.NoError(t, err)
 			require.NoError(t, bc.setupAgentConfigConfigMap(ctx, nb, agentCfg))
@@ -103,7 +100,6 @@ func TestSecretBackedTransportTLS_UsesIdenticalEncodingAcrossClusterModes(t *tes
 			require.NotNil(t, decodedConfig.Workload.TransportTLS)
 			assert.Equal(t, nvcaconfig.TrustModeBundle, decodedConfig.Workload.TransportTLS.TrustMode)
 			assert.Equal(t, transportTrustTestPEM, decodedConfig.Workload.TransportTLS.TrustBundlePEM)
-			assert.Equal(t, "registry.example.test/nvca:2.52.0", decodedConfig.Workload.TransportTLS.InstallerImage)
 			assert.Equal(t, "/nvcf/transport-tls", decodedConfig.Workload.TransportTLS.InstalledBundleMountPath)
 
 			checker, err := bc.newAgentConfigChangedCheck(ctx, nb)
@@ -287,18 +283,27 @@ func TestSetupAgentConfigConfigMap_InvalidInstalledBundleMountPathPreservesLastG
 	assert.Equal(t, lastGoodData, storedConfig.Data[agentConfigFile])
 }
 
-func TestConfigMapAddHandler_ReconcilesForOperatorConfig(t *testing.T) {
+func TestConfigMapAddHandler_SkipsInitialListForOperatorConfig(t *testing.T) {
 	ctx := newTestContext()
 	bc, backend := newConfigMapEventTestCache(t, ctx)
 
 	err := bc.handleConfigMapAdd(ctx, &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: nvcaOperatorConfigMapName},
 	})
-	require.ErrorContains(t, err, "version cannot be empty")
+	require.NoError(t, err)
 
 	storedBackend, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, backend.Name, metav1.GetOptions{})
 	require.NoError(t, err)
-	assert.Contains(t, storedBackend.Finalizers, cleanup.NVCAOperatorFinalizer)
+	assert.NotContains(t, storedBackend.Finalizers, cleanup.NVCAOperatorFinalizer)
+}
+
+func TestSyncCurrentBackendForConfigMapChange_WrapsError(t *testing.T) {
+	ctx := newTestContext()
+	bc, _ := newConfigMapEventTestCache(t, ctx)
+
+	err := bc.syncCurrentBackendForConfigMapChange(ctx, logrus.NewEntry(logrus.New()))
+
+	require.EqualError(t, err, "sync current NVCFBackend: event-backend version cannot be empty")
 }
 
 func TestConfigMapUpdateHandler_ReconcilesWhenOperatorConfigDataChanges(t *testing.T) {
@@ -333,9 +338,7 @@ func TestConfigMapUpdateHandler_SkipsUnchangedOperatorConfig(t *testing.T) {
 
 func TestConfigMapChangesForceNVCAReconcile(t *testing.T) {
 	assert.True(t, configMapUpdateForcesNVCAReconcile(nvcaOperatorConfigMapName))
-	assert.True(t, configMapAddForcesNVCAReconcile(nvcaOperatorConfigMapName))
 	assert.True(t, configMapUpdateForcesNVCAReconcile(nvcfBackendChartDefaultsConfigMapName))
-	assert.False(t, configMapAddForcesNVCAReconcile(nvcfBackendChartDefaultsConfigMapName))
 }
 
 func newConfigMapEventTestCache(t *testing.T, ctx context.Context) (*BackendK8sCache, *nvidiaiov1.NVCFBackend) {

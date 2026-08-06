@@ -1299,8 +1299,6 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 	if err != nil {
 		return nil, fmt.Errorf("get agent config to merge: %w", err)
 	}
-	bc.defaultTransportTLSInstallerImage(nb, &mergeCfg)
-
 	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
 		return nil, fmt.Errorf("encode config: %w", err)
@@ -1317,17 +1315,6 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 			agentConfigFile: string(cb),
 		},
 	}, nil
-}
-
-func (bc *BackendK8sCache) defaultTransportTLSInstallerImage(nb *nvidiaiov1.NVCFBackend, cfg *nvcaconfig.Config) {
-	if cfg == nil || cfg.Workload.TransportTLS == nil {
-		return
-	}
-	transportTLS := cfg.Workload.TransportTLS
-	if transportTLS.TrustMode != nvcaconfig.TrustModeBundle || strings.TrimSpace(transportTLS.InstallerImage) != "" {
-		return
-	}
-	transportTLS.InstallerImage = bc.getNVCAImagePathFromConfig(nb)
 }
 
 type agentHostOverrides struct {

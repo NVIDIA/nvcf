@@ -1,13 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 go_library(
     name = "nvcf-trust-bundle-install_lib",
     srcs = ["main.go"],
-    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvcf-trust-bundle-install",
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/cmd/nvcf-trust-bundle-install",
     visibility = ["//visibility:private"],
-    deps = [
-        "//internal/transporttls/trustbundle",
-    ],
+    deps = ["@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/trustbundle"],
 )
 
 go_binary(
@@ -20,8 +21,5 @@ go_test(
     name = "nvcf-trust-bundle-install_test",
     srcs = ["main_test.go"],
     embed = [":nvcf-trust-bundle-install_lib"],
-    deps = [
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
-    ],
+    deps = ["@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/trustbundle"],
 )

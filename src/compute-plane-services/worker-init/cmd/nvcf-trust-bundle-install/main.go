@@ -24,7 +24,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls/trustbundle"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle"
 )
 
 const (

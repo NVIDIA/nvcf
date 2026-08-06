@@ -182,6 +182,7 @@ func TestValidateConfigRejectsInvalidInstalledBundleMountPaths(t *testing.T) {
 
 func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
 	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
 		Containers: []corev1.Container{
 			{Name: function.LLMWorkerContainerName, Image: "nvcr.io/nvcf/llm-worker:test"},
 			{Name: "inference", Image: "nvcr.io/customer/inference:test"},
@@ -193,7 +194,6 @@ func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
 		TrustMode:              nvcaconfig.TrustModeBundle,
 		TrustBundleFingerprint: testRootFingerprint,
 		TrustBundlePEM:         testRootCertPEM,
-		InstallerImage:         "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 	}))
 	require.NoError(t, err)
 
@@ -218,8 +218,13 @@ func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
 	}
 }
 
-func TestInjectIntoPodSpecUsesNVCAInstallCommand(t *testing.T) {
+func TestInjectIntoPodSpecUsesRenderedInitImageAndPullPolicy(t *testing.T) {
 	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{{
+			Name:            "init",
+			Image:           "nvcr.io/nvcf-core/nvcf_worker_init:v3.1",
+			ImagePullPolicy: corev1.PullAlways,
+		}},
 		Containers: []corev1.Container{{
 			Name:  function.LLMWorkerContainerName,
 			Image: "nvcr.io/nvcf/llm-worker:test",
@@ -230,14 +235,13 @@ func TestInjectIntoPodSpecUsesNVCAInstallCommand(t *testing.T) {
 		TrustMode:              nvcaconfig.TrustModeBundle,
 		TrustBundleFingerprint: testRootFingerprint,
 		TrustBundlePEM:         testRootCertPEM,
-		InstallerImage:         "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 	}))
 	require.NoError(t, err)
 
 	installContainer := findTestInitContainer(podSpec, InstallContainerName)
 	require.NotNil(t, installContainer)
-	assert.Equal(t, "nvcr.io/nvidia/nvcf-byoc/nvca:test", installContainer.Image)
-	assert.Equal(t, corev1.PullIfNotPresent, installContainer.ImagePullPolicy)
+	assert.Equal(t, "nvcr.io/nvcf-core/nvcf_worker_init:v3.1", installContainer.Image)
+	assert.Equal(t, corev1.PullAlways, installContainer.ImagePullPolicy)
 	assert.Equal(t, []string{InstallCommandPath}, installContainer.Command)
 	assert.Equal(t, []string{
 		"--system-bundle", SystemCertFile,
@@ -252,8 +256,42 @@ func TestInjectIntoPodSpecUsesNVCAInstallCommand(t *testing.T) {
 	assert.False(t, *installContainer.SecurityContext.RunAsNonRoot)
 }
 
+func TestInjectIntoPodSpecRejectsMissingOrEmptyRegularInitImage(t *testing.T) {
+	tests := []struct {
+		name           string
+		initContainers []corev1.Container
+	}{
+		{name: "missing init"},
+		{name: "empty init image", initContainers: []corev1.Container{{Name: "init"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			podSpec := &corev1.PodSpec{
+				InitContainers: tt.initContainers,
+				Containers: []corev1.Container{{
+					Name:  function.LLMWorkerContainerName,
+					Image: "nvcr.io/nvcf/llm-worker:test",
+				}},
+			}
+
+			err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
+				TrustMode:              nvcaconfig.TrustModeBundle,
+				TrustBundleFingerprint: testRootFingerprint,
+				TrustBundlePEM:         testRootCertPEM,
+			}))
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `regular init container "init"`)
+			assert.Empty(t, podSpec.Volumes)
+			assert.Nil(t, findTestInitContainer(podSpec, InstallContainerName))
+		})
+	}
+}
+
 func TestInjectIntoPodSpecUsesConfiguredInstalledBundleMountPath(t *testing.T) {
 	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
 		Containers: []corev1.Container{{
 			Name:  function.LLMWorkerContainerName,
 			Image: "nvcr.io/nvcf/llm-worker:test",
@@ -264,7 +302,6 @@ func TestInjectIntoPodSpecUsesConfiguredInstalledBundleMountPath(t *testing.T) {
 		TrustMode:                nvcaconfig.TrustModeBundle,
 		TrustBundleFingerprint:   testRootFingerprint,
 		TrustBundlePEM:           testRootCertPEM,
-		InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 		InstalledBundleMountPath: "/nvcf/transport-tls",
 	}))
 	require.NoError(t, err)
@@ -284,6 +321,7 @@ func TestInjectIntoPodSpecUsesConfiguredInstalledBundleMountPath(t *testing.T) {
 
 func TestInjectIntoPodSpecRejectsConflictingInstalledBundleMount(t *testing.T) {
 	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
 		Containers: []corev1.Container{{
 			Name:  function.LLMWorkerContainerName,
 			Image: "nvcr.io/nvcf/llm-worker:test",
@@ -298,7 +336,6 @@ func TestInjectIntoPodSpecRejectsConflictingInstalledBundleMount(t *testing.T) {
 		TrustMode:                nvcaconfig.TrustModeBundle,
 		TrustBundleFingerprint:   testRootFingerprint,
 		TrustBundlePEM:           testRootCertPEM,
-		InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 		InstalledBundleMountPath: "/nvcf/transport-tls",
 	}))
 
@@ -313,6 +350,7 @@ func TestInjectIntoPodSpecRejectsOverlappingInstalledBundleMount(t *testing.T) {
 	for _, existingMountPath := range []string{"/", "/nvcf", "/nvcf/", "/nvcf/transport-tls/nested"} {
 		t.Run(existingMountPath, func(t *testing.T) {
 			podSpec := &corev1.PodSpec{
+				InitContainers: []corev1.Container{testWorkerInitContainer()},
 				Containers: []corev1.Container{{
 					Name:  function.LLMWorkerContainerName,
 					Image: "nvcr.io/nvcf/llm-worker:test",
@@ -327,7 +365,6 @@ func TestInjectIntoPodSpecRejectsOverlappingInstalledBundleMount(t *testing.T) {
 				TrustMode:                nvcaconfig.TrustModeBundle,
 				TrustBundleFingerprint:   testRootFingerprint,
 				TrustBundlePEM:           testRootCertPEM,
-				InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 				InstalledBundleMountPath: "/nvcf/transport-tls",
 			}))
 
@@ -341,10 +378,13 @@ func TestInjectIntoPodSpecRejectsOverlappingInstalledBundleMount(t *testing.T) {
 }
 
 func TestInjectIntoPodSpecCoexistsWithAdmissionCertificateMounts(t *testing.T) {
-	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
-		Name:  function.LLMWorkerContainerName,
-		Image: "nvcr.io/nvcf/llm-worker:test",
-	}}}}
+	pod := &corev1.Pod{Spec: corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
+		Containers: []corev1.Container{{
+			Name:  function.LLMWorkerContainerName,
+			Image: "nvcr.io/nvcf/llm-worker:test",
+		}},
+	}}
 	base, err := json.Marshal(pod)
 	require.NoError(t, err)
 
@@ -365,7 +405,6 @@ func TestInjectIntoPodSpecCoexistsWithAdmissionCertificateMounts(t *testing.T) {
 		TrustMode:                nvcaconfig.TrustModeBundle,
 		TrustBundleFingerprint:   testRootFingerprint,
 		TrustBundlePEM:           testRootCertPEM,
-		InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 		InstalledBundleMountPath: "/nvcf/transport-tls",
 	}))
 	require.NoError(t, err)
@@ -381,50 +420,26 @@ func TestInjectIntoPodSpecCoexistsWithAdmissionCertificateMounts(t *testing.T) {
 	assert.NotNil(t, findTestInitContainer(&pod.Spec, InstallContainerName))
 }
 
-func TestInjectIntoPodSpecUsesConfiguredInstallerImageWhenLegacyEnvIsSet(t *testing.T) {
-	t.Setenv("NVCF_TRUST_BUNDLE_INSTALLER_IMAGE", "nvcr.io/private-mirror/nvca:test")
-	podSpec := &corev1.PodSpec{
-		InitContainers: []corev1.Container{{
-			Name:            InstallContainerName,
-			Image:           "nvcr.io/legacy/installer:42",
-			ImagePullPolicy: corev1.PullAlways,
-		}},
-		Containers: []corev1.Container{{
-			Name:  function.LLMWorkerContainerName,
-			Image: "nvcr.io/nvcf/llm-worker:test",
-		}},
-	}
+func TestInjectIntoPodSpecSkipsNonLLMWorkloads(t *testing.T) {
+	podSpec := &corev1.PodSpec{Containers: []corev1.Container{{Name: "inference", Image: "nvcr.io/customer/inference:test"}}}
 
 	err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
 		TrustMode:              nvcaconfig.TrustModeBundle,
 		TrustBundleFingerprint: testRootFingerprint,
 		TrustBundlePEM:         testRootCertPEM,
-		InstallerImage:         "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 	}))
-	require.NoError(t, err)
 
-	installContainer := findTestInitContainer(podSpec, InstallContainerName)
-	require.NotNil(t, installContainer)
-	assert.Equal(t, "nvcr.io/nvidia/nvcf-byoc/nvca:test", installContainer.Image)
-	assert.Equal(t, corev1.PullIfNotPresent, installContainer.ImagePullPolicy)
+	require.NoError(t, err)
+	assert.Empty(t, podSpec.InitContainers)
+	assert.Empty(t, podSpec.Volumes)
 }
 
-func TestInjectIntoPodSpecRejectsBundleModeWithoutInstallerImage(t *testing.T) {
-	podSpec := &corev1.PodSpec{
-		Containers: []corev1.Container{{
-			Name:  function.LLMWorkerContainerName,
-			Image: "nvcr.io/nvcf/llm-worker:test",
-		}},
+func testWorkerInitContainer() corev1.Container {
+	return corev1.Container{
+		Name:            WorkerInitContainerName,
+		Image:           "nvcr.io/nvcf-core/nvcf_worker_init:v3.1",
+		ImagePullPolicy: corev1.PullIfNotPresent,
 	}
-
-	err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
-		TrustMode:              nvcaconfig.TrustModeBundle,
-		TrustBundleFingerprint: testRootFingerprint,
-		TrustBundlePEM:         testRootCertPEM,
-	}))
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "transportTls.installerImage")
 }
 
 func findTestContainer(podSpec *corev1.PodSpec, name string) *corev1.Container {

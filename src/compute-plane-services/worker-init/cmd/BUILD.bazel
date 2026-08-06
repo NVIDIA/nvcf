@@ -14,7 +14,8 @@
 # limitations under the License.
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
-load("//rules/oci:defs.bzl", "go_oci_image")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//rules/oci:defs.bzl", "go_oci_multi_binary_image")
 
 go_library(
     name = "cmd_lib",
@@ -42,10 +43,23 @@ go_binary(
     visibility = ["//visibility:public"],
 )
 
-go_oci_image(
+go_oci_multi_binary_image(
     name = "image",
     base = "@distroless_go",
-    binary = ":worker-init",
+    binaries = {
+        ":worker-init": "/worker-init",
+        "//cmd/nvcf-trust-bundle-install:nvcf-trust-bundle-install": "/usr/bin/nvcf-trust-bundle-install",
+    },
+    entrypoint = ["/worker-init"],
     tags = ["nvcf-worker-init"],
     visibility = ["//visibility:public"],
+)
+
+# Keep the worker-init entrypoint stable while ensuring the transport trust
+# installer is present in the same OCI image at the path NVCA invokes.
+sh_test(
+    name = "image_contents_test",
+    srcs = ["image_contents_test.sh"],
+    args = ["$(location :image.tar)"],
+    data = [":image.tar"],
 )
