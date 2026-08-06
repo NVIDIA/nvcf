@@ -42,6 +42,9 @@ spec:
           env:
             - name: NVCA_IMAGE_REPO
               value: "nvcr.io/nvidia/nvcf-byoc/nvca"
+          args:
+            - --function-env-overrides-b64
+            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIn0="
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -86,6 +89,7 @@ expected_images=(
   "nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper:0.5.0"
   "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector:0.143.2"
   "nvcr.io/nvidia/nvcf-byoc/samba:1.0.5"
+  "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11"
 )
 
 for image in "${expected_images[@]}"; do
@@ -96,8 +100,8 @@ for image in "${expected_images[@]}"; do
 done
 
 line_count="$(wc -l < "${image_manifest}" | tr -d '[:space:]')"
-if [[ "${line_count}" != "5" ]]; then
-  echo "expected exactly 5 unique images, got ${line_count}" >&2
+if [[ "${line_count}" != "6" ]]; then
+  echo "expected exactly 6 unique images, got ${line_count}" >&2
   cat "${image_manifest}" >&2
   exit 1
 fi

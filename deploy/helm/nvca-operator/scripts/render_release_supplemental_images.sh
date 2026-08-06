@@ -132,6 +132,39 @@ END {
 }
 ' "${input_manifest}" | sort -u > "${tmp_images}"
 
+while IFS= read -r encoded_overrides; do
+  if decoded_overrides="$(printf '%s' "$encoded_overrides" | base64 --decode 2>/dev/null)"; then
+    :
+  else
+    decoded_overrides="$(printf '%s' "$encoded_overrides" | base64 -D)"
+  fi
+
+  byoo_otel_collector_image="$(printf '%s' "$decoded_overrides" | sed -n 's/.*"BYOO_OTEL_COLLECTOR_CONTAINER"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  case "$byoo_otel_collector_image" in
+    */*:*|*/*@*)
+      printf '%s\n' "$byoo_otel_collector_image" >> "$tmp_images"
+      ;;
+  esac
+done < <(
+  awk '
+    /-[[:space:]]+--(function|task)-env-overrides-b64$/ {
+      expect_value = 1
+      next
+    }
+    expect_value && /^[[:space:]]*-[[:space:]]*/ {
+      value = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+      gsub(/^"/, "", value)
+      gsub(/"$/, "", value)
+      print value
+      expect_value = 0
+    }
+  ' "${input_manifest}"
+)
+
+sort -u "${tmp_images}" > "${tmp_images}.sorted"
+mv "${tmp_images}.sorted" "${tmp_images}"
+
 if [[ ! -s "${tmp_images}" ]]; then
   cat > "${output_manifest}" <<'EOF'
 apiVersion: v1
