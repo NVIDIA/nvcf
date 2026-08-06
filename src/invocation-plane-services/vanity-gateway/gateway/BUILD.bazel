@@ -31,6 +31,7 @@ go_library(
         "@com_github_nvidia_nvcf_go//pkg/nvkit/logs",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/servers",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/tracing",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_valyala_bytebufferpool//:bytebufferpool",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@io_opentelemetry_go_otel//:otel",
@@ -59,6 +60,7 @@ go_test(
     srcs = [
         "gateway_test.go",
         "h2_test.go",
+        "info_test.go",
         "openai_director_test.go",
         "shadow_metrics_test.go",
         "shadow_test.go",

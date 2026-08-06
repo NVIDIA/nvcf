@@ -69,6 +69,9 @@ go_library(
     # VCS build info (absent under Bazel).
     x_defs = {
         "ai-api-gateway-service/gateway.version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-ai-api-gateway-service",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
     },
     deps = [
         "//src/invocation-plane-services/vanity-gateway/gateway",
