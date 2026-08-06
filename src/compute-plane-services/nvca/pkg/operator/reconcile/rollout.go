@@ -20,7 +20,6 @@ package operator
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
@@ -318,9 +317,9 @@ func (bc *BackendK8sCache) newAgentConfigChangedCheck(ctx context.Context, nb *n
 	if err != nil {
 		return nil, nvcaoperatorerrors.FatalError(err)
 	}
-	mergeCfg, _, err := bc.getAgentConfigToMerge(ctx)
+	desiredCfgCM, err := bc.newAgentConfigConfigMap(ctx, nb, genCfg)
 	if err != nil {
-		return nil, fmt.Errorf("get agent config to merge: %w", err)
+		return nil, err
 	}
 	existingCfgCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
 	switch {
@@ -331,14 +330,10 @@ func (bc *BackendK8sCache) newAgentConfigChangedCheck(ctx context.Context, nb *n
 		return nil, err
 	}
 
-	genCfgData, err := encodeAgentConfig(genCfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
-	if err != nil {
-		return nil, fmt.Errorf("encode and merge generated config: %w", err)
-	}
-
+	genCfgData := desiredCfgCM.Data[agentConfigFile]
 	existingCfgData := existingCfgCM.Data[agentConfigFile]
 
 	return func() bool {
-		return !bytes.Equal(bytes.TrimSpace(genCfgData), bytes.TrimSpace([]byte(existingCfgData)))
+		return !bytes.Equal(bytes.TrimSpace([]byte(genCfgData)), bytes.TrimSpace([]byte(existingCfgData)))
 	}, nil
 }

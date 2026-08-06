@@ -125,6 +125,7 @@ const (
 	agentConfigFilePath           = agentConfigDir + "/" + agentConfigFile
 	agentConfigConfigMapName      = "agent-config"
 	agentConfigMergeConfigMapName = "agent-config-merge"
+	nvcaOperatorConfigMapName     = "nvca-operator-config"
 	agentConfigVolumeName         = "agent-config"
 
 	// ReVal config.
@@ -1279,18 +1280,33 @@ func (bc *BackendK8sCache) setupAgentConfigConfigMap(
 	nb *nvidiaiov1.NVCFBackend,
 	cfg nvcaconfig.Config,
 ) error {
+	cm, err := bc.newAgentConfigConfigMap(ctx, nb, cfg)
+	if err != nil {
+		return err
+	}
+	return bc.createOrUpdateConfigMap(ctx, cm)
+}
+
+// newAgentConfigConfigMap maps a generated NVCA configuration resource to the
+// ConfigMap consumed by the agent. Keeping this mapping in one place ensures
+// reconcile setup and rollout comparison use identical configuration bytes.
+func (bc *BackendK8sCache) newAgentConfigConfigMap(
+	ctx context.Context,
+	nb *nvidiaiov1.NVCFBackend,
+	cfg nvcaconfig.Config,
+) (*corev1.ConfigMap, error) {
 	mergeCfg, _, err := bc.getAgentConfigToMerge(ctx)
 	if err != nil {
-		return fmt.Errorf("get agent config to merge: %w", err)
+		return nil, fmt.Errorf("get agent config to merge: %w", err)
 	}
 	bc.defaultTransportTLSInstallerImage(nb, &mergeCfg)
 
 	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
-		return fmt.Errorf("encode config: %v", err)
+		return nil, fmt.Errorf("encode config: %w", err)
 	}
 
-	s := &corev1.ConfigMap{
+	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        agentConfigConfigMapName,
 			Namespace:   getSystemNamespace(nb),
@@ -1300,9 +1316,7 @@ func (bc *BackendK8sCache) setupAgentConfigConfigMap(
 		Data: map[string]string{
 			agentConfigFile: string(cb),
 		},
-	}
-
-	return bc.createOrUpdateConfigMap(ctx, s)
+	}, nil
 }
 
 func (bc *BackendK8sCache) defaultTransportTLSInstallerImage(nb *nvidiaiov1.NVCFBackend, cfg *nvcaconfig.Config) {
@@ -1420,6 +1434,28 @@ func yamlStringNode(value string) *yamlv3.Node {
 }
 
 func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
+	mergeCfg, foundMergeCfg, err := bc.getRawAgentConfigToMerge(ctx)
+	if err != nil {
+		return nvcaconfig.Config{}, false, err
+	}
+
+	operatorCfg, foundOperatorCfg, err := bc.getNVCAAgentConfig(ctx)
+	if err != nil {
+		return nvcaconfig.Config{}, false, err
+	}
+	if !foundOperatorCfg {
+		return mergeCfg, foundMergeCfg, nil
+	}
+	if mergeCfg.Workload.TransportTLS != nil {
+		return nvcaconfig.Config{}, false,
+			fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName)
+	}
+
+	mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
+	return mergeCfg, true, nil
+}
+
+func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
 	log := core.GetLogger(ctx)
 	cm, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.operatorNamespace).Get(ctx, agentConfigMergeConfigMapName, metav1.GetOptions{})
 	if err != nil {

@@ -180,6 +180,61 @@ assert_service_oauth_nil_safe "self-managed" \
   --set-string "selfManaged.natsURL=nats://nats.nvcf-control-plane.test:14222" \
   --show-only templates/self-managed-nvcfbackend-cm.yaml
 
+# Secret-backed workload transport trust is operator-owned configuration, not a
+# raw agentConfig.mergeConfig overlay. Confirm its ConfigMap is rendered with
+# defaults, configured values, and values inherited by reuse-values upgrades.
+echo -e "\nTesting workload transport trust ConfigMap renders..."
+assert_transport_trust_config() {
+  local label="${1}"
+  local expected_name="${2}"
+  local expected_fingerprint="${3}"
+  local expected_mount_path="${4}"
+  shift 4
+  local render_output
+  render_output="$(mktemp)"
+
+  if ! helm template test-release "${repo_root}/deployments/nvca-operator" "$@" \
+    --show-only templates/operator-config-cm.yaml > "${render_output}" 2>&1; then
+    echo "Expected ${label} workload transport trust ConfigMap to render"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  if ! grep -Fq "name: \"${expected_name}\"" "${render_output}" ||
+    ! grep -Fq "fingerprint: \"${expected_fingerprint}\"" "${render_output}"; then
+    echo "Expected ${label} workload transport trust configuration"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  if [[ -z "${expected_mount_path}" ]]; then
+    if grep -Fq "installedBundleMountPath:" "${render_output}"; then
+      echo "Expected ${label} workload transport trust configuration to omit installedBundleMountPath"
+      cat "${render_output}"
+      rm -f "${render_output}"
+      exit 1
+    fi
+  elif ! grep -Fq "installedBundleMountPath: \"${expected_mount_path}\"" "${render_output}"; then
+    echo "Expected ${label} workload transport trust configuration to set installedBundleMountPath"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  rm -f "${render_output}"
+  echo "✓ ${label} workload transport trust ConfigMap renders"
+}
+
+assert_transport_trust_config "default" "" "" "" --set "ngcConfig.serviceKey=fakekey"
+assert_transport_trust_config "configured" "nvcf-trust" "sha256:example" "/nvcf/transport-tls" \
+  --set "ngcConfig.serviceKey=fakekey" \
+  --set "operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name=nvcf-trust" \
+  --set "operatorConfig.workload.transportTLS.fingerprint=sha256:example" \
+  --set "operatorConfig.workload.transportTLS.installedBundleMountPath=/nvcf/transport-tls"
+assert_transport_trust_config "reuse-values upgrade simulation" "" "" "" \
+  --set "ngcConfig.serviceKey=fakekey" \
+  --values "${reuse_values_file}" \
+  --set "operatorConfig=null"
+
 # Test secret mirroring feature
 # Test with only source namespace (should not add args)
 run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns" --set "ngcConfig.serviceKey=fakekey"

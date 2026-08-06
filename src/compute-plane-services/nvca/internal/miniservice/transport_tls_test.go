@@ -81,6 +81,7 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 					TrustBundleFingerprint:   testTransportTLSRootFingerprint,
 					TrustBundlePEM:           testTransportTLSRootCertPEM,
 					InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
+					InstalledBundleMountPath: "/nvcf/transport-tls",
 				},
 			},
 		},
@@ -119,9 +120,11 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 	assert.NotNil(t, findWorkloadInitContainer(podSpec, "nvcf-trust-bundle-install"))
 	llmWorker := findWorkloadContainer(podSpec, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
-	assert.Equal(t, "/etc/ssl/certs/ca-certificates.crt",
+	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt",
 		findWorkloadEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
-	assert.NotNil(t, findWorkloadVolumeMount(llmWorker, "nvcf-trust-merged-certs"))
+	mount := findWorkloadVolumeMount(llmWorker, "nvcf-trust-merged-certs")
+	require.NotNil(t, mount)
+	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
 
 	for _, name := range []string{"inference", "smb-server"} {
 		container := findWorkloadContainer(podSpec, name)

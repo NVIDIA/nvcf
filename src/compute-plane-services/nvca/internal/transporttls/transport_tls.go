@@ -19,6 +19,7 @@ package transporttls
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 
@@ -48,8 +49,9 @@ const (
 	TrustBundleMountPath = "/nvcf/trust"
 	MergedCertsMountPath = "/merged-certs"
 	MergedCertsFile      = "/merged-certs/ca-certificates.crt"
+	InstalledBundleFile  = "ca-certificates.crt"
 	SystemCertDir        = "/etc/ssl/certs"
-	SystemCertFile       = "/etc/ssl/certs/ca-certificates.crt"
+	SystemCertFile       = "/etc/ssl/certs/" + InstalledBundleFile
 	CertPathEnv          = "STARGATE_TLS_CERT_PATH"
 )
 
@@ -65,6 +67,9 @@ func NormalizeConfig(cfg nvcaconfig.TransportTLSConfig) nvcaconfig.TransportTLSC
 	if cfg.TrustBundleKey == "" {
 		cfg.TrustBundleKey = DefaultTrustBundleKey
 	}
+	if cfg.InstalledBundleMountPath == "" {
+		cfg.InstalledBundleMountPath = SystemCertDir
+	}
 	cfg.TrustBundleFingerprint = strings.ToLower(strings.TrimSpace(cfg.TrustBundleFingerprint))
 	return cfg
 }
@@ -74,6 +79,9 @@ func ValidateConfig(cfg nvcaconfig.TransportTLSConfig) error {
 	case TrustModeSystem:
 		return nil
 	case TrustModeBundle:
+		if err := validateInstalledBundleMountPath(cfg.InstalledBundleMountPath); err != nil {
+			return err
+		}
 		if errs := validation.IsDNS1123Subdomain(cfg.TrustBundleConfigMapName); len(errs) > 0 {
 			return fmt.Errorf("transportTls.trustBundleConfigMapName is invalid: %s", strings.Join(errs, "; "))
 		}
@@ -102,6 +110,23 @@ func ValidateConfig(cfg nvcaconfig.TransportTLSConfig) error {
 	}
 }
 
+func validateInstalledBundleMountPath(mountPath string) error {
+	if !path.IsAbs(mountPath) {
+		return fmt.Errorf("transportTls.installedBundleMountPath must be absolute")
+	}
+	if path.Clean(mountPath) != mountPath {
+		return fmt.Errorf("transportTls.installedBundleMountPath must be canonical")
+	}
+	if mountPath == "/" {
+		return fmt.Errorf("transportTls.installedBundleMountPath must not be root")
+	}
+	if mountPath == MergedCertsMountPath || strings.HasPrefix(mountPath, MergedCertsMountPath+"/") ||
+		mountPath == TrustBundleMountPath || strings.HasPrefix(mountPath, TrustBundleMountPath+"/") {
+		return fmt.Errorf("transportTls.installedBundleMountPath uses reserved path %q", mountPath)
+	}
+	return nil
+}
+
 func FingerprintTrustBundle(trustBundlePEM string) (string, error) {
 	return trustbundle.FingerprintPEM(trustBundlePEM)
 }
@@ -127,20 +152,46 @@ func InjectIntoPodSpec(podSpec *corev1.PodSpec, cfg nvcaconfig.TransportTLSConfi
 	if err != nil {
 		return err
 	}
+	if err := validateInstalledBundleMountConflict(&podSpec.Containers[llmWorkerIdx], cfg.InstalledBundleMountPath); err != nil {
+		return err
+	}
 	upsertVolumes(podSpec, cfg)
 	upsertInstallContainer(podSpec, installImage, installImagePullPolicy, cfg)
 
 	llmWorker := &podSpec.Containers[llmWorkerIdx]
 	upsertVolumeMount(&llmWorker.VolumeMounts, corev1.VolumeMount{
 		Name:      MergedCertsVolumeName,
-		MountPath: SystemCertDir,
+		MountPath: cfg.InstalledBundleMountPath,
 		ReadOnly:  true,
 	})
 	k8sutil.AddEnvsToContainer(llmWorker, corev1.EnvVar{
 		Name:  CertPathEnv,
-		Value: SystemCertFile,
+		Value: cfg.InstalledBundleMountPath + "/" + InstalledBundleFile,
 	})
 	return nil
+}
+
+func validateInstalledBundleMountConflict(container *corev1.Container, mountPath string) error {
+	for _, mount := range container.VolumeMounts {
+		if mount.Name != MergedCertsVolumeName && mountPathsOverlap(mount.MountPath, mountPath) {
+			return fmt.Errorf("transportTls.installedBundleMountPath %q conflicts with volume mount %q on %q",
+				mountPath, mount.Name, container.Name)
+		}
+	}
+	return nil
+}
+
+// mountPathsOverlap reports whether either mount hides the other. Kubernetes
+// permits nested mounts, but using them for the NVCA bundle would make the
+// installed certificate file ambiguous or inaccessible to the llm worker.
+func mountPathsOverlap(first, second string) bool {
+	first = path.Clean(first)
+	second = path.Clean(second)
+
+	if first == "/" || second == "/" {
+		return true
+	}
+	return first == second || strings.HasPrefix(first, second+"/") || strings.HasPrefix(second, first+"/")
 }
 
 func resolveInstallContainerImage(

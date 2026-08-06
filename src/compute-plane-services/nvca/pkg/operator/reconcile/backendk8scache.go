@@ -568,6 +568,111 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 
 // addConfigMapInformers adds and starts an informer on ConfigMaps containing
 // potentially dynamic data to ensure any changes are propagated to all necessary namespaces.
+func configMapUpdateForcesNVCAReconcile(name string) bool {
+	switch name {
+	case nvcfCustomNetworkPoliciesConfigMapName,
+		nvcfCustomAnnotationsConfigMapName,
+		nvcfGPUProfilingConfigMapName,
+		nvcfBackendChartDefaultsConfigMapName,
+		nvcaOperatorConfigMapName:
+		return true
+	default:
+		return false
+	}
+}
+
+func configMapAddForcesNVCAReconcile(name string) bool {
+	return name == nvcaOperatorConfigMapName
+}
+
+func (c *BackendK8sCache) syncCurrentBackendForConfigMapChange(ctx context.Context, log *logrus.Entry) error {
+	if err := c.SyncNVCFCurrentBackend(ctx, true); err != nil {
+		if nvcaoperatorerrors.IsFatal(err) {
+			nvcaoperatorerrors.ExitReason(ctx, err)
+			log.WithError(err).Fatalf("failed to sync current NVCFBackend, will not be requeued, NVCA operator will exit")
+		}
+		log.WithError(err).Error("failed to sync current NVCFBackend")
+		return err
+	}
+	log.Debug("successfully synced current NVCFBackend")
+	return nil
+}
+
+func (c *BackendK8sCache) handleConfigMapAdd(ctx context.Context, obj interface{}) error {
+	log := core.GetLogger(ctx)
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		log.Errorf("Wrong object in ConfigMap informer Add handler: %v", obj)
+		return fmt.Errorf("invalid object received")
+	}
+	if cm.Name == cleanup.ShutdownSentinelConfigMapName {
+		log.Debugf("found %s configmap update, skipping", cm.Name)
+		return nil
+	}
+	if configMapAddForcesNVCAReconcile(cm.Name) {
+		log.Debugf("found %s ConfigMap creation, syncing current NVCFBackend", cm.Name)
+		return c.syncCurrentBackendForConfigMapChange(ctx, log)
+	}
+	return nil
+}
+
+func (c *BackendK8sCache) handleConfigMapUpdate(ctx context.Context, oldObj, newObj interface{}) error {
+	log := core.GetLogger(ctx)
+	log.Debug("Got ConfigMap update")
+
+	oldCM, ok := oldObj.(*corev1.ConfigMap)
+	if !ok {
+		log.Errorf("Wrong object in ConfigMap informer: %v", oldObj)
+		return fmt.Errorf("invalid object received")
+	}
+	newCM, ok := newObj.(*corev1.ConfigMap)
+	if !ok {
+		log.Errorf("Wrong object in ConfigMap informer: %v", newObj)
+		return fmt.Errorf("invalid object received")
+	}
+
+	log = log.WithFields(logrus.Fields{
+		"configmapName": newCM.Name,
+	})
+
+	switch {
+	case configMapUpdateForcesNVCAReconcile(newCM.Name):
+		log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
+		diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
+		log.WithField("diff", diff).Debugf("configmap data diff")
+		if diff != "" {
+			log.Info("configmap data has changed, forcing rollout")
+			return c.syncCurrentBackendForConfigMapChange(ctx, log)
+		}
+		log.Debug("successfully synced current NVCFBackend")
+		return nil
+	case newCM.Name == nvcfBackendHelmManagedConfigMapName:
+		log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
+		diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
+		log.WithField("diff", diff).Debugf("configmap data diff")
+		if diff != "" {
+			log.Infof("configmap %s data has changed, dispatch cluster reconcile event", newCM.Name)
+			c.dispatchReconcileClusterFunc(ctx)
+		}
+		log.Debug("successfully dispatched cluster reconcile event")
+		return nil
+	case newCM.Name == nvcfBackendSelfManagedConfigMapName:
+		log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
+		diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
+		log.WithField("diff", diff).Debugf("configmap data diff")
+		if diff != "" {
+			log.Infof("configmap %s data has changed, dispatch cluster reconcile event", newCM.Name)
+			c.dispatchReconcileClusterFunc(ctx)
+		}
+		log.Debug("successfully dispatched cluster reconcile event")
+		return nil
+	case newCM.Name == cleanup.ShutdownSentinelConfigMapName:
+		log.Debugf("found %s configmap update, skipping", newCM.Name)
+		return nil
+	}
+	return nil
+}
+
 func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 	log := core.GetLogger(ctx)
 
@@ -581,82 +686,14 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 	_, err := cmi.Informer().AddEventHandler(&cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			_ = cmnotel.InvokeWithSpan(ctx, c.tracer, "nvca-operator.BackendK8sCache.ConfigMapInformer.AddHandler",
-				func(_ context.Context) error {
-					cm, ok := obj.(*corev1.ConfigMap)
-					if !ok {
-						log.Errorf("Wrong object in ConfigMap informer Add handler: %v", obj)
-						return fmt.Errorf("invalid object received")
-					}
-					if cm.Name == cleanup.ShutdownSentinelConfigMapName {
-						log.Debugf("found %s configmap update, skipping", cm.Name)
-						return nil
-					}
-					return nil
+				func(ctx context.Context) error {
+					return c.handleConfigMapAdd(ctx, obj)
 				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer))
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			_ = cmnotel.InvokeWithSpan(ctx, c.tracer, "nvca-operator.BackendK8sCache.ConfigMapInformer.UpdateHandler",
 				func(_ context.Context) error {
-					log.Debug("Got ConfigMap update")
-
-					oldCM, ok := oldObj.(*corev1.ConfigMap)
-					if !ok {
-						log.Errorf("Wrong object in ConfigMap informer: %v", oldObj)
-						return fmt.Errorf("invalid object received")
-					}
-					newCM, ok := newObj.(*corev1.ConfigMap)
-					if !ok {
-						log.Errorf("Wrong object in ConfigMap informer: %v", newObj)
-						return fmt.Errorf("invalid object received")
-					}
-
-					log = log.WithFields(logrus.Fields{
-						"configmapName": newCM.Name,
-					})
-
-					switch newCM.Name {
-					case nvcfCustomNetworkPoliciesConfigMapName, nvcfCustomAnnotationsConfigMapName, nvcfGPUProfilingConfigMapName, nvcfBackendChartDefaultsConfigMapName:
-						log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
-						diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
-						log.WithField("diff", diff).Debugf("configmap data diff")
-						if diff != "" {
-							log.Info("configmap data has changed, forcing rollout")
-							if err := c.SyncNVCFCurrentBackend(ctx, true); err != nil {
-								if nvcaoperatorerrors.IsFatal(err) {
-									nvcaoperatorerrors.ExitReason(ctx, err)
-									log.WithError(err).Fatalf("failed to sync current NVCFBackend, will not be requeued, NVCA operator will exit")
-								}
-								log.WithError(err).Error("failed to sync current NVCFBackend")
-								return err
-							}
-						}
-						log.Debug("successfully synced current NVCFBackend")
-						return nil
-					case nvcfBackendHelmManagedConfigMapName:
-						log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
-						diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
-						log.WithField("diff", diff).Debugf("configmap data diff")
-						if diff != "" {
-							log.Infof("configmap %s data has changed, dispatch cluster reconcile event", newCM.Name)
-							c.dispatchReconcileClusterFunc(ctx)
-						}
-						log.Debug("successfully dispatched cluster reconcile event")
-						return nil
-					case nvcfBackendSelfManagedConfigMapName:
-						log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
-						diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
-						log.WithField("diff", diff).Debugf("configmap data diff")
-						if diff != "" {
-							log.Infof("configmap %s data has changed, dispatch cluster reconcile event", newCM.Name)
-							c.dispatchReconcileClusterFunc(ctx)
-						}
-						log.Debug("successfully dispatched cluster reconcile event")
-						return nil
-					case cleanup.ShutdownSentinelConfigMapName:
-						log.Debugf("found %s configmap update, skipping", newCM.Name)
-						return nil
-					}
-					return nil
+					return c.handleConfigMapUpdate(ctx, oldObj, newObj)
 				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer))
 		},
 	})
