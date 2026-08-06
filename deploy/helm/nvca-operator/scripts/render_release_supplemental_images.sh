@@ -132,19 +132,43 @@ END {
 }
 ' "${input_manifest}" | sort -u > "${tmp_images}"
 
+is_valid_image_reference() {
+  local image="$1"
+
+  [[ "${image}" =~ ^[a-z0-9][a-z0-9._-]*(:[0-9]+)?/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]*(@[A-Za-z][A-Za-z0-9_+.-]*:[A-Fa-f0-9]+)?|@[A-Za-z][A-Za-z0-9_+.-]*:[A-Fa-f0-9]+)$ ]]
+}
+
 while IFS= read -r encoded_overrides; do
   if decoded_overrides="$(printf '%s' "$encoded_overrides" | base64 --decode 2>/dev/null)"; then
     :
+  elif decoded_overrides="$(printf '%s' "$encoded_overrides" | base64 -D 2>/dev/null)"; then
+    :
   else
-    decoded_overrides="$(printf '%s' "$encoded_overrides" | base64 -D)"
+    echo "invalid base64 environment overrides in rendered manifest" >&2
+    exit 1
   fi
 
-  byoo_otel_collector_image="$(printf '%s' "$decoded_overrides" | sed -n 's/.*"BYOO_OTEL_COLLECTOR_CONTAINER"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-  case "$byoo_otel_collector_image" in
-    */*:*|*/*@*)
-      printf '%s\n' "$byoo_otel_collector_image" >> "$tmp_images"
-      ;;
-  esac
+  if ! printf '%s' "$decoded_overrides" | yq -e 'type == "!!map"' >/dev/null; then
+    echo "invalid JSON environment overrides in rendered manifest" >&2
+    exit 1
+  fi
+
+  if ! printf '%s' "$decoded_overrides" | yq -e 'has("BYOO_OTEL_COLLECTOR_CONTAINER")' >/dev/null; then
+    continue
+  fi
+
+  if ! printf '%s' "$decoded_overrides" | yq -e '.BYOO_OTEL_COLLECTOR_CONTAINER | type == "!!str"' >/dev/null; then
+    echo "BYOO_OTEL_COLLECTOR_CONTAINER must be a string" >&2
+    exit 1
+  fi
+
+  byoo_otel_collector_image="$(printf '%s' "$decoded_overrides" | yq -er '.BYOO_OTEL_COLLECTOR_CONTAINER')"
+  if ! is_valid_image_reference "$byoo_otel_collector_image"; then
+    echo "invalid BYOO_OTEL_COLLECTOR_CONTAINER image reference" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$byoo_otel_collector_image" >> "$tmp_images"
 done < <(
   awk '
     /-[[:space:]]+--(function|task)-env-overrides-b64$/ {

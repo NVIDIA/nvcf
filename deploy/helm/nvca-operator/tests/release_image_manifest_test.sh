@@ -45,6 +45,8 @@ spec:
           args:
             - --function-env-overrides-b64
             - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIn0="
+            - --task-env-overrides-b64
+            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIn0="
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -108,6 +110,39 @@ fi
 
 if ! grep -Fq "nvca-release-supplemental-images" "${supplemental_manifest}"; then
   echo "expected supplemental manifest to contain the synthetic Pod" >&2
+  exit 1
+fi
+
+invalid_manifest="${tmp_dir}/invalid-rendered.yaml"
+invalid_supplemental_manifest="${tmp_dir}/invalid-supplemental.yaml"
+invalid_output="${tmp_dir}/invalid-output.log"
+
+cat > "${invalid_manifest}" <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nvca-operator
+spec:
+  template:
+    spec:
+      containers:
+        - name: operator
+          args:
+            - --function-env-overrides-b64
+            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6InJlcG8vaW1hZ2U6In0="
+EOF
+
+if "${repo_root}/scripts/render_release_supplemental_images.sh" \
+  "${invalid_manifest}" \
+  "${invalid_supplemental_manifest}" \
+  >"${invalid_output}" 2>&1; then
+  echo "expected invalid BYOO collector image reference to fail" >&2
+  exit 1
+fi
+
+if ! grep -Fq "invalid BYOO_OTEL_COLLECTOR_CONTAINER image reference" "${invalid_output}"; then
+  echo "expected invalid image reference error" >&2
+  cat "${invalid_output}" >&2
   exit 1
 fi
 
