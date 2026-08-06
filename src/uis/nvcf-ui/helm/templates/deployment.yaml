@@ -84,6 +84,26 @@ spec:
             - name: SIS_URL
               value: {{ . | quote }}
             {{- end }}
+            # HTTP connection timeouts, in whole seconds. Tested for nil rather
+            # than truthiness so that 0 (deadline disabled) is still passed
+            # through; a null entry is omitted and the server default applies.
+            {{- $timeouts := .Values.nvcfUi.config.timeouts | default dict }}
+            {{- if not (kindIs "invalid" $timeouts.readHeaderSeconds) }}
+            - name: READ_HEADER_TIMEOUT_SECONDS
+              value: {{ $timeouts.readHeaderSeconds | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $timeouts.readSeconds) }}
+            - name: READ_TIMEOUT_SECONDS
+              value: {{ $timeouts.readSeconds | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $timeouts.writeSeconds) }}
+            - name: WRITE_TIMEOUT_SECONDS
+              value: {{ $timeouts.writeSeconds | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $timeouts.idleSeconds) }}
+            - name: IDLE_TIMEOUT_SECONDS
+              value: {{ $timeouts.idleSeconds | quote }}
+            {{- end }}
           # HTTP probes against /status, the server's dependency-free 200
           # handler. The probe action is hardcoded; timing comes from values.
           livenessProbe:

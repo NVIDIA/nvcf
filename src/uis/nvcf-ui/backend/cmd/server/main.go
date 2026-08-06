@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -52,6 +53,87 @@ const (
 	staticDir  = "STATIC_DIR"
 )
 
+// Connection timeouts. Without them a slow or idle client holds a connection
+// (and its goroutine) open indefinitely, so a handful of them can exhaust the
+// server. Every timeout is a hard deadline on a distinct phase:
+//
+//   - read header caps how long a client may take to send its request headers,
+//     which is what bounds a slow-loris style attack.
+//   - read covers headers plus body. Only GET and HEAD reach this server (see
+//     middleware.AllowReadMethods), so bodies are effectively absent.
+//   - write bounds the response write. For proxied routes the upstream round
+//     trip is written inside this window, so it must stay comfortably above the
+//     slowest control-plane call rather than tracking the read timeout.
+//   - idle reaps keep-alive connections between requests.
+//
+// Each is overridable in whole seconds through its environment variable, which
+// the Helm chart populates from values.yaml. A value of 0 disables that
+// deadline; only set one that way for a deployment that has a proven need,
+// because it restores the unbounded behavior above.
+const (
+	defaultReadHeaderTimeoutSeconds = 10
+	defaultReadTimeoutSeconds       = 30
+	defaultWriteTimeoutSeconds      = 60
+	defaultIdleTimeoutSeconds       = 120
+
+	readHeaderTimeoutSeconds = "READ_HEADER_TIMEOUT_SECONDS"
+	readTimeoutSeconds       = "READ_TIMEOUT_SECONDS"
+	writeTimeoutSeconds      = "WRITE_TIMEOUT_SECONDS"
+	idleTimeoutSeconds       = "IDLE_TIMEOUT_SECONDS"
+)
+
+// serverTimeouts holds the resolved connection deadlines for the HTTP server.
+type serverTimeouts struct {
+	readHeader time.Duration
+	read       time.Duration
+	write      time.Duration
+	idle       time.Duration
+}
+
+// timeoutsFromEnv resolves each connection timeout from its environment
+// variable, falling back to the package default when the variable is unset or
+// empty. It reports an error rather than silently falling back when a variable
+// is set to something unusable, so a typo in the chart values surfaces at
+// startup instead of quietly serving with a different deadline.
+func timeoutsFromEnv() (serverTimeouts, error) {
+	var (
+		timeouts serverTimeouts
+		err      error
+	)
+	for _, f := range []struct {
+		env      string
+		fallback int
+		dst      *time.Duration
+	}{
+		{readHeaderTimeoutSeconds, defaultReadHeaderTimeoutSeconds, &timeouts.readHeader},
+		{readTimeoutSeconds, defaultReadTimeoutSeconds, &timeouts.read},
+		{writeTimeoutSeconds, defaultWriteTimeoutSeconds, &timeouts.write},
+		{idleTimeoutSeconds, defaultIdleTimeoutSeconds, &timeouts.idle},
+	} {
+		if *f.dst, err = secondsFromEnv(f.env, f.fallback); err != nil {
+			return serverTimeouts{}, err
+		}
+	}
+	return timeouts, nil
+}
+
+// secondsFromEnv reads key as a whole number of seconds, returning fallback if
+// it is unset or empty.
+func secondsFromEnv(key string, fallback int) (time.Duration, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return time.Duration(fallback) * time.Second, nil
+	}
+	secs, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	if secs < 0 {
+		return 0, fmt.Errorf("%s: %d is negative", key, secs)
+	}
+	return time.Duration(secs) * time.Second, nil
+}
+
 func main() {
 	ctx := signals.SetupSignalHandler()
 	logger := utils.ConfigLogger()
@@ -61,6 +143,10 @@ func main() {
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
 		logger.Fatal().Err(err).Msgf("Invalid %s", serverPort)
+	}
+	timeouts, err := timeoutsFromEnv()
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Invalid server timeout")
 	}
 	tokenWatcher := twatcher.Watch(ctx)
 	k8sClient, err := utils.InitK8sClient()
@@ -119,8 +205,12 @@ func main() {
 	registerStatic(router, utils.GetEnvOr(staticDir, defaultStaticDir), logger)
 
 	server := http.Server{
-		Addr:    fmt.Sprintf("0.0.0.0:%d", port),
-		Handler: handler,
+		Addr:              fmt.Sprintf("0.0.0.0:%d", port),
+		Handler:           handler,
+		ReadHeaderTimeout: timeouts.readHeader,
+		ReadTimeout:       timeouts.read,
+		WriteTimeout:      timeouts.write,
+		IdleTimeout:       timeouts.idle,
 	}
 
 	go func() {

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,40 @@ type apiTokens struct {
 	NvcfApiToken string `json:"nvcfApiToken"`
 	NvctApiToken string `json:"nvctApiToken"`
 	SisApiToken  string `json:"sisApiToken"`
+}
+
+// UnmarshalJSON rejects a token file that leaves any token out or empty.
+//
+// encoding/json has no "required" tag: an absent or empty field decodes to ""
+// and is indistinguishable from a supplied empty string. An empty token is not
+// a usable credential, so accepting one means the proxy forwards an empty
+// Authorization header instead of failing with a clear error. Treating it as a
+// decode failure keeps that decision in one place, so every caller of load
+// either gets a complete set of tokens or an error naming what is missing.
+//
+// Field names in the error come from the json tags, so they match the file the
+// operator has to fix rather than the Go identifiers.
+func (t *apiTokens) UnmarshalJSON(data []byte) error {
+	// Alias sheds the method set, so this does not recurse.
+	type apiTokensRaw apiTokens
+	var raw apiTokensRaw
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	var missing []string
+	v := reflect.ValueOf(raw)
+	for i := range v.NumField() {
+		if v.Field(i).String() == "" {
+			missing = append(missing, v.Type().Field(i).Tag.Get("json"))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing or empty API token(s): %s", strings.Join(missing, ", "))
+	}
+
+	*t = apiTokens(raw)
+	return nil
 }
 
 type tokenState struct {
@@ -141,12 +176,14 @@ func (w *Watcher) load() error {
 	}
 	var t apiTokens
 	if err := json.Unmarshal(data, &t); err != nil {
-		return err
+		return fmt.Errorf("%s: %w", w.tokensPath, err)
 	}
 
 	w.mu.Lock()
 
-	// Mark all tokens valid and cancel any in-flight expiry goroutines.
+	// Mark all tokens valid and cancel any in-flight expiry goroutines. Every
+	// token is known non-empty here: apiTokens.UnmarshalJSON rejects the file
+	// otherwise, and this function has already returned that error.
 	w.nvcf.value, w.nvcf.valid = t.NvcfApiToken, true
 	w.nvct.value, w.nvct.valid = t.NvctApiToken, true
 	w.sis.value, w.sis.valid = t.SisApiToken, true

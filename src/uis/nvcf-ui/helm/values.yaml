@@ -142,6 +142,29 @@ nvcfUi:
     nvctUrl: "nvct-api.nvcf.svc.cluster.local:8080"
     sisUrl: "api.sis.svc.cluster.local:8080"
 
+    # HTTP connection timeouts for the BFF server, in whole seconds. Each is
+    # injected as an environment variable (READ_HEADER_TIMEOUT_SECONDS,
+    # READ_TIMEOUT_SECONDS, WRITE_TIMEOUT_SECONDS, IDLE_TIMEOUT_SECONDS).
+    # Without them a slow or idle client holds a connection open indefinitely,
+    # so a handful of them can exhaust the server.
+    #
+    # Set an entry to null to leave the server's own default in place. Setting
+    # one to 0 disables that deadline entirely and restores the unbounded
+    # behavior, so only do it for a deployment with a proven need.
+    timeouts:
+      # How long a client may take to send its request headers. This is the
+      # deadline that bounds a slow-loris style attack.
+      readHeaderSeconds: 10
+      # Headers plus body. The server serves only GET and HEAD, so bodies are
+      # effectively absent.
+      readSeconds: 30
+      # Response write. Proxied upstream round trips are written inside this
+      # window, so keep it comfortably above the slowest control-plane call
+      # rather than tracking readSeconds.
+      writeSeconds: 60
+      # How long an idle keep-alive connection is kept before being reaped.
+      idleSeconds: 120
+
   # -- Expose the service via gateway-api HTTPRoute
   # Requires Gateway API resources and a suitable controller in the cluster
   # (see: https://gateway-api.sigs.k8s.io/guides/).

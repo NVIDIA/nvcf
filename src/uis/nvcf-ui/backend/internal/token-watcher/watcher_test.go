@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,6 +174,132 @@ func TestLoad(t *testing.T) {
 				t.Errorf("SISToken = (%q, %v), want (%q, true)", sis, sisOK, longJWT)
 			}
 		})
+	}
+}
+
+// TestUnmarshalRejectsEmptyTokens covers the fail-open case: an empty or absent
+// token is not a usable credential, so decoding must fail rather than hand back
+// a token the proxy would forward as an empty Authorization header. The error
+// names the offending fields by their json tags, matching the file on disk.
+func TestUnmarshalRejectsEmptyTokens(t *testing.T) {
+	t.Parallel()
+
+	longJWT := makeJWT(time.Now().Add(24 * time.Hour).Unix())
+
+	tests := []struct {
+		name        string
+		contents    string
+		wantErr     bool
+		wantInError []string
+	}{
+		{
+			name:     "every token present",
+			contents: `{"nvcfApiToken":"a","nvctApiToken":"b","sisApiToken":"c"}`,
+		},
+		{
+			name:        "empty token value",
+			contents:    `{"nvcfApiToken":"","nvctApiToken":"` + longJWT + `","sisApiToken":"` + longJWT + `"}`,
+			wantErr:     true,
+			wantInError: []string{"nvcfApiToken"},
+		},
+		{
+			name:        "absent field",
+			contents:    `{"nvctApiToken":"` + longJWT + `"}`,
+			wantErr:     true,
+			wantInError: []string{"nvcfApiToken", "sisApiToken"},
+		},
+		{
+			name:        "no tokens at all",
+			contents:    `{}`,
+			wantErr:     true,
+			wantInError: []string{"nvcfApiToken", "nvctApiToken", "sisApiToken"},
+		},
+		{
+			name:     "whitespace is not treated as empty",
+			contents: `{"nvcfApiToken":" ","nvctApiToken":"b","sisApiToken":"c"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got apiTokens
+			err := json.Unmarshal([]byte(tt.contents), &got)
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Unmarshal err = %v, wantErr %v", err, tt.wantErr)
+			}
+			for _, field := range tt.wantInError {
+				if !strings.Contains(err.Error(), field) {
+					t.Errorf("error %q does not name the missing field %q", err, field)
+				}
+			}
+		})
+	}
+}
+
+// TestUnmarshalLeavesTargetUntouchedOnError checks a rejected file does not
+// half-apply. The reload path keeps serving the previous tokens on error, which
+// only holds if a failed decode writes nothing.
+func TestUnmarshalLeavesTargetUntouchedOnError(t *testing.T) {
+	t.Parallel()
+
+	before := apiTokens{NvcfApiToken: "a", NvctApiToken: "b", SisApiToken: "c"}
+	got := before
+
+	if err := json.Unmarshal([]byte(`{"nvcfApiToken":"new"}`), &got); err == nil {
+		t.Fatal("Unmarshal returned no error for an incomplete file, want one")
+	}
+	if got != before {
+		t.Errorf("tokens = %+v after a failed decode, want them unchanged (%+v)", got, before)
+	}
+}
+
+// TestLoadRejectsIncompleteFile checks the decode error propagates out of load,
+// so startup fails loudly instead of serving an unusable token.
+func TestLoadRejectsIncompleteFile(t *testing.T) {
+	t.Parallel()
+
+	longJWT := makeJWT(time.Now().Add(24 * time.Hour).Unix())
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	writeTokens(t, path, apiTokens{NvctApiToken: longJWT, SisApiToken: longJWT})
+
+	w := &Watcher{ctx: nopCtx(t), tokensPath: path}
+	err := w.load()
+	if err == nil {
+		t.Fatal("load returned no error for a file missing a token, want one")
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error %q does not name the tokens file %q", err, path)
+	}
+	if _, ok := w.NVCFToken(); ok {
+		t.Error("NVCF token reported valid after a failed load")
+	}
+}
+
+// TestLoadKeepsPreviousTokensOnBadReload covers a rotation that renders an
+// incomplete file: the watcher must keep serving the tokens it already has
+// rather than dropping them.
+func TestLoadKeepsPreviousTokensOnBadReload(t *testing.T) {
+	t.Parallel()
+
+	longJWT := makeJWT(time.Now().Add(24 * time.Hour).Unix())
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	writeTokens(t, path, apiTokens{NvcfApiToken: longJWT, NvctApiToken: longJWT, SisApiToken: longJWT})
+
+	w := &Watcher{ctx: nopCtx(t), tokensPath: path}
+	if err := w.load(); err != nil {
+		t.Fatalf("load err = %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"nvcfApiToken":""}`), 0o600); err != nil {
+		t.Fatalf("write tokens file: %v", err)
+	}
+	if err := w.load(); err == nil {
+		t.Fatal("reload of an incomplete file returned no error, want one")
+	}
+
+	if value, ok := w.NVCFToken(); !ok || value != longJWT {
+		t.Errorf("NVCFToken after failed reload = (%q, %v), want (%q, true)", value, ok, longJWT)
 	}
 }
 
