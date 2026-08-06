@@ -147,7 +147,8 @@ jobs:
           helm-reval|src/control-plane-services/helm-reval|false|go-root|build-container
           stargate|src/libraries/rust/stargate|false|go-root|build-container
           nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container
-          image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container'
+          image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container
+            nvcf-ui|src/uis/nvcf-ui|false|go-root|build-container'
 
           # Java rows are discovered from component-local bazel-java-ci.json
           # descriptors. The descriptor's parent directory is the component

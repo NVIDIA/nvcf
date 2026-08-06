@@ -231,6 +231,23 @@ use_repo(go_deps, "cat_dario_mergo", "com_github_armon_go_metrics", "com_github_
 # semantics, not a build setting, so the value here is kept at the majority
 # edition and carries no meaning beyond that.
 # ============================================================================
+# ---- JS/TS (aspect_rules_js, pnpm-native) ----
+# Lifted from src/uis/nvcf-ui/MODULE.bazel when the UI joined the root module.
+# 3.2.x reads the build-script allowlist from pnpm-workspace.yaml (allowBuilds).
+bazel_dep(name = "aspect_rules_js", version = "3.2.2")
+bazel_dep(name = "rules_nodejs", version = "6.7.3")
+
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+node.toolchain(node_version = "22.12.0")
+
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
+npm.npm_translate_lock(
+    name = "npm",
+    pnpm_lock = "//src/uis/nvcf-ui/ui:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm")
+
 bazel_dep(name = "rules_rust", version = "0.69.0")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
