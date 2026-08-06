@@ -38,7 +38,7 @@ import (
 const (
 	maxRequestBytes        = 10 << 20
 	maxOutputBytes         = 1 << 20
-	maxOutputChunks        = 4096
+	maxOutputChunks        = 6000
 	maxEmbeddingItems      = 2048
 	maxControlMilliseconds = 5 * 60 * 1000
 	maxConcurrencyLimit    = 100000
@@ -269,6 +269,18 @@ type apiErrorResponse struct {
 	Error apiError `json:"error"`
 }
 
+type streamPacer struct {
+	timer *time.Timer
+}
+
+type responsesDeltaWriter struct {
+	w              http.ResponseWriter
+	itemID         []byte
+	fixedChunk     []byte
+	frame          []byte
+	fixedChunkMode bool
+}
+
 func main() {
 	server := &http.Server{
 		Addr:              ":8000",
@@ -343,13 +355,12 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "model is required", "model")
 		return
 	}
-	chunks := outputChunks(tuning)
-
-	response := newResponsesResponse(request.Model, strings.Join(chunks, ""))
 	if request.Stream {
-		streamResponses(r.Context(), w, response, chunks, tuning)
+		streamResponses(r.Context(), w, newResponsesResponse(request.Model, ""), tuning)
 		return
 	}
+	chunks := outputChunks(tuning)
+	response := newResponsesResponse(request.Model, strings.Join(chunks, ""))
 	if !waitFor(r.Context(), tuning.TTFT, tuning.TTFTJitter) {
 		return
 	}
@@ -680,6 +691,50 @@ func waitFor(ctx context.Context, delay, jitter time.Duration) bool {
 	}
 }
 
+func (pacer *streamPacer) wait(ctx context.Context, delay, jitter time.Duration) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	delay += randomDuration(jitter)
+	if delay <= 0 {
+		return true
+	}
+	if pacer.timer == nil {
+		pacer.timer = time.NewTimer(delay)
+	} else {
+		if !pacer.timer.Stop() {
+			select {
+			case <-pacer.timer.C:
+			default:
+			}
+		}
+		pacer.timer.Reset(delay)
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-pacer.timer.C:
+		return true
+	}
+}
+
+func (pacer *streamPacer) stop() {
+	pacer.stopTimer()
+}
+
+func (pacer *streamPacer) stopTimer() {
+	if pacer.timer == nil {
+		return
+	}
+	if !pacer.timer.Stop() {
+		select {
+		case <-pacer.timer.C:
+		default:
+		}
+	}
+	pacer.timer = nil
+}
+
 func randomDuration(max time.Duration) time.Duration {
 	if max <= 0 {
 		return 0
@@ -797,14 +852,23 @@ func newResponsesResponse(model, text string) responsesResponse {
 				Annotations: []any{},
 			}},
 		}},
-		Usage: &responsesUsage{
-			InputTokens:        0,
-			InputTokensDetails: responseInputTokenDetails{CachedTokens: 0},
-			OutputTokens:       outputTokens,
-			OutputTokensDetail: responseOutputTokenDetail{ReasoningTokens: 0},
-			TotalTokens:        outputTokens,
-		},
+		Usage: newResponsesUsage(outputTokens),
 	}
+}
+
+func newResponsesUsage(outputTokens int) *responsesUsage {
+	return &responsesUsage{
+		InputTokens:        0,
+		InputTokensDetails: responseInputTokenDetails{CachedTokens: 0},
+		OutputTokens:       outputTokens,
+		OutputTokensDetail: responseOutputTokenDetail{ReasoningTokens: 0},
+		TotalTokens:        outputTokens,
+	}
+}
+
+func setResponsesOutput(response *responsesResponse, text string) {
+	response.Output[0].Content[0].Text = text
+	response.Usage = newResponsesUsage(countTokens(text))
 }
 
 func setResponsesCompleted(response *responsesResponse) {
@@ -867,7 +931,7 @@ func newModelInfo(model string) modelInfo {
 	}
 }
 
-func streamResponses(ctx context.Context, w http.ResponseWriter, response responsesResponse, chunks []string, tuning benchmarkTuning) {
+func streamResponses(ctx context.Context, w http.ResponseWriter, response responsesResponse, tuning benchmarkTuning) {
 	setSSEHeaders(w)
 	if !waitFor(ctx, tuning.TTFT, tuning.TTFTJitter) {
 		return
@@ -909,17 +973,24 @@ func streamResponses(ctx context.Context, w http.ResponseWriter, response respon
 		}
 		return
 	}
-	for index, chunk := range chunks {
-		if index > 0 && !waitFor(ctx, tuning.ITL, tuning.ITLJitter) {
+	deltaWriter := newResponsesDeltaWriter(w, item.ID, tuning.Chunk, tuning.ChunkBytes == 0)
+	var pacer streamPacer
+	defer pacer.stop()
+	var output strings.Builder
+	for index := 0; index < tuning.OutputChunks; index++ {
+		if index > 0 && !pacer.wait(ctx, tuning.ITL, tuning.ITLJitter) {
 			return
 		}
-		if err := writeSSEJSON(w, "response.output_text.delta", map[string]any{
-			"type": "response.output_text.delta", "sequence_number": 4 + index,
-			"item_id": item.ID, "output_index": 0, "content_index": 0,
-			"delta": chunk, "logprobs": []any{},
-		}); err != nil {
+		chunk := tuning.Chunk
+		if tuning.ChunkBytes > 0 {
+			chunk = randomText(tuning.ChunkBytes)
+		}
+		if err := deltaWriter.write(4+index, chunk); err != nil {
 			log.Printf("Responses event write failed: %v", err)
 			return
+		}
+		if tuning.ChunkBytes > 0 {
+			output.WriteString(chunk)
 		}
 		if terminate, truncated := streamTermination(tuning, index+1); terminate {
 			if !truncated {
@@ -928,9 +999,19 @@ func streamResponses(ctx context.Context, w http.ResponseWriter, response respon
 			return
 		}
 	}
+	if ctx.Err() != nil {
+		return
+	}
 
+	text := output.String()
+	if tuning.ChunkBytes == 0 {
+		text = strings.Repeat(tuning.Chunk, tuning.OutputChunks)
+	}
+	setResponsesOutput(&response, text)
+	item = response.Output[0]
+	part = item.Content[0]
 	setResponsesCompleted(&response)
-	sequence := 4 + len(chunks)
+	sequence := 4 + tuning.OutputChunks
 	events = []struct {
 		name string
 		data any
@@ -972,8 +1053,10 @@ func streamChatCompletion(ctx context.Context, w http.ResponseWriter, response c
 		}
 		return
 	}
+	var pacer streamPacer
+	defer pacer.stop()
 	for index, text := range chunks {
-		if index > 0 && !waitFor(ctx, tuning.ITL, tuning.ITLJitter) {
+		if index > 0 && !pacer.wait(ctx, tuning.ITL, tuning.ITLJitter) {
 			return
 		}
 		if err := writeSSEJSON(w, "", chatCompletionChunk{
@@ -992,6 +1075,9 @@ func streamChatCompletion(ctx context.Context, w http.ResponseWriter, response c
 			}
 			return
 		}
+	}
+	if ctx.Err() != nil {
+		return
 	}
 
 	stop := "stop"
@@ -1020,11 +1106,10 @@ func streamChatCompletion(ctx context.Context, w http.ResponseWriter, response c
 			return
 		}
 	}
-	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
+	if err := writeSSEFrame(w, []byte("data: [DONE]\n\n")); err != nil {
 		log.Printf("Chat completion event write failed: %v", err)
 		return
 	}
-	flush(w)
 }
 
 func streamCompletion(ctx context.Context, w http.ResponseWriter, response completionResponse, chunks []string, tuning benchmarkTuning) {
@@ -1039,8 +1124,10 @@ func streamCompletion(ctx context.Context, w http.ResponseWriter, response compl
 		}
 		return
 	}
+	var pacer streamPacer
+	defer pacer.stop()
 	for index, text := range chunks {
-		if index > 0 && !waitFor(ctx, tuning.ITL, tuning.ITLJitter) {
+		if index > 0 && !pacer.wait(ctx, tuning.ITL, tuning.ITLJitter) {
 			return
 		}
 		if err := writeSSEJSON(w, "", completionChunk{
@@ -1060,6 +1147,9 @@ func streamCompletion(ctx context.Context, w http.ResponseWriter, response compl
 			return
 		}
 	}
+	if ctx.Err() != nil {
+		return
+	}
 
 	stop := "stop"
 	if err := writeSSEJSON(w, "", completionChunk{
@@ -1072,11 +1162,10 @@ func streamCompletion(ctx context.Context, w http.ResponseWriter, response compl
 		log.Printf("Completion stop event write failed: %v", err)
 		return
 	}
-	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
+	if err := writeSSEFrame(w, []byte("data: [DONE]\n\n")); err != nil {
 		log.Printf("Completion event write failed: %v", err)
 		return
 	}
-	flush(w)
 }
 
 func streamTermination(tuning benchmarkTuning, emitted int) (bool, bool) {
@@ -1125,13 +1214,61 @@ func writeSSEJSON(w http.ResponseWriter, name string, data any) error {
 	if err != nil {
 		return err
 	}
+	frame := make([]byte, 0, len(name)+len(payload)+16)
 	if name != "" {
-		if _, err := fmt.Fprintf(w, "event: %s\n", name); err != nil {
+		frame = append(frame, "event: "...)
+		frame = append(frame, name...)
+		frame = append(frame, '\n')
+	}
+	frame = append(frame, "data: "...)
+	frame = append(frame, payload...)
+	frame = append(frame, '\n', '\n')
+	return writeSSEFrame(w, frame)
+}
+
+func newResponsesDeltaWriter(w http.ResponseWriter, itemID, chunk string, fixedChunkMode bool) responsesDeltaWriter {
+	itemIDJSON, _ := json.Marshal(itemID)
+	fixedChunkJSON, _ := json.Marshal(chunk)
+	return responsesDeltaWriter{
+		w:              w,
+		itemID:         itemIDJSON,
+		fixedChunk:     fixedChunkJSON,
+		frame:          make([]byte, 0, len(itemIDJSON)+len(fixedChunkJSON)+128),
+		fixedChunkMode: fixedChunkMode,
+	}
+}
+
+func (writer *responsesDeltaWriter) write(sequence int, chunk string) error {
+	frame := writer.frame[:0]
+	frame = append(frame, "event: response.output_text.delta\ndata: {\"content_index\":0,\"delta\":"...)
+	if writer.fixedChunkMode {
+		frame = append(frame, writer.fixedChunk...)
+	} else {
+		chunkJSON, err := json.Marshal(chunk)
+		if err != nil {
 			return err
 		}
+		frame = append(frame, chunkJSON...)
 	}
-	if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
-		return err
+	frame = append(frame, ",\"item_id\":"...)
+	frame = append(frame, writer.itemID...)
+	frame = append(frame, ",\"logprobs\":[],\"output_index\":0,\"sequence_number\":"...)
+	frame = strconv.AppendInt(frame, int64(sequence), 10)
+	frame = append(frame, ",\"type\":\"response.output_text.delta\"}\n\n"...)
+	writer.frame = frame
+	return writeSSEFrame(writer.w, frame)
+}
+
+func writeSSEFrame(w http.ResponseWriter, frame []byte) error {
+	for len(frame) > 0 {
+		written, err := w.Write(frame)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+		frame = frame[written:]
 	}
 	flush(w)
 	return nil

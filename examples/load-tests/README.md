@@ -216,6 +216,36 @@ The load profile leaves queue, TTFT, and ITL delays unset unless their
   -e OPENAI_RESPONSES_DURATION=30s
 ```
 
+For a 30-second per-connection capacity run at 5 ms ITL, use calibration mode
+with 6000 chunks and two iterations per VU. Raise the generator file-descriptor
+limit before a high-concurrency run. Set `OAI_COMPAT_URL` to the full
+`/v1/responses` endpoint.
+
+```bash
+ulimit -n 65536
+
+./k6 run functions/oai_compatible_responses_sse_load_test.js \
+  --summary-export responses-sse-summary.json \
+  -e OAI_COMPAT_URL=$OAI_COMPAT_URL \
+  -e OPENAI_RESPONSES_PROFILE=calibration \
+  -e OPENAI_RESPONSES_VUS=1792 \
+  -e OPENAI_RESPONSES_ITERATIONS=2 \
+  -e OPENAI_RESPONSES_MAX_DURATION=3m \
+  -e OPENAI_RESPONSES_EXPECTED_DELTAS=6000 \
+  -e OPENAI_RESPONSES_CALIBRATION_TOLERANCE_MS=1 \
+  -e LOAD_TESTER_QUEUE_DELAY_MS=0 \
+  -e LOAD_TESTER_TTFT_MS=1 \
+  -e LOAD_TESTER_TTFT_JITTER_MS=0 \
+  -e LOAD_TESTER_ITL_MS=5 \
+  -e LOAD_TESTER_ITL_JITTER_MS=0 \
+  -e LOAD_TESTER_CHUNK=xxxx \
+  -e LOAD_TESTER_OUTPUT_CHUNKS=6000
+```
+
+The high-concurrency profile opens a new connection for each iteration. Check
+generator file descriptors, sockets, CPU, and network saturation before
+interpreting a failure as target capacity.
+
 `openai_responses_declared_tokens_per_second` is synthetic. It multiplies the
 observed chunk rate by `OPENAI_RESPONSES_TOKENS_PER_CHUNK`; `xxxx` is not a
 tokenizer-derived token. Use `openai_responses_output_chunks_per_second` when

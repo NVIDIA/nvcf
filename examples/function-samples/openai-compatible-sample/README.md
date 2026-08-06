@@ -46,7 +46,7 @@ routes.
 | Concurrency limit | `X-Load-Tester-Max-Concurrency` | `0` | Return 429 when the global in-flight request count exceeds this value. |
 
 Timing values are non-negative integer milliseconds and are capped at five
-minutes. Output is capped at 1 MiB and 4096 chunks. `Chunk` and `Chunk-Bytes`
+minutes. Output is capped at 1 MiB and 6000 chunks. `Chunk` and `Chunk-Bytes`
 cannot be combined. Stream error and truncate controls are mutually exclusive.
 For a deterministic concurrency test, send the same concurrency limit header
 on every request in the load test.
@@ -136,6 +136,33 @@ go run .
 
 # In another terminal, with the openai package installed:
 python3 openai_client_check.py
+```
+
+## 30-second SSE capacity run
+
+Use the matching pinned xk6 binary from `examples/load-tests`. The command
+opens two approximately 30-second streams per VU at 5 ms ITL. Raise the
+generator file-descriptor limit before using high concurrency.
+
+```bash
+cd examples/load-tests
+ulimit -n 65536
+
+./k6 run functions/oai_compatible_responses_sse_load_test.js \
+  -e OAI_COMPAT_URL=$OAI_COMPAT_URL \
+  -e OPENAI_RESPONSES_PROFILE=calibration \
+  -e OPENAI_RESPONSES_VUS=1792 \
+  -e OPENAI_RESPONSES_ITERATIONS=2 \
+  -e OPENAI_RESPONSES_MAX_DURATION=3m \
+  -e OPENAI_RESPONSES_EXPECTED_DELTAS=6000 \
+  -e OPENAI_RESPONSES_CALIBRATION_TOLERANCE_MS=1 \
+  -e LOAD_TESTER_QUEUE_DELAY_MS=0 \
+  -e LOAD_TESTER_TTFT_MS=1 \
+  -e LOAD_TESTER_TTFT_JITTER_MS=0 \
+  -e LOAD_TESTER_ITL_MS=5 \
+  -e LOAD_TESTER_ITL_JITTER_MS=0 \
+  -e LOAD_TESTER_CHUNK=xxxx \
+  -e LOAD_TESTER_OUTPUT_CHUNKS=6000
 ```
 
 ## NVCF LLM functions

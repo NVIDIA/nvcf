@@ -16,6 +16,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -121,6 +123,239 @@ func TestResponsesStreamUsesHeaderControls(t *testing.T) {
 			t.Fatalf("event %q arrived out of order: %s", event, body)
 		}
 		lastIndex = index
+	}
+}
+
+func TestResponsesStreamPreservesSSESemanticsAndFlushes(t *testing.T) {
+	chunk := "quote\" slash\\ newline\n"
+	recorder := newFlushCountingRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test-model","input":"hello","stream":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(headerChunk, chunk)
+	request.Header.Set(headerOutputChunks, "3")
+	newRouter().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	events := parseResponsesSSEEvents(t, recorder.Body.String())
+	wantNames := []string{
+		"response.created",
+		"response.in_progress",
+		"response.output_item.added",
+		"response.content_part.added",
+		"response.output_text.delta",
+		"response.output_text.delta",
+		"response.output_text.delta",
+		"response.output_text.done",
+		"response.content_part.done",
+		"response.output_item.done",
+		"response.completed",
+	}
+	if len(events) != len(wantNames) {
+		t.Fatalf("event count = %d, want %d: %s", len(events), len(wantNames), recorder.Body.String())
+	}
+	if recorder.flushes != len(events) {
+		t.Fatalf("flushes = %d, want %d", recorder.flushes, len(events))
+	}
+
+	var deltaText strings.Builder
+	for index, event := range events {
+		if event.name != wantNames[index] {
+			t.Fatalf("event %d = %q, want %q", index, event.name, wantNames[index])
+		}
+		if got := sseSequence(t, event); got != index {
+			t.Fatalf("event %d sequence = %d, want %d", index, got, index)
+		}
+		if event.name == "response.output_text.delta" {
+			delta, ok := event.data["delta"].(string)
+			if !ok {
+				t.Fatalf("delta = %#v, want string", event.data["delta"])
+			}
+			if delta != chunk {
+				t.Fatalf("delta = %q, want %q", delta, chunk)
+			}
+			deltaText.WriteString(delta)
+		}
+	}
+
+	wantText := strings.Repeat(chunk, 3)
+	if got := eventText(t, events[7], "text"); got != wantText {
+		t.Fatalf("output_text.done text = %q, want %q", got, wantText)
+	}
+	if got := nestedEventText(t, events[8], "part"); got != wantText {
+		t.Fatalf("content_part.done text = %q, want %q", got, wantText)
+	}
+	completed := events[10].data["response"].(map[string]any)
+	if got := nestedResponseText(t, completed); got != wantText {
+		t.Fatalf("completed response text = %q, want %q", got, wantText)
+	}
+	if got := completed["status"]; got != "completed" {
+		t.Fatalf("completed status = %#v, want completed", got)
+	}
+	usage := completed["usage"].(map[string]any)
+	if got := int(usage["output_tokens"].(float64)); got != countTokens(deltaText.String()) {
+		t.Fatalf("output tokens = %d, want %d", got, countTokens(deltaText.String()))
+	}
+}
+
+func TestResponsesStreamRandomChunksMatchCompletedText(t *testing.T) {
+	recorder := postJSONWithHeaders(t, "/v1/responses", `{"model":"test-model","input":"hello","stream":true}`, map[string]string{
+		headerChunkBytes:   "7",
+		headerOutputChunks: "3",
+	})
+	events := parseResponsesSSEEvents(t, recorder.Body.String())
+	var deltaText strings.Builder
+	for _, event := range events {
+		if event.name != "response.output_text.delta" {
+			continue
+		}
+		delta := event.data["delta"].(string)
+		if len(delta) != 7 {
+			t.Fatalf("random chunk length = %d, want 7", len(delta))
+		}
+		deltaText.WriteString(delta)
+	}
+	if got := eventText(t, events[len(events)-4], "text"); got != deltaText.String() {
+		t.Fatalf("output_text.done text = %q, want %q", got, deltaText.String())
+	}
+	completed := events[len(events)-1].data["response"].(map[string]any)
+	if got := nestedResponseText(t, completed); got != deltaText.String() {
+		t.Fatalf("completed response text = %q, want %q", got, deltaText.String())
+	}
+}
+
+func TestResponsesStreamCancellationDoesNotComplete(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recorder := newFlushCountingRecorder()
+	recorder.onWrite = func(frame []byte) {
+		if bytes.Contains(frame, []byte("event: response.output_text.delta\n")) {
+			cancel()
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		streamResponses(ctx, recorder, newResponsesResponse("test-model", ""), benchmarkTuning{
+			ITL:                 time.Hour,
+			Chunk:               defaultChunk,
+			OutputChunks:        2,
+			StreamErrorAfter:    -1,
+			StreamTruncateAfter: -1,
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not stop after context cancellation")
+	}
+	if strings.Contains(recorder.Body.String(), "event: response.completed") {
+		t.Fatalf("cancelled stream completed: %s", recorder.Body.String())
+	}
+}
+
+func TestResponsesStreamCancellationDuringFinalDeltaDoesNotComplete(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recorder := newFlushCountingRecorder()
+	recorder.onWrite = func(frame []byte) {
+		if bytes.Contains(frame, []byte("event: response.output_text.delta\n")) {
+			cancel()
+		}
+	}
+
+	streamResponses(ctx, recorder, newResponsesResponse("test-model", ""), benchmarkTuning{
+		Chunk:               defaultChunk,
+		OutputChunks:        1,
+		StreamErrorAfter:    -1,
+		StreamTruncateAfter: -1,
+	})
+
+	if strings.Contains(recorder.Body.String(), "event: response.completed") {
+		t.Fatalf("cancelled final delta completed: %s", recorder.Body.String())
+	}
+}
+
+func TestResponsesStreamWaitsAfterSlowDeltaWrite(t *testing.T) {
+	const itl = 25 * time.Millisecond
+	recorder := &delayedDeltaRecorder{
+		flushCountingRecorder: newFlushCountingRecorder(),
+		delay:                 50 * time.Millisecond,
+	}
+
+	streamResponses(context.Background(), recorder, newResponsesResponse("test-model", ""), benchmarkTuning{
+		ITL:                 itl,
+		Chunk:               defaultChunk,
+		OutputChunks:        3,
+		StreamErrorAfter:    -1,
+		StreamTruncateAfter: -1,
+	})
+
+	if len(recorder.deltaWrites) != 3 {
+		t.Fatalf("delta writes = %d, want 3", len(recorder.deltaWrites))
+	}
+	if elapsed := recorder.deltaWrites[2].Sub(recorder.deltaWrites[1]); elapsed < itl-5*time.Millisecond {
+		t.Fatalf("post-write ITL = %s, want at least %s", elapsed, itl-5*time.Millisecond)
+	}
+}
+
+func TestOutputChunksLimit(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "maximum accepted", value: "6000", want: true},
+		{name: "above maximum rejected", value: "6001", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			request.Header.Set(headerOutputChunks, test.value)
+			tuning, err := resolveBenchmarkTuning(request)
+			if test.want {
+				if err != nil {
+					t.Fatalf("resolveBenchmarkTuning() error = %v", err)
+				}
+				if tuning.OutputChunks != maxOutputChunks {
+					t.Fatalf("output chunks = %d, want %d", tuning.OutputChunks, maxOutputChunks)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("resolveBenchmarkTuning() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestWriteSSEFrameHandlesPartialWrites(t *testing.T) {
+	writer := &partialResponseWriter{header: make(http.Header), maxWrite: 3}
+	if err := writeSSEFrame(writer, []byte("event: test\ndata: {}\n\n")); err != nil {
+		t.Fatalf("writeSSEFrame() error = %v", err)
+	}
+	if got, want := writer.body.String(), "event: test\ndata: {}\n\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+	if writer.flushes != 1 {
+		t.Fatalf("flushes = %d, want 1", writer.flushes)
+	}
+}
+
+func BenchmarkResponsesFixedChunkStream(b *testing.B) {
+	tuning := benchmarkTuning{
+		Chunk:               defaultChunk,
+		OutputChunks:        1000,
+		StreamErrorAfter:    -1,
+		StreamTruncateAfter: -1,
+	}
+	writer := &discardResponseWriter{header: make(http.Header)}
+	b.SetBytes(int64(tuning.OutputChunks * len(tuning.Chunk)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		streamResponses(context.Background(), writer, newResponsesResponse("test-model", ""), tuning)
 	}
 }
 
@@ -232,6 +467,15 @@ func TestInjectedStatusAndStreamFailures(t *testing.T) {
 		t.Fatalf("failed stream unexpectedly completed: %s", body)
 	}
 
+	recorder = postJSONWithHeaders(t, "/v1/responses", `{"model":"test-model","input":"hello","stream":true}`, map[string]string{
+		headerOutputChunks:        "2",
+		headerStreamTruncateAfter: "1",
+	})
+	body = recorder.Body.String()
+	if strings.Contains(body, "event: error") || strings.Contains(body, "event: response.completed") {
+		t.Fatalf("truncated Responses stream unexpectedly terminated: %s", body)
+	}
+
 	recorder = postJSONWithHeaders(t, "/v1/chat/completions", `{"model":"test-model","messages":[],"stream":true}`, map[string]string{
 		headerOutputChunks:        "2",
 		headerStreamTruncateAfter: "1",
@@ -326,6 +570,40 @@ func TestChatCompletionsSupportsJSONAndSSE(t *testing.T) {
 	}
 }
 
+func TestLegacyStreamsFlushOncePerFrame(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "chat completions",
+			path: "/v1/chat/completions",
+			body: `{"model":"test-model","messages":[],"stream":true}`,
+		},
+		{
+			name: "completions",
+			path: "/v1/completions",
+			body: `{"model":"test-model","prompt":"hello","stream":true}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := newFlushCountingRecorder()
+			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set(headerOutputChunks, "2")
+			newRouter().ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+			if frames := strings.Count(recorder.Body.String(), "\n\n"); recorder.flushes != frames {
+				t.Fatalf("flushes = %d, want %d frames", recorder.flushes, frames)
+			}
+		})
+	}
+}
+
 func TestCompletionsAndModels(t *testing.T) {
 	recorder := postJSON(t, "/v1/completions", `{"model":"test-model","prompt":"hello"}`)
 	if recorder.Code != http.StatusOK {
@@ -416,4 +694,170 @@ func responseMap(t *testing.T, recorder *httptest.ResponseRecorder) map[string]a
 		t.Fatalf("response JSON unmarshal failed: %v: %s", err, recorder.Body.String())
 	}
 	return response
+}
+
+type sseEvent struct {
+	name string
+	data map[string]any
+}
+
+type flushCountingRecorder struct {
+	*httptest.ResponseRecorder
+	flushes int
+	onWrite func([]byte)
+}
+
+func newFlushCountingRecorder() *flushCountingRecorder {
+	return &flushCountingRecorder{ResponseRecorder: httptest.NewRecorder()}
+}
+
+func (recorder *flushCountingRecorder) Write(frame []byte) (int, error) {
+	if recorder.onWrite != nil {
+		recorder.onWrite(frame)
+	}
+	return recorder.ResponseRecorder.Write(frame)
+}
+
+func (recorder *flushCountingRecorder) Flush() {
+	recorder.flushes++
+}
+
+type delayedDeltaRecorder struct {
+	*flushCountingRecorder
+	delay       time.Duration
+	deltaWrites []time.Time
+}
+
+func (recorder *delayedDeltaRecorder) Write(frame []byte) (int, error) {
+	isDelta := bytes.Contains(frame, []byte("event: response.output_text.delta\n"))
+	if isDelta && len(recorder.deltaWrites) == 1 {
+		time.Sleep(recorder.delay)
+	}
+	written, err := recorder.flushCountingRecorder.Write(frame)
+	if isDelta {
+		recorder.deltaWrites = append(recorder.deltaWrites, time.Now())
+	}
+	return written, err
+}
+
+type partialResponseWriter struct {
+	header   http.Header
+	body     bytes.Buffer
+	maxWrite int
+	flushes  int
+}
+
+func (writer *partialResponseWriter) Header() http.Header {
+	return writer.header
+}
+
+func (writer *partialResponseWriter) Write(frame []byte) (int, error) {
+	written := len(frame)
+	if writer.maxWrite > 0 && written > writer.maxWrite {
+		written = writer.maxWrite
+	}
+	_, _ = writer.body.Write(frame[:written])
+	return written, nil
+}
+
+func (writer *partialResponseWriter) WriteHeader(int) {}
+
+func (writer *partialResponseWriter) Flush() {
+	writer.flushes++
+}
+
+type discardResponseWriter struct {
+	header http.Header
+}
+
+func (writer *discardResponseWriter) Header() http.Header {
+	return writer.header
+}
+
+func (writer *discardResponseWriter) Write(frame []byte) (int, error) {
+	return len(frame), nil
+}
+
+func (writer *discardResponseWriter) WriteHeader(int) {}
+
+func (writer *discardResponseWriter) Flush() {}
+
+func parseResponsesSSEEvents(t *testing.T, stream string) []sseEvent {
+	t.Helper()
+	frames := strings.Split(strings.TrimSuffix(stream, "\n\n"), "\n\n")
+	events := make([]sseEvent, 0, len(frames))
+	for _, frame := range frames {
+		var event sseEvent
+		for _, line := range strings.Split(frame, "\n") {
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				event.name = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event.data); err != nil {
+					t.Fatalf("SSE data JSON unmarshal failed: %v: %s", err, line)
+				}
+			}
+		}
+		if event.name == "" || event.data == nil {
+			t.Fatalf("invalid SSE frame: %q", frame)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func sseSequence(t *testing.T, event sseEvent) int {
+	t.Helper()
+	sequence, ok := event.data["sequence_number"].(float64)
+	if !ok {
+		t.Fatalf("sequence_number = %#v, want number", event.data["sequence_number"])
+	}
+	return int(sequence)
+}
+
+func eventText(t *testing.T, event sseEvent, field string) string {
+	t.Helper()
+	text, ok := event.data[field].(string)
+	if !ok {
+		t.Fatalf("%s = %#v, want string", field, event.data[field])
+	}
+	return text
+}
+
+func nestedEventText(t *testing.T, event sseEvent, field string) string {
+	t.Helper()
+	part, ok := event.data[field].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want object", field, event.data[field])
+	}
+	text, ok := part["text"].(string)
+	if !ok {
+		t.Fatalf("%s.text = %#v, want string", field, part["text"])
+	}
+	return text
+}
+
+func nestedResponseText(t *testing.T, response map[string]any) string {
+	t.Helper()
+	output, ok := response["output"].([]any)
+	if !ok || len(output) != 1 {
+		t.Fatalf("output = %#v, want one item", response["output"])
+	}
+	item, ok := output[0].(map[string]any)
+	if !ok {
+		t.Fatalf("output item = %#v, want object", output[0])
+	}
+	content, ok := item["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("content = %#v, want one item", item["content"])
+	}
+	part, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("content part = %#v, want object", content[0])
+	}
+	text, ok := part["text"].(string)
+	if !ok {
+		t.Fatalf("content text = %#v, want string", part["text"])
+	}
+	return text
 }
