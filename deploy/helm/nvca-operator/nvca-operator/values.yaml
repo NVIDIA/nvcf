@@ -241,7 +241,7 @@ webhook:
 ## @param ngcConfig.clusterSource Source of the cluster configuration:
 ##     - "ngc-managed": Cluster configuration managed by NGC (default)
 ##     - "helm-managed": Cluster configuration managed by the Helm chart
-##     - "self-managed": Cluster configuration managed by the self-hosted control plane
+##     - "self-managed": Cluster configuration managed by the self-hosted compute plane
 ngcConfig:
   username: '$oauthtoken'
   serviceKey: "dummy-api-key"
