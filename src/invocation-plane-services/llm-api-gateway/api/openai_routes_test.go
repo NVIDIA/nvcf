@@ -30,6 +30,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
@@ -390,4 +391,75 @@ func newTestAPI(cfg *config.Config) *echo.Echo {
 		),
 	)
 	return e
+}
+
+func TestChatCompletionsModelURIAllowlist(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		uris       []string
+		enforce    bool
+		wantStatus int
+	}{
+		{
+			name:       "rejects undeclared endpoint when enforced",
+			uris:       []string{"/v1/embeddings"},
+			enforce:    true,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "allows undeclared endpoint in log mode",
+			uris:       []string{"/v1/embeddings"},
+			enforce:    false,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "allows declared endpoint",
+			uris:       []string{"/v1/chat/completions"},
+			enforce:    true,
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := config.Default()
+			cfg.ModelURIAllowlistEnabled = tc.enforce
+			e := echo.New()
+			e.Use(NewContextMiddleware(cfg))
+			e.Use(modelSpecsMiddleware(map[string]nvcf.ModelSpec{
+				"company-name/model-name": {URIs: tc.uris},
+			}))
+			RegisterRoutes(
+				e,
+				NewHandlers(
+					cfg,
+					provider.NewEchoProvider(),
+					nil,
+					nil,
+				),
+			)
+
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/chat/completions",
+				strings.NewReader(`{"model":"fn-chat/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`),
+			)
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantStatus == http.StatusBadRequest &&
+				!strings.Contains(rec.Body.String(), chatCompletionsEndpointPath) {
+				t.Fatalf("response body missing endpoint: %s", rec.Body.String())
+			}
+		})
+	}
 }
