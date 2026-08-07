@@ -42,6 +42,10 @@ type Config struct {
 	DefaultTPM         int64
 	DefaultRPM         int64
 	ModelCapabilities  map[string]ModelCapabilities
+	// ModelURIEnforce refuses requests to endpoints a model does not declare
+	// in its uris allowlist. When false, undeclared endpoints are only
+	// counted and logged so enforcement can roll out per environment.
+	ModelURIEnforce bool
 }
 
 type ServerConfig struct {
@@ -240,6 +244,10 @@ func LoadFromEnv() (*Config, error) {
 	applyOlricRuntimeEnv(cfg, &errs)
 	applyRateLimitEnv(cfg, &errs)
 	applyDefaultModelEnv(cfg, &errs)
+
+	if v, ok := errs.boolean("MODEL_URI_ENFORCE"); ok {
+		cfg.ModelURIEnforce = v
+	}
 
 	// SecretsPath is populated by applyStargateNVCFEnv above.
 	cfg.Telemetry.TracingAccessToken = loadTracingAccessToken(cfg.NVCF.SecretsPath)

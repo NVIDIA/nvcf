@@ -41,18 +41,20 @@ type Handlers struct {
 }
 
 type observabilityMetrics struct {
-	llmTokens        otelmetric.Int64Counter
-	providerTime     otelmetric.Float64Histogram
-	streamFirstToken otelmetric.Float64Histogram
-	streamDuration   otelmetric.Float64Histogram
+	llmTokens          otelmetric.Int64Counter
+	providerTime       otelmetric.Float64Histogram
+	streamFirstToken   otelmetric.Float64Histogram
+	streamDuration     otelmetric.Float64Histogram
+	modelURIRejections otelmetric.Int64Counter
 }
 
 func newObservabilityMetrics() observabilityMetrics {
 	return observabilityMetrics{
-		llmTokens:        telemetry.LLMTokens(),
-		providerTime:     telemetry.ProviderTime(),
-		streamFirstToken: telemetry.StreamFirstToken(),
-		streamDuration:   telemetry.StreamDuration(),
+		llmTokens:          telemetry.LLMTokens(),
+		providerTime:       telemetry.ProviderTime(),
+		streamFirstToken:   telemetry.StreamFirstToken(),
+		streamDuration:     telemetry.StreamDuration(),
+		modelURIRejections: telemetry.ModelURIRejections(),
 	}
 }
 
@@ -135,6 +137,15 @@ func (h *Handlers) normalizeChatRequest(
 	request.Model = routedModel
 	reqCtx.Model = routedModel
 	setRoutingMethodForModel(reqCtx, routedModel)
+
+	if err := h.requireModelURI(
+		c,
+		routedModel,
+		chatCompletionsEndpointPath,
+		h.modelURIEnforce(),
+	); err != nil {
+		return nil, err
+	}
 
 	if !request.ServiceTier.IsValid() {
 		request.ServiceTier = h.config.DefaultServiceTier

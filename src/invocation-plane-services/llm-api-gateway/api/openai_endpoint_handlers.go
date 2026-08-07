@@ -41,8 +41,6 @@ import (
 )
 
 const (
-	embeddingsEndpointPath = "/v1/embeddings"
-
 	MaxEmbeddingInputs = 2048
 	MaxRerankingDocs   = 100
 	ttsMaxInputLength  = 10000
@@ -174,7 +172,7 @@ func (h *OpenAIProxyHandlers) Embeddings(ec echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	requestModel, err := h.validateEmbeddingRequest(reqCtx, &request)
+	requestModel, err := h.validateEmbeddingRequest(c, reqCtx, &request)
 	if err != nil {
 		return err
 	}
@@ -311,6 +309,7 @@ func (h *OpenAIProxyHandlers) TextToSpeech(ec echo.Context) error {
 }
 
 func (h *OpenAIProxyHandlers) validateEmbeddingRequest(
+	c *GatewayContext,
 	reqCtx *requestctx.RequestContext,
 	request *models.CreateEmbeddingRequest,
 ) (string, error) {
@@ -325,7 +324,12 @@ func (h *OpenAIProxyHandlers) validateEmbeddingRequest(
 			fmt.Sprintf("the model `%s` does not support embeddings", requestModel),
 		)
 	}
-	if err := requireModelURI(reqCtx, reqCtx.Model, embeddingsEndpointPath); err != nil {
+	if err := h.handlers.requireModelURI(
+		c,
+		reqCtx.Model,
+		embeddingsEndpointPath,
+		h.handlers.modelURIEnforce(),
+	); err != nil {
 		return "", err
 	}
 	if len(request.Input) == 0 {

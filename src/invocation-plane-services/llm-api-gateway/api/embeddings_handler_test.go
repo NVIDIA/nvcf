@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	echo "github.com/labstack/echo/v4"
@@ -120,112 +121,130 @@ func TestProxyEmbeddingsForwardsBodyAndHeaders(t *testing.T) {
 	}
 }
 
-func TestEmbeddingsRejectsModelWithoutEmbeddingsURI(t *testing.T) {
+func TestEmbeddingsModelURIAllowlist(t *testing.T) {
 	t.Parallel()
 
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-		_, _ = io.WriteString(w, `{"object":"list","data":[]}`)
-	}))
-	defer upstream.Close()
-
-	cfg := config.Default()
-	proxyProvider, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})
-	if err != nil {
-		t.Fatalf("new stargate provider: %v", err)
-	}
-	e := echo.New()
-	e.Use(NewContextMiddleware(cfg))
-	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(ec echo.Context) error {
-			if gc, ok := ec.(*GatewayContext); ok && gc.RequestContext() != nil {
-				gc.RequestContext().ModelSpecs = map[string]nvcf.ModelSpec{
-					"company-name/model-name": {
-						URIs: []string{"/v1/chat/completions"},
-					},
-				}
-			}
-			return next(ec)
+	specs := func(uris ...string) map[string]nvcf.ModelSpec {
+		return map[string]nvcf.ModelSpec{
+			"company-name/model-name": {URIs: uris},
 		}
-	})
-	RegisterRoutes(
-		e,
-		NewHandlers(
-			cfg,
-			proxyProvider,
-			nil,
-			nil,
-		),
-	)
-
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/v1/embeddings",
-		strings.NewReader(`{"model":"fn-alpha/company-name/model-name","input":"hello"}`),
-	)
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	rec := httptest.NewRecorder()
-
-	e.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "/v1/embeddings") {
-		t.Fatalf("response body missing endpoint: %s", rec.Body.String())
+
+	tests := []struct {
+		name             string
+		modelSpecs       map[string]nvcf.ModelSpec
+		enforce          bool
+		wantStatus       int
+		wantUpstreamHits int32
+	}{
+		{
+			name:             "rejects undeclared endpoint when enforced",
+			modelSpecs:       specs("/v1/chat/completions"),
+			enforce:          true,
+			wantStatus:       http.StatusBadRequest,
+			wantUpstreamHits: 0,
+		},
+		{
+			name:             "allows undeclared endpoint in log mode",
+			modelSpecs:       specs("/v1/chat/completions"),
+			enforce:          false,
+			wantStatus:       http.StatusOK,
+			wantUpstreamHits: 1,
+		},
+		{
+			name:             "allows declared endpoint",
+			modelSpecs:       specs("/v1/chat/completions", "/v1/embeddings"),
+			enforce:          true,
+			wantStatus:       http.StatusOK,
+			wantUpstreamHits: 1,
+		},
+		{
+			name:             "allows lenient uri spelling",
+			modelSpecs:       specs("V1/Embeddings/"),
+			enforce:          true,
+			wantStatus:       http.StatusOK,
+			wantUpstreamHits: 1,
+		},
+		{
+			name: "allows model absent from specs",
+			modelSpecs: map[string]nvcf.ModelSpec{
+				"other/model": {URIs: []string{"/v1/chat/completions"}},
+			},
+			enforce:          true,
+			wantStatus:       http.StatusOK,
+			wantUpstreamHits: 1,
+		},
+		{
+			name:             "allows model with empty uris",
+			modelSpecs:       specs(),
+			enforce:          true,
+			wantStatus:       http.StatusOK,
+			wantUpstreamHits: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var upstreamHits atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				upstreamHits.Add(1)
+				w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+				_, _ = io.WriteString(w, `{"object":"list","data":[]}`)
+			}))
+			defer upstream.Close()
+
+			cfg := config.Default()
+			cfg.ModelURIEnforce = tc.enforce
+			proxyProvider, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})
+			if err != nil {
+				t.Fatalf("new stargate provider: %v", err)
+			}
+			e := echo.New()
+			e.Use(NewContextMiddleware(cfg))
+			e.Use(modelSpecsMiddleware(tc.modelSpecs))
+			RegisterRoutes(
+				e,
+				NewHandlers(
+					cfg,
+					proxyProvider,
+					nil,
+					nil,
+				),
+			)
+
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/embeddings",
+				strings.NewReader(`{"model":"fn-alpha/company-name/model-name","input":"hello"}`),
+			)
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantStatus == http.StatusBadRequest && !strings.Contains(rec.Body.String(), "/v1/embeddings") {
+				t.Fatalf("response body missing endpoint: %s", rec.Body.String())
+			}
+			if got := upstreamHits.Load(); got != tc.wantUpstreamHits {
+				t.Fatalf("upstream hits = %d, want %d", got, tc.wantUpstreamHits)
+			}
+		})
 	}
 }
 
-func TestEmbeddingsAllowsModelWithEmbeddingsURI(t *testing.T) {
-	t.Parallel()
-
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-		_, _ = io.WriteString(w, `{"object":"list","data":[]}`)
-	}))
-	defer upstream.Close()
-
-	cfg := config.Default()
-	proxyProvider, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})
-	if err != nil {
-		t.Fatalf("new stargate provider: %v", err)
-	}
-	e := echo.New()
-	e.Use(NewContextMiddleware(cfg))
-	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+func modelSpecsMiddleware(specs map[string]nvcf.ModelSpec) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ec echo.Context) error {
 			if gc, ok := ec.(*GatewayContext); ok && gc.RequestContext() != nil {
-				gc.RequestContext().ModelSpecs = map[string]nvcf.ModelSpec{
-					"company-name/model-name": {
-						URIs: []string{"/v1/chat/completions", "/v1/embeddings"},
-					},
-				}
+				gc.RequestContext().ModelSpecs = specs
 			}
 			return next(ec)
 		}
-	})
-	RegisterRoutes(
-		e,
-		NewHandlers(
-			cfg,
-			proxyProvider,
-			nil,
-			nil,
-		),
-	)
-
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/v1/embeddings",
-		strings.NewReader(`{"model":"fn-alpha/company-name/model-name","input":"hello"}`),
-	)
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	rec := httptest.NewRecorder()
-
-	e.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 }
 

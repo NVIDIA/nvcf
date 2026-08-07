@@ -180,6 +180,13 @@ func UpstreamRequestDuration() otelmetric.Float64Histogram {
 	))
 }
 
+func ModelURIRejections() otelmetric.Int64Counter {
+	return must.Get(Meter().Int64Counter(
+		metricPrefix+"model_uri_rejections_total",
+		otelmetric.WithDescription("Requests to endpoints not declared in the model uris allowlist."),
+	))
+}
+
 func LLMTokens() otelmetric.Int64Counter {
 	return must.Get(Meter().Int64Counter(
 		metricPrefix+"llm_tokens_total",
