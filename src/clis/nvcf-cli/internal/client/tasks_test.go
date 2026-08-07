@@ -297,7 +297,7 @@ func TestGetTaskWithSecrets(t *testing.T) {
 		wantPath string
 		wantQS   string
 	}{
-		{"without flag", false, "/v1/nvct/tasks/task-id", ""},
+		{"without flag", false, "/v1/nvct/tasks/task-id", "includeSecrets=false"},
 		{"with flag", true, "/v1/nvct/tasks/task-id", "includeSecrets=true"},
 	}
 	for _, tt := range tests {
