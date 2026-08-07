@@ -110,6 +110,8 @@ releases:
         imagePullSecrets:
         {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
         {{- end }}
+        ngcConfig:
+          clusterSource: self-managed
         clusterName: {{ requiredEnv "CLUSTER_NAME" }}
         ncaId: {{ requiredEnv "NCA_ID" }}
         {{- $selfManaged := dig "nvcaOperator" "selfManaged" dict .Values.global }}
