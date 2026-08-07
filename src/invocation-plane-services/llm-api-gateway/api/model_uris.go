@@ -70,7 +70,6 @@ func (h *Handlers) requireModelURIAllowlist(
 		h.observability.modelURIAllowlistRejections,
 		1,
 		attribute.String("endpoint", endpointPath),
-		attribute.String("mode", mode),
 	)
 	telemetry.Logger(ctx).Warn().
 		Str("model", model).
