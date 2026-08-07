@@ -142,7 +142,7 @@ func (h *Handlers) normalizeChatRequest(
 		c,
 		routedModel,
 		chatCompletionsEndpointPath,
-		h.modelURIEnforce(),
+		h.modelURIAllowlistEnabled(),
 	); err != nil {
 		return nil, err
 	}

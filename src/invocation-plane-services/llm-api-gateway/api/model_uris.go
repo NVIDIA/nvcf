@@ -87,11 +87,11 @@ func (h *Handlers) requireModelURI(
 	)
 }
 
-// modelURIEnforce reports whether undeclared endpoints are refused rather
-// than only counted and logged. Controlled by the MODEL_URI_ENFORCE
+// modelURIAllowlistEnabled reports whether undeclared endpoints are refused rather
+// than only counted and logged. Controlled by the MODEL_URI_ALLOWLIST_ENABLED
 // environment variable; defaults to false for safe rollout.
-func (h *Handlers) modelURIEnforce() bool {
-	return h != nil && h.config != nil && h.config.ModelURIEnforce
+func (h *Handlers) modelURIAllowlistEnabled() bool {
+	return h != nil && h.config != nil && h.config.ModelURIAllowlistEnabled
 }
 
 // modelURIMatches reports whether a declared model uri refers to

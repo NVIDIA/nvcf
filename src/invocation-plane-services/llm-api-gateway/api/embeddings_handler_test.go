@@ -196,7 +196,7 @@ func TestEmbeddingsModelURIAllowlist(t *testing.T) {
 			defer upstream.Close()
 
 			cfg := config.Default()
-			cfg.ModelURIEnforce = tc.enforce
+			cfg.ModelURIAllowlistEnabled = tc.enforce
 			proxyProvider, err := provider.NewStargateProvider(config.StargateConfig{URL: upstream.URL})
 			if err != nil {
 				t.Fatalf("new stargate provider: %v", err)

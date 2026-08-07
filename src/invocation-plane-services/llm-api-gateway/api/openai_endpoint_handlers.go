@@ -328,7 +328,7 @@ func (h *OpenAIProxyHandlers) validateEmbeddingRequest(
 		c,
 		reqCtx.Model,
 		embeddingsEndpointPath,
-		h.handlers.modelURIEnforce(),
+		h.handlers.modelURIAllowlistEnabled(),
 	); err != nil {
 		return "", err
 	}

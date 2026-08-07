@@ -90,7 +90,7 @@ func TestChatCompletionsModelURIAllowlist(t *testing.T) {
 			t.Parallel()
 
 			cfg := config.Default()
-			cfg.ModelURIEnforce = tc.enforce
+			cfg.ModelURIAllowlistEnabled = tc.enforce
 			e := echo.New()
 			e.Use(NewContextMiddleware(cfg))
 			e.Use(modelSpecsMiddleware(map[string]nvcf.ModelSpec{
