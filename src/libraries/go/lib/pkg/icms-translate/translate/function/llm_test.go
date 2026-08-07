@@ -88,7 +88,7 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 			},
 		},
 		{
-			name: "configured default stargate address without env returns error",
+			name: "configured default request router address is used when env is absent",
 			ls:   &LaunchSpecification{},
 			allEnvSet: map[string]string{
 				"INFERENCE_PORT": "9090",
@@ -96,8 +96,14 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 			tcfg: TranslateConfig{
 				DefaultStargateAddress: "default-stargate.example.com:443",
 			},
-			expError: "LLM request router address is not set " +
-				"(LLM_REQUEST_ROUTER_ADDRESS env or STARGATE_ADDRESS legacy env)",
+			instanceID: "inst-default",
+			isHelm:     false,
+			validate: func(t *testing.T, c corev1.Container) {
+				assert.Contains(t, c.Args, "--stargate-address=default-stargate.example.com:443")
+				envMap := envSliceToMap(c.Env)
+				assert.Equal(t, "default-stargate.example.com:443", envMap["LLM_REQUEST_ROUTER_ADDRESS"])
+				assert.Equal(t, "default-stargate.example.com:443", envMap["STARGATE_ADDRESS"])
+			},
 		},
 		{
 			name: "LLM request router env controls when both env names are present",

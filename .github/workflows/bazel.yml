@@ -88,6 +88,7 @@ jobs:
         run: |
           bash tools/ci/test-bazel-cache-upload-mode
           bash tools/ci/test-bazel-remote-probe
+          bash tools/ci/test-image-push-manual
 
       - name: Compute changed subtrees
         id: detect

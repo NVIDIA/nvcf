@@ -30,7 +30,7 @@ rust_binary(
 
 # Multi-arch OCI image. distroless/cc base, binary at /usr/local/bin/pylon.
 rust_oci_image(
-    name = "image",
+    name = "pylon-image",
     base = "@distroless_cc",
     binary = ":pylon",
     binary_path = "/usr/local/bin/pylon",
@@ -45,8 +45,8 @@ sh_test(
     name = "image_entrypoint_mode_test",
     srcs = ["//src/libraries/rust/stargate/tools/ci:image_entrypoint_mode_test.sh"],
     args = [
-        "$(location :image_layer)",
+        "$(location :pylon-image_layer)",
         "/usr/local/bin/pylon",
     ],
-    data = [":image_layer"],
+    data = [":pylon-image_layer"],
 )

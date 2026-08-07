@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Behavioral regression test for the manual image-push workflow. A repository
+# collision must fail before any image push begins, because every push also
+# updates the shared latest-dispatch tag.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+workflow="${repo_root}/.github/workflows/image-push-manual.yml"
+work="$(mktemp -d)"
+trap 'rm -rf "${work}"' EXIT
+
+awk '
+  $0 == "      - name: Build and push multi-arch image(s)" {
+    in_step = 1
+    next
+  }
+  in_step && $0 == "        run: |" {
+    in_script = 1
+    next
+  }
+  in_script {
+    if ($0 ~ /^      - name:/) {
+      exit
+    }
+    sub(/^          /, "")
+    print
+  }
+' "${workflow}" > "${work}/image-push-step"
+
+if [[ ! -s "${work}/image-push-step" ]]; then
+  echo "FAIL: could not extract the image-push shell block" >&2
+  exit 1
+fi
+
+mkdir -p "${work}/bin" "${work}/home" "${work}/run"
+cat > "${work}/bin/bazel" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "${BAZEL_CALL_LOG}"
+case "${1:-}" in
+  query)
+    # Both targets map to example-service-worker under the workflow's two
+    # supported naming conventions.
+    printf '%s\n' \
+      '//first:worker_image_index' \
+      '//second:example-service-worker-image_index'
+    ;;
+  run)
+    touch "${PUSH_MARKER}"
+    ;;
+  *)
+    echo "unexpected bazel invocation: $*" >&2
+    exit 1
+    ;;
+esac
+STUB
+chmod +x "${work}/bin/bazel"
+
+output="${work}/output"
+calls="${work}/bazel-calls"
+push_marker="${work}/push-started"
+
+if (
+  cd "${work}/run"
+  HOME="${work}/home" \
+  PATH="${work}/bin:${PATH}" \
+  BAZEL_CALL_LOG="${calls}" \
+  PUSH_MARKER="${push_marker}" \
+  SVC_PATH="src/example-service" \
+  SCOPE="//..." \
+  TAG="gh.1-deadbeef" \
+  REGISTRY="registry.example.com/nvcf" \
+  bash "${work}/image-push-step"
+) > "${output}" 2>&1; then
+  echo "FAIL: duplicate repository mapping unexpectedly succeeded" >&2
+  exit 1
+fi
+
+if [[ -e "${push_marker}" ]] || grep -q '^run ' "${calls}"; then
+  echo "FAIL: bazel run executed before all repository mappings were validated" >&2
+  sed 's/^/  /' "${calls}" >&2
+  exit 1
+fi
+
+if ! grep -Fq \
+  "//second:example-service-worker-image_index and //first:worker_image_index both map to image repository example-service-worker" \
+  "${output}"; then
+  echo "FAIL: workflow did not report the conflicting target mappings" >&2
+  sed 's/^/  /' "${output}" >&2
+  exit 1
+fi
+
+echo "image-push-manual: duplicate mappings prevent every push"

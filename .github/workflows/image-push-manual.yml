@@ -217,6 +217,8 @@ jobs:
             exit 1
           fi
           echo "discovered: ${indexes[*]}"
+          declare -A seen_repos=()
+          repos=()
           for tgt in "${indexes[@]}"; do
             name="${tgt##*:}"; name="${name%_index}"
             # Two naming conventions exist in the tree and they mean different
@@ -236,6 +238,20 @@ jobs:
               *-image) repo="${name%-image}" ;;
               *)       sub="$(printf '%s' "$name" | tr '_' '-')"; repo="${svc}-${sub}" ;;
             esac
+            if [ -n "${seen_repos[$repo]:-}" ]; then
+              echo "ERROR: ${tgt} and ${seen_repos[$repo]} both map to image repository ${repo}" >&2
+              echo "Give each oci_image_index target a distinct image name before publishing." >&2
+              exit 1
+            fi
+            seen_repos["$repo"]="$tgt"
+            repos+=("$repo")
+          done
+          # Validate every target-to-repository mapping before starting any
+          # push. A later collision must not leave earlier repositories with
+          # a new snapshot or latest-dispatch tag.
+          for i in "${!indexes[@]}"; do
+            tgt="${indexes[$i]}"
+            repo="${repos[$i]}"
             dest="${REGISTRY}/${repo}"
             echo "[push] ${tgt} -> ${dest}:${TAG} (+ latest-dispatch)"
             mkdir -p ci-ghcr

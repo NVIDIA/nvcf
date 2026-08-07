@@ -16,6 +16,26 @@
 use anyhow::Result;
 use prometheus::{Encoder, IntCounterVec, Opts, Registry, TextEncoder};
 
+const QUIC_CONNECTION_OUTCOMES: &[&str] = &[
+    "accepted",
+    "completed",
+    "missing_sni",
+    "relay_error",
+    "target_unavailable",
+    "unknown_sni",
+];
+const WEBTRANSPORT_SESSION_OUTCOMES: &[&str] = &[
+    "accepted",
+    "completed",
+    "invalid_connect",
+    "missing_sni",
+    "relay_error",
+    "target_unavailable",
+    "unknown_sni",
+    "upstream_connect_error",
+    "upstream_rejected",
+];
+
 #[derive(Clone)]
 pub struct RouterMetrics {
     registry: Registry,
@@ -42,6 +62,13 @@ impl RouterMetrics {
             &["outcome"],
         )?;
         registry.register(Box::new(webtransport_sessions_total.clone()))?;
+
+        for outcome in QUIC_CONNECTION_OUTCOMES {
+            let _ = quic_connections_total.with_label_values(&[outcome]);
+        }
+        for outcome in WEBTRANSPORT_SESSION_OUTCOMES {
+            let _ = webtransport_sessions_total.with_label_values(&[outcome]);
+        }
 
         Ok(Self {
             registry,
@@ -73,6 +100,30 @@ impl RouterMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metrics_export_known_outcomes_before_traffic() {
+        let metrics = RouterMetrics::new().expect("metrics should initialize");
+
+        let body = metrics.gather().expect("metrics should encode");
+
+        for &outcome in QUIC_CONNECTION_OUTCOMES {
+            assert!(
+                body.contains(&format!(
+                    r#"stargate_k8s_router_quic_connections_total{{outcome="{outcome}"}} 0"#
+                )),
+                "missing zero-valued QUIC series for {outcome}"
+            );
+        }
+        for &outcome in WEBTRANSPORT_SESSION_OUTCOMES {
+            assert!(
+                body.contains(&format!(
+                    r#"stargate_k8s_router_webtransport_sessions_total{{outcome="{outcome}"}} 0"#
+                )),
+                "missing zero-valued WebTransport series for {outcome}"
+            );
+        }
+    }
 
     #[test]
     fn metrics_exports_quic_connection_outcomes() {

@@ -116,6 +116,7 @@ rust_oci_image(
     base = "@distroless_cc",
     binary = ":stargate",
     binary_path = "/usr/local/bin/stargate",
+    extra_layers = ["//crates/stargate-k8s-router:stargate-k8s-router-image_layer"],
     tags = ["stargate"],
     visibility = ["//visibility:public"],
 )
@@ -131,4 +132,16 @@ sh_test(
         "/usr/local/bin/stargate",
     ],
     data = [":image_layer"],
+)
+
+# Composite-image guard. Inspect the assembled OCI layout so removing the
+# router's extra layer fails this test.
+sh_test(
+    name = "image_router_binary_test",
+    srcs = ["//tools/ci:oci_image_contains_path_test.sh"],
+    args = [
+        "$(location :image)",
+        "/usr/local/bin/stargate-k8s-router",
+    ],
+    data = [":image"],
 )
