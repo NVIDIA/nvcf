@@ -126,6 +126,83 @@ func TestResponsesStreamUsesHeaderControls(t *testing.T) {
 	}
 }
 
+func TestBodyControlsWorkBeforeAndAfterNormalFields(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		path string
+		body string
+		want string
+	}{
+		{
+			name: "responses before input",
+			path: "/v1/responses",
+			body: `{"x_load_tester_ttft_ms":0,"x_load_tester_chunk":"before-response","x_load_tester_output_chunks":2,"model":"test-model","input":"hello"}`,
+			want: `"text":"before-responsebefore-response"`,
+		},
+		{
+			name: "responses after input",
+			path: "/v1/responses",
+			body: `{"model":"test-model","input":"hello","x_load_tester_ttft_ms":0,"x_load_tester_chunk":"after-response","x_load_tester_output_chunks":2}`,
+			want: `"text":"after-responseafter-response"`,
+		},
+		{
+			name: "chat before messages",
+			path: "/v1/chat/completions",
+			body: `{"x_load_tester_ttft_ms":0,"x_load_tester_chunk":"before-chat","x_load_tester_output_chunks":2,"model":"test-model","messages":[{"role":"user","content":"hello"}]}`,
+			want: `"content":"before-chatbefore-chat"`,
+		},
+		{
+			name: "chat after messages",
+			path: "/v1/chat/completions",
+			body: `{"model":"test-model","messages":[{"role":"user","content":"hello"}],"x_load_tester_ttft_ms":0,"x_load_tester_chunk":"after-chat","x_load_tester_output_chunks":2}`,
+			want: `"content":"after-chatafter-chat"`,
+		},
+		{
+			name: "completion before prompt",
+			path: "/v1/completions",
+			body: `{"x_load_tester_ttft_ms":0,"x_load_tester_chunk":"before-completion","x_load_tester_output_chunks":2,"model":"test-model","prompt":"hello"}`,
+			want: `"text":"before-completionbefore-completion"`,
+		},
+		{
+			name: "completion after prompt",
+			path: "/v1/completions",
+			body: `{"model":"test-model","prompt":"hello","x_load_tester_ttft_ms":0,"x_load_tester_chunk":"after-completion","x_load_tester_output_chunks":2}`,
+			want: `"text":"after-completionafter-completion"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := postJSON(t, test.path, test.body)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), test.want) {
+				t.Fatalf("response does not contain %s: %s", test.want, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestAnyLoadTesterHeaderDisablesBodyControls(t *testing.T) {
+	recorder := postJSONWithHeaders(t, "/v1/responses", `{
+		"model":"test-model",
+		"input":"hello",
+		"stream":true,
+		"x_load_tester_ttft_ms":"not-an-integer",
+		"x_load_tester_chunk":"body",
+		"x_load_tester_output_chunks":2,
+		"x_load_tester_status_code":503
+	}`, map[string]string{"X-Load-Tester-Ignored": "1"})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := strings.Count(recorder.Body.String(), `"delta":"`+defaultChunk+`"`); got != 1 {
+		t.Fatalf("delta count = %d, want 1: %s", got, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "event: response.completed") {
+		t.Fatalf("stream did not complete: %s", recorder.Body.String())
+	}
+}
+
 func TestResponsesStreamPreservesSSESemanticsAndFlushes(t *testing.T) {
 	chunk := "quote\" slash\\ newline\n"
 	recorder := newFlushCountingRecorder()
@@ -349,7 +426,7 @@ func TestOutputChunksLimit(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			request.Header.Set(headerOutputChunks, test.value)
-			tuning, err := resolveBenchmarkTuning(request, defaultMaxOutputChunks)
+			tuning, err := resolveBenchmarkTuning(request, benchmarkBodyControls{}, defaultMaxOutputChunks)
 			if test.want {
 				if err != nil {
 					t.Fatalf("resolveBenchmarkTuning() error = %v", err)
@@ -476,6 +553,68 @@ func TestChunkBytesControlsOutput(t *testing.T) {
 	}
 }
 
+func TestBodyControlMapping(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	tuning, err := resolveBenchmarkTuning(request, benchmarkBodyControls{
+		QueueDelay:       json.RawMessage(`1`),
+		TTFT:             json.RawMessage(`2`),
+		TTFTJitter:       json.RawMessage(`3`),
+		ITL:              json.RawMessage(`4`),
+		ITLJitter:        json.RawMessage(`5`),
+		Chunk:            json.RawMessage(`"body"`),
+		OutputChunks:     json.RawMessage(`6`),
+		StatusCode:       json.RawMessage(`503`),
+		StreamErrorAfter: json.RawMessage(`1`),
+		MaxConcurrency:   json.RawMessage(`2`),
+	}, defaultMaxOutputChunks)
+	if err != nil {
+		t.Fatalf("resolveBenchmarkTuning() error = %v", err)
+	}
+	if tuning.QueueDelay != time.Millisecond || tuning.TTFT != 2*time.Millisecond || tuning.TTFTJitter != 3*time.Millisecond || tuning.ITL != 4*time.Millisecond || tuning.ITLJitter != 5*time.Millisecond {
+		t.Fatalf("timing controls = %#v, want body values", tuning)
+	}
+	if tuning.Chunk != "body" || tuning.OutputChunks != 6 || tuning.StatusCode != http.StatusServiceUnavailable || tuning.StreamErrorAfter != 1 || tuning.MaxConcurrency != 2 {
+		t.Fatalf("body controls = %#v, want configured values", tuning)
+	}
+}
+
+func TestBodyChunkBytesControlsOutput(t *testing.T) {
+	recorder := postJSON(t, "/v1/chat/completions", `{
+		"model":"test-model",
+		"messages":[{"role":"user","content":"hello"}],
+		"x_load_tester_chunk_bytes":7,
+		"x_load_tester_output_chunks":2
+	}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	body := responseMap(t, recorder)
+	choices := body["choices"].([]any)
+	message := choices[0].(map[string]any)["message"].(map[string]any)
+	if got := len(message["content"].(string)); got != 14 {
+		t.Fatalf("content length = %d, want 14", got)
+	}
+}
+
+func TestRejectsInvalidLoadTesterBodyControls(t *testing.T) {
+	for name, body := range map[string]string{
+		"negative itl":           `{"model":"test-model","input":"hello","x_load_tester_itl_ms":-1}`,
+		"empty chunk":            `{"model":"test-model","input":"hello","x_load_tester_chunk":""}`,
+		"zero chunks":            `{"model":"test-model","input":"hello","x_load_tester_output_chunks":0}`,
+		"success status":         `{"model":"test-model","input":"hello","x_load_tester_status_code":200}`,
+		"combined chunk values":  `{"model":"test-model","input":"hello","x_load_tester_chunk":"text","x_load_tester_chunk_bytes":4}`,
+		"output over cap":        `{"model":"test-model","input":"hello","x_load_tester_chunk_bytes":1048576,"x_load_tester_output_chunks":2}`,
+		"competing stream stops": `{"model":"test-model","input":"hello","x_load_tester_stream_error_after_chunks":0,"x_load_tester_stream_truncate_after_chunks":0}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := postJSON(t, "/v1/responses", body)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestRejectsInvalidLoadTesterHeaders(t *testing.T) {
 	for name, headers := range map[string]map[string]string{
 		"negative itl": {
@@ -554,6 +693,50 @@ func TestInjectedStatusAndStreamFailures(t *testing.T) {
 	}
 }
 
+func TestBodyInjectedStatusAndStreamFailures(t *testing.T) {
+	recorder := postJSON(t, "/v1/responses", `{
+		"model":"test-model",
+		"input":"hello",
+		"x_load_tester_status_code":503
+	}`)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusServiceUnavailable, recorder.Body.String())
+	}
+
+	recorder = postJSON(t, "/v1/embeddings", `{
+		"model":"test-model",
+		"input":"hello",
+		"x_load_tester_status_code":503
+	}`)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("embedding status = %d, want %d: %s", recorder.Code, http.StatusServiceUnavailable, recorder.Body.String())
+	}
+
+	recorder = postJSON(t, "/v1/responses", `{
+		"model":"test-model",
+		"input":"hello",
+		"stream":true,
+		"x_load_tester_output_chunks":2,
+		"x_load_tester_stream_error_after_chunks":1
+	}`)
+	body := recorder.Body.String()
+	if !strings.Contains(body, "event: error") || strings.Contains(body, "event: response.completed") {
+		t.Fatalf("unexpected failed stream: %s", body)
+	}
+
+	recorder = postJSON(t, "/v1/responses", `{
+		"model":"test-model",
+		"input":"hello",
+		"stream":true,
+		"x_load_tester_output_chunks":2,
+		"x_load_tester_stream_truncate_after_chunks":1
+	}`)
+	body = recorder.Body.String()
+	if strings.Contains(body, "event: error") || strings.Contains(body, "event: response.completed") {
+		t.Fatalf("unexpected truncated stream: %s", body)
+	}
+}
+
 func TestConcurrencyLimit(t *testing.T) {
 	activeRequests.Store(0)
 	firstDone := make(chan *httptest.ResponseRecorder, 1)
@@ -588,6 +771,51 @@ func TestConcurrencyLimit(t *testing.T) {
 	secondRequest := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
 	secondRequest.Header.Set("Content-Type", "application/json")
 	secondRequest.Header.Set(headerMaxConcurrency, "1")
+	secondRecorder := httptest.NewRecorder()
+	router.ServeHTTP(secondRecorder, secondRequest)
+	if secondRecorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d: %s", secondRecorder.Code, http.StatusTooManyRequests, secondRecorder.Body.String())
+	}
+	if firstRecorder := <-firstDone; firstRecorder.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want %d: %s", firstRecorder.Code, http.StatusOK, firstRecorder.Body.String())
+	}
+	if activeRequests.Load() != 0 {
+		t.Fatalf("active requests = %d, want 0", activeRequests.Load())
+	}
+}
+
+func TestBodyConcurrencyLimit(t *testing.T) {
+	activeRequests.Store(0)
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	requestFinished := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-requestFinished:
+		case <-time.After(time.Second):
+		}
+		activeRequests.Store(0)
+	})
+	router := newRouter()
+	body := `{"model":"test-model","x_load_tester_max_concurrency":1,"x_load_tester_ttft_ms":100}`
+	firstRequest := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	firstRequest.Header.Set("Content-Type", "application/json")
+	go func() {
+		defer close(requestFinished)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, firstRequest)
+		firstDone <- recorder
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for activeRequests.Load() != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if activeRequests.Load() != 1 {
+		t.Fatal("first request did not acquire the concurrency slot")
+	}
+
+	secondRequest := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	secondRequest.Header.Set("Content-Type", "application/json")
 	secondRecorder := httptest.NewRecorder()
 	router.ServeHTTP(secondRecorder, secondRequest)
 	if secondRecorder.Code != http.StatusTooManyRequests {

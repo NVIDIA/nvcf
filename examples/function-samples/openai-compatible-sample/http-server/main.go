@@ -60,6 +60,21 @@ const (
 	headerStreamErrorAfter    = "X-Load-Tester-Stream-Error-After-Chunks"
 	headerStreamTruncateAfter = "X-Load-Tester-Stream-Truncate-After-Chunks"
 	headerMaxConcurrency      = "X-Load-Tester-Max-Concurrency"
+
+	bodyQueueDelay          = "x_load_tester_queue_delay_ms"
+	bodyTTFT                = "x_load_tester_ttft_ms"
+	bodyTTFTJitter          = "x_load_tester_ttft_jitter_ms"
+	bodyITL                 = "x_load_tester_itl_ms"
+	bodyITLJitter           = "x_load_tester_itl_jitter_ms"
+	bodyChunk               = "x_load_tester_chunk"
+	bodyChunkBytes          = "x_load_tester_chunk_bytes"
+	bodyOutputChunks        = "x_load_tester_output_chunks"
+	bodyStatusCode          = "x_load_tester_status_code"
+	bodyStreamErrorAfter    = "x_load_tester_stream_error_after_chunks"
+	bodyStreamTruncateAfter = "x_load_tester_stream_truncate_after_chunks"
+	bodyMaxConcurrency      = "x_load_tester_max_concurrency"
+
+	loadTesterHeaderPrefix = "x-load-tester-"
 )
 
 var (
@@ -88,20 +103,41 @@ type serverConfig struct {
 	maxOutputChunks int
 }
 
+type benchmarkBodyControls struct {
+	QueueDelay          json.RawMessage `json:"x_load_tester_queue_delay_ms"`
+	TTFT                json.RawMessage `json:"x_load_tester_ttft_ms"`
+	TTFTJitter          json.RawMessage `json:"x_load_tester_ttft_jitter_ms"`
+	ITL                 json.RawMessage `json:"x_load_tester_itl_ms"`
+	ITLJitter           json.RawMessage `json:"x_load_tester_itl_jitter_ms"`
+	Chunk               json.RawMessage `json:"x_load_tester_chunk"`
+	ChunkBytes          json.RawMessage `json:"x_load_tester_chunk_bytes"`
+	OutputChunks        json.RawMessage `json:"x_load_tester_output_chunks"`
+	StatusCode          json.RawMessage `json:"x_load_tester_status_code"`
+	StreamErrorAfter    json.RawMessage `json:"x_load_tester_stream_error_after_chunks"`
+	StreamTruncateAfter json.RawMessage `json:"x_load_tester_stream_truncate_after_chunks"`
+	MaxConcurrency      json.RawMessage `json:"x_load_tester_max_concurrency"`
+}
+
 type responsesRequest struct {
-	Model  string `json:"model"`
-	Stream bool   `json:"stream"`
+	Model  string          `json:"model"`
+	Stream bool            `json:"stream"`
+	Input  json.RawMessage `json:"input"`
+	benchmarkBodyControls
 }
 
 type chatCompletionsRequest struct {
 	Model         string             `json:"model"`
 	Stream        bool               `json:"stream"`
 	StreamOptions *chatStreamOptions `json:"stream_options"`
+	Messages      json.RawMessage    `json:"messages"`
+	benchmarkBodyControls
 }
 
 type completionsRequest struct {
-	Model  string `json:"model"`
-	Stream bool   `json:"stream"`
+	Model  string          `json:"model"`
+	Stream bool            `json:"stream"`
+	Prompt json.RawMessage `json:"prompt"`
+	benchmarkBodyControls
 }
 
 type chatStreamOptions struct {
@@ -112,6 +148,7 @@ type embeddingsRequest struct {
 	Model          string          `json:"model"`
 	Input          json.RawMessage `json:"input"`
 	EncodingFormat string          `json:"encoding_format"`
+	benchmarkBodyControls
 }
 
 type responsesResponse struct {
@@ -355,17 +392,16 @@ func handleResponses(w http.ResponseWriter, r *http.Request, config serverConfig
 	if !requirePost(w, r) {
 		return
 	}
-	tuning, release, ok := startBenchmark(w, r, config)
-	if !ok {
-		return
-	}
-	defer release()
-
 	var request responsesRequest
 	if err := decodeJSON(w, r, &request); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid JSON request body", "")
 		return
 	}
+	tuning, release, ok := startBenchmark(w, r, config, request.benchmarkBodyControls)
+	if !ok {
+		return
+	}
+	defer release()
 	if request.Model == "" {
 		writeAPIError(w, http.StatusBadRequest, "model is required", "model")
 		return
@@ -387,17 +423,16 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request, config server
 	if !requirePost(w, r) {
 		return
 	}
-	tuning, release, ok := startBenchmark(w, r, config)
-	if !ok {
-		return
-	}
-	defer release()
-
 	var request chatCompletionsRequest
 	if err := decodeJSON(w, r, &request); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid JSON request body", "")
 		return
 	}
+	tuning, release, ok := startBenchmark(w, r, config, request.benchmarkBodyControls)
+	if !ok {
+		return
+	}
+	defer release()
 	if request.Model == "" {
 		writeAPIError(w, http.StatusBadRequest, "model is required", "model")
 		return
@@ -420,17 +455,16 @@ func handleCompletions(w http.ResponseWriter, r *http.Request, config serverConf
 	if !requirePost(w, r) {
 		return
 	}
-	tuning, release, ok := startBenchmark(w, r, config)
-	if !ok {
-		return
-	}
-	defer release()
-
 	var request completionsRequest
 	if err := decodeJSON(w, r, &request); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid JSON request body", "")
 		return
 	}
+	tuning, release, ok := startBenchmark(w, r, config, request.benchmarkBodyControls)
+	if !ok {
+		return
+	}
+	defer release()
 	if request.Model == "" {
 		writeAPIError(w, http.StatusBadRequest, "model is required", "model")
 		return
@@ -452,17 +486,16 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request, config serverConfi
 	if !requirePost(w, r) {
 		return
 	}
-	tuning, release, ok := startBenchmark(w, r, config)
-	if !ok {
-		return
-	}
-	defer release()
-
 	var request embeddingsRequest
 	if err := decodeJSON(w, r, &request); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid JSON request body", "")
 		return
 	}
+	tuning, release, ok := startBenchmark(w, r, config, request.benchmarkBodyControls)
+	if !ok {
+		return
+	}
+	defer release()
 	if request.Model == "" {
 		writeAPIError(w, http.StatusBadRequest, "model is required", "model")
 		return
@@ -527,8 +560,8 @@ func requireGet(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-func startBenchmark(w http.ResponseWriter, r *http.Request, config serverConfig) (benchmarkTuning, func(), bool) {
-	tuning, err := resolveBenchmarkTuning(r, config.maxOutputChunks)
+func startBenchmark(w http.ResponseWriter, r *http.Request, config serverConfig, body benchmarkBodyControls) (benchmarkTuning, func(), bool) {
+	tuning, err := resolveBenchmarkTuning(r, body, config.maxOutputChunks)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error(), "")
 		return benchmarkTuning{}, nil, false
@@ -555,7 +588,10 @@ func startBenchmark(w http.ResponseWriter, r *http.Request, config serverConfig)
 	return tuning, release, true
 }
 
-func resolveBenchmarkTuning(r *http.Request, maxOutputChunks int) (benchmarkTuning, error) {
+func resolveBenchmarkTuning(r *http.Request, body benchmarkBodyControls, maxOutputChunks int) (benchmarkTuning, error) {
+	if hasLoadTesterHeader(r) {
+		body = benchmarkBodyControls{}
+	}
 	tuning := benchmarkTuning{
 		Chunk:               defaultChunk,
 		OutputChunks:        1,
@@ -564,56 +600,63 @@ func resolveBenchmarkTuning(r *http.Request, maxOutputChunks int) (benchmarkTuni
 	}
 	var err error
 	for _, setting := range []struct {
-		name  string
-		value *time.Duration
+		header string
+		body   string
+		raw    json.RawMessage
+		value  *time.Duration
 	}{
-		{name: headerQueueDelay, value: &tuning.QueueDelay},
-		{name: headerTTFT, value: &tuning.TTFT},
-		{name: headerTTFTJitter, value: &tuning.TTFTJitter},
-		{name: headerITL, value: &tuning.ITL},
-		{name: headerITLJitter, value: &tuning.ITLJitter},
+		{header: headerQueueDelay, body: bodyQueueDelay, raw: body.QueueDelay, value: &tuning.QueueDelay},
+		{header: headerTTFT, body: bodyTTFT, raw: body.TTFT, value: &tuning.TTFT},
+		{header: headerTTFTJitter, body: bodyTTFTJitter, raw: body.TTFTJitter, value: &tuning.TTFTJitter},
+		{header: headerITL, body: bodyITL, raw: body.ITL, value: &tuning.ITL},
+		{header: headerITLJitter, body: bodyITLJitter, raw: body.ITLJitter, value: &tuning.ITLJitter},
 	} {
-		*setting.value, err = durationHeader(r, setting.name)
+		*setting.value, err = durationControl(r, setting.header, setting.body, setting.raw)
 		if err != nil {
 			return benchmarkTuning{}, err
 		}
 	}
 
-	chunk, hasChunk, err := oneHeader(r, headerChunk)
+	chunk, hasChunk, chunkName, err := textControl(r, headerChunk, bodyChunk, body.Chunk)
 	if err != nil {
 		return benchmarkTuning{}, err
 	}
 	if hasChunk {
 		if chunk == "" {
-			return benchmarkTuning{}, fmt.Errorf("%s must not be empty", headerChunk)
+			return benchmarkTuning{}, fmt.Errorf("%s must not be empty", chunkName)
 		}
 		tuning.Chunk = chunk
 	}
-	if tuning.ChunkBytes, err = integerHeader(r, headerChunkBytes, 0, 0, maxOutputBytes); err != nil {
+	chunkBytesName := headerChunkBytes
+	var hasChunkBytes bool
+	if tuning.ChunkBytes, hasChunkBytes, chunkBytesName, err = integerControl(r, headerChunkBytes, bodyChunkBytes, body.ChunkBytes, 0, 0, maxOutputBytes); err != nil {
 		return benchmarkTuning{}, err
 	}
-	if tuning.ChunkBytes > 0 && hasChunk {
-		return benchmarkTuning{}, fmt.Errorf("%s and %s cannot be combined", headerChunk, headerChunkBytes)
+	if hasChunkBytes && tuning.ChunkBytes > 0 && hasChunk {
+		return benchmarkTuning{}, fmt.Errorf("%s and %s cannot be combined", chunkName, chunkBytesName)
 	}
-	if tuning.OutputChunks, err = integerHeader(r, headerOutputChunks, 1, 1, maxOutputChunks); err != nil {
+	if tuning.OutputChunks, _, _, err = integerControl(r, headerOutputChunks, bodyOutputChunks, body.OutputChunks, 1, 1, maxOutputChunks); err != nil {
 		return benchmarkTuning{}, err
 	}
-	if tuning.StatusCode, err = integerHeader(r, headerStatusCode, 0, 0, 599); err != nil {
+	statusName := headerStatusCode
+	if tuning.StatusCode, _, statusName, err = integerControl(r, headerStatusCode, bodyStatusCode, body.StatusCode, 0, 0, 599); err != nil {
 		return benchmarkTuning{}, err
 	}
 	if tuning.StatusCode != 0 && tuning.StatusCode < http.StatusBadRequest {
-		return benchmarkTuning{}, fmt.Errorf("%s must be an HTTP error status", headerStatusCode)
+		return benchmarkTuning{}, fmt.Errorf("%s must be an HTTP error status", statusName)
 	}
-	if tuning.StreamErrorAfter, err = integerHeader(r, headerStreamErrorAfter, -1, -1, tuning.OutputChunks); err != nil {
+	streamErrorName := headerStreamErrorAfter
+	if tuning.StreamErrorAfter, _, streamErrorName, err = integerControl(r, headerStreamErrorAfter, bodyStreamErrorAfter, body.StreamErrorAfter, -1, -1, tuning.OutputChunks); err != nil {
 		return benchmarkTuning{}, err
 	}
-	if tuning.StreamTruncateAfter, err = integerHeader(r, headerStreamTruncateAfter, -1, -1, tuning.OutputChunks); err != nil {
+	streamTruncateName := headerStreamTruncateAfter
+	if tuning.StreamTruncateAfter, _, streamTruncateName, err = integerControl(r, headerStreamTruncateAfter, bodyStreamTruncateAfter, body.StreamTruncateAfter, -1, -1, tuning.OutputChunks); err != nil {
 		return benchmarkTuning{}, err
 	}
 	if tuning.StreamErrorAfter >= 0 && tuning.StreamTruncateAfter >= 0 {
-		return benchmarkTuning{}, fmt.Errorf("%s and %s cannot be combined", headerStreamErrorAfter, headerStreamTruncateAfter)
+		return benchmarkTuning{}, fmt.Errorf("%s and %s cannot be combined", streamErrorName, streamTruncateName)
 	}
-	if tuning.MaxConcurrency, err = integerHeader(r, headerMaxConcurrency, 0, 0, maxConcurrencyLimit); err != nil {
+	if tuning.MaxConcurrency, _, _, err = integerControl(r, headerMaxConcurrency, bodyMaxConcurrency, body.MaxConcurrency, 0, 0, maxConcurrencyLimit); err != nil {
 		return benchmarkTuning{}, err
 	}
 
@@ -652,34 +695,104 @@ func oneHeader(r *http.Request, name string) (string, bool, error) {
 	return values[0], true, nil
 }
 
-func durationHeader(r *http.Request, name string) (time.Duration, error) {
-	value, present, err := oneHeader(r, name)
+func hasLoadTesterHeader(r *http.Request) bool {
+	for name := range r.Header {
+		if strings.HasPrefix(strings.ToLower(name), loadTesterHeaderPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func controlValue(r *http.Request, header, body string, raw json.RawMessage) (string, json.RawMessage, bool, string, bool, error) {
+	value, present, err := oneHeader(r, header)
+	if err != nil {
+		return "", nil, false, header, true, err
+	}
+	if present {
+		return value, nil, true, header, true, nil
+	}
+	if len(raw) == 0 {
+		return "", nil, false, body, false, nil
+	}
+	return "", raw, true, body, false, nil
+}
+
+func bodyInteger(raw json.RawMessage) (int64, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return 0, err
+	}
+	var text string
+	switch typed := value.(type) {
+	case json.Number:
+		text = typed.String()
+	case string:
+		text = typed
+	default:
+		return 0, errors.New("must be an integer")
+	}
+	return strconv.ParseInt(text, 10, 64)
+}
+
+func durationControl(r *http.Request, header, body string, raw json.RawMessage) (time.Duration, error) {
+	headerValue, bodyValue, present, source, fromHeader, err := controlValue(r, header, body, raw)
 	if err != nil {
 		return 0, err
 	}
 	if !present {
 		return 0, nil
 	}
-	milliseconds, err := strconv.ParseInt(value, 10, 64)
+	var milliseconds int64
+	if fromHeader {
+		milliseconds, err = strconv.ParseInt(headerValue, 10, 64)
+	} else {
+		milliseconds, err = bodyInteger(bodyValue)
+	}
 	if err != nil || milliseconds < 0 || milliseconds > maxControlMilliseconds {
-		return 0, fmt.Errorf("%s must be an integer from 0 to %d milliseconds", name, maxControlMilliseconds)
+		return 0, fmt.Errorf("%s must be an integer from 0 to %d milliseconds", source, maxControlMilliseconds)
 	}
 	return time.Duration(milliseconds) * time.Millisecond, nil
 }
 
-func integerHeader(r *http.Request, name string, defaultValue, minimum, maximum int) (int, error) {
-	value, present, err := oneHeader(r, name)
+func integerControl(r *http.Request, header, body string, raw json.RawMessage, defaultValue, minimum, maximum int) (int, bool, string, error) {
+	headerValue, bodyValue, present, source, fromHeader, err := controlValue(r, header, body, raw)
 	if err != nil {
-		return 0, err
+		return 0, false, source, err
 	}
 	if !present {
-		return defaultValue, nil
+		return defaultValue, false, source, nil
 	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < minimum || parsed > maximum {
-		return 0, fmt.Errorf("%s must be an integer from %d to %d", name, minimum, maximum)
+	var parsed64 int64
+	if fromHeader {
+		parsed64, err = strconv.ParseInt(headerValue, 10, 64)
+	} else {
+		parsed64, err = bodyInteger(bodyValue)
 	}
-	return parsed, nil
+	if err != nil || parsed64 < int64(minimum) || parsed64 > int64(maximum) {
+		return 0, true, source, fmt.Errorf("%s must be an integer from %d to %d", source, minimum, maximum)
+	}
+	return int(parsed64), true, source, nil
+}
+
+func textControl(r *http.Request, header, body string, raw json.RawMessage) (string, bool, string, error) {
+	headerValue, bodyValue, present, source, fromHeader, err := controlValue(r, header, body, raw)
+	if err != nil {
+		return "", false, source, err
+	}
+	if !present {
+		return "", false, source, nil
+	}
+	if fromHeader {
+		return headerValue, true, source, nil
+	}
+	var value string
+	if err := json.Unmarshal(bodyValue, &value); err != nil {
+		return "", true, source, fmt.Errorf("%s must be a string", source)
+	}
+	return value, true, source, nil
 }
 
 func outputChunks(tuning benchmarkTuning) []string {

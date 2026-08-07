@@ -25,25 +25,31 @@ not implemented.
 
 ## Benchmark controls
 
-All benchmark controls are HTTP headers. The default output chunk is `xxxx`.
-The text headers apply to Chat Completions, Responses, and legacy Completions.
-Queue delay, TTFT, status injection, and concurrency limits apply to all POST
-routes.
+Benchmark controls use either HTTP headers or top-level JSON body fields. Body
+controls may appear anywhere in the JSON object. The normal OpenAI fields,
+including `model`, `stream`, `input`, `messages`, and `prompt`, are still
+decoded normally.
 
-| Control | Header | Default | Behavior |
-|---------|--------|---------|----------|
-| Queue delay | `X-Load-Tester-Queue-Delay-Ms` | `0` | Delay before processing the request. |
-| TTFT | `X-Load-Tester-TTFT-Ms` | `0` | Delay before the first response byte. |
-| TTFT jitter | `X-Load-Tester-TTFT-Jitter-Ms` | `0` | Random extra delay from 0 through this value. |
-| ITL | `X-Load-Tester-ITL-Ms` | `0` | Delay between streamed output chunks. |
-| ITL jitter | `X-Load-Tester-ITL-Jitter-Ms` | `0` | Random extra delay between chunks. |
-| Chunk text | `X-Load-Tester-Chunk` | `xxxx` | Text returned in each output chunk. |
-| Chunk bytes | `X-Load-Tester-Chunk-Bytes` | `0` | Generate a random chunk of this byte length. |
-| Output chunks | `X-Load-Tester-Output-Chunks` | `1` | Number of text chunks to return, capped by the startup limit. |
-| Status injection | `X-Load-Tester-Status-Code` | unset | Return an OpenAI-shaped HTTP error. |
-| Stream error | `X-Load-Tester-Stream-Error-After-Chunks` | unset | End a stream with an OpenAI-shaped error after this many chunks. |
-| Stream truncate | `X-Load-Tester-Stream-Truncate-After-Chunks` | unset | Close a stream without its completion event after this many chunks. |
-| Concurrency limit | `X-Load-Tester-Max-Concurrency` | `0` | Return 429 when the global in-flight request count exceeds this value. |
+If any request header starts with `X-Load-Tester-`, all body controls are
+ignored. Header controls and defaults apply instead. The default output chunk
+is `xxxx`. Text controls apply to Chat Completions, Responses, and legacy
+Completions. Queue delay, TTFT, status injection, and concurrency limits apply
+to all POST routes.
+
+| Control | Header | JSON body field | Default | Behavior |
+|---------|--------|-----------------|---------|----------|
+| Queue delay | `X-Load-Tester-Queue-Delay-Ms` | `x_load_tester_queue_delay_ms` | `0` | Delay before processing the request. |
+| TTFT | `X-Load-Tester-TTFT-Ms` | `x_load_tester_ttft_ms` | `0` | Delay before the first response byte. |
+| TTFT jitter | `X-Load-Tester-TTFT-Jitter-Ms` | `x_load_tester_ttft_jitter_ms` | `0` | Random extra delay from 0 through this value. |
+| ITL | `X-Load-Tester-ITL-Ms` | `x_load_tester_itl_ms` | `0` | Delay between streamed output chunks. |
+| ITL jitter | `X-Load-Tester-ITL-Jitter-Ms` | `x_load_tester_itl_jitter_ms` | `0` | Random extra delay between chunks. |
+| Chunk text | `X-Load-Tester-Chunk` | `x_load_tester_chunk` | `xxxx` | Text returned in each output chunk. |
+| Chunk bytes | `X-Load-Tester-Chunk-Bytes` | `x_load_tester_chunk_bytes` | `0` | Generate a random chunk of this byte length. |
+| Output chunks | `X-Load-Tester-Output-Chunks` | `x_load_tester_output_chunks` | `1` | Number of text chunks to return, capped by the startup limit. |
+| Status injection | `X-Load-Tester-Status-Code` | `x_load_tester_status_code` | unset | Return an OpenAI-shaped HTTP error. |
+| Stream error | `X-Load-Tester-Stream-Error-After-Chunks` | `x_load_tester_stream_error_after_chunks` | unset | End a stream with an OpenAI-shaped error after this many chunks. |
+| Stream truncate | `X-Load-Tester-Stream-Truncate-After-Chunks` | `x_load_tester_stream_truncate_after_chunks` | unset | Close a stream without its completion event after this many chunks. |
+| Concurrency limit | `X-Load-Tester-Max-Concurrency` | `x_load_tester_max_concurrency` | `0` | Return 429 when the global in-flight request count exceeds this value. |
 
 Timing values are non-negative integer milliseconds and are capped at five
 minutes. Output is capped at 1 MiB and the startup chunk limit. The
@@ -73,6 +79,19 @@ curl --request POST \
   --data '{
     "model": "test-model",
     "messages": [{"role": "user", "content": "hello"}]
+  }'
+
+curl --request POST \
+  --url http://localhost:18000/v1/responses \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "test-model",
+    "input": "hello",
+    "stream": true,
+    "x_load_tester_ttft_ms": 200,
+    "x_load_tester_itl_ms": 50,
+    "x_load_tester_chunk": "token",
+    "x_load_tester_output_chunks": 3
   }'
 
 curl --request POST \
