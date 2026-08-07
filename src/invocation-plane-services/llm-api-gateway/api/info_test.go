@@ -75,9 +75,33 @@ func TestInfoEndpoint_GET(t *testing.T) {
 	}
 }
 
+func TestInfoEndpoint_GET_UnstampedFallback(t *testing.T) {
+	// vars are zero-valued when x_defs are not injected; resolve() falls back to "unknown".
+	e := newInfoEngine()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/info", nil)
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /info: got status %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var info map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatalf("GET /info: unmarshal body: %v", err)
+	}
+	for _, field := range []string{"service", "version", "commit"} {
+		if info[field] == "" {
+			t.Errorf("GET /info: field %q must be populated (got empty)", field)
+		}
+	}
+}
+
 func TestInfoEndpoint_RejectsNonGET(t *testing.T) {
 	e := newInfoEngine()
 
+	// e.Any registers all standard methods including CONNECT and TRACE.
 	for _, method := range []string{
 		http.MethodHead,
 		http.MethodPost,
@@ -85,6 +109,8 @@ func TestInfoEndpoint_RejectsNonGET(t *testing.T) {
 		http.MethodPatch,
 		http.MethodDelete,
 		http.MethodOptions,
+		http.MethodConnect,
+		http.MethodTrace,
 	} {
 		t.Run(method, func(t *testing.T) {
 			rec := httptest.NewRecorder()
