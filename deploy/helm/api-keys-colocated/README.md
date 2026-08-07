@@ -97,9 +97,10 @@ follow the service repository's version numbers.
 ### Cutting a release
 
 Pushing a tag of the form `deploy/helm/api-keys-colocated/v<version>` to this
-repository is what publishes the chart. The release automation watches for that
-tag prefix, packages the chart directory, stamps the version from the tag, and
-pushes to the target above.
+repository is what triggers publication. The workflows in this repository
+validate the tag and generate release notes; the packaging and registry push run
+in separate release automation that watches for the tag prefix, stamps the
+version from the tag, and pushes to the target above.
 
 ```bash
 git tag deploy/helm/api-keys-colocated/v1.5.2 <commit>
