@@ -32,6 +32,12 @@ on:
           oci_image_index target works; the list is not maintained here.
         required: true
         type: string
+      image_tag:
+        description: >-
+          Optional semantic registry tag for an intentional release publish,
+          e.g. 1.20.2. Leave empty for the traceable gh.<run>-<sha> snapshot tag.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -214,11 +220,20 @@ jobs:
         env:
           RUN_NUMBER: ${{ github.run_number }}
           SHA: ${{ github.sha }}
+          REQUESTED_TAG: ${{ github.event.inputs.image_tag }}
         run: |
           set -euo pipefail
-          # Tags are always machine-derived (never user input) so every
-          # published snapshot is deterministic and traceable to its run+commit.
-          tag="gh.${RUN_NUMBER}-$(printf '%s' "${SHA}" | cut -c1-8)"
+          tag="${REQUESTED_TAG}"
+          if [ -n "${tag}" ]; then
+            if [[ ! "${tag}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(rc|dev)\.(0|[1-9][0-9]*))?$ ]]; then
+              echo "ERROR: image_tag must be a stable, rc, or dev semantic version" >&2
+              exit 1
+            fi
+            echo "publishing requested release tag: ${tag}"
+          else
+            # Snapshot tags remain deterministic and traceable to the run and commit.
+            tag="gh.${RUN_NUMBER}-$(printf '%s' "${SHA}" | cut -c1-8)"
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to the NGC dev registry
