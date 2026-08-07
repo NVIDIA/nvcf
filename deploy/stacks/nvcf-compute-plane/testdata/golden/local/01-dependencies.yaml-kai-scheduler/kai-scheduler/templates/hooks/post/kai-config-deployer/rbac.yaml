@@ -43,4 +43,3 @@ subjects:
 - kind: ServiceAccount
   name: kai-config-deployer
   namespace: kai-scheduler
-

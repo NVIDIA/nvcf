@@ -6,7 +6,7 @@ metadata:
   name: grove-operator
   namespace: grove-system
   labels:
-    chart: "grove-charts-v0.1.0-alpha.9"
+    chart: "grove-charts-v0.1.0-alpha.11"
     release: "grove-operator"
     app.kubernetes.io/component: operator-deployment
     app.kubernetes.io/name: grove-operator
@@ -22,7 +22,7 @@ spec:
   template:
     metadata:
       labels:
-        chart: "grove-charts-v0.1.0-alpha.9"
+        chart: "grove-charts-v0.1.0-alpha.11"
         release: "grove-operator"
         app.kubernetes.io/component: operator-deployment
         app.kubernetes.io/name: grove-operator
@@ -36,7 +36,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: crd-installer
-          image: ghcr.io/ai-dynamo/grove/grove-install-crds:v0.1.0-alpha.9
+          image: ghcr.io/ai-dynamo/grove/grove-install-crds:v0.1.0-alpha.11
           imagePullPolicy: IfNotPresent
           volumeMounts:
             - name: kube-api-access-grove
@@ -44,7 +44,7 @@ spec:
               readOnly: true
       containers:
         - name: grove-operator
-          image: ghcr.io/ai-dynamo/grove/grove-operator:v0.1.0-alpha.9
+          image: ghcr.io/ai-dynamo/grove/grove-operator:v0.1.0-alpha.11
           imagePullPolicy: IfNotPresent
           args:
             - --config=/etc/grove-operator/config/config.yaml

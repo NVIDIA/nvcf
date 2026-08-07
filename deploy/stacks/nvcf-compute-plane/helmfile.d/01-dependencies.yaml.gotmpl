@@ -87,7 +87,7 @@ releases:
               - ALL
           {{- if .Values.global.nodeSelector.enabled }}
           nodeSelector:
-            {{ .Values.global.nodeSelector.key }}: {{ .Values.global.nodeSelector.value }}
+            {{ .Values.global.nodeSelector.key | quote }}: {{ .Values.global.nodeSelector.value | quote }}
           {{- end }}
           {{- if .Values.global.imagePullSecrets }}
           imagePullSecrets:
@@ -232,8 +232,11 @@ releases:
     # Topology-aware scheduling operator (optional; disabled by default).
     # Enable per-environment: addons.groveOperator.enabled: true
     condition: addons.groveOperator.enabled
+    # Minimum v0.1.0-alpha.10: earlier charts have no nodeSelector support and
+    # silently drop the nodeSelector set below, letting the operator schedule onto
+    # any node — including one whose architecture its image does not support.
     chart: nvidia-ai-dynamo-grove/grove-charts
-    version: v0.1.0-alpha.9
+    version: v0.1.0-alpha.11
     namespace: grove-system
     needs:
       - kai-scheduler/kai-scheduler
@@ -242,18 +245,18 @@ releases:
       - replicaCount: 1
         image:
           repository: ghcr.io/ai-dynamo/grove/grove-operator
-          tag: v0.1.0-alpha.9
+          tag: v0.1.0-alpha.11
         resources:
           limits:
             memory: 1Gi
           requests:
             cpu: 50m
             memory: 128Mi
-        {{- if .Values.global.nodeSelector.enabled -}}
+        {{- if .Values.global.nodeSelector.enabled }}
         nodeSelector:
-          {{ .Values.global.nodeSelector.key }}: {{ .Values.global.nodeSelector.value }}
+          {{ .Values.global.nodeSelector.key | quote }}: {{ .Values.global.nodeSelector.value | quote }}
         {{- end }}
-        {{- if not (empty .Values.global.tolerations) -}}
+        {{- if not (empty .Values.global.tolerations) }}
         tolerations:
         {{- toYaml .Values.global.tolerations | nindent 8 }}
         {{- end }}
@@ -328,7 +331,7 @@ releases:
                 cpu: 512m
                 memory: 1Gi
             replicas: 1
-            {{- if .Values.global.nodeSelector.enabled -}}
+            {{- if .Values.global.nodeSelector.enabled }}
             affinity:
               nodeAffinity:
                 requiredDuringSchedulingIgnoredDuringExecution:
@@ -339,7 +342,7 @@ releases:
                       values:
                       - {{ .Values.global.nodeSelector.value | quote }}
             {{- end }}
-            {{- if not (empty .Values.global.tolerations) -}}
+            {{- if not (empty .Values.global.tolerations) }}
             tolerations:
             {{- toYaml .Values.global.tolerations | nindent 12 }}
             {{- end }}
@@ -357,9 +360,15 @@ releases:
               enabled: true
               pvc:
                 enabled: true
-          {{- $ns := .Values.global.nodeSelector -}}
-          {{- $tol := .Values.global.tolerations -}}
-          {{- if or (and .Values.global.nodeSelector.enabled (not (empty $ns))) (not (empty $tol)) }}
+          {{- $ns := .Values.global.nodeSelector | default dict -}}
+          {{- $tol := .Values.global.tolerations | default list -}}
+          {{- $nsKey := dig "key" nil $ns -}}
+          {{- $nsValue := dig "value" nil $ns -}}
+          {{- /* Presence-based, so a configured `false` or `0` still counts as set. */ -}}
+          {{- $nsSet := and (not (kindIs "invalid" $nsKey)) (ne (toString $nsKey) "") -}}
+          {{- $nsSet = and $nsSet (not (kindIs "invalid" $nsValue)) (ne (toString $nsValue) "") -}}
+          {{- $nsOn := and (dig "enabled" false $ns) $nsSet -}}
+          {{- if or $nsOn (not (empty $tol)) }}
           podTemplate:
             merge:
               spec:
@@ -367,11 +376,9 @@ releases:
                 # JetStream PVC attachment in some clusters (e.g. OCI). Override
                 # this nodeSelector per environment when no `monitoring` node
                 # group exists (e.g. local k3d).
-                {{- with $ns }}
-                {{- if and .key .value }}
+                {{- if $nsOn }}
                 nodeSelector:
-                  {{ .key }}: {{ .value }}
-                {{- end }}
+                  {{ $nsKey | quote }}: {{ $nsValue | quote }}
                 {{- end }}
                 {{- with $tol }}
                 tolerations:

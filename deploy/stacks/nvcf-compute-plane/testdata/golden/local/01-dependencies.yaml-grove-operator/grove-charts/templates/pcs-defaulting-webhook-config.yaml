@@ -5,7 +5,7 @@ kind: MutatingWebhookConfiguration
 metadata:
   name: podcliqueset-defaulting-webhook
   labels:
-    chart: "grove-charts-v0.1.0-alpha.9"
+    chart: "grove-charts-v0.1.0-alpha.11"
     release: "grove-operator"
     app.kubernetes.io/component: operator-pcs-defaulting-webhook
     app.kubernetes.io/name: pcs-defaulting-webhook

@@ -1,14 +1,14 @@
 ---
-# Source: grove-charts/templates/clustertopology-validating-webhook-config.yaml
+# Source: grove-charts/templates/pcs-validating-webhook-config.yaml
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
-  name: clustertopology-validating-webhook
+  name: podcliqueset-validating-webhook
   labels:
-    chart: "grove-charts-v0.1.0-alpha.9"
+    chart: "grove-charts-v0.1.0-alpha.11"
     release: "grove-operator"
-    app.kubernetes.io/component: operator-clustertopology-validating-webhook
-    app.kubernetes.io/name: clustertopology-validating-webhook
+    app.kubernetes.io/component: operator-pcs-validating-webhook
+    app.kubernetes.io/name: pcs-validating-webhook
     app.kubernetes.io/part-of: grove
 webhooks:
   - admissionReviewVersions:
@@ -17,11 +17,11 @@ webhooks:
       service:
         name: grove-operator
         namespace: grove-system
-        path: /webhooks/validate-clustertopology
+        path: /webhooks/validate-podcliqueset
         port: 9443
     failurePolicy: Fail
     matchPolicy: Exact
-    name: clustertopology.validating.webhooks.grove.io
+    name: pcs.validating.webhooks.grove.io
     namespaceSelector: { }
     rules:
       - apiGroups:
@@ -32,7 +32,7 @@ webhooks:
           - CREATE
           - UPDATE
         resources:
-          - clustertopologybindings
-        scope: "Cluster"
+          - podcliquesets
+        scope: "Namespaced"
     sideEffects: None
     timeoutSeconds: 10

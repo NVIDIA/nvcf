@@ -12,7 +12,6 @@ roleRef:
   kind: ClusterRole
   name: kai-numa-placement-exporter
   apiGroup: rbac.authorization.k8s.io
-
 ---
 # Source: kai-scheduler/templates/rbac/numa-placement-exporter-binding.yaml
 # Copyright 2026 NVIDIA CORPORATION
