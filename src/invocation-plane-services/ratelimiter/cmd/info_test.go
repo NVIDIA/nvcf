@@ -23,6 +23,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +32,15 @@ import (
 // safe here as long as the test never exercises /health.
 
 func TestNewHealthServeMux_Info(t *testing.T) {
+	golibversion.Service = "nvcf-ratelimiter"
+	golibversion.Version = "test-1.0.0"
+	golibversion.GitHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	t.Cleanup(func() {
+		golibversion.Service = ""
+		golibversion.Version = ""
+		golibversion.GitHash = ""
+	})
+
 	mux := newHealthServeMux(nil)
 	require.NotNil(t, mux)
 
@@ -41,14 +51,11 @@ func TestNewHealthServeMux_Info(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	// x_defs are not injected under `go test`; resolve() falls back to
-	// "unknown" for any empty field, so all three values are non-empty.
 	var info map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
-	for _, field := range []string{"service", "version", "commit"} {
-		assert.Contains(t, info, field)
-		assert.NotEmpty(t, info[field], field+" must be populated")
-	}
+	assert.Equal(t, "nvcf-ratelimiter", info["service"])
+	assert.Equal(t, "test-1.0.0", info["version"])
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", info["commit"])
 }
 
 func TestNewHealthServeMux_Info_RejectsNonGET(t *testing.T) {

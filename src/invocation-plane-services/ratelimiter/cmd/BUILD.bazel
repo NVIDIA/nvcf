@@ -91,6 +91,7 @@ go_test(
         "//src/invocation-plane-services/ratelimiter:ratelimiter",
         "//src/invocation-plane-services/ratelimiter/pb",
         "@com_github_olric_data_olric//config",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
@@ -99,20 +100,5 @@ go_test(
         "@org_golang_google_grpc//status",
         "@org_golang_x_exp//rand",
         "@org_uber_go_zap//:zap",
-    ],
-)
-
-go_test(
-    name = "cmd_info_stamped_test",
-    srcs = ["info_stamped_test.go"],
-    embed = [":cmd_lib"],
-    x_defs = {
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-ratelimiter",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "test-1.0.0",
-        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    },
-    deps = [
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
     ],
 )
