@@ -251,15 +251,16 @@ webhook:
 ## @param ngcConfig.serviceKeySecretKeyName Key in the secret ngcConfig.serviceKeySecretName containing the NGC ServiceKey (password).
 ## @param ngcConfig.apiURL NGC API URL for requesting auth tokens
 ## @param ngcConfig.clusterSource Source of the cluster configuration:
-##     - "helm-managed": Cluster configuration managed by the helm chart
-##     - "ngc-managed": Cluster configuration managed by NGC
+##     - "ngc-managed": Cluster configuration managed by NGC (default)
+##     - "helm-managed": Cluster configuration managed by the Helm chart
+##     - "self-managed": Cluster configuration managed by the self-hosted compute plane
 ngcConfig:
   username: '$oauthtoken'
   serviceKey: "dummy-api-key"
   serviceKeySecretName: "ngc-service-key"
   serviceKeySecretKeyName: "ngcServiceKey"
   apiURL: https://api.ngc.nvidia.com
-  clusterSource: self-managed
+  clusterSource: ngc-managed
 ## @section Vault Configuration
 ## @param vaultConfig.oAuthClientMountPathTemplate Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret"
 ## @param vaultConfig.oAuthClientMountPath (Optional) Full OAuth client mount path. If set, overrides the computed path from template.
