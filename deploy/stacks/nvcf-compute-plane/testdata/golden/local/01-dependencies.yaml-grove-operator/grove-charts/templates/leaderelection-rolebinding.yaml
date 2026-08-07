@@ -5,7 +5,7 @@ kind: RoleBinding
 metadata:
   name: grove:system:grove-operator-lease
   labels:
-    chart: "grove-charts-v0.1.0-alpha.9"
+    chart: "grove-charts-v0.1.0-alpha.11"
     release: "grove-operator"
     app.kubernetes.io/component: operator-lease-rolebinding
     app.kubernetes.io/name: grove-operator

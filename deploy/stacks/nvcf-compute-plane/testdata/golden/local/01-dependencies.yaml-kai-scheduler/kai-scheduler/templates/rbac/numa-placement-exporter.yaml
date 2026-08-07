@@ -13,7 +13,6 @@ rules:
   - get
   - list
   - patch
-
 ---
 # Source: kai-scheduler/templates/rbac/numa-placement-exporter.yaml
 # Copyright 2025 NVIDIA CORPORATION

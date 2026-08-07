@@ -272,8 +272,9 @@ webhook:
 ## @param ngcConfig.serviceKeySecretKeyName Key in the secret ngcConfig.serviceKeySecretName containing the NGC ServiceKey (password).
 ## @param ngcConfig.apiURL NGC API URL for requesting auth tokens
 ## @param ngcConfig.clusterSource Source of the cluster configuration:
-##     - "helm-managed": Cluster configuration managed by the helm chart
-##     - "ngc-managed": Cluster configuration managed by NGC
+##     - "ngc-managed": Cluster configuration managed by NGC (default)
+##     - "helm-managed": Cluster configuration managed by the Helm chart
+##     - "self-managed": Cluster configuration managed by the self-hosted compute plane
 ngcConfig:
   username: '$oauthtoken'
   serviceKey: ""
