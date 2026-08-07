@@ -108,7 +108,7 @@ Only rendered when the init-container strategy is selected AND
 agentHostCIDR is set. The default inline strategy does the mount inside
 the webhook and needs no pod->agent egress.
 */ -}}
-{{- if and .Values.webhook.enabled (eq (.Values.webhook.restorePrepStrategy | default "inline") "init-container") .Values.webhook.agentHostCIDR .Values.agent.l2.restoreNamespaces }}
+{{- if and .Values.webhook.enabled (eq (.Values.webhook.restorePrepStrategy | default "inline") "init-container") (or (not .Values.agent.hostNetwork) .Values.webhook.agentHostCIDR) .Values.agent.l2.restoreNamespaces }}
 {{- range $ns := .Values.agent.l2.restoreNamespaces }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -130,8 +130,25 @@ spec:
     - Egress
   egress:
     - to:
+        {{- if $.Values.agent.hostNetwork }}
+        # hostNetwork: the agent carries NODE identity, so a podSelector never
+        # matches it (verified on GKE Dataplane V2 / Cilium) and the rule has
+        # to name the whole node CIDR -- every node, on this port, for every
+        # pod in the namespace.
         - ipBlock:
             cidr: {{ $.Values.webhook.agentHostCIDR }}
+        {{- else }}
+        # Pod networking: the agent has a pod identity again, so the rule can
+        # name exactly the agent pods and nothing else. This is the concrete
+        # payoff of GH #490 -- no operator-supplied CIDR, and the grant shrinks
+        # from "the node network" to "these pods".
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "nvsnap.agent.selectorLabels" $ | nindent 14 }}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ $.Values.webhook.agentHostPort | default 8081 }}
