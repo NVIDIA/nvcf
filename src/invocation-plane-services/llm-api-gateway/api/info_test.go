@@ -76,7 +76,18 @@ func TestInfoEndpoint_GET(t *testing.T) {
 }
 
 func TestInfoEndpoint_GET_UnstampedFallback(t *testing.T) {
-	// vars are zero-valued when x_defs are not injected; resolve() falls back to "unknown".
+	previousService := golibversion.Service
+	previousVersion := golibversion.Version
+	previousGitHash := golibversion.GitHash
+	golibversion.Service = ""
+	golibversion.Version = ""
+	golibversion.GitHash = ""
+	t.Cleanup(func() {
+		golibversion.Service = previousService
+		golibversion.Version = previousVersion
+		golibversion.GitHash = previousGitHash
+	})
+
 	e := newInfoEngine()
 
 	rec := httptest.NewRecorder()
@@ -91,10 +102,14 @@ func TestInfoEndpoint_GET_UnstampedFallback(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
 		t.Fatalf("GET /info: unmarshal body: %v", err)
 	}
-	for _, field := range []string{"service", "version", "commit"} {
-		if info[field] == "" {
-			t.Errorf("GET /info: field %q must be populated (got empty)", field)
-		}
+	if got, want := info["service"], "unknown"; got != want {
+		t.Errorf("GET /info: service = %q, want %q", got, want)
+	}
+	if got, want := info["version"], "unknown"; got != want {
+		t.Errorf("GET /info: version = %q, want %q", got, want)
+	}
+	if info["commit"] == "" {
+		t.Error("GET /info: commit must be populated")
 	}
 }
 
