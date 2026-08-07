@@ -343,6 +343,15 @@ func TestConfigMapAddHandler_SkipsInitialListForOperatorConfig(t *testing.T) {
 	assert.NotContains(t, storedBackend.Finalizers, cleanup.NVCAOperatorFinalizer)
 }
 
+func TestConfigMapAddHandler_RejectsInvalidObjectWithContext(t *testing.T) {
+	ctx := newTestContext()
+	bc, _ := newConfigMapEventTestCache(t, ctx)
+
+	err := bc.handleConfigMapAdd(ctx, &corev1.Secret{})
+
+	require.EqualError(t, err, "invalid object received in ConfigMap Add handler: *v1.Secret")
+}
+
 func TestConfigMapAddHandler_SkipsInitialListAfterInformerCacheSync(t *testing.T) {
 	ctx := newTestContext()
 	bc, backend := newConfigMapEventTestCache(t, ctx)

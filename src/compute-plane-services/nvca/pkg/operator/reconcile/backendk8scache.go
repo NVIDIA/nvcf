@@ -607,8 +607,7 @@ func (c *BackendK8sCache) handleConfigMapAdd(ctx context.Context, obj interface{
 	log := core.GetLogger(ctx)
 	cm, ok := obj.(*corev1.ConfigMap)
 	if !ok {
-		log.Errorf("Wrong object in ConfigMap informer Add handler: %v", obj)
-		return fmt.Errorf("invalid object received")
+		return fmt.Errorf("invalid object received in ConfigMap Add handler: %T", obj)
 	}
 	if !c.informersSynced() ||
 		c.configMapHandlerRegistration == nil ||
