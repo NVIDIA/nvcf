@@ -31,6 +31,7 @@
 # ledger, deployment stages, NVCT API, vanity gateway, autoscaler, Helm ReVal,
 # LLM gateway, LLM request router, SIS, and Stargate.
 /src/control-plane-services/ @NVIDIA/nvcf-control-plane-dev
+/src/uis/ @NVIDIA/nvcf-control-plane-dev
 /src/invocation-plane-services/ @NVIDIA/nvcf-control-plane-dev
 /src/libraries/rust/stargate/ @NVIDIA/nvcf-control-plane-dev
 /deploy/helm/admin-token-issuer-proxy/ @NVIDIA/nvcf-control-plane-dev
