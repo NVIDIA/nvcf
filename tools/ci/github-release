@@ -311,10 +311,18 @@ def synthesize_current_prefix_anchor(service):
     print(f"[github-release] {service['id']}: synthesized local compatibility anchor {anchor} -> {legacy_tag} ({sha})")
 
 
+def initial_floor_version(service):
+    floor = str(service.get("initial_version") or INITIAL_RELEASE_FLOOR_VERSION).strip().lstrip("v")
+    if not re.fullmatch(SEMVER_PATTERN, floor):
+        raise SystemExit(f"{service['id']}: unsupported initial_version {service.get('initial_version')!r}")
+    return floor
+
+
 def synthesize_initial_version_anchor(root, service):
     if latest_service_tag(service):
         return
-    anchor = tag_for_version(service, INITIAL_RELEASE_FLOOR_VERSION)
+    floor = initial_floor_version(service)
+    anchor = tag_for_version(service, floor)
     if run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{anchor}"], cwd=root, capture=True, check=False).strip():
         return
 
@@ -333,9 +341,10 @@ def synthesize_initial_version_anchor(root, service):
     if not sha:
         return
     run(["git", "tag", anchor, sha], cwd=root)
+    next_hint = INITIAL_RELEASE_VERSION if floor == INITIAL_RELEASE_FLOOR_VERSION else f"the next bump after {floor}"
     print(
         f"[github-release] {service['id']}: synthesized local initial-version anchor "
-        f"{anchor} ({sha}); missing version tags start at {INITIAL_RELEASE_VERSION}"
+        f"{anchor} ({sha}); missing version tags start at {next_hint}"
     )
 
 
