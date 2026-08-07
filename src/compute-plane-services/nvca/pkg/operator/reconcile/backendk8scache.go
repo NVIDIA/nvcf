@@ -104,11 +104,12 @@ type BackendK8sCache struct {
 	nvcaRunAsUserID      int64
 	nvcaRunAsGroupID     int64
 
-	nvcfBackendLister nvcabelister.NVCFBackendLister
-	syncedFuncs       []cache.InformerSynced
-	eventRecorder     record.EventRecorder
-	eventBroadcaster  record.EventBroadcaster
-	tracer            oteltrace.Tracer
+	nvcfBackendLister            nvcabelister.NVCFBackendLister
+	syncedFuncs                  []cache.InformerSynced
+	configMapHandlerRegistration cache.ResourceEventHandlerRegistration
+	eventRecorder                record.EventRecorder
+	eventBroadcaster             record.EventBroadcaster
+	tracer                       oteltrace.Tracer
 
 	nvcaImageRepo        string
 	gxCacheNamespace     string
@@ -593,15 +594,43 @@ func (c *BackendK8sCache) syncCurrentBackendForConfigMapChange(ctx context.Conte
 	return nil
 }
 
+func (c *BackendK8sCache) informersSynced() bool {
+	for _, hasSynced := range c.syncedFuncs {
+		if !hasSynced() {
+			return false
+		}
+	}
+	return len(c.syncedFuncs) > 0
+}
+
 func (c *BackendK8sCache) handleConfigMapAdd(ctx context.Context, obj interface{}) error {
 	log := core.GetLogger(ctx)
-	_, ok := obj.(*corev1.ConfigMap)
+	cm, ok := obj.(*corev1.ConfigMap)
 	if !ok {
 		log.Errorf("Wrong object in ConfigMap informer Add handler: %v", obj)
 		return fmt.Errorf("invalid object received")
 	}
-	// Add events include the informer's initial list, so valid ConfigMaps must
-	// not trigger a rollout until their data subsequently changes.
+	if !c.informersSynced() ||
+		c.configMapHandlerRegistration == nil ||
+		!c.configMapHandlerRegistration.HasSynced() {
+		// Add events include the informer's initial list. The initial backend
+		// reconciliation consumes that state after all informers and this
+		// handler have received it.
+		return nil
+	}
+
+	log = log.WithField("configmapName", cm.Name)
+	switch {
+	case configMapUpdateForcesNVCAReconcile(cm.Name):
+		log.Info("configmap recreated after informer sync, forcing rollout")
+		return c.syncCurrentBackendForConfigMapChange(ctx, log)
+	case cm.Name == nvcfBackendHelmManagedConfigMapName,
+		cm.Name == nvcfBackendSelfManagedConfigMapName:
+		log.Info("backend configmap recreated after informer sync, dispatching cluster reconcile event")
+		c.dispatchReconcileClusterFunc(ctx)
+	case cm.Name == cleanup.ShutdownSentinelConfigMapName:
+		log.Debug("shutdown sentinel configmap recreated, skipping")
+	}
 	return nil
 }
 
@@ -665,12 +694,14 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 
 	cmi := f.Core().V1().ConfigMaps()
 	c.syncedFuncs = append(c.syncedFuncs, cmi.Informer().HasSynced)
-	_, err := cmi.Informer().AddEventHandler(&cache.ResourceEventHandlerFuncs{
+	registration, err := cmi.Informer().AddEventHandler(&cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			_ = cmnotel.InvokeWithSpan(ctx, c.tracer, "nvca-operator.BackendK8sCache.ConfigMapInformer.AddHandler",
+			if err := cmnotel.InvokeWithSpan(ctx, c.tracer, "nvca-operator.BackendK8sCache.ConfigMapInformer.AddHandler",
 				func(ctx context.Context) error {
 					return c.handleConfigMapAdd(ctx, obj)
-				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer))
+				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer)); err != nil {
+				log.WithError(err).Error("failed to handle ConfigMap add")
+			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			if err := cmnotel.InvokeWithSpan(ctx, c.tracer, "nvca-operator.BackendK8sCache.ConfigMapInformer.UpdateHandler",
@@ -685,6 +716,7 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 		log.WithError(err).Error("failed to add event handler for ConfigMaps")
 		return err
 	}
+	c.configMapHandlerRegistration = registration
 	f.Start(ctx.Done())
 	log.Infof("added configmap informers")
 	return nil
@@ -1119,13 +1151,11 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 
 	desiredAgentConfigCM, err := bc.newAgentConfigConfigMap(ctx, nbMerged)
 	if err != nil {
-		log.WithError(err).Error("Failed to create desired agent config ConfigMap")
-		return err
+		return fmt.Errorf("create desired agent config ConfigMap: %w", err)
 	}
 	cfgCheck, err := bc.newAgentConfigChangedCheck(ctx, nbMerged, desiredAgentConfigCM)
 	if err != nil {
-		log.WithError(err).Error("Failed to create new agent config check")
-		return err
+		return fmt.Errorf("create new agent config check: %w", err)
 	}
 	nvcaRolloutChecks = append(nvcaRolloutChecks, cfgCheck)
 

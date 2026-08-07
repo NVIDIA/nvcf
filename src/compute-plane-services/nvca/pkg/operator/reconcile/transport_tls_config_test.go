@@ -330,6 +330,8 @@ func TestNewAgentConfigConfigMap_InvalidInstalledBundleMountPathPreservesLastGoo
 func TestConfigMapAddHandler_SkipsInitialListForOperatorConfig(t *testing.T) {
 	ctx := newTestContext()
 	bc, backend := newConfigMapEventTestCache(t, ctx)
+	bc.syncedFuncs = []cache.InformerSynced{func() bool { return false }}
+	bc.configMapHandlerRegistration = testResourceEventHandlerRegistration{synced: false}
 
 	err := bc.handleConfigMapAdd(ctx, &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: nvcaOperatorConfigMapName},
@@ -339,6 +341,69 @@ func TestConfigMapAddHandler_SkipsInitialListForOperatorConfig(t *testing.T) {
 	storedBackend, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, backend.Name, metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.NotContains(t, storedBackend.Finalizers, cleanup.NVCAOperatorFinalizer)
+}
+
+func TestConfigMapAddHandler_SkipsInitialListAfterInformerCacheSync(t *testing.T) {
+	ctx := newTestContext()
+	bc, backend := newConfigMapEventTestCache(t, ctx)
+	bc.syncedFuncs = []cache.InformerSynced{func() bool { return true }}
+	bc.configMapHandlerRegistration = testResourceEventHandlerRegistration{synced: false}
+
+	err := bc.handleConfigMapAdd(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: nvcaOperatorConfigMapName},
+	})
+	require.NoError(t, err)
+
+	storedBackend, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, backend.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, storedBackend.Finalizers, cleanup.NVCAOperatorFinalizer)
+}
+
+func TestConfigMapAddHandler_SkipsRecreatedOperatorConfigUntilAllInformersSync(t *testing.T) {
+	ctx := newTestContext()
+	bc, backend := newConfigMapEventTestCache(t, ctx)
+	bc.syncedFuncs = []cache.InformerSynced{func() bool { return false }}
+	bc.configMapHandlerRegistration = testResourceEventHandlerRegistration{synced: true}
+
+	err := bc.handleConfigMapAdd(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: nvcaOperatorConfigMapName},
+	})
+	require.NoError(t, err)
+
+	storedBackend, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, backend.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, storedBackend.Finalizers, cleanup.NVCAOperatorFinalizer)
+}
+
+func TestConfigMapAddHandler_ReconcilesRecreatedOperatorConfigAfterSync(t *testing.T) {
+	ctx := newTestContext()
+	bc, backend := newConfigMapEventTestCache(t, ctx)
+	bc.syncedFuncs = []cache.InformerSynced{func() bool { return true }}
+	bc.configMapHandlerRegistration = testResourceEventHandlerRegistration{synced: true}
+
+	err := bc.handleConfigMapAdd(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: nvcaOperatorConfigMapName},
+	})
+	require.ErrorContains(t, err, "version cannot be empty")
+
+	storedBackend, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, backend.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Contains(t, storedBackend.Finalizers, cleanup.NVCAOperatorFinalizer)
+}
+
+func TestConfigMapAddHandler_DispatchesRecreatedBackendConfigAfterSync(t *testing.T) {
+	ctx := newTestContext()
+	bc, _ := newConfigMapEventTestCache(t, ctx)
+	bc.syncedFuncs = []cache.InformerSynced{func() bool { return true }}
+	bc.configMapHandlerRegistration = testResourceEventHandlerRegistration{synced: true}
+	dispatches := 0
+	bc.dispatchReconcileClusterFunc = func(context.Context) { dispatches++ }
+
+	err := bc.handleConfigMapAdd(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: nvcfBackendHelmManagedConfigMapName},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, dispatches)
 }
 
 func TestSyncCurrentBackendForConfigMapChange_WrapsError(t *testing.T) {
@@ -380,6 +445,22 @@ func TestConfigMapUpdateHandler_SkipsUnchangedOperatorConfig(t *testing.T) {
 	assert.NotContains(t, storedBackend.Finalizers, cleanup.NVCAOperatorFinalizer)
 }
 
+func TestSyncNVCFBackend_WrapsDesiredAgentConfigError(t *testing.T) {
+	ctx := newTestContext()
+	bc, backend := newConfigMapEventTestCache(t, ctx)
+	bc.functionEnvOverridesB64 = "not-base64"
+
+	storedBackend, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, backend.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	storedBackend.Spec.Version = "1.0.0"
+	_, err = bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Update(ctx, storedBackend, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	err = bc.syncNVCFBackend(ctx, backend, false)
+	require.ErrorContains(t, err, "create desired agent config ConfigMap:")
+	require.ErrorContains(t, err, "decode function env overrides")
+}
+
 func TestConfigMapChangesForceNVCAReconcile(t *testing.T) {
 	assert.True(t, configMapUpdateForcesNVCAReconcile(nvcaOperatorConfigMapName))
 	assert.True(t, configMapUpdateForcesNVCAReconcile(nvcfBackendChartDefaultsConfigMapName))
@@ -405,4 +486,12 @@ func newConfigMapEventTestCache(t *testing.T, ctx context.Context) (*BackendK8sC
 		tracer:                  nvcaopotel.NewTracer(),
 		generateImagePullSecret: false,
 	}, backend
+}
+
+type testResourceEventHandlerRegistration struct {
+	synced bool
+}
+
+func (r testResourceEventHandlerRegistration) HasSynced() bool {
+	return r.synced
 }
