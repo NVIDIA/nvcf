@@ -97,6 +97,8 @@ func TestInfoEndpoint_RejectsNonGET(t *testing.T) {
 		http.MethodPatch,
 		http.MethodDelete,
 		http.MethodOptions,
+		http.MethodConnect,
+		http.MethodTrace,
 	} {
 		t.Run(method, func(t *testing.T) {
 			w := httptest.NewRecorder()

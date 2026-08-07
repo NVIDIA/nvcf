@@ -61,7 +61,6 @@ func New(logger *zap.Logger, config *Config) *Router {
 
 	// create gin router
 	engine := gin.New()
-	engine.HandleMethodNotAllowed = true
 
 	// add middleware
 	engine.Use(ginzap.Ginzap(logger, time.RFC3339, true))
@@ -131,6 +130,22 @@ func (r *Router) setupRoutes() {
 	r.engine.GET("/healthz", r.handleHealthz)
 
 	r.engine.GET("/info", gin.WrapH(golibversion.Handler()))
+	infoMethodNotAllowed := func(c *gin.Context) {
+		c.Header("Allow", http.MethodGet)
+		c.AbortWithStatus(http.StatusMethodNotAllowed)
+	}
+	for _, method := range []string{
+		http.MethodHead,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodOptions,
+		http.MethodConnect,
+		http.MethodTrace,
+	} {
+		r.engine.Handle(method, "/info", infoMethodNotAllowed)
+	}
 
 	// Note: Metrics endpoint is now served on a separate port via GetMetricsHandler()
 	// and not included in the main application routes
