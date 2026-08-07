@@ -54,6 +54,7 @@ go_test(
     embed = [":router"],
     deps = [
         "@com_github_gin_gonic_gin//:gin",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

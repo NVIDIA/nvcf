@@ -24,14 +24,23 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
 func TestInfoEndpoint_GET(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+	golibversion.Service = "nvcf-nats-auth-callout-service"
+	golibversion.Version = "test-1.0.0"
+	golibversion.GitHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	t.Cleanup(func() {
+		golibversion.Service = ""
+		golibversion.Version = ""
+		golibversion.GitHash = ""
+	})
 
+	gin.SetMode(gin.TestMode)
 	r := New(zap.NewNop(), &Config{ServiceName: "test-service"})
 
 	w := httptest.NewRecorder()
@@ -41,22 +50,54 @@ func TestInfoEndpoint_GET(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	// x_defs are not injected under `go test`; resolve() falls back to
-	// "unknown" for any empty field, so all three values are non-empty.
 	var info map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
-	for _, field := range []string{"service", "version", "commit"} {
-		assert.Contains(t, info, field)
-		assert.NotEmpty(t, info[field], field+" must be populated")
-	}
+	assert.Equal(t, "nvcf-nats-auth-callout-service", info["service"])
+	assert.Equal(t, "test-1.0.0", info["version"])
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", info["commit"])
+}
+
+func TestInfoEndpoint_GET_UnstampedFallback(t *testing.T) {
+	previousService := golibversion.Service
+	previousVersion := golibversion.Version
+	previousGitHash := golibversion.GitHash
+	golibversion.Service = ""
+	golibversion.Version = ""
+	golibversion.GitHash = ""
+	t.Cleanup(func() {
+		golibversion.Service = previousService
+		golibversion.Version = previousVersion
+		golibversion.GitHash = previousGitHash
+	})
+
+	gin.SetMode(gin.TestMode)
+	r := New(zap.NewNop(), &Config{ServiceName: "test-service"})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/info", nil)
+	r.engine.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var info map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
+	assert.Equal(t, "unknown", info["service"])
+	assert.Equal(t, "unknown", info["version"])
+	assert.NotEmpty(t, info["commit"])
 }
 
 func TestInfoEndpoint_RejectsNonGET(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-
 	r := New(zap.NewNop(), &Config{ServiceName: "test-service"})
 
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+	for _, method := range []string{
+		http.MethodHead,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodOptions,
+	} {
 		t.Run(method, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(method, "/info", nil)
@@ -64,7 +105,6 @@ func TestInfoEndpoint_RejectsNonGET(t *testing.T) {
 
 			assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 			assert.Equal(t, http.MethodGet, w.Header().Get("Allow"))
-			assert.Empty(t, w.Body.String())
 		})
 	}
 }

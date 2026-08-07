@@ -61,6 +61,7 @@ func New(logger *zap.Logger, config *Config) *Router {
 
 	// create gin router
 	engine := gin.New()
+	engine.HandleMethodNotAllowed = true
 
 	// add middleware
 	engine.Use(ginzap.Ginzap(logger, time.RFC3339, true))
@@ -129,10 +130,7 @@ func (r *Router) setupRoutes() {
 	// Health check interface (no version)
 	r.engine.GET("/healthz", r.handleHealthz)
 
-	// Build/version metadata served by the shared go-lib handler. Registered
-	// for all methods so the handler itself enforces the GET-only contract
-	// (405 + Allow: GET on non-GET) instead of gin returning a bare 404.
-	r.engine.Any("/info", gin.WrapH(golibversion.Handler()))
+	r.engine.GET("/info", gin.WrapH(golibversion.Handler()))
 
 	// Note: Metrics endpoint is now served on a separate port via GetMetricsHandler()
 	// and not included in the main application routes
