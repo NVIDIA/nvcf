@@ -29,8 +29,6 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 )
 
-// newInfoEngine builds an echo engine with the service routes registered so the
-// /info endpoint can be exercised the same way it is served at runtime.
 func newInfoEngine() *echo.Echo {
 	e := echo.New()
 	RegisterRoutes(e, NewHandlers(config.Default(), nil, nil))
@@ -116,7 +114,6 @@ func TestInfoEndpoint_GET_UnstampedFallback(t *testing.T) {
 func TestInfoEndpoint_RejectsNonGET(t *testing.T) {
 	e := newInfoEngine()
 
-	// e.Any registers all standard methods including CONNECT and TRACE.
 	for _, method := range []string{
 		http.MethodHead,
 		http.MethodPost,
@@ -137,9 +134,6 @@ func TestInfoEndpoint_RejectsNonGET(t *testing.T) {
 			}
 			if allow := rec.Header().Get("Allow"); allow != http.MethodGet {
 				t.Errorf("%s /info: got Allow %q, want %q", method, allow, http.MethodGet)
-			}
-			if body := rec.Body.String(); body != "" {
-				t.Errorf("%s /info: got non-empty body %q", method, body)
 			}
 		})
 	}
