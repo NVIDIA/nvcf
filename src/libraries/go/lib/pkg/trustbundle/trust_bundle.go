@@ -15,6 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package trustbundle validates, fingerprints, and installs NVCF trust bundles.
 package trustbundle
 
 import (
@@ -30,6 +31,8 @@ import (
 	"strings"
 )
 
+// InstallOptions identifies the source and destination files used to install a
+// pinned NVCF trust bundle alongside an optional system CA bundle.
 type InstallOptions struct {
 	SystemBundlePath    string
 	TrustBundlePath     string

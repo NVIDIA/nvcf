@@ -10,8 +10,8 @@ github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c/go.mod h1:xomTg6
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3 h1:pBymv2IQia2bswak0wHracVj2kdDXB5xcCgm3BVxfmg=
-github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3/go.mod h1:nj3yBW2weO0qzi1ML45tBqviLa2Y/KG9qCalxQuJVB8=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260807010315-d791d3c11262 h1:tvXFs+ol67ogsRM1zVpE3FPom1oyFTJOjYvJTMN7sgk=
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260807010315-d791d3c11262/go.mod h1:WUFjMVtVWK1PAw7WBXM0nWhYbtlE/4zyfjkj+lHUEtY=
 github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260710034659-973443ac16c3 h1:3a00OqSlHTn3BQnzNEQXqY8x0j25tgLDztNepZsDkgg=
 github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260710034659-973443ac16c3/go.mod h1:LYrJLNwPMTruA5cu+9GuMhNvji24ErB1UwcaaB/yooE=
 github.com/agext/levenshtein v1.2.1 h1:QmvMAjj2aEICytGiWzmxoE0x2KZvE0fvmqMOfy2tjT8=

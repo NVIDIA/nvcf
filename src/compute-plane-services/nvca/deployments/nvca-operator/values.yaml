@@ -142,6 +142,21 @@ agentConfig:
   #         hashSeed: 1234
   #         failClosed: true
 
+## @section Workload transport trust configuration
+## @param operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name Secret containing the workload transport trust bundle. Empty disables Secret-backed transport trust. Example: nvcf-trust.
+## @param operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.key Secret data key containing certificate-only PEM.
+## @param operatorConfig.workload.transportTLS.fingerprint Optional sha256 fingerprint pin for the trust bundle. Empty computes the fingerprint from the selected Secret data.
+## @param operatorConfig.workload.transportTLS.installedBundleMountPath Optional llm-worker mount path for the installed transport trust bundle. Empty uses /etc/ssl/certs.
+operatorConfig:
+  workload:
+    transportTLS:
+      trustBundle:
+        secretKeyRef:
+          name: ""
+          key: ca.crt
+      fingerprint: ""
+      installedBundleMountPath: ""
+
 ## @section resources Resource requests and limits for the nvca-operator container
 ## @param resources.limits.cpu CPU limit for the nvca-operator container
 ## @param resources.limits.memory Memory limit for the nvca-operator container
