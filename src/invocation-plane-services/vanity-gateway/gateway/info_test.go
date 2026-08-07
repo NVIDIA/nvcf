@@ -24,6 +24,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,6 +49,15 @@ func newInfoTestMux(t *testing.T) http.Handler {
 }
 
 func TestBuildChiMux_Info(t *testing.T) {
+	golibversion.Service = "nvcf-ai-api-gateway-service"
+	golibversion.Version = "test-1.0.0"
+	golibversion.GitHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	t.Cleanup(func() {
+		golibversion.Service = ""
+		golibversion.Version = ""
+		golibversion.GitHash = ""
+	})
+
 	mux := newInfoTestMux(t)
 
 	w := httptest.NewRecorder()
@@ -57,20 +67,24 @@ func TestBuildChiMux_Info(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	// x_defs are not injected under `go test`; resolve() falls back to
-	// "unknown" for any empty field, so all three values are non-empty.
 	var info map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
-	for _, field := range []string{"service", "version", "commit"} {
-		assert.Contains(t, info, field)
-		assert.NotEmpty(t, info[field], field+" must be populated")
-	}
+	assert.Equal(t, "nvcf-ai-api-gateway-service", info["service"])
+	assert.Equal(t, "test-1.0.0", info["version"])
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", info["commit"])
 }
 
 func TestBuildChiMux_Info_RejectsNonGET(t *testing.T) {
 	mux := newInfoTestMux(t)
 
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+	for _, method := range []string{
+		http.MethodHead,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodOptions,
+	} {
 		t.Run(method, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(method, "/info", nil)

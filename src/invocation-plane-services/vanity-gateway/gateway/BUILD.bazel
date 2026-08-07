@@ -72,6 +72,7 @@ go_test(
     deps = [
         "//src/invocation-plane-services/vanity-gateway/gateway_config",
         "@com_github_carlmjohnson_versioninfo//:versioninfo",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_goccy_go_json//:go-json",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
