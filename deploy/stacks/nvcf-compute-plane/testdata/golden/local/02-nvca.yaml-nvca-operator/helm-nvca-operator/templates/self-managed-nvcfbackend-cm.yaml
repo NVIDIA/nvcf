@@ -42,7 +42,7 @@ data:
     cloudProvider: "NCP"
     region: "us-west-1"
     attributes: []
-    capabilities: ["DynamicGPUDiscovery","InfraResourceOverhead","EnforceHelmFunctionResourceLimits","EnforceContainerFunctionResourceLimits","EnforceHelmTaskResourceLimits","EnforceContainerTaskResourceLimits","BYOObservability"]
+    capabilities: ["DynamicGPUDiscovery","InfraResourceOverhead","EnforceHelmFunctionResourceLimits","EnforceContainerFunctionResourceLimits","EnforceHelmTaskResourceLimits","EnforceContainerTaskResourceLimits","BYOObservability","KAIScheduler","DynamoOperatorSupport"]
     gpusB64: ""
     cacheCSIVolumeMountOptionsConfig:
       disabled: false
@@ -58,6 +58,7 @@ data:
       trustBundleConfigMapName: "nvcf-transport-trust-bundle"
       trustBundleKey: "nvcf-ca-bundle.pem"
       trustBundleFingerprint: ""
+      installerImage: ""
     imageCredentialHelper:
       imageConfig:
         repository: "nvcr.io/0651155215864979/ncp-dev/nvcf-image-credential-helper"
