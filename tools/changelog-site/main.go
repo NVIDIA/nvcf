@@ -450,15 +450,28 @@ func fetchGitHubTags(repoDir, base string) (map[string]bool, error) {
 	// Capture (do not live-forward) git's stderr: on auth failure git echoes
 	// the credential-embedded remote URL, which would leak the token into CI
 	// logs. Scrub it before surfacing anything.
+	// Both calls below cross the network to GitHub. A single transient failure
+	// used to drop the entire GitHub tag set, and because the caller only
+	// warned, the site republished with every GitHub-only release missing --
+	// services appeared and disappeared between half-hourly rebuilds. Retry
+	// with a short backoff so a blip does not decide the contents of the site.
 	run := func(args ...string) (string, error) {
-		cmd := exec.Command("git", append([]string{"-C", repoDir}, args...)...)
-		var stdout, stderr strings.Builder
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("git %s: %w: %s", args[0], err, scrub(stderr.String()))
+		var lastErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			}
+			cmd := exec.Command("git", append([]string{"-C", repoDir}, args...)...)
+			var stdout, stderr strings.Builder
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				lastErr = fmt.Errorf("git %s: %w: %s", args[0], err, scrub(stderr.String()))
+				continue
+			}
+			return stdout.String(), nil
 		}
-		return stdout.String(), nil
+		return "", lastErr
 	}
 	lsOut, err := run("ls-remote", "--tags", url)
 	if err != nil {
@@ -496,6 +509,8 @@ func main() {
 	commitBase := flag.String("commit-base", "", "umbrella commit URL base, e.g. https://host/group/proj/-/commit/")
 	githubRepo := flag.String("github-repo", envOr("NVCF_GITHUB_REMOTE", "https://github.com/NVIDIA/nvcf.git"),
 		"GitHub mirror to also scan for release tags; empty disables the GitHub source")
+	allowMissingGitHub := flag.Bool("allow-missing-github-tags", false,
+		"publish even if the GitHub tag fetch fails, omitting every GitHub-only release")
 	flag.Parse()
 
 	raw, err := os.ReadFile(*configPath)
@@ -521,7 +536,14 @@ func main() {
 			}
 		}
 		if set, err := fetchGitHubTags(*repo, base); err != nil {
-			// Degrade gracefully: an unreachable mirror must not fail the build.
+			// Fail rather than degrade. Continuing here publishes a site with
+			// every GitHub-only release silently missing, which overwrites a
+			// good deployment with a worse one and reads as data loss rather
+			// than as an outage. Failing leaves the previous deployment served.
+			// Pass --allow-missing-github-tags to opt into the old behavior.
+			if !*allowMissingGitHub {
+				fatal(fmt.Errorf("github tags unavailable: %w (pass --allow-missing-github-tags to publish without them)", err))
+			}
 			fmt.Fprintf(os.Stderr, "changelog-site: github tags unavailable (%v)\n", err)
 		} else {
 			githubTags = set
