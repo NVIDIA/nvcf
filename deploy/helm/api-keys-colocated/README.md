@@ -72,6 +72,56 @@ Settings to review before deployment:
 
 To override image-profile defaults (Cassandra, `apikeys.nca-id`, `apikeys.service-id-map.*`, etc), set the corresponding env var under `apikeys.env.*` — Spring relaxed binding maps env vars to Spring properties.
 
+## OSS Helm Chart
+
+Where this chart lives, how it is versioned, and where the published artifact
+goes. The same layout applies to every chart under `deploy/helm/`.
+
+| | |
+|---|---|
+| Chart source | `deploy/helm/api-keys-colocated/api-keys` |
+| Chart name when published | `helm-nvcf-api-keys` |
+| Published to | `oci://nvcr.io/0651155215864979/ncp-dev/helm-nvcf-api-keys` |
+| Release tag format | `deploy/helm/api-keys-colocated/v<version>` |
+
+### Versioning
+
+The chart version and the application version are independent. `Chart.yaml`
+carries `version: 0.0.0`, a placeholder that CI replaces with the version in the
+git tag; `appVersion` tracks the API Keys service image and moves on its own
+schedule. So chart `1.5.2` and `appVersion 0.0.4` are both correct and unrelated.
+
+Chart versions continue the series from the chart's own history. They do not
+follow the service repository's version numbers.
+
+### Cutting a release
+
+Pushing a tag of the form `deploy/helm/api-keys-colocated/v<version>` to this
+repository is what publishes the chart. The release automation watches for that
+tag prefix, packages the chart directory, stamps the version from the tag, and
+pushes to the target above.
+
+```bash
+git tag deploy/helm/api-keys-colocated/v1.5.2 <commit>
+git push origin deploy/helm/api-keys-colocated/v1.5.2
+```
+
+Deleting the git tag afterwards does not remove an already-published chart from
+the registry.
+
+### Consuming the published chart
+
+```bash
+helm show chart oci://nvcr.io/0651155215864979/ncp-dev/helm-nvcf-api-keys \
+  --version 1.5.2
+
+helm pull oci://nvcr.io/0651155215864979/ncp-dev/helm-nvcf-api-keys \
+  --version 1.5.2
+```
+
+Access to that registry namespace must be arranged separately; see the note on
+image registries above.
+
 ## Notes
 
 - If you publish or mirror the required images into another registry, set the image registry, repository, tag, and pull secret values explicitly in your override file.
