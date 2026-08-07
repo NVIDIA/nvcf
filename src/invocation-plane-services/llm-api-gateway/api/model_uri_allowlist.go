@@ -34,11 +34,11 @@ const (
 	embeddingsEndpointPath      = "/v1/embeddings"
 )
 
-// requireModelURI checks the model's declared uris allowlist for
+// requireModelURIAllowlist checks the model's declared uris allowlist for
 // endpointPath. Models with no spec or an empty uris list are allowed
 // unchanged. An undeclared endpoint is always counted and logged; enforce
 // controls whether the request is also refused with a 400.
-func (h *Handlers) requireModelURI(
+func (h *Handlers) requireModelURIAllowlist(
 	c *GatewayContext,
 	model string,
 	endpointPath string,
@@ -67,7 +67,7 @@ func (h *Handlers) requireModelURI(
 	ctx := c.UserContext()
 	telemetry.AddWithContext(
 		ctx,
-		h.observability.modelURIRejections,
+		h.observability.modelURIAllowlistRejections,
 		1,
 		attribute.String("endpoint", endpointPath),
 		attribute.String("mode", mode),
@@ -76,7 +76,7 @@ func (h *Handlers) requireModelURI(
 		Str("model", model).
 		Str("endpoint", endpointPath).
 		Str("mode", mode).
-		Msg("model does not declare endpoint in uris")
+		Msg("endpoint not in model uris allowlist")
 
 	if !enforce {
 		return nil

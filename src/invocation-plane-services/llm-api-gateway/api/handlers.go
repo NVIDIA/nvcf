@@ -41,20 +41,20 @@ type Handlers struct {
 }
 
 type observabilityMetrics struct {
-	llmTokens          otelmetric.Int64Counter
-	providerTime       otelmetric.Float64Histogram
-	streamFirstToken   otelmetric.Float64Histogram
-	streamDuration     otelmetric.Float64Histogram
-	modelURIRejections otelmetric.Int64Counter
+	llmTokens                   otelmetric.Int64Counter
+	providerTime                otelmetric.Float64Histogram
+	streamFirstToken            otelmetric.Float64Histogram
+	streamDuration              otelmetric.Float64Histogram
+	modelURIAllowlistRejections otelmetric.Int64Counter
 }
 
 func newObservabilityMetrics() observabilityMetrics {
 	return observabilityMetrics{
-		llmTokens:          telemetry.LLMTokens(),
-		providerTime:       telemetry.ProviderTime(),
-		streamFirstToken:   telemetry.StreamFirstToken(),
-		streamDuration:     telemetry.StreamDuration(),
-		modelURIRejections: telemetry.ModelURIRejections(),
+		llmTokens:                   telemetry.LLMTokens(),
+		providerTime:                telemetry.ProviderTime(),
+		streamFirstToken:            telemetry.StreamFirstToken(),
+		streamDuration:              telemetry.StreamDuration(),
+		modelURIAllowlistRejections: telemetry.ModelURIAllowlistRejections(),
 	}
 }
 
@@ -138,7 +138,7 @@ func (h *Handlers) normalizeChatRequest(
 	reqCtx.Model = routedModel
 	setRoutingMethodForModel(reqCtx, routedModel)
 
-	if err := h.requireModelURI(
+	if err := h.requireModelURIAllowlist(
 		c,
 		routedModel,
 		chatCompletionsEndpointPath,

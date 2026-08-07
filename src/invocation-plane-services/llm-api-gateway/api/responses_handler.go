@@ -124,7 +124,7 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 	reqCtx.Model = routedModel
 	setRoutingMethodForModel(reqCtx, routedModel)
 
-	if err := h.handlers.requireModelURI(c, routedModel, responsesEndpointPath, true); err != nil {
+	if err := h.handlers.requireModelURIAllowlist(c, routedModel, responsesEndpointPath, true); err != nil {
 		return nil, nil, err
 	}
 

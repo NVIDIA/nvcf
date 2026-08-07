@@ -324,7 +324,7 @@ func (h *OpenAIProxyHandlers) validateEmbeddingRequest(
 			fmt.Sprintf("the model `%s` does not support embeddings", requestModel),
 		)
 	}
-	if err := h.handlers.requireModelURI(
+	if err := h.handlers.requireModelURIAllowlist(
 		c,
 		reqCtx.Model,
 		embeddingsEndpointPath,

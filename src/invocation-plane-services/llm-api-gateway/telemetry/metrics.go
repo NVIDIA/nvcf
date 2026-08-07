@@ -76,6 +76,7 @@ func InitializeMetrics() {
 	_ = HTTPActiveRequests()
 	_ = UpstreamRequestsTotal()
 	_ = UpstreamRequestDuration()
+	_ = ModelURIAllowlistRejections()
 	_ = LLMTokens()
 	_ = ProviderTime()
 	_ = StreamFirstToken()
@@ -180,9 +181,9 @@ func UpstreamRequestDuration() otelmetric.Float64Histogram {
 	))
 }
 
-func ModelURIRejections() otelmetric.Int64Counter {
+func ModelURIAllowlistRejections() otelmetric.Int64Counter {
 	return must.Get(Meter().Int64Counter(
-		metricPrefix+"model_uri_rejections_total",
+		metricPrefix+"model_uri_allowlist_rejections_total",
 		otelmetric.WithDescription("Requests to endpoints not declared in the model uris allowlist."),
 	))
 }
