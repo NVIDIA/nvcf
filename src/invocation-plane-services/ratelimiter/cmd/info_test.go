@@ -55,7 +55,14 @@ func TestNewHealthServeMux_Info_RejectsNonGET(t *testing.T) {
 	mux := newHealthServeMux(nil)
 	require.NotNil(t, mux)
 
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+	for _, method := range []string{
+		http.MethodHead,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodOptions,
+	} {
 		t.Run(method, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(method, "/info", nil)
