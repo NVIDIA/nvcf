@@ -266,7 +266,8 @@
     {
       "id": "ess",
       "path": "src/control-plane-services/ess",
-      "service_name": "nvcf-ess"
+      "service_name": "nvcf-ess",
+      "initial_version": "0.4.9"
     },
     {
       "id": "ess-helm",
