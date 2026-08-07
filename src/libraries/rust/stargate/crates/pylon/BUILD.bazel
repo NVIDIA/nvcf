@@ -3,7 +3,7 @@
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 load("//rules/oci:defs.bzl", "rust_oci_image")
 
 # `all_crate_deps()` only resolves third-party crate_universe deps;
@@ -26,6 +26,12 @@ rust_binary(
     proc_macro_deps = all_crate_deps(proc_macro = True),
     visibility = ["//visibility:public"],
     deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "pylon_test",
+    crate = ":pylon",
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal_dev = True),
 )
 
 # Multi-arch OCI image. distroless/cc base, binary at /usr/local/bin/pylon.

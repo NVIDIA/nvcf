@@ -171,6 +171,7 @@ mod tests {
             request_quality_monitor: RequestQualityMonitorConfig::default(),
             retry: PylonRetryConfig::default(),
             queue_mismatch_retry: PylonQueueMismatchRetryConfig::default(),
+            derive_dynamo_priority: true,
             metrics: None,
             #[cfg(test)]
             webtransport_stream_header_wait_tx: None,

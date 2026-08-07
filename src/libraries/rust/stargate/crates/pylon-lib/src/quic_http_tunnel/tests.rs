@@ -14,10 +14,10 @@
 // limitations under the License.
 
 use super::core::{
-    MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES, TunnelServerApp, extend_body_from_buf,
-    is_health_request_path, otel_parent_from_headers, pylon_upstream_parent_context,
-    request_body_buffer, request_body_capacity, should_forward_header,
-    should_forward_response_header,
+    MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES, TunnelServerApp, dynamo_request_priority,
+    extend_body_from_buf, is_health_request_path, otel_parent_from_headers,
+    pylon_upstream_parent_context, request_body_buffer, request_body_capacity,
+    should_forward_header, should_forward_response_header, x_priority_header_value,
 };
 use super::endpoint::{
     build_trusted_client_config, derive_sni, make_server_config, target_authority,
@@ -477,6 +477,9 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
         "X-Method",
         "X-Path",
         "X-Stargate-Expected-Queue-Ms",
+        "X-Dynamo-Request-Priority",
+        "X-Dynamo-Request-Strict-Priority",
+        "X-Dynamo-Request-Anything",
     ]
     .into_iter()
     .chain(RETRY_CONTROL_REQUEST_HEADERS)
@@ -486,11 +489,37 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
             &retry
         ));
     }
-    assert!(should_forward_header(
-        &HeaderName::from_bytes(b"X-Request-Id")?,
-        &retry
-    ));
+    for name in [b"X-Request-Id".as_slice(), b"X-Priority", b"X-Dynamo-Nvext"] {
+        assert!(should_forward_header(
+            &HeaderName::from_bytes(name)?,
+            &retry
+        ));
+    }
     Ok(())
+}
+
+#[test]
+fn pylon_dynamo_request_priority_inverts_and_clamps_to_i32() {
+    assert_eq!(dynamo_request_priority(0), i32::MAX);
+    assert_eq!(dynamo_request_priority(7), i32::MAX - 7);
+    assert_eq!(dynamo_request_priority(i32::MAX as u32), 0);
+    assert_eq!(dynamo_request_priority(i32::MAX as u32 + 1), 0);
+    assert_eq!(dynamo_request_priority(u32::MAX), 0);
+}
+
+#[test]
+fn pylon_x_priority_header_value_distinguishes_absent_from_zero() {
+    let mut headers = HeaderMap::new();
+    assert_eq!(x_priority_header_value(&headers), None);
+
+    headers.insert("x-priority", "0".parse().unwrap());
+    assert_eq!(x_priority_header_value(&headers), Some(0));
+
+    headers.insert("x-priority", " 7 ".parse().unwrap());
+    assert_eq!(x_priority_header_value(&headers), Some(7));
+
+    headers.insert("x-priority", "not-a-priority".parse().unwrap());
+    assert_eq!(x_priority_header_value(&headers), None);
 }
 
 #[test]
@@ -1629,6 +1658,109 @@ async fn quic_tunnel_forwards_to_http_backend() {
     assert_eq!(payloads.len(), 1);
     assert_eq!(payloads[0]["object"], "chat.completion.chunk");
     assert_eq!(payloads[0]["choices"][0]["delta"]["content"], "ok");
+
+    tunnel.shutdown().await;
+}
+
+fn dynamo_priority_echo_router() -> Router {
+    Router::new().route(
+        "/v1/chat/completions",
+        post(|req: Request| async move {
+            let dynamo_priority = req
+                .headers()
+                .get("x-dynamo-request-priority")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("absent")
+                .to_string();
+            let saw_spoofed_dynamo_header = req
+                .headers()
+                .contains_key("x-dynamo-request-strict-priority");
+            let mut sse = axum::response::Sse::new(async_stream::stream! {
+                yield Ok::<_, std::convert::Infallible>(
+                    Event::default().data(r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":"ok"}}]}"#)
+                );
+                yield Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"));
+            })
+            .into_response();
+            sse.headers_mut().insert(
+                HeaderName::from_static("x-echo-dynamo-priority"),
+                HeaderValue::from_str(&dynamo_priority).unwrap(),
+            );
+            sse.headers_mut().insert(
+                HeaderName::from_static("x-saw-spoofed-dynamo-header"),
+                HeaderValue::from_str(&saw_spoofed_dynamo_header.to_string()).unwrap(),
+            );
+            *sse.status_mut() = StatusCode::OK;
+            sse
+        }),
+    )
+}
+
+#[tokio::test]
+async fn quic_tunnel_derives_dynamo_priority_from_x_priority() {
+    let (config, _metrics) = metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    let mut headers =
+        tunnel_request_headers("/v1/chat/completions", "model-a", "req-dynamo-1", "11");
+    headers.insert("x-priority", "7".parse().unwrap());
+    headers.insert("x-dynamo-request-priority", "42".parse().unwrap());
+    headers.insert("x-dynamo-request-strict-priority", "1".parse().unwrap());
+    tunnel
+        .send(headers, br#"{"messages":[],"stream":true}"#)
+        .await;
+
+    let response_headers = tunnel.response_head(StatusCode::OK).await;
+    assert_eq!(
+        response_headers
+            .get("x-echo-dynamo-priority")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        (i32::MAX - 7).to_string()
+    );
+    assert_eq!(response_headers["x-saw-spoofed-dynamo-header"], "false");
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_omits_dynamo_priority_without_x_priority() {
+    let (config, _metrics) = metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    let mut headers =
+        tunnel_request_headers("/v1/chat/completions", "model-a", "req-dynamo-2", "11");
+    headers.insert("x-dynamo-request-priority", "42".parse().unwrap());
+    tunnel
+        .send(headers, br#"{"messages":[],"stream":true}"#)
+        .await;
+
+    let response_headers = tunnel.response_head(StatusCode::OK).await;
+    assert_eq!(response_headers["x-echo-dynamo-priority"], "absent");
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_dynamo_priority_derivation_can_be_disabled() {
+    let (mut config, _metrics) =
+        metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
+    config.forwarding.derive_dynamo_priority = false;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    let mut headers =
+        tunnel_request_headers("/v1/chat/completions", "model-a", "req-dynamo-3", "11");
+    headers.insert("x-priority", "7".parse().unwrap());
+    headers.insert("x-dynamo-request-strict-priority", "1".parse().unwrap());
+    tunnel
+        .send(headers, br#"{"messages":[],"stream":true}"#)
+        .await;
+
+    let response_headers = tunnel.response_head(StatusCode::OK).await;
+    assert_eq!(response_headers["x-echo-dynamo-priority"], "absent");
+    // Stripping inbound x-dynamo-request-* headers is not gated by the flag.
+    assert_eq!(response_headers["x-saw-spoofed-dynamo-header"], "false");
 
     tunnel.shutdown().await;
 }

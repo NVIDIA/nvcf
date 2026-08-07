@@ -27,8 +27,9 @@ use reqwest::{Client, Error as ReqwestError, Method, Response, StatusCode};
 use sonic_rs::JsonValueTrait;
 use stargate_protocol::common::is_hop_by_hop_header;
 use stargate_protocol::tunnel_contract::{
-    HEADER_MODEL, HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
-    HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE, HEADER_STARGATE_UPSTREAM_RETRYABLE,
+    HEADER_MODEL, HEADER_PRIORITY, HEADER_REQUEST_ID, HEADER_STARGATE_EXPECTED_QUEUE_MS,
+    HEADER_STARGATE_RETRY_AFTER_MS, HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
+    HEADER_STARGATE_UPSTREAM_RETRYABLE,
 };
 use stargate_telemetry::{
     inject_trace_context, parent_context_from_headers, traceparent_from_headers,
@@ -105,6 +106,9 @@ pub struct TunnelForwardingConfig {
     pub request_quality_monitor: RequestQualityMonitorConfig,
     pub retry: PylonRetryConfig,
     pub queue_mismatch_retry: PylonQueueMismatchRetryConfig,
+    /// Derive x-dynamo-request-priority for the upstream engine from x-priority.
+    /// Inbound x-dynamo-request-* headers are stripped regardless of this gate.
+    pub derive_dynamo_priority: bool,
     pub metrics: Option<Arc<PylonMetrics>>,
     #[cfg(test)]
     pub webtransport_stream_header_wait_tx: Option<flume::Sender<()>>,
@@ -121,6 +125,7 @@ impl Default for TunnelForwardingConfig {
             request_quality_monitor: RequestQualityMonitorConfig::default(),
             retry: PylonRetryConfig::default(),
             queue_mismatch_retry: PylonQueueMismatchRetryConfig::default(),
+            derive_dynamo_priority: true,
             metrics: None,
             #[cfg(test)]
             webtransport_stream_header_wait_tx: None,
@@ -141,6 +146,7 @@ pub(super) struct TunnelServerApp {
     pub(super) request_quality_monitor: RequestQualityMonitorConfig,
     pub(super) retry: PylonRetryConfig,
     pub(super) queue_mismatch_retry: PylonQueueMismatchRetryConfig,
+    pub(super) derive_dynamo_priority: bool,
     pub(super) metrics: Option<Arc<PylonMetrics>>,
     #[cfg(test)]
     pub(super) webtransport_stream_header_wait_tx: Option<flume::Sender<()>>,
@@ -164,6 +170,7 @@ impl TunnelServerApp {
             request_quality_monitor: forwarding.request_quality_monitor,
             retry: forwarding.retry,
             queue_mismatch_retry: forwarding.queue_mismatch_retry,
+            derive_dynamo_priority: forwarding.derive_dynamo_priority,
             metrics: forwarding.metrics,
             #[cfg(test)]
             webtransport_stream_header_wait_tx: forwarding.webtransport_stream_header_wait_tx,
@@ -710,6 +717,7 @@ async fn send_upstream_request(
             inference_server.id = %app.inference_server_id,
             upstream.status = field::Empty,
             upstream.error = field::Empty,
+            dynamo.request_priority = field::Empty,
         );
         let _ = span.set_parent(pylon_upstream_parent_context(request_headers));
         if let Some(otel_parent) = otel_parent_from_headers(request_headers) {
@@ -723,6 +731,27 @@ async fn send_upstream_request(
     for (name, value) in request_headers {
         if should_forward_header(name, &app.retry) {
             upstream_headers.append(name, value.clone());
+        }
+    }
+    // `traced` excludes health requests, which skip header validation and are
+    // not client inference traffic; nothing to derive for them.
+    if app.derive_dynamo_priority && traced {
+        if let Some(priority) = x_priority_header_value(request_headers) {
+            let dynamo_priority = dynamo_request_priority(priority);
+            upstream_headers.insert(
+                HeaderName::from_static(HEADER_DYNAMO_REQUEST_PRIORITY),
+                HeaderValue::from(dynamo_priority),
+            );
+            span.record("dynamo.request_priority", dynamo_priority);
+            tracing::info!(
+                request_id = request_headers
+                    .get(HEADER_REQUEST_ID)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default(),
+                priority,
+                dynamo.request_priority = dynamo_priority,
+                "derived dynamo request priority"
+            );
         }
     }
     if traced {
@@ -1058,10 +1087,42 @@ pub(super) fn join_base_path(base: &str, path_and_query: &str) -> Result<url::Ur
 
 pub(super) fn should_forward_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool {
     !is_tunnel_control_header(name, retry)
+        && !is_dynamo_request_header(name)
         && !matches!(
             name.as_str(),
             "host" | "x-method" | "x-path" | HEADER_STARGATE_EXPECTED_QUEUE_MS
         )
+}
+
+/// Engine-facing priority header in the Dynamo contract; Pylon owns this
+/// contract, so the constant stays out of the shared tunnel contract.
+pub(super) const HEADER_DYNAMO_REQUEST_PRIORITY: &str = "x-dynamo-request-priority";
+const DYNAMO_REQUEST_HEADER_PREFIX: &str = "x-dynamo-request-";
+
+/// Client-supplied Dynamo request headers never reach the engine; Pylon is
+/// the only writer of x-dynamo-request-* values.
+pub(super) fn is_dynamo_request_header(name: &HeaderName) -> bool {
+    name.as_str().starts_with(DYNAMO_REQUEST_HEADER_PREFIX)
+}
+
+/// Dynamo schedules on an i32 where higher wins and silently drops values
+/// that do not parse as i32, while x-priority is a u32 where lower wins, so
+/// the mapping inverts and clamps to keep every configured priority valid.
+pub(super) fn dynamo_request_priority(priority: u32) -> i32 {
+    i32::MAX - i32::try_from(priority).unwrap_or(i32::MAX)
+}
+
+/// Absent stays absent: a request without x-priority must not be promoted to
+/// maximum engine priority, so this reads the raw header instead of the
+/// parsed default of 0. Malformed values were already rejected upstream.
+pub(super) fn x_priority_header_value(headers: &HeaderMap) -> Option<u32> {
+    headers
+        .get(HEADER_PRIORITY)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 pub(super) fn should_forward_response_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool {

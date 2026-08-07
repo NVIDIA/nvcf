@@ -204,6 +204,14 @@ struct Args {
     /// Optional retry-after hint in milliseconds for local queue-mismatch retries
     #[arg(long, env = "PYLON_QUEUE_MISMATCH_RETRY_AFTER_MS", value_name = "MS")]
     pylon_queue_mismatch_retry_after_ms: Option<u64>,
+    /// Derive x-dynamo-request-priority for the upstream engine from x-priority
+    #[arg(
+        long,
+        action = clap::ArgAction::Set,
+        default_value_t = true,
+        env = "PYLON_DERIVE_DYNAMO_PRIORITY"
+    )]
+    pylon_derive_dynamo_priority: bool,
     /// Collect post-stream output quality metrics (gibberish checks)
     #[arg(long, default_value_t = false)]
     collect_quality_metrics: bool,
@@ -243,7 +251,7 @@ async fn main() -> Result<()> {
 mod tests {
     use pylon_lib::{
         EngineStatsStreamMode, ModelDiscoveryProvider, PylonQueueMismatchRetryConfig,
-        PylonRetryConfig, TunnelTransportProtocol,
+        PylonRetryConfig, TunnelForwardingConfig, TunnelTransportProtocol,
     };
     use reqwest::header::HeaderName;
 
@@ -411,6 +419,23 @@ mod tests {
         let retry = pylon_retry_config_from_args(&args).expect("retry config should parse");
 
         assert!(retry.retryable_upstream_status_codes.is_empty());
+    }
+
+    #[test]
+    fn pylon_derive_dynamo_priority_cli_default_matches_runtime_default() {
+        let args = parse_args("");
+
+        assert_eq!(
+            args.pylon_derive_dynamo_priority,
+            TunnelForwardingConfig::default().derive_dynamo_priority
+        );
+    }
+
+    #[test]
+    fn pylon_derive_dynamo_priority_cli_override_is_applied() {
+        let args = parse_argv(&["--pylon-derive-dynamo-priority=false"]);
+
+        assert!(!args.pylon_derive_dynamo_priority);
     }
 
     #[test]

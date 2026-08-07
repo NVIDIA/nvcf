@@ -101,6 +101,7 @@ pub(crate) struct PylonStartupPlan {
     model_source: ModelSource,
     pylon_retry: PylonRetryConfig,
     queue_mismatch_retry: PylonQueueMismatchRetryConfig,
+    derive_dynamo_priority: bool,
     model_initialization: ModelInitialization,
     bringup: BringupConfig,
     request_quality_monitor: RequestQualityMonitorConfig,
@@ -146,6 +147,7 @@ impl PylonStartupPlan {
             model_source,
             pylon_retry: pylon_retry_config_from_args(args)?,
             queue_mismatch_retry: pylon_queue_mismatch_retry_config_from_args(args)?,
+            derive_dynamo_priority: args.pylon_derive_dynamo_priority,
             model_initialization,
             bringup: BringupConfig {
                 enabled: !args.disable_bringup,
@@ -504,6 +506,7 @@ fn tunnel_forwarding_config_from_plan(
         metrics: Some(metrics),
         retry: plan.pylon_retry.clone(),
         queue_mismatch_retry: plan.queue_mismatch_retry.clone(),
+        derive_dynamo_priority: plan.derive_dynamo_priority,
         ..Default::default()
     }
 }
@@ -1111,6 +1114,15 @@ mod tests {
 
         assert!(registration_url(&plan, Some(&tunnel)).starts_with("quic://127.0.0.1:"));
         tunnel.shutdown().await;
+    }
+
+    #[test]
+    fn derive_dynamo_priority_flows_from_args_to_forwarding_config() {
+        let (_, default_plan) = startup(&[]);
+        assert!(test_forwarding(&default_plan).derive_dynamo_priority);
+
+        let (_, disabled_plan) = startup(&["--pylon-derive-dynamo-priority=false"]);
+        assert!(!test_forwarding(&disabled_plan).derive_dynamo_priority);
     }
 
     #[test]
