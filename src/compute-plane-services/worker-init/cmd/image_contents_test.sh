@@ -30,7 +30,10 @@ case "${entrypoint}" in
 esac
 
 for layer in "${outer_dir}"/blobs/sha256/*.tar.gz; do
-  if ! tar -tzf "${layer}" | grep -Eq '^(\./)?usr/bin/nvcf-trust-bundle-install$'; then
+  # Do not use grep -q here. With pipefail enabled, GNU tar receives SIGPIPE
+  # as soon as grep exits after its first match, which makes a valid layer
+  # appear to be missing the installer in Linux CI.
+  if ! tar -tzf "${layer}" | grep -E '^(\./)?usr/bin/nvcf-trust-bundle-install$' >/dev/null; then
     continue
   fi
 
