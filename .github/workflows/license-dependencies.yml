@@ -79,13 +79,34 @@ jobs:
           chmod +x "${RUNNER_TEMP}/bin/bazel"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
-      - name: Cache Bazel repository and disk caches
-        uses: actions/cache@v4
+      # Restore always, save only from main. This cache is ~1.4 GB and was the
+      # single largest consumer of the repository's 10 GB quota: three copies,
+      # 4.19 GB, 42% of the whole budget, for a job that builds five Java
+      # runtime inventories with Bazel. Every PR and every merge-queue ref used
+      # to write its own full-size copy, evicting entries other jobs needed.
+      # Saving from main alone keeps one authoritative entry that every branch
+      # restores from.
+      - name: Restore Bazel repository and disk caches
+        id: depdocs_cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/bazel/*/install
             ~/.cache/bazel/*/cache
           key: dependency-docs-bazel-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'maven_install.json') }}
+          restore-keys: |
+            dependency-docs-bazel-
 
       - name: Run dependency docs freshness check
         run: ./tools/ci/check-dependency-docs
+
+      - name: Save Bazel repository and disk caches
+        # Only main writes. Merge-queue refs (gh-readonly-queue/**) are deleted
+        # once the queue drains, so a cache saved there is pure quota burn.
+        if: github.ref == 'refs/heads/main' && steps.depdocs_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel/*/install
+            ~/.cache/bazel/*/cache
+          key: dependency-docs-bazel-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'maven_install.json') }}

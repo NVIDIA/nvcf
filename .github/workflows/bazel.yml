@@ -433,7 +433,14 @@ jobs:
       # same instant, tripping GitHub's action-download rate limit (HTTP 429 in
       # "Set up job"). Batching keeps the download burst under that limit;
       # change-aware scheduling already keeps most PRs well below the cap.
-      max-parallel: 8
+      #
+      # Raised 8 -> 12 to shorten full-matrix runs: a recent 25-row merge-queue
+      # run needed three waves at 8 and needs two at 12. The bazel-docker matrix
+      # below contributes 4 more, so simultaneous checkouts peak at 16 rather
+      # than the previous 12. If "Set up job" starts failing with HTTP 429 this
+      # is the first knob to walk back; measure with `tools/ci/ci-health --why`,
+      # which reports queue wait separately from execution time.
+      max-parallel: 12
       matrix:
         subtree: ${{ fromJSON(needs.detect.outputs.matrix) }}
     steps:
@@ -482,9 +489,16 @@ jobs:
       #
       # Concurrent saves to one key are safe: the first writer wins and the rest
       # no-op. Rows with their own module keep a per-row identity.
-      - name: Cache Bazel repository + disk caches
+      # Restore on every ref, save on everything except merge-queue refs.
+      # gh-readonly-queue/** branches are deleted as soon as the queue drains,
+      # so a cache written there can never be restored again, but it still
+      # counts against the repository's 10 GB quota and evicts entries that
+      # can. Duplicate main/queue pairs of these keys were observed filling the
+      # budget to 94%.
+      - name: Restore Bazel repository + disk caches
+        id: bazel_cache
         if: steps.precheck.outputs.skip == 'false'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
@@ -724,6 +738,20 @@ jobs:
             echo "::warning::remote cache build failed; retrying cacheless (local)"
             bazel build "${COMMON[@]}" --remote_cache= "${TARGETS[@]}"
           fi
+
+      - name: Save Bazel repository + disk caches
+        # Never from a merge-queue ref: gh-readonly-queue/** is deleted when the
+        # queue drains, so the entry is unrestorable but still occupies quota.
+        if: >-
+          steps.precheck.outputs.skip == 'false'
+          && steps.bazel_cache.outputs.cache-hit != 'true'
+          && !startsWith(github.ref, 'refs/heads/gh-readonly-queue/')
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
+          key: bazel-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
 
       - name: bazel test //...
         # `tests_skip: true` on the matrix row keeps the subtree in the matrix
