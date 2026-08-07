@@ -106,6 +106,7 @@ go_test(
         "//src/invocation-plane-services/llm-api-gateway/requestctx",
         "//src/invocation-plane-services/llm-api-gateway/telemetry",
         "@com_github_labstack_echo_v4//:echo",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@io_opentelemetry_go_otel//:otel",
         "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel//propagation",

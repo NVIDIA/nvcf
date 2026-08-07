@@ -25,6 +25,7 @@ import (
 
 	echo "github.com/labstack/echo/v4"
 
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 )
 
@@ -37,7 +38,14 @@ func newInfoEngine() *echo.Echo {
 }
 
 func TestInfoEndpoint_GET(t *testing.T) {
-	t.Parallel()
+	golibversion.Service = "nvcf-llm-api-gateway"
+	golibversion.Version = "test-1.0.0"
+	golibversion.GitHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	t.Cleanup(func() {
+		golibversion.Service = ""
+		golibversion.Version = ""
+		golibversion.GitHash = ""
+	})
 
 	e := newInfoEngine()
 
@@ -52,25 +60,32 @@ func TestInfoEndpoint_GET(t *testing.T) {
 		t.Errorf("GET /info: got Content-Type %q, want application/json", ct)
 	}
 
-	// x_defs are not injected under `go test`; resolve() falls back to "unknown"
-	// for any empty field, so all three values are guaranteed non-empty.
 	var info map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
 		t.Fatalf("GET /info: unmarshal body: %v", err)
 	}
-	for _, field := range []string{"service", "version", "commit"} {
-		if info[field] == "" {
-			t.Errorf("GET /info: field %q must be populated", field)
-		}
+	if info["service"] != "nvcf-llm-api-gateway" {
+		t.Errorf("GET /info: service = %q, want nvcf-llm-api-gateway", info["service"])
+	}
+	if info["version"] != "test-1.0.0" {
+		t.Errorf("GET /info: version = %q, want test-1.0.0", info["version"])
+	}
+	if info["commit"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Errorf("GET /info: commit = %q, want aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", info["commit"])
 	}
 }
 
 func TestInfoEndpoint_RejectsNonGET(t *testing.T) {
-	t.Parallel()
-
 	e := newInfoEngine()
 
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+	for _, method := range []string{
+		http.MethodHead,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodOptions,
+	} {
 		t.Run(method, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(method, "/info", nil)
