@@ -153,11 +153,18 @@ dist: clean-dist
 # Golden manifests for `make test-local` (compared against $(DIST_DIR)/out)
 GOLDEN_LOCAL_DIR ?= $(MAKEFILE_DIR)/testdata/golden/local
 
+# Strip helmfile's default {{ .State.AbsPathSHA1 }} from the output directory
+# name for golden rendering only. That hash is a SHA1 of the helmfile's absolute
+# path, so fixtures generated in one checkout would not match another. Applies to
+# this repo's tests; `make template` on its own keeps helmfile's default layout.
+GOLDEN_OUTPUT_DIR_TEMPLATE ?= {{ .OutputDir }}/{{ .State.BaseName }}-{{ .Release.Name }}
+
 render-local: dist
 	@echo ">>> Rendering local environment into $(DIST_DIR)/out..."
 	@cp -r testdata/environments/* $(DIST_DIR)/environments/
 	@cp -r testdata/registration $(DIST_DIR)/
-	@cd $(DIST_DIR) && CLUSTER_NAME=ncp-local NCA_ID=ncp-local HELMFILE_ENV=local make template
+	@cd $(DIST_DIR) && CLUSTER_NAME=ncp-local NCA_ID=ncp-local HELMFILE_ENV=local \
+		make template OUTPUT_DIR_TEMPLATE='$(GOLDEN_OUTPUT_DIR_TEMPLATE)'
 
 test-observability-profile:
 	@tests/observability-profile.sh

@@ -146,6 +146,13 @@ endif
 
 # --- Core Targets ---
 
+# Optional override for helmfile's --output-dir-template. Empty by default, so
+# helmfile's own default applies and rendered output keeps its usual layout.
+# The repo's golden-file tests set this to strip the {{ .State.AbsPathSHA1 }}
+# component, which is derived from the helmfile's absolute path and would
+# otherwise make the fixtures differ per checkout location.
+OUTPUT_DIR_TEMPLATE ?=
+
 template: clean check-versions check-cluster-name
 	@if [ ! -f "$(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml" ]; then \
 		echo "ERROR: Registration values not found at $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml"; \
@@ -166,7 +173,9 @@ template: clean check-versions check-cluster-name
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) template --output-dir "$(OUTPUT_DIR)"
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) template \
+		--output-dir "$(OUTPUT_DIR)" \
+		$(if $(OUTPUT_DIR_TEMPLATE),--output-dir-template '$(OUTPUT_DIR_TEMPLATE)')
 
 	@echo ">>> Templating complete. Manifests generated in $(OUTPUT_DIR)"
 

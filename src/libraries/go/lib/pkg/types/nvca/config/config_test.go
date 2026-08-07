@@ -497,19 +497,6 @@ workload:
 		assert.Equal(t, 3*time.Hour, cfg.Workload.MaxRunningTimeout)
 	})
 
-	t.Run("transport_tls_installer_image_env_override", func(t *testing.T) {
-		t.Setenv("NVCA_WORKLOAD_TRANSPORT_TLS_INSTALLER_IMAGE", "nvcr.io/private-mirror/nvca:test")
-		data := []byte(`
-workload:
-  transportTLS:
-    trustMode: bundle
-    installerImage: nvcr.io/nvidia/nvcf-byoc/nvca:file
-`)
-		cfg, err := DecodeConfig(data)
-		require.NoError(t, err)
-		require.NotNil(t, cfg.Workload.TransportTLS)
-		assert.Equal(t, "nvcr.io/private-mirror/nvca:test", cfg.Workload.TransportTLS.InstallerImage)
-	})
 }
 
 func TestEncodeConfig(t *testing.T) {

@@ -312,6 +312,7 @@ The following third-party licenses are included in this repository:
     src/compute-plane-services/nvsnap/NOTICE
     src/control-plane-services/api-keys/NOTICE
     src/control-plane-services/cloud-tasks/NOTICE
+    src/control-plane-services/ess/NOTICE
     src/control-plane-services/instance-cluster-management/NOTICE
     src/control-plane-services/notary/NOTICE
     src/invocation-plane-services/llm-api-gateway/NOTICE
@@ -481,3 +482,4 @@ The following third-party licenses are included in this repository:
     src/libraries/go/lib/vendor/sigs.k8s.io/structured-merge-diff/v6/LICENSE
     src/libraries/go/lib/vendor/sigs.k8s.io/yaml/LICENSE
     src/libraries/java/nv-boot-parent/NOTICE
+    src/uis/nvcf-ui/NOTICE
