@@ -23,6 +23,7 @@ import (
 	"time"
 
 	_ "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/api"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 
 	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
@@ -127,6 +128,24 @@ func (r *Router) prometheusMiddleware() gin.HandlerFunc {
 func (r *Router) setupRoutes() {
 	// Health check interface (no version)
 	r.engine.GET("/healthz", r.handleHealthz)
+
+	r.engine.GET("/info", gin.WrapH(golibversion.Handler()))
+	infoMethodNotAllowed := func(c *gin.Context) {
+		c.Header("Allow", http.MethodGet)
+		c.AbortWithStatus(http.StatusMethodNotAllowed)
+	}
+	for _, method := range []string{
+		http.MethodHead,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodOptions,
+		http.MethodConnect,
+		http.MethodTrace,
+	} {
+		r.engine.Handle(method, "/info", infoMethodNotAllowed)
+	}
 
 	// Note: Metrics endpoint is now served on a separate port via GetMetricsHandler()
 	// and not included in the main application routes
