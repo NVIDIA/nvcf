@@ -939,3 +939,57 @@ func optionalSectionBetween(content, startMarker, endMarker string) (string, boo
 	}
 	return content[start : start+end], true
 }
+
+func TestFindRepoRoot(t *testing.T) {
+	tests := []struct {
+		name      string
+		gitIsFile bool
+	}{
+		{"git directory", false},
+		// A git worktree has .git as a file holding a gitdir pointer.
+		{"git file", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			gitPath := filepath.Join(root, ".git")
+			if tc.gitIsFile {
+				if err := os.WriteFile(gitPath, []byte("gitdir: /elsewhere\n"), 0o644); err != nil {
+					t.Fatalf("write .git file: %v", err)
+				}
+			} else if err := os.Mkdir(gitPath, 0o755); err != nil {
+				t.Fatalf("mkdir .git: %v", err)
+			}
+			nested := filepath.Join(root, "tools", "docs-version-sync")
+			if err := os.MkdirAll(nested, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			t.Chdir(nested)
+
+			got, err := findRepoRoot()
+			if err != nil {
+				t.Fatalf("findRepoRoot: %v", err)
+			}
+			// macOS resolves TempDir through a symlink, so compare resolved paths.
+			wantResolved, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatalf("resolve want: %v", err)
+			}
+			gotResolved, err := filepath.EvalSymlinks(got)
+			if err != nil {
+				t.Fatalf("resolve got: %v", err)
+			}
+			if gotResolved != wantResolved {
+				t.Fatalf("findRepoRoot() = %q, want %q", gotResolved, wantResolved)
+			}
+		})
+	}
+
+	t.Run("no git dir", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		if _, err := findRepoRoot(); err == nil {
+			t.Fatal("findRepoRoot() = nil error, want failure when no .git exists")
+		}
+	})
+}
