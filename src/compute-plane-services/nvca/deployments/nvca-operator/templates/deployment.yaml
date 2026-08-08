@@ -182,8 +182,6 @@ spec:
             name: otel-{{ include "nvcaop.fullname" . }}-config
         {{- end}}
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-operator
           - --nca-id
           - "{{ .Values.ncaID }}"
@@ -293,8 +291,6 @@ spec:
             drop:
               - "ALL"
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-mirror
           - run
           - --target-namespace

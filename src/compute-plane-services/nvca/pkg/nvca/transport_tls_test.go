@@ -70,7 +70,7 @@ func TestCreatePodArtifactInstancesTransportTLSBundleInjectsOnlyLLMWorker(t *tes
 		TrustBundleKey:           "nvcf-ca-bundle.pem",
 		TrustBundleFingerprint:   testTransportRootFingerprint,
 		TrustBundlePEM:           testTransportRootCertPEM,
-		InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
+		InstalledBundleMountPath: "/nvcf/transport-tls",
 	})
 	req := newTransportTLSTestRequest()
 
@@ -88,13 +88,18 @@ func TestCreatePodArtifactInstancesTransportTLSBundleInjectsOnlyLLMWorker(t *tes
 	assert.Equal(t, []corev1.LocalObjectReference{{Name: "worker-image-pull-secret"}}, createdPod.Spec.ImagePullSecrets)
 	assert.NotNil(t, findTransportTLSVolume(createdPod, "nvcf-transport-trust-bundle"))
 	assert.NotNil(t, findTransportTLSVolume(createdPod, "nvcf-trust-merged-certs"))
-	assert.NotNil(t, findTransportTLSInitContainer(createdPod, "nvcf-trust-bundle-install"))
+	installer := findTransportTLSInitContainer(createdPod, "nvcf-trust-bundle-install")
+	require.NotNil(t, installer)
+	assert.Equal(t, "nvcr.io/nvcf-core/nvcf_worker_init:v3.1", installer.Image)
+	assert.Equal(t, corev1.PullAlways, installer.ImagePullPolicy)
 
 	llmWorker := findTransportTLSContainer(createdPod, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
-	assert.Equal(t, "/etc/ssl/certs/ca-certificates.crt",
+	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt",
 		findTransportTLSEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
-	assert.NotNil(t, findTransportTLSVolumeMount(llmWorker, "nvcf-trust-merged-certs"))
+	mount := findTransportTLSVolumeMount(llmWorker, "nvcf-trust-merged-certs")
+	require.NotNil(t, mount)
+	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
 
 	for _, name := range []string{"inference", "smb-server"} {
 		container := findTransportTLSContainer(createdPod, name)
@@ -190,7 +195,6 @@ func TestCreatePodArtifactInstancesTransportTLSBundleRejectsInvalidConfigMapMeta
 				TrustBundleKey:           "nvcf-ca-bundle.pem",
 				TrustBundleFingerprint:   testTransportRootFingerprint,
 				TrustBundlePEM:           testTransportRootCertPEM,
-				InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 			}
 			tt.mutateCfg(&cfg)
 			kb := newTransportTLSTestBackend(clients, cfg)
@@ -208,7 +212,7 @@ func TestCreatePodArtifactInstancesTransportTLSBundleRejectsInvalidConfigMapMeta
 	}
 }
 
-func TestCreatePodArtifactInstancesTransportTLSBundleRequiresInstallerImageTerminal(t *testing.T) {
+func TestCreatePodArtifactInstancesTransportTLSBundleRequiresRegularInitTerminal(t *testing.T) {
 	ctx := newTestContext()
 	clients := makeMockKubeClients()
 	kb := newTransportTLSTestBackend(clients, nvcaconfig.TransportTLSConfig{
@@ -219,12 +223,14 @@ func TestCreatePodArtifactInstancesTransportTLSBundleRequiresInstallerImageTermi
 		TrustBundlePEM:           testTransportRootCertPEM,
 	})
 
-	_, err := kb.CreatePodArtifactInstances(ctx, newTransportTLSTestPod(), newTransportTLSTestRequest(),
+	pod := newTransportTLSTestPod()
+	pod.Spec.InitContainers = nil
+	_, err := kb.CreatePodArtifactInstances(ctx, pod, newTransportTLSTestRequest(),
 		transportTLSTestMutator)
 
 	require.Error(t, err)
 	assert.True(t, nvcaerrors.IsTerminal(err))
-	assert.Contains(t, err.Error(), "transportTls.installerImage")
+	assert.Contains(t, err.Error(), `regular init container "init"`)
 	pods, listErr := clients.K8s.CoreV1().Pods(RequestsNamespace).List(ctx, metav1.ListOptions{})
 	require.NoError(t, listErr)
 	assert.Empty(t, pods.Items)
@@ -272,6 +278,11 @@ func newTransportTLSTestPod() *corev1.Pod {
 		ObjectMeta: metav1.ObjectMeta{Name: "worker-template"},
 		Spec: corev1.PodSpec{
 			ImagePullSecrets: []corev1.LocalObjectReference{{Name: "worker-image-pull-secret"}},
+			InitContainers: []corev1.Container{{
+				Name:            "init",
+				Image:           "nvcr.io/nvcf-core/nvcf_worker_init:v3.1",
+				ImagePullPolicy: corev1.PullAlways,
+			}},
 			Containers: []corev1.Container{
 				{Name: function.LLMWorkerContainerName, Image: "nvcr.io/nvcf/llm-worker:test"},
 				{Name: "inference", Image: "nvcr.io/customer/inference:test"},

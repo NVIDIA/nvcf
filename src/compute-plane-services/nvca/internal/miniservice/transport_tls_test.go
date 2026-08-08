@@ -80,7 +80,7 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 					TrustBundleKey:           "nvcf-ca-bundle.pem",
 					TrustBundleFingerprint:   testTransportTLSRootFingerprint,
 					TrustBundlePEM:           testTransportTLSRootCertPEM,
-					InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
+					InstalledBundleMountPath: "/nvcf/transport-tls",
 				},
 			},
 		},
@@ -89,6 +89,11 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "llm-workload"},
 		Spec: corev1.PodSpec{
 			ImagePullSecrets: []corev1.LocalObjectReference{{Name: "worker-image-pull-secret"}},
+			InitContainers: []corev1.Container{{
+				Name:            "init",
+				Image:           "nvcr.io/nvcf-core/nvcf_worker_init:v3.1",
+				ImagePullPolicy: corev1.PullAlways,
+			}},
 			Containers: []corev1.Container{
 				{Name: function.LLMWorkerContainerName, Image: "nvcr.io/nvcf/llm-worker:test"},
 				{Name: "inference", Image: "nvcr.io/customer/inference:test"},
@@ -116,12 +121,17 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 	assert.Equal(t, []corev1.LocalObjectReference{{Name: "worker-image-pull-secret"}}, podSpec.ImagePullSecrets)
 	assert.NotNil(t, findWorkloadVolume(podSpec, "nvcf-transport-trust-bundle"))
 	assert.NotNil(t, findWorkloadVolume(podSpec, "nvcf-trust-merged-certs"))
-	assert.NotNil(t, findWorkloadInitContainer(podSpec, "nvcf-trust-bundle-install"))
+	installer := findWorkloadInitContainer(podSpec, "nvcf-trust-bundle-install")
+	require.NotNil(t, installer)
+	assert.Equal(t, "nvcr.io/nvcf-core/nvcf_worker_init:v3.1", installer.Image)
+	assert.Equal(t, corev1.PullAlways, installer.ImagePullPolicy)
 	llmWorker := findWorkloadContainer(podSpec, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
-	assert.Equal(t, "/etc/ssl/certs/ca-certificates.crt",
+	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt",
 		findWorkloadEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
-	assert.NotNil(t, findWorkloadVolumeMount(llmWorker, "nvcf-trust-merged-certs"))
+	mount := findWorkloadVolumeMount(llmWorker, "nvcf-trust-merged-certs")
+	require.NotNil(t, mount)
+	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
 
 	for _, name := range []string{"inference", "smb-server"} {
 		container := findWorkloadContainer(podSpec, name)
@@ -148,7 +158,6 @@ func TestPrepareTransportTLSForWorkloadsKeepsOwnerRefForSameNamespaceConfigMap(t
 		TrustBundleKey:           "nvcf-ca-bundle.pem",
 		TrustBundleFingerprint:   testTransportTLSRootFingerprint,
 		TrustBundlePEM:           testTransportTLSRootCertPEM,
-		InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 	})
 
 	err := r.prepareTransportTLSForWorkloads(ctx, ms, []client.Object{newTransportTLSPod()})
@@ -197,7 +206,6 @@ func TestPrepareTransportTLSForWorkloadsNormalizesExistingControllerOwnerRef(t *
 		TrustBundleKey:           "nvcf-ca-bundle.pem",
 		TrustBundleFingerprint:   testTransportTLSRootFingerprint,
 		TrustBundlePEM:           testTransportTLSRootCertPEM,
-		InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 	})
 
 	err := r.prepareTransportTLSForWorkloads(ctx, ms, []client.Object{newTransportTLSPod()})
@@ -241,7 +249,6 @@ func TestPrepareTransportTLSForWorkloadsDropsCrossNamespaceOwnerRefFromExistingC
 		TrustBundleKey:           "nvcf-ca-bundle.pem",
 		TrustBundleFingerprint:   testTransportTLSRootFingerprint,
 		TrustBundlePEM:           testTransportTLSRootCertPEM,
-		InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 	})
 
 	err := r.prepareTransportTLSForWorkloads(ctx, ms, []client.Object{newTransportTLSPod()})
@@ -302,7 +309,6 @@ func TestPrepareTransportTLSForWorkloadsReturnsTerminalErrorForInvalidConfig(t *
 				TrustBundleKey:           "nvcf-ca-bundle.pem",
 				TrustBundleFingerprint:   testTransportTLSRootFingerprint,
 				TrustBundlePEM:           testTransportTLSRootCertPEM,
-				InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 			}
 			tt.mutateCfg(&cfg)
 			crClient, _ := newFakeClient(mgrScheme, ms)
@@ -312,6 +318,53 @@ func TestPrepareTransportTLSForWorkloadsReturnsTerminalErrorForInvalidConfig(t *
 
 			require.Error(t, err)
 			assert.True(t, errors.Is(err, reconcile.TerminalError(nil)), "invalid static transport TLS config should fail terminally")
+		})
+	}
+}
+
+func TestPrepareTransportTLSForWorkloadsReturnsTerminalErrorWithoutRegularInitImage(t *testing.T) {
+	tests := []struct {
+		name           string
+		initContainers []corev1.Container
+	}{
+		{
+			name: "missing init container",
+		},
+		{
+			name: "empty init image",
+			initContainers: []corev1.Container{{
+				Name: "init",
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			ms := &nvcav1alpha1.MiniService{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "llm-miniservice",
+					Namespace: "worker-ns",
+					UID:       k8stypes.UID("llm-miniservice-uid"),
+				},
+				Spec: nvcav1alpha1.MiniServiceSpec{Namespace: "worker-ns"},
+			}
+			crClient, _ := newFakeClient(mgrScheme, ms)
+			pod := newTransportTLSPod()
+			pod.Spec.InitContainers = tt.initContainers
+			r := newTransportTLSReconciler(crClient, nvcaconfig.TransportTLSConfig{
+				TrustMode:                nvcaconfig.TrustModeBundle,
+				TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+				TrustBundleKey:           "nvcf-ca-bundle.pem",
+				TrustBundleFingerprint:   testTransportTLSRootFingerprint,
+				TrustBundlePEM:           testTransportTLSRootCertPEM,
+			})
+
+			err := r.prepareTransportTLSForWorkloads(ctx, ms, []client.Object{pod})
+
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, reconcile.TerminalError(nil)))
+			assert.Contains(t, err.Error(), `regular init container "init"`)
 		})
 	}
 }
@@ -402,7 +455,6 @@ func TestPrepareTransportTLSForWorkloadsKeepsConfigMapAPIErrorsRetryable(t *test
 				TrustBundleKey:           "nvcf-ca-bundle.pem",
 				TrustBundleFingerprint:   testTransportTLSRootFingerprint,
 				TrustBundlePEM:           testTransportTLSRootCertPEM,
-				InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 			})
 
 			err := r.prepareTransportTLSForWorkloads(ctx, ms, []client.Object{newTransportTLSPod()})
@@ -429,6 +481,11 @@ func newTransportTLSPod() *corev1.Pod {
 		ObjectMeta: metav1.ObjectMeta{Name: "llm-workload"},
 		Spec: corev1.PodSpec{
 			ImagePullSecrets: []corev1.LocalObjectReference{{Name: "worker-image-pull-secret"}},
+			InitContainers: []corev1.Container{{
+				Name:            "init",
+				Image:           "nvcr.io/nvcf-core/nvcf_worker_init:v3.1",
+				ImagePullPolicy: corev1.PullIfNotPresent,
+			}},
 			Containers: []corev1.Container{
 				{Name: function.LLMWorkerContainerName, Image: "nvcr.io/nvcf/llm-worker:test"},
 				{Name: "inference", Image: "nvcr.io/customer/inference:test"},
