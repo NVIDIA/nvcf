@@ -39,7 +39,7 @@ OCI_REGISTRY_NAMESPACE ?= 0651155215864979/ncp-dev
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: deploy delete status lint template
+.PHONY: install uninstall status lint template validate clean package push-oci
 
 install:
 ifndef values

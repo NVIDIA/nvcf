@@ -490,20 +490,22 @@ class GithubReleaseTest(unittest.TestCase):
             self.assertIn("deploy/helm/ess/v0.0.0", self._tags(root))
 
     def test_initial_version_anchor_honors_metadata(self):
+        metadata = json.loads(
+            Path(__file__).with_name("github-release-subprojects.json").read_text()
+        )
+        service = self.github_release.find_service(metadata, "ess-helm")
+        expected_tag = self.github_release.tag_for_version(service, service["initial_version"])
+        default_floor_tag = self.github_release.tag_for_version(
+            service, self.github_release.INITIAL_RELEASE_FLOOR_VERSION
+        )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._make_service_repo(root)
-            service = {
-                "id": "ess-helm",
-                "path": "deploy/helm/ess",
-                "service_name": "helm-nvcf-ess-api",
-                "initial_version": "0.58.5",
-            }
             with chdir(root), contextlib.redirect_stdout(io.StringIO()):
                 self.github_release.synthesize_initial_version_anchor(root, service)
             tags = self._tags(root)
-            self.assertIn("deploy/helm/ess/v0.58.5", tags)
-            self.assertNotIn("deploy/helm/ess/v0.0.0", tags)
+            self.assertIn(expected_tag, tags)
+            self.assertNotIn(default_floor_tag, tags)
 
     def test_initial_version_anchor_rejects_bad_semver(self):
         service = {

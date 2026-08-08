@@ -32,7 +32,7 @@ Install the chart with the default values plus your own overrides:
 
 ```bash
 helm install ess-api ess-api \
-  --namespace ess-api \
+  --namespace ess \
   --create-namespace \
   --values ess-api/values.yaml \
   --values path/to/values.yaml \
@@ -44,7 +44,7 @@ Upgrade an existing release:
 
 ```bash
 helm upgrade ess-api ess-api \
-  --namespace ess-api \
+  --namespace ess \
   --values ess-api/values.yaml \
   --values path/to/values.yaml \
   --wait \
@@ -54,7 +54,7 @@ helm upgrade ess-api ess-api \
 Uninstall the release:
 
 ```bash
-helm uninstall ess-api --namespace ess-api
+helm uninstall ess-api --namespace ess
 ```
 
 ## Configuration
@@ -104,7 +104,7 @@ Notes:
 
 ### Scaling behavior
 
-The chart does not set a custom `behavior` block, so Kubernetes defaults apply. The timings below are typical Kubernetes defaults, not guaranteed; actual response varies with the controller sync period, metrics collection interval, and pod readiness delays:
+The chart does not set a custom `behavior` block, so Kubernetes defaults apply. The timings below are typical Kubernetes defaults, not guaranteed; actual response varies with the Kubernetes version, controller and cluster configuration, metrics collection interval, and pod readiness delays:
 
 - Scale-up is fast: the controller typically reacts within one sync interval (~15s by default) with no stabilization delay.
 - Scale-down is conservative: it typically requires sustained low utilization across the default 5-minute stabilization window before reducing replicas.

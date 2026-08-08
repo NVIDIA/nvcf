@@ -93,7 +93,7 @@ spec:
             - name: SPRING_PROFILES_ACTIVE
               value: "{{ .Values.ess.configuration.springProfile }}"
             - name: JAVA_TOOL_OPTIONS
-              value: "-Dapp.version={{ .Values.ess.image.tag }} {{ default "" .Values.ess.additionalJavaOpts }}"
+              value: "-Dapp.version={{ .Values.ess.image.tag }} {{ default "" .Values.ess.configuration.additionalJavaOpts }}"
           {{ if .Values.ess.env }}
           envFrom:
             - configMapRef:
