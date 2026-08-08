@@ -274,7 +274,7 @@ class GrpcWorkerArtifactServiceIntegrationTest extends BaseFunctionInvocationTes
 
                     @Override
                     public void onError(Throwable t) {
-                        log.error("Stream error: ", t);
+                        log.error("Stream error: '{}'", t.getMessage());
                         latch.countDown();
                     }
 

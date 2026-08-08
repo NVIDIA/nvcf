@@ -165,6 +165,9 @@ logging:
     com.nvidia.nvcf.service.account: ERROR
     com.nvidia.nvcf.service.registry: ERROR
     com.nvidia.nvcf.configuration: INFO
+    com.nvidia.nvcf.service.ratelimit.BucketRateLimiter: INFO
+    com.nvidia.nvcf.service.apikeys.ApiKeysService: INFO
+    com.nvidia.nvcf.rest.function.invocation.TestInvokeService: INFO
     # Default org.springframework.web: DEBUG would log full MethodArgumentNotValidException text
     # (including multi‑KB rejected values) from ExceptionHandlerExceptionResolver.
     org.springframework.web.servlet.mvc.method.annotation.ExceptionHandlerExceptionResolver: INFO
@@ -173,6 +176,7 @@ logging:
     # HttpLogging at DEBUG logs request/response bodies (same risk as RestTemplate for tests using testRestTemplate).
     org.springframework.web.HttpLogging: INFO
     org.springframework.web: DEBUG
+    org.springframework.web.reactive.function.client.ExchangeFunctions: INFO
     org.springframework.data.cassandra.core.cql.CqlTemplate: INFO
     org.springframework.data.cassandra.core.cql.ReactiveCqlTemplate: INFO
     com.github.tomakehurst.wiremock: DEBUG

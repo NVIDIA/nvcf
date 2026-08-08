@@ -245,17 +245,26 @@ public class InstanceManagementTask {
                 int currentInstancesCount = (int) instances.stream()
                         .filter(InstanceManagementTask::isStartingOrRunning)
                         .count();
+                int currentActiveInstancesCount = (int) instances.stream()
+                        .filter(InstanceManagementTask::isRunning)
+                        .count();
 
                 if (currentInstancesCount < gpuSpec.getMinInstances()) {
-                    // need to allocate instances
+                    // Allocate instances
                     int instancesToSchedule = gpuSpec.getMinInstances() - currentInstancesCount;
                     icmsAllocatorService.scheduleNewInstance(
                             function, deployment.getDeploymentId(), gpuSpec, instancesToSchedule);
-                } else if (currentInstancesCount > gpuSpec.getMaxInstances()) {
-                    // need to cancel instances
-                    var deleteCount = currentInstancesCount - gpuSpec.getMaxInstances();
+                } else if (currentActiveInstancesCount > gpuSpec.getMaxInstances()) {
+                    // Delete only RUNNING(active) instances with stable IDs. Excluding pending
+                    // instances prevents rollover process from deleting active instances. This
+                    // is because instances with no instance-ids are filtered out when trying to
+                    // construct the list of instance-ids to send to ICMS for termination. And,
+                    // we inadvertently include the instance-ids of active instances in the list
+                    // that causes complete downtime for functions with min=max=N till all the
+                    // pending instances become active.
+                    var deleteCount = currentActiveInstancesCount - gpuSpec.getMaxInstances();
                     var deletableInstances = instances.stream()
-                            .filter(InstanceManagementTask::isStartingOrRunning)
+                            .filter(InstanceManagementTask::isRunning)
                             .collect(toSet());
 
                     log.warn(MESG_EXCEEDED_MAX_INSTANCE_COUNT,

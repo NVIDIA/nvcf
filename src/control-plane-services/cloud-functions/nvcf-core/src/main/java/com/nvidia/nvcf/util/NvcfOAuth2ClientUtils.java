@@ -364,7 +364,8 @@ public final class NvcfOAuth2ClientUtils {
                 disposeMono.block(BLOCK_TIMEOUT);
                 log.info(MESG_DISPOSED_CLEANLY.formatted(kind, name));
             } catch (Exception ex) {
-                log.warn(MESG_DISPOSE_TIMED_OUT.formatted(kind, name, BLOCK_TIMEOUT), ex);
+                var mesg = MESG_DISPOSE_TIMED_OUT.formatted(kind, name, BLOCK_TIMEOUT) + " - '{}'";
+                log.warn(mesg, ex.getMessage());
             }
         }
     }

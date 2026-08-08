@@ -704,7 +704,9 @@ class InstanceManagementTaskTest {
     }
 
     Stream<Arguments> allocateOrTerminateArgs() {
-        // Deployment has two gpu specs with min/max = [2, 5]
+        // Deployment has two gpu specs with min/max = [2, 5]. Allocation counts both RUNNING
+        // and STARTING instances; termination counts only RUNNING instances so that pending
+        // instances without stable instance IDs are never deleted.
         // InstanceCount order: RUNNING, STARTING, SHUTTING_DOWN, TERMINATED
         // Arguments order: gpu1InstanceCounts, expectedGpu1Create, expectedGpu1Delete,
         // gpu2InstanceCounts, expectedGpu2Create, expectedGpu2Delete
@@ -717,16 +719,18 @@ class InstanceManagementTaskTest {
                 Arguments.of(List.of(2, 1, 1, 3), 0, 0, List.of(0, 1, 3, 3), 1, 0),
                 // 4. Should create 1 in gpu1 and 2 in gpu2
                 Arguments.of(List.of(0, 1, 1, 3), 1, 0, List.of(0, 0, 3, 3), 2, 0),
-                // 5. Should terminate 1 in gpu1 only
-                Arguments.of(List.of(3, 3, 1, 3), 0, 1, List.of(1, 2, 3, 3), 0, 0),
-                // 6. Should terminate 2 in gpu2 only
-                Arguments.of(List.of(3, 1, 1, 3), 0, 0, List.of(5, 2, 3, 3), 0, 2),
-                // 7. Should terminate 1 in gpu1 and 2 in gpu2
-                Arguments.of(List.of(3, 3, 1, 3), 0, 1, List.of(5, 2, 3, 3), 0, 2),
-                // 8. Should terminate 1 in gpu1 and create 2 in gpu2
-                Arguments.of(List.of(3, 3, 1, 3), 0, 1, List.of(0, 0, 3, 3), 2, 0),
-                // 9. Should create 1 in gpu1 and terminate 2 in gpu2
-                Arguments.of(List.of(0, 1, 1, 3), 1, 0, List.of(2, 5, 3, 3), 0, 2)
+                // 5. Do not terminate gpu1: only 3 instances are RUNNING.
+                Arguments.of(List.of(3, 3, 1, 3), 0, 0, List.of(1, 2, 3, 3), 0, 0),
+                // 6. Do not terminate gpu2: only 5 instances are RUNNING.
+                Arguments.of(List.of(3, 1, 1, 3), 0, 0, List.of(5, 2, 3, 3), 0, 0),
+                // 7. Do not terminate either GPU spec when their excess instances are STARTING.
+                Arguments.of(List.of(3, 3, 1, 3), 0, 0, List.of(5, 2, 3, 3), 0, 0),
+                // 8. Do not terminate gpu1; create 2 instances in gpu2.
+                Arguments.of(List.of(3, 3, 1, 3), 0, 0, List.of(0, 0, 3, 3), 2, 0),
+                // 9. Create 1 in gpu1; do not terminate gpu2's STARTING instances.
+                Arguments.of(List.of(0, 1, 1, 3), 1, 0, List.of(2, 5, 3, 3), 0, 0),
+                // 10. Terminate only the excess RUNNING instance in gpu1.
+                Arguments.of(List.of(6, 0, 0, 0), 0, 1, List.of(2, 1, 0, 0), 0, 0)
         );
     }
 

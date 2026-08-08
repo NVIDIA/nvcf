@@ -108,7 +108,8 @@ public class RegistryArtifactValidationService {
                     ArtifactTypeEnum.CONTAINER));
         } catch (NotFoundException | UnauthorizedException | ForbiddenException |
                  BadRequestException | TooManyRequestsException e) {
-            log.error(MESG_ARTIFACT_INVALID.formatted(functionId), e);
+            var mesg = MESG_ARTIFACT_INVALID.formatted(functionId) + " - '{}'";
+            log.error(mesg, e.getMessage());
             if (exceptionHandlingDuringArtifactValidation.equals("throw")) {
                 throw e;
             } else {

@@ -93,7 +93,7 @@ public class FunctionMapperService {
     private static final String MESG_LLM_CONFIG_VERSION_UNSUPPORTED =
             "Unsupported llm_config storage version: %d";
     private static final String MESG_LLM_CONFIG_DESERIALIZE_FAILED =
-            "Failed to deserialize function llm_config";
+            "Failed to deserialize function llm_config - '{}'";
     // Schema version stamped on the stored llm_config JSON. Storage-internal: it is not a member
     // of the typed DTO, so it never reaches the API or the client.
     private static final int LLM_CONFIG_VERSION = 1;
@@ -372,7 +372,7 @@ public class FunctionMapperService {
             }
             return jsonMapper.treeToValue(root, LlmInvocationConfigDto.class);
         } catch (JacksonException exception) {
-            log.error(MESG_LLM_CONFIG_DESERIALIZE_FAILED, exception);
+            log.error(MESG_LLM_CONFIG_DESERIALIZE_FAILED, exception.getMessage());
             throw new IllegalStateException(MESG_LLM_CONFIG_DESERIALIZE_FAILED, exception);
         }
     }
