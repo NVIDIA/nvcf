@@ -303,11 +303,12 @@ path-format tag, for example
 same commit for another service, the helper refuses to overwrite it so
 the notes ref can be merged manually.
 
-## Seeding the first version for a new service or chart
+## Seeding and pinning service or chart versions
 
-A newly registered service or chart has no release tags, so
-semantic-release has no version to bump from. Seed a starting point once,
-then let automation take over.
+Release automation bumps from the highest existing tag, so every line
+needs a starting point. This section covers seeding the first version for
+a new service or chart and pinning a new floor for a line that already
+has tags.
 
 ### 1. Register the service
 
@@ -326,33 +327,55 @@ file, when possible. Each entry provides:
   release-neutral commits produce no release. An empty string is
   rejected; either omit the field or give a valid SemVer.
 
+For example, the `ess-helm` chart is registered with an
+`initial_version` floor so it continues the upstream chart version line:
+
+```json
+{
+  "id": "ess-helm",
+  "path": "deploy/helm/ess",
+  "service_name": "helm-nvcf-ess-api",
+  "initial_version": "1.7.0"
+}
+```
+
 Run the registry tests:
 
 ```bash
 python3 tools/ci/test-github-release.py
 ```
 
-### 2. Choose how to seed the first tag
+### 2. Set the version
 
-Approach A: let automation synthesize the floor.
+Pick the case that matches your situation.
 
-When a registered service has no tags, `./tools/ci/github-release auto`
-synthesizes a local floor anchor from `initial_version` (or `0.0.0`) and
-cuts the first release as the next bump after it. The floor itself is a
-local computation baseline: it is not published, so no tag for the floor
-version appears on the remote. The first published tag is the next bump,
-for example `0.1.0` from a `0.0.0` floor, or `1.7.1`/`1.8.0` from a
-`1.7.0` floor. Preview locally:
+#### Case 1: new service or chart, seed with initial_version (automatic)
 
-```bash
-./tools/ci/github-release auto --service <id>
-```
+Use this for a brand-new line with no tags when you want it to start
+above `0.0.0`. Set `initial_version` to the desired floor in the
+registration; omit it, or use `0.0.0`, to start at the default.
+`initial_version` only takes effect while the service has no tags; once
+any tag exists it is ignored (see Case 3).
 
-Approach B: anchor a specific version explicitly.
+Then just commit the registration. On the next `main` push,
+`./tools/ci/github-release auto` synthesizes the floor locally and cuts
+the next bump. The floor is a local computation baseline and is not
+published, so no tag for the floor version appears on the remote. The
+first published tag is the next bump: for example `1.7.1` (fix) or
+`1.8.0` (feat) from a `1.7.0` floor, or `0.1.0` (feat) / `0.0.1` (fix)
+from a `0.0.0` floor.
 
-Use this when the seeded version should exist on the remote and be
-recorded as already released. It writes both the path-format tag and the
-`refs/notes/semantic-release` note:
+`ess-helm` uses this case. It is registered with `initial_version:
+1.7.0`, so the first published chart release is `1.7.1` or `1.8.0` and no
+`1.7.0` tag is created.
+
+#### Case 2: new service or chart, seed manually on the command line
+
+Use this when the seeded version itself should exist on the remote and be
+recorded as already released, for example to publish an explicit `1.7.0`
+tag. The `anchor` command takes the version as an argument, so
+`initial_version` is not used in this case. It writes both the
+path-format tag and the `refs/notes/semantic-release` note:
 
 ```bash
 # preview
@@ -361,32 +384,35 @@ recorded as already released. It writes both the path-format tag and the
 ./tools/ci/github-release anchor --service <id> --version <X.Y.Z> --ref <commit> --push
 ```
 
-`--ref` is the commit the tag lands on and defaults to `HEAD`. It is
-usually the commit that created or imported the service.
+`--ref` is the commit the tag lands on and defaults to `HEAD`, usually
+the commit that created or imported the service. For `ess-helm` that
+would be:
 
-### 3. Special case: the anchor commit was already released
+```bash
+./tools/ci/github-release anchor --service ess-helm --version 1.7.0 --ref <chart-import-commit> --push
+```
 
-`anchor` refuses to run when the target commit already carries a
-`refs/notes/semantic-release` note, because it will not overwrite an
-existing note. This happens when you seed a new version on a commit that
-a previous version already released.
+The next release then bumps from the anchored version.
 
-In that case skip `anchor` and push a plain floor tag. semantic-release
-and `latest_service_tag` derive the baseline from tag names, so the
-highest tag wins while the existing note keeps the commit marked as
-released:
+#### Case 3: service or chart already has tags, pin a new version
+
+Use this when the line already has release tags and you want to move the
+floor to a specific version, for example to match a new upstream product
+version. `initial_version` is ignored once tags exist, and `anchor`
+refuses to run when the target commit already carries a
+`refs/notes/semantic-release` note. Pin the version by pushing a plain
+floor tag. semantic-release and `latest_service_tag` derive the baseline
+from tag names, so the highest tag wins while the existing note keeps the
+commit marked as released:
 
 ```bash
 git tag <path>/v<X.Y.Z> <commit>
 git push origin refs/tags/<path>/v<X.Y.Z>
 ```
 
-### Worked examples
-
-The `ess` service already had `v0.0.0`, `v0.1.0`, and `v0.2.0` on the
-same commit, and that commit carried a semantic-release note. To realign
-it to the upstream product version, a plain floor tag was pushed on that
-commit:
+`ess` used this case. It already had `v0.0.0`, `v0.1.0`, and `v0.2.0` on
+a commit that carried a semantic-release note, so a plain floor tag was
+pushed to realign it to the upstream product version:
 
 ```bash
 git tag src/control-plane-services/ess/v0.4.9 <commit>
@@ -396,17 +422,7 @@ git push origin refs/tags/src/control-plane-services/ess/v0.4.9
 The next `ess` release computes from `0.4.9`: `0.5.0` for a `feat`,
 `0.4.10` for a `fix`. The `0.3.x` to `0.4.8` gap is intended.
 
-The `ess-helm` chart is a new line with no tags, registered with
-`initial_version: 1.7.0` to continue the upstream chart version. With
-Approach A, `auto` uses `1.7.0` as the floor and the next chart release
-is `1.7.1` or `1.8.0`; no `1.7.0` tag is published. To publish an
-explicit `1.7.0` tag instead, use Approach B:
-
-```bash
-./tools/ci/github-release anchor --service ess-helm --version 1.7.0 --ref <chart-import-commit> --push
-```
-
-### 4. Verify
+### 3. Verify
 
 ```bash
 git ls-remote --tags origin '<path>/*'
