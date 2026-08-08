@@ -104,10 +104,10 @@ Notes:
 
 ### Scaling behavior
 
-The chart does not set a custom `behavior` block, so Kubernetes defaults apply:
+The chart does not set a custom `behavior` block, so Kubernetes defaults apply. The timings below are typical Kubernetes defaults, not guaranteed; actual response varies with the controller sync period, metrics collection interval, and pod readiness delays:
 
-- Scale up is fast: the controller reacts within one sync interval (~15s) with no stabilization delay.
-- Scale down is conservative: it requires sustained low utilization across the default 5-minute stabilization window before reducing replicas.
+- Scale-up is fast: the controller typically reacts within one sync interval (~15s by default) with no stabilization delay.
+- Scale-down is conservative: it typically requires sustained low utilization across the default 5-minute stabilization window before reducing replicas.
 - When both CPU and memory metrics are configured, the controller computes a desired replica count per metric and uses the higher one. Consequently it will only scale down when *both* metrics are below their targets.
 
 ### Caveat: memory is a poor autoscaling signal
@@ -123,10 +123,12 @@ If you must autoscale on memory, set `-Xmx` and the container memory request/lim
 
 ### Verifying
 
+The HPA name is derived from the chart's fullname and depends on the release name and any name overrides, so look it up first, then describe it by name:
+
 ```bash
 kubectl get hpa -n <namespace>
-kubectl describe hpa <release>-helm-nvcf-ess-api -n <namespace>   # current vs target metrics + scaling events
-kubectl get hpa -n <namespace> -w                                  # watch scaling decisions live
+kubectl describe hpa <hpa-name> -n <namespace>   # use the NAME shown above; current vs target metrics + scaling events
+kubectl get hpa -n <namespace> -w                # watch scaling decisions live
 ```
 
 ## Notes
