@@ -305,10 +305,11 @@ the notes ref can be merged manually.
 
 ## Seeding and pinning service or chart versions
 
-Release automation bumps from the highest existing tag, so every line
-needs a starting point. This section covers seeding the first version for
-a new service or chart and pinning a new floor for a line that already
-has tags.
+Release automation computes the next version by bumping the highest
+existing release tag for a service. A new service or chart has no tags
+yet, so there is nothing to bump from until you seed one. This section
+explains how to seed that first tag, and how to pin a new floor on a line
+that already has tags.
 
 ### 1. Register the service
 
