@@ -105,6 +105,4 @@ push-oci:
 	fi
 	@helm push ./packaged-charts/$(CHART_NAME)-$(CHART_VERSION).tgz oci://$(OCI_REGISTRY_HOST)/$(OCI_REGISTRY_NAMESPACE)
 	@echo "[push-oci] Successfully pushed chart to OCI registry."
-	@echo "[push-oci] Cleaning up temporary package directory..."
-	@rm -rf ./packaged-charts
-	@echo "[push-oci] Cleanup complete."
+	@echo "[push-oci] Preserved packaged chart at ./packaged-charts/$(CHART_NAME)-$(CHART_VERSION).tgz (run 'make clean' to remove)."
