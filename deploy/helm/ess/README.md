@@ -66,8 +66,7 @@ Important settings to review before deployment:
 - `ess.image.*` for the ESS API container image
 - `ess.imagePullSecrets` for private registry access
 - `ess.replicaCount`, resource requests, and limits for your environment
-- `ess.config.*` for Cassandra contact points, datacenter, and authentication settings
-- `ess.vault.*` for JWT authentication path, role, and audience values used by the Vault Agent injector
+- `ess.configuration.*` for the Spring profile (`springProfile`) and additional Java options (`additionalJavaOpts`)
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
 
