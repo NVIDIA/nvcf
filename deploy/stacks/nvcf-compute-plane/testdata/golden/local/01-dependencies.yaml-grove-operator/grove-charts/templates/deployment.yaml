@@ -106,7 +106,7 @@ spec:
                         apiVersion: v1
         - name: operator-config
           configMap:
-            name: grove-operator-cm-b77904eb
+            name: grove-operator-cm-58969b77
         - name: grove-webhook-server-cert
           # Mount the Secret volume containing webhook certificates
           secret:

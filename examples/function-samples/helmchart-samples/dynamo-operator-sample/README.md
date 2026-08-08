@@ -1,17 +1,29 @@
 # Dynamo Operator on NVCA self-hosted demo
 
-This demo uses and modifies [this upstream example disaggregated router DGD](https://github.com/ai-dynamo/dynamo/blob/v1.0.2/examples/backends/vllm/deploy/disagg_router.yaml).
+This demo adapts an
+[upstream disaggregated router example](https://github.com/ai-dynamo/dynamo/blob/v1.0.2/examples/backends/vllm/deploy/disagg_router.yaml)
+for an NVCF Helm function. Dynamo uses Grove and KAI Scheduler to orchestrate
+and place the workload. See
+[Gang Scheduling](../../../../docs/user/cluster-management/gang-scheduling.md)
+and
+[Topology-Aware Scheduling](../../../../docs/user/cluster-management/topology-aware-scheduling.md)
+for the production compute plane configuration.
 
 ## Prerequisites
 
-* An NVCF self-hosted Kubernetes cluster with Dynamo Operator installed (see [the local Dynamo Operator install guide](../../../../tools/ncp-local-cluster/docs/dynamo-operator.md) for local cluster testing).
-* A HuggingFace [token](https://huggingface.co/docs/hub/en/security-tokens), if using the default model [Qwen/Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) used in the example Helm chart
+- An NVCF self-hosted Kubernetes cluster with the Dynamo, Grove, and KAI
+  Scheduler add-ons installed. For local cluster testing, see the
+  [local Dynamo Operator guide](../../../../tools/ncp-local-cluster/docs/dynamo-operator.md).
+- A Hugging Face [token](https://huggingface.co/docs/hub/en/security-tokens)
+  when using the example Helm chart's default
+  [Qwen/Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) model.
 
 ## Deploying your Dynamo chart
 
 1. Package the chart and push it to an OCI registry your cluster can reach, then register pull credentials with `nvcf-cli`:
 
-    **Note:** ensure your DGD name is <= 24 characters long, otherwise the generated object names will be too long for Kubernetes to handle
+    Note: Keep the DGD name at 24 characters or fewer so generated Kubernetes
+    object names remain valid.
 
     ```console
     $ helm package dynamo-operator-test
@@ -26,7 +38,8 @@ This demo uses and modifies [this upstream example disaggregated router DGD](htt
 
 1. Create the function, using the below payload as an example, substituting in your Helm chart's values
 
-    **Note:** the `helmChartServiceName` field must contain a string of the format `<DGD name>-frontend`. In this example, the DGD is named `myllm`, so the service name generated is `myllm-frontend`.
+    Note: Set `helmChartServiceName` to `<DGD name>-frontend`. This example
+    names the DGD `myllm`, so the generated service is `myllm-frontend`.
 
     ```console
     $ cat <<EOF > function-create.json
