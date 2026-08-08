@@ -23,6 +23,12 @@ values := $(helm_dir)/values.yaml
 # Example: make deploy values=my-values.yaml additional_values=override.yaml
 additional_values ?= 
 
+# Values used only for local lint/template/validate rendering. The chart requires
+# image.registry/repository, which the default values.yaml leaves empty, so point
+# at the CI validation values by default. Matches the documented helm commands in
+# AGENTS.md. Deployment targets keep using $(values).
+validation_values ?= ../../../tools/ci/helm-validate-values/ess.yaml
+
 # OCI Registry details
 OCI_REGISTRY_HOST ?= nvcr.io
 OCI_REGISTRY_NAMESPACE ?= 0651155215864979/ncp-dev
@@ -62,7 +68,7 @@ status:
 lint:
 	@echo "Linting chart $(helm_dir)..."
 	helm lint $(helm_dir) \
-		$(if $(values),--values $(values),) \
+		$(if $(validation_values),--values $(validation_values),) \
 		$(if $(additional_values),--values $(additional_values),)
 
 template:
@@ -70,7 +76,7 @@ template:
 	@mkdir -p bin
 	helm template $(release) $(helm_dir) \
 		--namespace $(namespace) \
-		$(if $(values),--values $(values),) \
+		$(if $(validation_values),--values $(validation_values),) \
 		$(if $(additional_values),--values $(additional_values),) \
 		> bin/manifest.yaml
 	@echo "Rendered manifest to bin/manifest.yaml"
