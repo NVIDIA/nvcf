@@ -321,8 +321,10 @@ file, when possible. Each entry provides:
   `<path>/v<X.Y.Z>`
 - `service_name`: release or package name
 - `initial_version`: optional SemVer floor to start the line from. Omit
-  it to start at `0.0.0`, where the first release is `0.1.0`. An empty
-  string is rejected; either omit the field or give a valid SemVer.
+  it to start from a `0.0.0` floor, where the next version depends on the
+  commit type: a `feat` yields `0.1.0`, a `fix` yields `0.0.1`, and
+  release-neutral commits produce no release. An empty string is
+  rejected; either omit the field or give a valid SemVer.
 
 Run the registry tests:
 
@@ -410,8 +412,13 @@ explicit `1.7.0` tag instead, use Approach B:
 git ls-remote --tags origin '<path>/*'
 ```
 
+Git matches this pattern on slash boundaries, so `<path>/*` lists
+exactly the version tags under that service path.
+
 Seeding tags only establishes the version floor. Nothing publishes a
 GitHub Release until `NVCF_GITHUB_AUTO_TAGGING_ENABLED=true` and
 `NVCF_GITHUB_RELEASE_DRY_RUN=false`, as described in the dry-run gate
-above. A tag push does start the tag workflow, but it stays inert while
-the dry-run gate is on.
+above. A tag pushed with the `NV_GITHUB_TOKEN` secret, or another
+workflow-capable token, starts the tag workflow, but it stays inert
+while the dry-run gate is on. Tags pushed with the default
+`GITHUB_TOKEN` do not trigger the follow-up workflow.
