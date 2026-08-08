@@ -79,6 +79,8 @@ release metadata:
 - service id
 - service subtree path
 - service tag format
+- optional initial version floor for a service or chart that has no tags
+  yet
 - legacy service tag prefix, when a release line still needs old-tag
   compatibility
 - version-file hints for services that do not use semantic-release
@@ -300,3 +302,116 @@ path-format tag, for example
 `<service>-v` tags. If a semantic-release note already exists on the
 same commit for another service, the helper refuses to overwrite it so
 the notes ref can be merged manually.
+
+## Seeding the first version for a new service or chart
+
+A newly registered service or chart has no release tags, so
+semantic-release has no version to bump from. Seed a starting point once,
+then let automation take over.
+
+### 1. Register the service
+
+Register the service in the metadata that produces
+`tools/ci/github-release-subprojects.json`. The public snapshot is
+generated from the internal source; edit the source, not the generated
+file, when possible. Each entry provides:
+
+- `id`: short service id
+- `path`: repo-relative subtree path, which also drives the tag format
+  `<path>/v<X.Y.Z>`
+- `service_name`: release or package name
+- `initial_version`: optional SemVer floor to start the line from. Omit
+  it to start at `0.0.0`, where the first release is `0.1.0`. An empty
+  string is rejected; either omit the field or give a valid SemVer.
+
+Run the registry tests:
+
+```bash
+python3 tools/ci/test-github-release.py
+```
+
+### 2. Choose how to seed the first tag
+
+Approach A: let automation synthesize the floor.
+
+When a registered service has no tags, `./tools/ci/github-release auto`
+synthesizes a local floor anchor from `initial_version` (or `0.0.0`) and
+cuts the first release as the next bump after it. The floor itself is a
+local computation baseline: it is not published, so no tag for the floor
+version appears on the remote. The first published tag is the next bump,
+for example `0.1.0` from a `0.0.0` floor, or `1.7.1`/`1.8.0` from a
+`1.7.0` floor. Preview locally:
+
+```bash
+./tools/ci/github-release auto --service <id>
+```
+
+Approach B: anchor a specific version explicitly.
+
+Use this when the seeded version should exist on the remote and be
+recorded as already released. It writes both the path-format tag and the
+`refs/notes/semantic-release` note:
+
+```bash
+# preview
+./tools/ci/github-release anchor --service <id> --version <X.Y.Z> --ref <commit> --dry-run
+# create and push the tag and note
+./tools/ci/github-release anchor --service <id> --version <X.Y.Z> --ref <commit> --push
+```
+
+`--ref` is the commit the tag lands on and defaults to `HEAD`. It is
+usually the commit that created or imported the service.
+
+### 3. Special case: the anchor commit was already released
+
+`anchor` refuses to run when the target commit already carries a
+`refs/notes/semantic-release` note, because it will not overwrite an
+existing note. This happens when you seed a new version on a commit that
+a previous version already released.
+
+In that case skip `anchor` and push a plain floor tag. semantic-release
+and `latest_service_tag` derive the baseline from tag names, so the
+highest tag wins while the existing note keeps the commit marked as
+released:
+
+```bash
+git tag <path>/v<X.Y.Z> <commit>
+git push origin refs/tags/<path>/v<X.Y.Z>
+```
+
+### Worked examples
+
+The `ess` service already had `v0.0.0`, `v0.1.0`, and `v0.2.0` on the
+same commit, and that commit carried a semantic-release note. To realign
+it to the upstream product version, a plain floor tag was pushed on that
+commit:
+
+```bash
+git tag src/control-plane-services/ess/v0.4.9 <commit>
+git push origin refs/tags/src/control-plane-services/ess/v0.4.9
+```
+
+The next `ess` release computes from `0.4.9`: `0.5.0` for a `feat`,
+`0.4.10` for a `fix`. The `0.3.x` to `0.4.8` gap is intended.
+
+The `ess-helm` chart is a new line with no tags, registered with
+`initial_version: 1.7.0` to continue the upstream chart version. With
+Approach A, `auto` uses `1.7.0` as the floor and the next chart release
+is `1.7.1` or `1.8.0`; no `1.7.0` tag is published. To publish an
+explicit `1.7.0` tag instead, use Approach B:
+
+```bash
+./tools/ci/github-release anchor --service ess-helm --version 1.7.0 --ref <chart-import-commit> --push
+```
+
+### 4. Verify
+
+```bash
+git ls-remote --tags origin '<path>/*'
+```
+
+Seeding tags only establishes the version floor. Nothing publishes a
+GitHub Release until `NVCF_GITHUB_AUTO_TAGGING_ENABLED=true` and
+`NVCF_GITHUB_RELEASE_DRY_RUN=false`, as described in the dry-run gate
+above. A tag push does start the tag workflow, but it stays inert while
+the dry-run gate is on.
