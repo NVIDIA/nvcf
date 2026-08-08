@@ -312,7 +312,10 @@ def synthesize_current_prefix_anchor(service):
 
 
 def initial_floor_version(service):
-    floor = str(service.get("initial_version") or INITIAL_RELEASE_FLOOR_VERSION).strip().lstrip("v")
+    raw = service.get("initial_version")
+    if raw is None:
+        raw = INITIAL_RELEASE_FLOOR_VERSION
+    floor = str(raw).strip().lstrip("v")
     if not re.fullmatch(SEMVER_PATTERN, floor):
         raise SystemExit(f"{service['id']}: unsupported initial_version {service.get('initial_version')!r}")
     return floor

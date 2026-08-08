@@ -515,6 +515,16 @@ class GithubReleaseTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.github_release.initial_floor_version(service)
 
+    def test_initial_version_anchor_rejects_empty_string(self):
+        service = {
+            "id": "ess-helm",
+            "path": "deploy/helm/ess",
+            "service_name": "helm-nvcf-ess-api",
+            "initial_version": "",
+        }
+        with self.assertRaises(SystemExit):
+            self.github_release.initial_floor_version(service)
+
     def test_nvca_branch_cut_uses_path_scoped_release_branch(self):
         service = {
             "id": "nvca",
