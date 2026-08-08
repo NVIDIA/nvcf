@@ -82,6 +82,7 @@ impl DiscoveryShard {
 enum InvocationMetricSource {
     InvocationService,
     GrpcProxy,
+    LlmGateway,
 }
 
 impl InvocationMetricSource {
@@ -89,6 +90,7 @@ impl InvocationMetricSource {
         match self {
             Self::InvocationService => "invocation_service",
             Self::GrpcProxy => "grpc_proxy",
+            Self::LlmGateway => "llm_gateway",
         }
     }
 
@@ -96,6 +98,7 @@ impl InvocationMetricSource {
         match self {
             Self::InvocationService => 0,
             Self::GrpcProxy => 1,
+            Self::LlmGateway => 2,
         }
     }
 }
@@ -182,6 +185,19 @@ fn get_timeseries_db_query(
     template.replace("{env_filter}", &selector)
 }
 
+fn llm_gateway_discovery_query(shard: DiscoveryShard) -> String {
+    let function_id_regex = shard.function_id_regex();
+    format!(
+        r#"(sum by(function_id) (
+            increase(llm_api_gateway_http_request_duration_seconds_sum{{function_id=~"{function_id_regex}", function_id!="none"}}[5m])
+        ) > 0)
+        * on(function_id) group_right(function_version_id, nca_id)
+        max by(function_id, function_version_id, nca_id) (
+            nvcf_function_info{{function_id=~"{function_id_regex}"}}
+        )"#
+    )
+}
+
 fn recent_invocation_queries(
     env: &str,
     ignore_env: bool,
@@ -193,7 +209,7 @@ fn recent_invocation_queries(
         DiscoveryShard::ALL.into_iter().map(Some).collect()
     };
 
-    let mut queries = Vec::with_capacity(shards.len() * 2);
+    let mut queries = Vec::with_capacity(shards.len() * 3);
     for shard in shards {
         queries.push(RecentInvocationQuery {
             source: InvocationMetricSource::InvocationService,
@@ -217,6 +233,14 @@ fn recent_invocation_queries(
                 shard,
             ),
         });
+        if function_version_filter.is_none() {
+            let shard = shard.expect("discovery queries are sharded");
+            queries.push(RecentInvocationQuery {
+                source: InvocationMetricSource::LlmGateway,
+                shard: Some(shard),
+                query: llm_gateway_discovery_query(shard),
+            });
+        }
     }
     queries
 }
@@ -533,9 +557,10 @@ async fn get_recently_invoked_functions_with_semaphore(
         "Executing PromQL queries for recently invoked functions"
     );
 
-    // Discovery runs eight queries (two sources across four shards) through one
-    // shared concurrency bound. Per-function scaling remains two unsharded
-    // queries. Every query is polled even when another source or shard fails.
+    // Discovery runs twelve queries (three sources across four shards) through
+    // one shared concurrency bound. Per-version invocation checks remain two
+    // unsharded queries. Every query is polled even when another source or
+    // shard fails.
     let mut query_results = stream::iter(queries.into_iter().map(|query_spec| {
         let query_semaphore = query_semaphore.clone();
         async move {
@@ -952,9 +977,9 @@ mod tests {
     }
 
     #[test]
-    fn discovery_queries_cover_four_fixed_shards_for_both_sources() {
+    fn discovery_queries_cover_four_fixed_shards_for_all_sources() {
         let queries = recent_invocation_queries("prd", false, None);
-        assert_eq!(queries.len(), 8);
+        assert_eq!(queries.len(), 12);
 
         for shard in DiscoveryShard::ALL {
             let matcher = format!(r#"function_id=~"{}""#, shard.function_id_regex());
@@ -962,10 +987,16 @@ mod tests {
                 .iter()
                 .filter(|query| query.shard == Some(shard))
                 .collect();
-            assert_eq!(shard_queries.len(), 2);
+            assert_eq!(shard_queries.len(), 3);
+
             for query in shard_queries {
-                assert_eq!(query.query.matches(&matcher).count(), 4);
-                assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 4);
+                if matches!(query.source, InvocationMetricSource::LlmGateway) {
+                    assert_eq!(query.query.matches(&matcher).count(), 2);
+                    assert!(!query.query.contains(r#"aws_env="prd""#));
+                } else {
+                    assert_eq!(query.query.matches(&matcher).count(), 4);
+                    assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 4);
+                }
             }
         }
     }
