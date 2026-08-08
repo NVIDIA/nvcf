@@ -14,6 +14,8 @@ Bazel currently builds, tests, and packages:
 - `src/libraries/java/nv-boot-parent` (Java framework libraries and tests)
 - `src/control-plane-services/cloud-tasks` (Java libraries, tests, and Spring
   Boot application)
+- `src/control-plane-services/cloud-functions` (Java libraries, tests, and
+  Spring Boot application)
 - `src/control-plane-services/notary` (Java libraries, tests, and Spring Boot
   application)
 - `src/control-plane-services/api-keys` (Java tests and Spring Boot
