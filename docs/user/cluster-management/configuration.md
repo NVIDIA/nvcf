@@ -31,7 +31,7 @@ See below for descriptions of all cluster features.
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Dynamic GPU Discovery            | Enables automatic detection and management of allocatable GPU capacity within the cluster via the NVIDIA GPU Operator. This capability is **strongly recommended** and would only be disabled in cases where [Manual Instance Configuration](./configuration.md) is required. |
 | Caching Support                  | Enhances application performance by storing frequently accessed data (models, resources and containers) in a cache. See [cluster-caching](./configuration.md).                                                                                                                                |
-| Optimized AI Workload Scheduling | Enable support for optimized AI workload scheduling using [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler). Additional setup details: [KAI Scheduler](./kai-scheduler.md)                                                                                        |
+| Optimized AI Workload Scheduling | Enables KAI Scheduler for GPU bin-packing and queues. See [KAI Scheduler](./kai-scheduler.md), [Gang Scheduling](./gang-scheduling.md), and [Topology-Aware Scheduling](./topology-aware-scheduling.md). |
 | Shared Cluster mode | Partitions the Kubernetes cluster's nodes into NVCF and non-NVCF pools. Set the label `nvca.nvcf.nvidia.io/schedule=true` on all nodes that can receive NVCF workload Pods. **Note**: this is an advanced use case and should not be used unless absolutely necessary                        |
 
 <Note>
@@ -233,6 +233,11 @@ The Cluster Agent can be directed to configure multi-node workloads with their o
 Additional prerequisites:
 \- The [NVIDIA GPU DRA driver](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-intro-install.html) must be installed.
 \- The `NVLinkOptimized` cluster attribute must be added during cluster registration.
+
+See [Topology-Aware Scheduling](./topology-aware-scheduling.md) to place
+multi-node workloads in one GPU clique. Use
+[Gang Scheduling](./gang-scheduling.md) when every Pod must be placed
+atomically.
 
 <Warning>
 In NVLink-optimized mode, the NVIDIA GPU DRA driver currently limits one GPU-enabled Pod to a node. To optimally utilize these clusters, GPU-enabled Pods _should_ request a full node's worth of GPUs. For example, nodes in GB200 clusters have 4 GPUs each so all containers and all GPU-enabled Pods in a workload must request `nvidia.com/gpu` values that sum to 4.

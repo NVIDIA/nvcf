@@ -1,0 +1,183 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring.main.allow-bean-definition-overriding: true
+
+# Faster JVM exit after integration tests (avoids Surefire fork exit timeout when many
+# @SpringBootTest contexts shut down gRPC + Tomcat + file watchers sequentially).
+server:
+  shutdown: immediate
+
+spring:
+  ssl:
+    bundle:
+      pem:
+        cassandra-ssl:
+          # Override base application.yaml's "base64:${kv.*}" PEM values that
+          # would otherwise fail parsing during eager SSL bundle registration.
+          # Empty strings work because PemSslStoreDetails.isEmpty() returns true
+          # when certificate/privateKey have no text, causing PemSslStore.load()
+          # to return null (skipping parsing entirely).
+          keystore:
+            certificate:
+            private-key:
+          truststore:
+            certificate:
+  cassandra:
+    repositories:
+      type: auto
+    request:
+      consistency: ALL # Set highest consistency in tests since tests expect success on read-after-write patterns
+      page-size: 5000
+      serial-consistency: local_serial
+      throttler:
+        type: none
+      timeout: 10000
+    advanced:
+      speculative-execution-policy:
+        class: ConstantSpeculativeExecutionPolicy
+        max-executions: 1
+        delay: 1500 # in ms (1.5 secs)
+      retry-policy:
+        class: com.nvidia.boot.cassandra.retry.NextHostRetryPolicy
+    local-datacenter: datacenter1
+    ssl:
+      enabled: false
+      # Override base application.yaml's `bundle: cassandra-ssl` with an empty string so
+      # that CassandraSslBundleConfiguration (nv-boot-starter-cassandra) still registers
+      # its RefreshingCqlSession bean (the configuration auto-activates because of
+      # `enabled: false` above on nv-boot >= 1.9.0) but the inner cassandraSslCustomizer
+      # short-circuits on `sslBundleName.isEmpty()` and never calls SslBundles.getBundle.
+      # Required because Testcontainers Cassandra is plaintext.
+      bundle: ""
+    keyspace-name: ess
+  netty:
+    leak-detection: paranoid
+
+logging:
+  config: "classpath:logback-integration-test.xml"
+  exception-conversion-word: "%wEx"
+  # NOTE: When debugging a failed test, consider relaxing these log levels
+  # (e.g., set com.nvidia to DEBUG or INFO) to see more detailed output.
+  level:
+    com.nvidia: WARN
+    com.nvidia.boot.audit: ERROR
+    com.nvidia.ess.exceptions: OFF
+    com.nvidia.ess.auth: OFF
+    org.springframework.web: WARN
+    io.netty.util.ResourceLeakDetector: WARN
+    com.datastax: INFO
+    org.springframework.data.cassandra: INFO
+    com.github.benmanes.caffeine.cache.LocalAsyncCache: ERROR # warn causes any exceptions through cache to get auto-logged even if used for control flow
+
+ess:
+  logging:
+    # Suppress error logs from CustomExceptionHandler during integration tests.
+    # These are expected errors from tests validating error handling behavior.
+    # NOTE: When debugging a failed test, change log-level to WARN or ERROR to see exception details.
+    # Stack trace depth is controlled by %ex{N} in logback-integration-test.xml.
+    errors:
+      - http-status-code: 400
+        log-level: OFF
+      - http-status-code: 401
+        log-level: OFF
+      - http-status-code: 403
+        log-level: OFF
+      - http-status-code: 404
+        log-level: OFF
+      - http-status-code: 409
+        log-level: OFF
+      - http-status-code: 500
+        log-level: OFF
+  auth:
+    operator:
+      iss: http://${ess.auth.service-id}:9102
+      jwks: ${ess.auth.operator.iss}/.well-known/jwks.json
+      client-id: &operator_sub operator-oauth2-client-1
+    service-id: localhost
+
+audit:
+  hmac: # dummy hmac keys for ITs.
+    kid: somekid
+    keys: eyJrZXlzIjpbeyJraWQiOiJzb21la2lkIiwia2V5Ijoic29tZWtleSJ9XX0K
+
+integration-test:
+  operator:
+    oauth2-server:
+      iss: ${ess.auth.operator.iss}
+      jwks: ${ess.auth.operator.jwks}
+    oauth2-client:
+      iss: ${ess.auth.operator.iss}
+      sub: *operator_sub
+      secret: operator-oauth2p-${random.uuid}
+      scopes:
+        - ess-operator
+  tenant:
+    oauth2-server:
+      iss: http://localhost:9103
+      jwks: ${integration-test.tenant.oauth2-server.iss}/.well-known/jwks.json
+    notary:
+      iss: http://localhost:9104
+      jwks: ${integration-test.tenant.notary.iss}/.well-known/jwks.json
+      sub: &notary_sub notary-client-1
+    notary-sign-server:
+      iss: http://localhost:9105
+      jwks: ${integration-test.tenant.notary-sign-server.iss}/.well-known/jwks.json
+    notary-sign-client:
+      iss: ${integration-test.tenant.notary-sign-server.iss}
+      sub: *notary_sub
+      secret: notary-sign-oauth2p-${random.uuid}
+      scopes:
+        - notary-sign
+    ns-admin:
+      iss: ${integration-test.tenant.oauth2-server.iss}
+      sub: ns-admin-oauth2-${random.uuid}
+      secret: ns-admin-oauth2p-${random.uuid}
+      scopes:
+        - ess:namespace-admin
+    entity-admin:
+      iss: ${integration-test.tenant.oauth2-server.iss}
+      sub: entity-admin-oauth2-${random.uuid}
+      secret: entity-admin-oauth2p-${random.uuid}
+      scopes:
+        - ess:entities-admin
+    secret-admin:
+      iss: ${integration-test.tenant.oauth2-server.iss}
+      sub: secret-admin-oauth2-${random.uuid}
+      secret: secret-admin-oauth2p-${random.uuid}
+      scopes:
+        - ess:secrets-admin
+    secret-consumer:
+      iss: ${integration-test.tenant.oauth2-server.iss}
+      sub: secret-consumer-oauth2-${random.uuid}
+      secret: secret-consumer-oauth2p-${random.uuid}
+      scopes:
+        - ess:secrets-consumer
+
+management:
+  tracing:
+    enabled: false
+
+metrics:
+  server:
+    enabled: false
+
+encryption:
+  rollout:
+    enabled: true
+    useDefaultKey: false
+    useAllowList: false
+  rotation:
+    scheduled:
+      enabled: false

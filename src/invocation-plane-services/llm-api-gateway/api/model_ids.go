@@ -21,10 +21,13 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	echo "github.com/labstack/echo/v4"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
+
+const canonicalUUIDLength = 36
 
 func splitOpenAIModelID(modelID string) (routingKey string, routedModel string, hasPrefix bool) {
 	if modelID == "" {
@@ -36,7 +39,23 @@ func splitOpenAIModelID(modelID string) (routingKey string, routedModel string, 
 		return "", modelID, false
 	}
 
-	return routingKey, routedModel, true
+	return canonicalizeRoutingKey(routingKey), routedModel, true
+}
+
+// canonicalizeRoutingKey lowercases routing keys written as standard
+// hyphenated UUIDs. UUID hex digits are case-insensitive on input
+// (RFC 9562 section 4), but routing targets register under the lowercase
+// form, so mixed-case keys must be canonicalized before auth and routing.
+// Non-UUID routing keys are opaque and pass through unchanged.
+func canonicalizeRoutingKey(routingKey string) string {
+	if len(routingKey) != canonicalUUIDLength {
+		return routingKey
+	}
+	parsed, err := uuid.Parse(routingKey)
+	if err != nil {
+		return routingKey
+	}
+	return parsed.String()
 }
 
 func routingKeyFromOpenAIModelID(modelID string) string {
