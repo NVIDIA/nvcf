@@ -16,7 +16,7 @@ name: ess-local
 
 services:
   cassandra:
-    image: cassandra:4.1.0
+    image: cassandra:5
     ports:
       - "9042:9042"
     environment:
@@ -28,7 +28,7 @@ services:
       - cassandra_data:/var/lib/cassandra
 
   cassandra-init:
-    image: cassandra:4.1.0
+    image: cassandra:5
     networks:
       - cassandra_network
     volumes:
