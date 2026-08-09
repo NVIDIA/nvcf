@@ -227,6 +227,32 @@ else
     info "skipping cert-manager + webhook (--without-webhook)"
 fi
 
+# L2 per-capture PVC fan-out is off unless agent.l2.storageClass names an
+# RWX-capable class. Left empty the install still succeeds, but restore
+# fan-out silently degrades to the L3 peer cascade — a large throughput
+# difference that only shows up under multi-node fan-out, long after the
+# installer has printed a clean banner. Say so at install time.
+#
+# Reported, not auto-selected: picking the wrong class yields PVCs that
+# never bind, and the right choice depends on cluster topology. RWX
+# capability isn't exposed on the StorageClass API, so candidates are
+# matched on known RWX provisioners.
+if ! printf '%s\n' "${EXTRA_HELM_ARGS[@]}" | grep -q "agent.l2.storageClass="; then
+    rwx_re='smb\.csi|nfs\.csi|efs\.csi|filestore\.csi|azurefile|excelero|nvmesh|cephfs'
+    candidates=$(kubectl get storageclass -o jsonpath='{range .items[*]}{.metadata.name}{" ("}{.provisioner}{")"}{"\n"}{end}' 2>/dev/null \
+        | grep -iE "$rwx_re" || true)
+    echo "     WARNING: agent.l2.storageClass is unset — L2 per-capture PVC fan-out is DISABLED." >&2
+    echo "              Restore falls back to the L3 peer cascade (slower multi-node fan-out)." >&2
+    if [ -n "$candidates" ]; then
+        echo "              RWX-capable StorageClasses on this cluster:" >&2
+        echo "$candidates" | sed 's/^/                /' >&2
+        echo "              Enable with: --set agent.l2.storageClass=<name>" >&2
+    else
+        echo "              No RWX-capable StorageClass detected; L2 needs one provisioned first." >&2
+        echo "              Reference: deploy/k8s/nvcf-cluster-prep/storage-classes.yaml" >&2
+    fi
+fi
+
 # ─── 6. Helm install ───────────────────────────────────────────────────
 
 step "[6/7] helm install / upgrade nvsnap"
