@@ -27,6 +27,38 @@ source "$(dirname "${BASH_SOURCE[0]}")/versions.sh"
 
 DIRS=(deploy/k8s deploy)
 
+# Helm values files spell an image as split `repository:` / `tag:` fields
+# rather than one registry/name:tag token, so the substitution below can
+# never see them and the grep-based check below can never flag them. They
+# are handled separately by chart_tag()/set_chart_tag().
+CHART_VALUES=(deploy/helm/nvsnap/values.yaml)
+
+# Print the tag a chart values file pins for <image-name>, or nothing when
+# that repository isn't present. \042 and \047 are " and ' — spelled in
+# octal so this awk program survives shell quoting intact.
+chart_tag() {
+    awk -v name="$2" '
+        $1 == "repository:" { pending = ($2 == name) }
+        pending && $1 == "tag:" { gsub(/[\042\047]/, "", $2); print $2; exit }
+    ' "$1"
+}
+
+# Rewrite the tag a chart values file pins for <image-name>, preserving the
+# original indentation.
+set_chart_tag() {
+    local file="$1"
+    awk -v name="$2" -v ver="$3" '
+        $1 == "repository:" { pending = ($2 == name) }
+        pending && $1 == "tag:" {
+            match($0, /^[ \t]*/)
+            print substr($0, 1, RLENGTH) "tag: \"" ver "\""
+            pending = 0
+            next
+        }
+        { print }
+    ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
+
 # image-name → version-var
 declare -A IMAGES=(
     [nvsnap-agent]="$NVSNAP_APP_VERSION"
@@ -49,6 +81,10 @@ for name in "${!IMAGES[@]}"; do
     for dir in "${DIRS[@]}"; do
         find "$dir" -name "*.yaml" -exec sed -i -E "${sed_re}" {} \;
     done
+    for f in "${CHART_VALUES[@]}"; do
+        [ -f "$f" ] && [ -n "$(chart_tag "$f" "$name")" ] || continue
+        set_chart_tag "$f" "$name" "$ver"
+    done
     echo "Synced ${name} -> ${new}"
 done
 
@@ -64,6 +100,30 @@ for name in "${!IMAGES[@]}"; do
             echo "$remaining" >&2
             fail=1
         fi
+    fi
+done
+
+# Same check for chart values. The grep above matches a combined
+# registry/name:tag token, which split repository:/tag: fields never form —
+# so without this loop a drifting chart tag passes verification silently.
+# That is exactly how the chart shipped nvsnap-agent v0.1.3 against an
+# NVSNAP_APP_VERSION of v0.2.32 (nvsnap#731).
+for f in "${CHART_VALUES[@]}"; do
+    [ -f "$f" ] || continue
+    for name in "${!IMAGES[@]}"; do
+        actual=$(chart_tag "$f" "$name")
+        [ -n "$actual" ] || continue
+        if [ "$actual" != "${IMAGES[$name]}" ]; then
+            echo "WARNING: ${f} pins ${name} tag ${actual}, expected ${IMAGES[$name]}" >&2
+            fail=1
+        fi
+    done
+    # The chart builds refs as <imageRegistry>/<repository>:<tag>, so a
+    # drifting registry breaks every image at once.
+    registry=$(awk '$1 == "imageRegistry:" { print $2; exit }' "$f")
+    if [ -n "$registry" ] && [ "$registry" != "$NVSNAP_REGISTRY" ]; then
+        echo "WARNING: ${f} imageRegistry is ${registry}, expected ${NVSNAP_REGISTRY}" >&2
+        fail=1
     fi
 done
 
