@@ -151,12 +151,28 @@ except Exception:
     echo "  Cleared local hostPath residue via node debug on $node"
 }
 
+# Bearer token for the agent API, empty when the chart was installed without
+# agent.auth.enabled. A missing Secret is therefore not an error: the same
+# call has to work against both an authenticating and a non-authenticating
+# agent. Without this header every call below returns "unauthorized" once
+# the agent runs with --auth-mode=required.
+agent_auth_header() {
+    local token
+    token=$(kubectl get secret nvsnap-agent-token -n "$NAMESPACE" \
+        -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null) || true
+    [ -n "$token" ] && printf 'Authorization: Bearer %s' "$token"
+}
+
 call_agent_api() {
     local agent_pod="$1"
     local method="$2"
     local endpoint="$3"
     local data="${4:-}"
-    
+
+    local auth=() hdr
+    hdr=$(agent_auth_header)
+    [ -n "$hdr" ] && auth=(-H "$hdr")
+
     # Start port-forward in background (redirect output to avoid contaminating API response)
     kubectl port-forward -n "$NAMESPACE" "$agent_pod" "${AGENT_PORT}:${AGENT_PORT}" >/dev/null 2>&1 &
     local pf_pid=$!
@@ -166,7 +182,9 @@ call_agent_api() {
     # Port-forward can take time to establish, especially on remote clusters
     local ready=false
     for i in {1..15}; do
-        if timeout 5 curl -s http://localhost:${AGENT_PORT}/v1/checkpoints >/dev/null 2>&1; then
+        # /health, not an API route: it stays unauthenticated in every auth
+        # mode, so this probes the port-forward rather than the credential.
+        if timeout 5 curl -sf http://localhost:${AGENT_PORT}/health >/dev/null 2>&1; then
             ready=true
             break
         fi
@@ -182,10 +200,12 @@ call_agent_api() {
     local max_time="${CHECKPOINT_TIMEOUT:-600}"
     if [[ -n "$data" ]]; then
         curl -s --max-time "$max_time" -X "$method" "http://localhost:${AGENT_PORT}${endpoint}" \
+            "${auth[@]}" \
             -H "Content-Type: application/json" \
             -d "$data"
     else
-        curl -s --max-time "$max_time" -X "$method" "http://localhost:${AGENT_PORT}${endpoint}"
+        curl -s --max-time "$max_time" -X "$method" "http://localhost:${AGENT_PORT}${endpoint}" \
+            "${auth[@]}"
     fi
     
     # Cleanup
