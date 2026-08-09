@@ -20,6 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/config.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/lib/agent-auth.sh"
 
 # Agent API port - IMPORTANT: Agent listens on 8081, not 8080!
 AGENT_PORT="${AGENT_PORT:-8081}"
@@ -151,27 +152,15 @@ except Exception:
     echo "  Cleared local hostPath residue via node debug on $node"
 }
 
-# Bearer token for the agent API, empty when the chart was installed without
-# agent.auth.enabled. A missing Secret is therefore not an error: the same
-# call has to work against both an authenticating and a non-authenticating
-# agent. Without this header every call below returns "unauthorized" once
-# the agent runs with --auth-mode=required.
-agent_auth_header() {
-    local token
-    token=$(kubectl get secret nvsnap-agent-token -n "$NAMESPACE" \
-        -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null) || true
-    [ -n "$token" ] && printf 'Authorization: Bearer %s' "$token"
-}
-
 call_agent_api() {
     local agent_pod="$1"
     local method="$2"
     local endpoint="$3"
     local data="${4:-}"
 
-    local auth=() hdr
-    hdr=$(agent_auth_header)
-    [ -n "$hdr" ] && auth=(-H "$hdr")
+    # Empty unless the chart was installed with agent.auth.enabled; without it
+    # every call here returns "unauthorized" under --auth-mode=required.
+    nvsnap_agent_auth_args "$NAMESPACE"
 
     # Start port-forward in background (redirect output to avoid contaminating API response)
     kubectl port-forward -n "$NAMESPACE" "$agent_pod" "${AGENT_PORT}:${AGENT_PORT}" >/dev/null 2>&1 &
@@ -200,12 +189,12 @@ call_agent_api() {
     local max_time="${CHECKPOINT_TIMEOUT:-600}"
     if [[ -n "$data" ]]; then
         curl -s --max-time "$max_time" -X "$method" "http://localhost:${AGENT_PORT}${endpoint}" \
-            "${auth[@]}" \
+            "${NVSNAP_AUTH_ARGS[@]}" \
             -H "Content-Type: application/json" \
             -d "$data"
     else
         curl -s --max-time "$max_time" -X "$method" "http://localhost:${AGENT_PORT}${endpoint}" \
-            "${auth[@]}"
+            "${NVSNAP_AUTH_ARGS[@]}"
     fi
     
     # Cleanup
