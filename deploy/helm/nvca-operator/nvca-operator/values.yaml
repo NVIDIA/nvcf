@@ -202,6 +202,10 @@ agent:
   ##     ESS_AGENT_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/ess-agent:1.0.5"
   functionEnvOverrides:
     BYOO_OTEL_COLLECTOR_CONTAINER: nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11
+    INIT_CONTAINER: nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_init:2.114.0
+    UTILS_CONTAINER: nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_utils:2.114.0
+    NICLLS_CONTAINER: nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_niclls:2.114.0
+    ESS_AGENT_CONTAINER: nvcr.io/qtfpt1h0bieu/nvcf-core/ess-agent:1.4.0
   ## Environment variable overrides for task workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 ESS_AGENT_CONTAINER, TASK_CONTAINER
@@ -211,6 +215,9 @@ agent:
   ##     UTILS_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_utils:2.94.0"
   taskEnvOverrides:
     BYOO_OTEL_COLLECTOR_CONTAINER: nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11
+    INIT_CONTAINER: nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_init:2.114.0
+    UTILS_CONTAINER: nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_utils:2.114.0
+    ESS_AGENT_CONTAINER: nvcr.io/qtfpt1h0bieu/nvcf-core/ess-agent:1.4.0
   overrideEnvironmentVariables: {}
   serviceOAuth:
     helmReVal:

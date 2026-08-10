@@ -44,9 +44,9 @@ spec:
               value: "nvcr.io/nvidia/nvcf-byoc/nvca"
           args:
             - --function-env-overrides-b64
-            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIn0="
+            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIiwiSU5JVF9DT05UQUlORVIiOiJudmNyLmlvL3F0ZnB0MWgwYmlldS9udmNmLWNvcmUvbnZjZl93b3JrZXJfaW5pdDoyLjExNC4wIiwiVVRJTFNfQ09OVEFJTkVSIjoibnZjci5pby9xdGZwdDFoMGJpZXUvbnZjZi1jb3JlL252Y2Zfd29ya2VyX3V0aWxzOjIuMTE0LjAiLCJOSUNMTFNfQ09OVEFJTkVSIjoibnZjci5pby9xdGZwdDFoMGJpZXUvbnZjZi1jb3JlL252Y2Zfd29ya2VyX25pY2xsczoyLjExNC4wIiwiRVNTX0FHRU5UX0NPTlRBSU5FUiI6Im52Y3IuaW8vcXRmcHQxaDBiaWV1L252Y2YtY29yZS9lc3MtYWdlbnQ6MS40LjAifQ=="
             - --task-env-overrides-b64
-            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIn0="
+            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIiwiSU5JVF9DT05UQUlORVIiOiJudmNyLmlvL3F0ZnB0MWgwYmlldS9udmNmLWNvcmUvbnZjZl93b3JrZXJfaW5pdDoyLjExNC4wIiwiVVRJTFNfQ09OVEFJTkVSIjoibnZjci5pby9xdGZwdDFoMGJpZXUvbnZjZi1jb3JlL252Y2Zfd29ya2VyX3V0aWxzOjIuMTE0LjAiLCJFU1NfQUdFTlRfQ09OVEFJTkVSIjoibnZjci5pby9xdGZwdDFoMGJpZXUvbnZjZi1jb3JlL2Vzcy1hZ2VudDoxLjQuMCJ9"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -92,6 +92,10 @@ expected_images=(
   "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector:0.143.2"
   "nvcr.io/nvidia/nvcf-byoc/samba:1.0.5"
   "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11"
+  "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_init:2.114.0"
+  "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_utils:2.114.0"
+  "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_niclls:2.114.0"
+  "nvcr.io/qtfpt1h0bieu/nvcf-core/ess-agent:1.4.0"
 )
 
 for image in "${expected_images[@]}"; do
@@ -102,8 +106,8 @@ for image in "${expected_images[@]}"; do
 done
 
 line_count="$(wc -l < "${image_manifest}" | tr -d '[:space:]')"
-if [[ "${line_count}" != "6" ]]; then
-  echo "expected exactly 6 unique images, got ${line_count}" >&2
+if [[ "${line_count}" != "10" ]]; then
+  echo "expected exactly 10 unique images, got ${line_count}" >&2
   cat "${image_manifest}" >&2
   exit 1
 fi

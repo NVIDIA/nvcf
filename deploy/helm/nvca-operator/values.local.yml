@@ -19,6 +19,20 @@ ngcConfig:
   clusterSource: self-managed
   serviceKey: "not-used"
 
+# The managed chart defaults below use NGC-managed worker images. Remove only
+# those defaults for self-managed installs while retaining the BYOO collector
+# override that is packaged for the self-managed chart.
+agent:
+  functionEnvOverrides:
+    INIT_CONTAINER: null
+    UTILS_CONTAINER: null
+    NICLLS_CONTAINER: null
+    ESS_AGENT_CONTAINER: null
+  taskEnvOverrides:
+    INIT_CONTAINER: null
+    UTILS_CONTAINER: null
+    ESS_AGENT_CONTAINER: null
+
 selfManaged:
   icmsServiceURL: "http://icms.example.invalid:8080"
   icmsServiceHostHeaderOverride: ""

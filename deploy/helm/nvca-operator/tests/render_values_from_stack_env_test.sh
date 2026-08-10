@@ -81,4 +81,18 @@ if [[ "${actual_nvca_version}" != "2.52.0-rc.5" ]]; then
   exit 1
 fi
 
-echo "render_values_from_stack_env.sh keeps upgrade version fields aligned with vendored defaults"
+for key in INIT_CONTAINER UTILS_CONTAINER NICLLS_CONTAINER ESS_AGENT_CONTAINER; do
+  if ! yq -e ".agent.functionEnvOverrides.${key} == null" "${output_file}" >/dev/null; then
+    echo "expected self-managed function override ${key} to be removed" >&2
+    exit 1
+  fi
+done
+
+for key in INIT_CONTAINER UTILS_CONTAINER ESS_AGENT_CONTAINER; do
+  if ! yq -e ".agent.taskEnvOverrides.${key} == null" "${output_file}" >/dev/null; then
+    echo "expected self-managed task override ${key} to be removed" >&2
+    exit 1
+  fi
+done
+
+echo "render_values_from_stack_env.sh keeps version fields aligned and removes managed worker defaults"

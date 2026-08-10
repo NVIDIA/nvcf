@@ -153,22 +153,32 @@ while IFS= read -r encoded_overrides; do
     exit 1
   fi
 
-  if ! printf '%s' "$decoded_overrides" | yq -e 'has("BYOO_OTEL_COLLECTOR_CONTAINER")' >/dev/null; then
-    continue
-  fi
+  for override_image_key in \
+    INIT_CONTAINER \
+    UTILS_CONTAINER \
+    OTEL_CONTAINER \
+    BYOO_OTEL_COLLECTOR_CONTAINER \
+    NICLLS_CONTAINER \
+    ESS_AGENT_CONTAINER \
+    INFERENCE_CONTAINER \
+    TASK_CONTAINER; do
+    if ! printf '%s' "$decoded_overrides" | yq -e "has(\"${override_image_key}\")" >/dev/null 2>&1; then
+      continue
+    fi
 
-  if ! printf '%s' "$decoded_overrides" | yq -e '.BYOO_OTEL_COLLECTOR_CONTAINER | type == "!!str"' >/dev/null; then
-    echo "BYOO_OTEL_COLLECTOR_CONTAINER must be a string" >&2
-    exit 1
-  fi
+    if ! printf '%s' "$decoded_overrides" | yq -e ".${override_image_key} | type == \"!!str\"" >/dev/null 2>&1; then
+      echo "${override_image_key} must be a string" >&2
+      exit 1
+    fi
 
-  byoo_otel_collector_image="$(printf '%s' "$decoded_overrides" | yq -er '.BYOO_OTEL_COLLECTOR_CONTAINER')"
-  if ! is_valid_image_reference "$byoo_otel_collector_image"; then
-    echo "invalid BYOO_OTEL_COLLECTOR_CONTAINER image reference" >&2
-    exit 1
-  fi
+    override_image="$(printf '%s' "$decoded_overrides" | yq -er ".${override_image_key}")"
+    if ! is_valid_image_reference "$override_image"; then
+      echo "invalid ${override_image_key} image reference" >&2
+      exit 1
+    fi
 
-  printf '%s\n' "$byoo_otel_collector_image" >> "$tmp_images"
+    printf '%s\n' "$override_image" >> "$tmp_images"
+  done
 done < <(
   awk '
     /-[[:space:]]+--(function|task)-env-overrides-b64$/ {

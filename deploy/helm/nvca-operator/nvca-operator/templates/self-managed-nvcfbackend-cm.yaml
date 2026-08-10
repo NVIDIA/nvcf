@@ -18,8 +18,8 @@ metadata:
   name: nvcfbackend-self-managed
   namespace: {{ .Release.Namespace }}
   {{- $releaseArtifactNvcaImageRepository := .Values.nvcaImage.repositoryOverride }}
-  {{- $releaseArtifactImageCredentialHelperRepository := (.Values.selfManaged.imageCredHelper | default dict).imageRepository }}
-  {{- $releaseArtifactSambaRepository := (.Values.selfManaged.sharedStorage | default dict).imageRepository }}
+  {{- $releaseArtifactImageCredentialHelperRepository := .Values.selfManaged.imageCredHelper.imageRepository }}
+  {{- $releaseArtifactSambaRepository := .Values.selfManaged.sharedStorage.imageRepository }}
   {{- if or $releaseArtifactNvcaImageRepository $releaseArtifactImageCredentialHelperRepository $releaseArtifactSambaRepository }}
   annotations:
     {{- if $releaseArtifactNvcaImageRepository }}

@@ -175,6 +175,12 @@ main() {
     fi
 
     byoo_otel_collector_image="${BYOO_OTEL_COLLECTOR_IMAGE:-nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11}"
+    worker_image_repository="${NVCF_WORKER_IMAGE_REPOSITORY:-nvcr.io/qtfpt1h0bieu/nvcf-core}"
+    worker_version="${NVCF_WORKER_VERSION:-2.114.0}"
+    worker_init_image="${NVCF_WORKER_INIT_IMAGE:-${worker_image_repository}/nvcf_worker_init:${worker_version}}"
+    worker_utils_image="${NVCF_WORKER_UTILS_IMAGE:-${worker_image_repository}/nvcf_worker_utils:${worker_version}}"
+    worker_niclls_image="${NVCF_WORKER_NICLLS_IMAGE:-${worker_image_repository}/nvcf_worker_niclls:${worker_version}}"
+    ess_agent_image="${ESS_AGENT_IMAGE:-${worker_image_repository}/ess-agent:1.4.0}"
 
     TARGET_DIR="${root_dir}/nvca-operator"
     SOURCE_DIR="${root_dir}/../../../src/compute-plane-services/nvca/deployments/nvca-operator"
@@ -205,6 +211,13 @@ main() {
     update_yaml_key ".ngcConfig.serviceKey = \"dummy-api-key\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".agent.functionEnvOverrides.BYOO_OTEL_COLLECTOR_CONTAINER = \"${byoo_otel_collector_image}\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".agent.taskEnvOverrides.BYOO_OTEL_COLLECTOR_CONTAINER = \"${byoo_otel_collector_image}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".agent.functionEnvOverrides.INIT_CONTAINER = \"${worker_init_image}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".agent.functionEnvOverrides.UTILS_CONTAINER = \"${worker_utils_image}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".agent.functionEnvOverrides.NICLLS_CONTAINER = \"${worker_niclls_image}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".agent.functionEnvOverrides.ESS_AGENT_CONTAINER = \"${ess_agent_image}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".agent.taskEnvOverrides.INIT_CONTAINER = \"${worker_init_image}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".agent.taskEnvOverrides.UTILS_CONTAINER = \"${worker_utils_image}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".agent.taskEnvOverrides.ESS_AGENT_CONTAINER = \"${ess_agent_image}\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".image.tag = \"${NVCA_OPERATOR_VERSION:?"NVCA_OPERATOR_VERSION is not set"}\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".selfManaged.nvcaVersion = \"${NVCA_VERSION:?"NVCA_VERSION is not set"}\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".selfManaged.icmsServiceURL = \"http://icms.example.invalid:8080\"" "${TARGET_DIR}/values.yaml"
