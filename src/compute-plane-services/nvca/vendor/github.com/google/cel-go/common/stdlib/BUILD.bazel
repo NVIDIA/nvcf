@@ -7,14 +7,14 @@ go_library(
     importpath = "github.com/google/cel-go/common/stdlib",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/google/cel-go/common",
-        "//vendor/github.com/google/cel-go/common/decls",
-        "//vendor/github.com/google/cel-go/common/functions",
-        "//vendor/github.com/google/cel-go/common/operators",
-        "//vendor/github.com/google/cel-go/common/overloads",
-        "//vendor/github.com/google/cel-go/common/types",
-        "//vendor/github.com/google/cel-go/common/types/ref",
-        "//vendor/github.com/google/cel-go/common/types/traits",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/decls",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/functions",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/operators",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/overloads",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/ref",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/traits",
     ],
 )
 

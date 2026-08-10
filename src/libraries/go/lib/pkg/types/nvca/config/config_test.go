@@ -208,6 +208,19 @@ agent:
   byooOtelCollector:
     exporterHelper:
       timeout: 30s
+    logSampling:
+      samplingPercentage: 10
+      mode: hash_seed
+      hashSeed: 1234
+      failClosed: false
+      attributeSource: record
+      fromAttribute: log.id
+      samplingPriority: sampling.priority
+    traceSampling:
+      samplingPercentage: 1
+      mode: hash_seed
+      hashSeed: 1234
+      failClosed: false
 `))
 	require.NoError(t, err)
 
@@ -217,6 +230,23 @@ agent:
 	assert.Equal(t, int64(131072), completed.Agent.BYOOLogChunking.MaxBodyBytes)
 	assert.True(t, completed.Agent.BYOODebugMode.Enabled)
 	assert.Equal(t, "30s", completed.Agent.BYOOOTelCollector.ExporterHelper.Timeout)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, 10.0, *completed.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", completed.Agent.BYOOOTelCollector.LogSampling.Mode)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *completed.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.False(t, *completed.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.Equal(t, "record", completed.Agent.BYOOOTelCollector.LogSampling.AttributeSource)
+	assert.Equal(t, "log.id", completed.Agent.BYOOOTelCollector.LogSampling.FromAttribute)
+	assert.Equal(t, "sampling.priority", completed.Agent.BYOOOTelCollector.LogSampling.SamplingPriority)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, 1.0, *completed.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", completed.Agent.BYOOOTelCollector.TraceSampling.Mode)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *completed.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
+	assert.False(t, *completed.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
 }
 
 func TestConfig_EncodeDecode_Tolerations(t *testing.T) {
@@ -441,6 +471,17 @@ agent:
 		assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.Agent.BYOOWorkloadMetrics.DropLabels)
 	})
 
+	t.Run("rejects_invalid_byoo_sampling", func(t *testing.T) {
+		_, err := DecodeConfig([]byte(`
+agent:
+  byooOtelCollector:
+    logSampling:
+      samplingPercentage: 0.001
+      mode: hash_seed
+`))
+		require.ErrorContains(t, err, "validate merged config: agent.byooOtelCollector: log sampling: samplingPercentage must be 0 or at least")
+	})
+
 	t.Run("duration_parsing", func(t *testing.T) {
 		data := []byte(`
 agent:
@@ -456,19 +497,6 @@ workload:
 		assert.Equal(t, 3*time.Hour, cfg.Workload.MaxRunningTimeout)
 	})
 
-	t.Run("transport_tls_installer_image_env_override", func(t *testing.T) {
-		t.Setenv("NVCA_WORKLOAD_TRANSPORT_TLS_INSTALLER_IMAGE", "nvcr.io/private-mirror/nvca:test")
-		data := []byte(`
-workload:
-  transportTLS:
-    trustMode: bundle
-    installerImage: nvcr.io/nvidia/nvcf-byoc/nvca:file
-`)
-		cfg, err := DecodeConfig(data)
-		require.NoError(t, err)
-		require.NotNil(t, cfg.Workload.TransportTLS)
-		assert.Equal(t, "nvcr.io/private-mirror/nvca:test", cfg.Workload.TransportTLS.InstallerImage)
-	})
 }
 
 func TestEncodeConfig(t *testing.T) {

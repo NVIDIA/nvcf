@@ -12,7 +12,7 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/cmd",
     visibility = ["//visibility:private"],
-    deps = ["//service"],
+    deps = ["//src/compute-plane-services/worker-utils/service"],
 )
 
 go_oci_image(

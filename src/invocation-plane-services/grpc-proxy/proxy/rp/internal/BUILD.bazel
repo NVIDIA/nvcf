@@ -21,7 +21,7 @@ go_library(
     importpath = "nvcf-grpc-proxy/proxy/rp/internal",
     visibility = ["//visibility:private"],
     deps = [
-        "//proxy/rp",
+        "//src/invocation-plane-services/grpc-proxy/proxy/rp",
         "@org_golang_x_net//http2",
         "@org_golang_x_net//http2/h2c",
     ],
@@ -30,5 +30,5 @@ go_library(
 go_binary(
     name = "internal",
     embed = [":internal_lib"],
-    visibility = ["//proxy/rp:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/grpc-proxy/proxy/rp:__subpackages__"],
 )

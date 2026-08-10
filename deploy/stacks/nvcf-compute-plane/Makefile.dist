@@ -21,7 +21,8 @@ CLUSTER_NAME  ?=
 # Determine the absolute path of the directory containing this Makefile.
 MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
-# Directory where templated manifests will be stored
+# Directory where templated manifests and the Helmfile registration handoff
+# will be stored.
 OUTPUT_DIR    ?= $(MAKEFILE_DIR)/out
 REGISTRATION_VALUES_DIR ?= $(MAKEFILE_DIR)/registration
 
@@ -145,6 +146,13 @@ endif
 
 # --- Core Targets ---
 
+# Optional override for helmfile's --output-dir-template. Empty by default, so
+# helmfile's own default applies and rendered output keeps its usual layout.
+# The repo's golden-file tests set this to strip the {{ .State.AbsPathSHA1 }}
+# component, which is derived from the helmfile's absolute path and would
+# otherwise make the fixtures differ per checkout location.
+OUTPUT_DIR_TEMPLATE ?=
+
 template: clean check-versions check-cluster-name
 	@if [ ! -f "$(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml" ]; then \
 		echo "ERROR: Registration values not found at $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml"; \
@@ -164,8 +172,10 @@ template: clean check-versions check-cluster-name
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
-	OUTPUT_DIR="$(OUTPUT_DIR)" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) template --output-dir "$(OUTPUT_DIR)"
+	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) template \
+		--output-dir "$(OUTPUT_DIR)" \
+		$(if $(OUTPUT_DIR_TEMPLATE),--output-dir-template '$(OUTPUT_DIR_TEMPLATE)')
 
 	@echo ">>> Templating complete. Manifests generated in $(OUTPUT_DIR)"
 
@@ -186,6 +196,7 @@ install: check-versions check-cluster-name $(INSTALL_PRE_HOOKS)
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
+	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) sync
 
 	@echo ">>> Compute-plane install complete."
@@ -209,6 +220,7 @@ apply: check-versions check-cluster-name $(APPLY_PRE_HOOKS)
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
+	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) apply
 
 	@echo ">>> Helmfile apply complete."
@@ -222,6 +234,7 @@ destroy: check-versions check-cluster-name
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
+	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) destroy
 
 	@echo ">>> Helmfile destroy complete."
@@ -333,7 +346,7 @@ help:
 	@echo "  KUBECONFIG_FILE    Path to kubeconfig file (pass to all targets in"
 	@echo "                     multi-cluster setups so registration reads JWKS"
 	@echo "                     from the correct cluster)"
-	@echo "  OUTPUT_DIR         Output directory for template (default: ./out)"
+	@echo "  OUTPUT_DIR         Output and Helmfile handoff directory (default: ./out)"
 	@echo "  NCA_ID             NCA identifier (default: $(NCA_ID))"
 	@echo "  CLUSTER_REGION     Cluster region (default: $(CLUSTER_REGION))"
 	@echo "  ICMS_URL           ICMS endpoint (default: $(ICMS_URL))"

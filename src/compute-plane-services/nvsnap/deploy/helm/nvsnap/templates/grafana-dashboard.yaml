@@ -1,3 +1,5 @@
+{{- if .Values.grafana.enabled }}
+{{- /* Guard first: a disabled feature must emit nothing at all. With the guard below the license header, Helm still renders the header as a document and kubectl rejects it. */ -}}
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -25,7 +27,6 @@
   Grafana's UI and re-exportable without dragging Helm templating
   syntax through it.
 */}}
-{{- if .Values.grafana.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

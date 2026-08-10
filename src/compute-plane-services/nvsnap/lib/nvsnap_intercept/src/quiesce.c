@@ -689,6 +689,26 @@ void nvsnap_start_quiesce_worker(void) {
 
 /* Called after fork() in child process. Restarts the quiesce worker thread
  * since threads don't survive fork(). Also resets quiesce state. */
+/* Set in the fork child; the worker is created later from a normal context. */
+static volatile sig_atomic_t g_quiesce_worker_needs_restart = 0;
+
+/* Runs in the child after fork(). POSIX allows only async-signal-safe calls
+ * here until exec(), so this may not create the worker thread directly even
+ * though the child needs one (threads do not survive fork, and the trigger
+ * file is keyed on the child's own pid).
+ *
+ * Creating it here deadlocks the child: pthread_create allocates TLS and takes
+ * the loader lock, which a thread that did not survive the fork may hold.
+ * That is not theoretical -- it wedges CRIU. CRIU forks during dump, and with
+ * this library force-loaded into it via /etc/ld.so.preload the child hung
+ * while the parent blocked in wait4 forever, stalling the dump before seize
+ * completed. Isolating each behaviour showed installing signal handlers and
+ * starting threads are both harmless; only this handler wedged it.
+ *
+ * So: record the need and let nvsnap_quiesce_worker_restart_if_needed() create
+ * the thread from a safe context. Most forks are followed by exec, where the
+ * constructors re-run and start the worker normally; this covers the
+ * fork-without-exec case. */
 static void nvsnap_quiesce_atfork_child(void)
 {
     /* Reset state — child starts fresh */
@@ -696,16 +716,37 @@ static void nvsnap_quiesce_atfork_child(void)
     g_quiesce_worker_thread_started = 0;
     g_quiesce_meta_thread_started = 0;
 
-    /* Restart worker thread so file-based quiesce triggers work */
-    nvsnap_start_quiesce_worker();
+    g_quiesce_worker_needs_restart = 1;
 
     /* Reset NCCL tracking */
     nvsnap_nccl_atfork_child();
 }
 
+/* Create the worker deferred by the atfork handler. Safe to call from any
+ * normal (non-atfork, non-signal) context; a no-op unless a fork left the
+ * child without one. */
+void nvsnap_quiesce_worker_restart_if_needed(void)
+{
+    if (!g_quiesce_worker_needs_restart)
+        return;
+
+    nvsnap_start_quiesce_worker();
+
+    /* Drop the request only once a worker actually exists. pthread_create can
+     * fail (EAGAIN under thread pressure, RLIMIT_NPROC), and clearing the flag
+     * first would discard the request permanently, leaving a forked child with
+     * no quiesce poller and no way to notice. Leaving it set means the next
+     * caller retries. */
+    if (g_quiesce_worker_thread_started)
+        g_quiesce_worker_needs_restart = 0;
+}
+
 __attribute__((constructor(103)))  /* Run after main init (101) and NvSnap init (102) */
 static void nvsnap_quiesce_register_atfork(void)
 {
+    if (nvsnap_self_disabled())
+        return;
+
     /* Register fork handler:
      * child (after fork): reset quiesce state, restart worker thread,
      * clear NCCL tracking so children build fresh state. */

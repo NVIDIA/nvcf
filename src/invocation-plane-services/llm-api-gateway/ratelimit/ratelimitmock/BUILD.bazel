@@ -21,7 +21,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit/ratelimitmock",
     visibility = ["//visibility:public"],
     deps = [
-        "//ratelimit",
+        "//src/invocation-plane-services/llm-api-gateway/ratelimit",
         "@org_uber_go_mock//gomock",
     ],
 )

@@ -7,18 +7,18 @@ go_library(
     name = "chartcache",
     srcs = ["chartcache.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice/chartcache",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
     deps = [
-        "//vendor/github.com/hashicorp/golang-lru/v2:golang-lru",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/log",
-        "//vendor/sigs.k8s.io/controller-runtime/pkg/manager",
+        "//src/compute-plane-services/nvca/vendor/github.com/hashicorp/golang-lru/v2:golang-lru",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/log",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/manager",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":chartcache",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )
 
 go_test(
@@ -26,7 +26,7 @@ go_test(
     srcs = ["chartcache_test.go"],
     embed = [":chartcache"],
     deps = [
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
     ],
 )

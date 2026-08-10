@@ -11,6 +11,6 @@ exports_files([
 
 alias(
     name = "nvcf-invocation-service",
-    actual = "//crates/server:server",
+    actual = "//src/invocation-plane-services/http-invocation/crates/server:server",
     visibility = ["//visibility:public"],
 )

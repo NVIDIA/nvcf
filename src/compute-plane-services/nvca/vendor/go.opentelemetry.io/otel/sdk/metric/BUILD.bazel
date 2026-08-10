@@ -1,0 +1,51 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "metric",
+    srcs = [
+        "aggregation.go",
+        "cache.go",
+        "config.go",
+        "doc.go",
+        "env.go",
+        "exemplar.go",
+        "exporter.go",
+        "instrument.go",
+        "instrumentkind_string.go",
+        "manual_reader.go",
+        "meter.go",
+        "periodic_reader.go",
+        "pipeline.go",
+        "provider.go",
+        "reader.go",
+        "splitmetrics.go",
+        "version.go",
+        "view.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric",
+    importpath = "go.opentelemetry.io/otel/sdk/metric",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/internal/global",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric/embedded",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric/noop",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/instrumentation",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/exemplar",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/internal",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/internal/aggregate",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/internal/observ",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/internal/x",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric/metricdata",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/resource",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.41.0:v1_41_0",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":metric",
+    visibility = ["//visibility:public"],
+)

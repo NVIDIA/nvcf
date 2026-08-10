@@ -57,11 +57,14 @@ var (
 	MultiNodeWorkloads            = newFeatureFlag("MultiNodeWorkloads", newBool(true))
 	BYOObservability              = newFeatureFlag("BYOObservability", newBool(false))
 	BYOOFluentBit                 = newFeatureFlag("BYOOFluentBit", newBool(false))
-	KAIScheduler                  = newFeatureFlag("KAIScheduler", newBool(false))
-	HelmCustomAnnotations         = newFeatureFlag("HelmCustomAnnotations", newBool(false))
-	MaxSQSBatchPull               = newFeatureFlag("MaxSQSBatchPull", newBool(true))
-	CordonMaintenance             = newFeatureFlag("CordonMaintenance", newBool(false))
-	CordonAndDrainMaintenance     = newFeatureFlag("CordonAndDrainMaintenance", newBool(false))
+	// ClientMetrics gates OpenTelemetry semantic-convention metrics for NVCA's
+	// outbound dependency clients.
+	ClientMetrics             = newFeatureFlag("ClientMetrics", newBool(false))
+	KAIScheduler              = newFeatureFlag("KAIScheduler", newBool(false))
+	HelmCustomAnnotations     = newFeatureFlag("HelmCustomAnnotations", newBool(false))
+	MaxSQSBatchPull           = newFeatureFlag("MaxSQSBatchPull", newBool(true))
+	CordonMaintenance         = newFeatureFlag("CordonMaintenance", newBool(false))
+	CordonAndDrainMaintenance = newFeatureFlag("CordonAndDrainMaintenance", newBool(false))
 	// AckTaskRequestAfterPodsScheduled instructs the agent to only acknowledge ICMS requests with ICMS
 	// and delete queue messages after all NVCT task pods have been accepted by the cluster's scheduler.
 	AckTaskRequestAfterPodsScheduled = newFeatureFlag("AckTaskRequestAfterPodsScheduled", newBool(false))

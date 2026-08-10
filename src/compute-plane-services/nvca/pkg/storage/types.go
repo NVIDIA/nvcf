@@ -95,6 +95,14 @@ const (
 	// SharedStorageEnabledLabel namespace label
 	SharedStorageEnabledLabel = "nvca.nvcf.nvidia.io/shared-storage-enabled"
 
+	// NVMeshCacheMountOptions are the mount options a read-only model cache
+	// volume on NVMesh requires, and the value the mount option ConfigMap is
+	// seeded with. NVMesh provisions XFS and the read-only volume attaches the
+	// same filesystem as the volume it was populated from, so the kernel
+	// rejects the mount as a duplicate filesystem UUID without nouuid, and
+	// rejects a dirty log on a read-only mount without norecovery.
+	NVMeshCacheMountOptions = "ro,norecovery,nouuid"
+
 	// Ephemeral model cache fallback (per-pod emptyDir). Reuses the model
 	// cache volume name and mount paths (ModelCachePodVolumeName /
 	// ModelCachePod{Model,Resources}MountPath) so workload containers see the

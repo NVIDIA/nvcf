@@ -11,9 +11,9 @@ go_library(
     importpath = "k8s.io/kube-openapi/pkg/common",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/emicklei/go-restful/v3:go-restful",
-        "//vendor/k8s.io/kube-openapi/pkg/spec3",
-        "//vendor/k8s.io/kube-openapi/pkg/validation/spec",
+        "//src/compute-plane-services/nvca/vendor/github.com/emicklei/go-restful/v3:go-restful",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/spec3",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/validation/spec",
     ],
 )
 

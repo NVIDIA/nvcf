@@ -1011,6 +1011,9 @@ void nvsnap_dump_handles(FILE* out) {
 
 __attribute__((constructor(103)))
 static void libuv_intercept_init(void) {
+    if (nvsnap_self_disabled())
+        return;
+
     /* Check if libuv interception is disabled */
     const char* disable_libuv = getenv("NVSNAP_DISABLE_LIBUV");
     if (disable_libuv && strcmp(disable_libuv, "1") == 0) {

@@ -246,6 +246,25 @@ deduplicated across components.
 `NOTICE`, runtime inventory, and OSRB delta outputs remain the component-level
 compliance evidence. None of these outputs replaces legal review.
 
+### Java alternative license designations
+
+Java component `notice_metadata.json` files retain the upstream `licenses`
+list. When an approved choice exists for a versioned dependency with
+alternative licenses, add `designated_license` with the chosen SPDX identifier.
+The generator accepts a listed license name or an alias in
+`tools/bazel/java/license_aliases.json`.
+
+The generated component `NOTICE` records the designated license and the
+normalized upstream alternatives. The runtime inventory retains the alternatives
+in `declared_licenses` and reports the choice in `designated_license`. Its
+existing `licenses` field reports the designated license so dependency review
+uses the applicable choice.
+
+Only record a designation supported by the dependency's license material and
+the required compliance review. Do not add private approval identifiers to
+public metadata. `--update-metadata` preserves an existing designation for the
+same coordinate and version, but does not carry it to a new version.
+
 Use it when:
 
 - imported trees or dependency manifests changed

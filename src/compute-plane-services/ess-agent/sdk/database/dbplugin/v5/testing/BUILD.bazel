@@ -8,7 +8,7 @@ go_library(
     srcs = ["test_helpers.go"],
     importpath = "github.com/hashicorp/vault/sdk/database/dbplugin/v5/testing",
     visibility = ["//visibility:public"],
-    deps = ["//sdk/database/dbplugin/v5:dbplugin"],
+    deps = ["//src/compute-plane-services/ess-agent/sdk/database/dbplugin/v5:dbplugin"],
 )
 
 alias(

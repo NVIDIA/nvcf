@@ -10,8 +10,8 @@ go_library(
     importpath = "k8s.io/apimachinery/pkg/util/mergepatch",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/apimachinery/pkg/util/dump",
-        "//vendor/sigs.k8s.io/yaml",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/dump",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
     ],
 )
 

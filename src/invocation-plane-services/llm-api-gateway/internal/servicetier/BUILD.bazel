@@ -19,11 +19,11 @@ go_library(
     name = "servicetier",
     srcs = ["servicetier.go"],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":servicetier",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
 )

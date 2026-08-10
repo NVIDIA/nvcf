@@ -19,12 +19,14 @@ package otelconfig
 
 import (
 	"encoding/base64"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -159,11 +161,28 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCF_WORKLOAD_TYPE":             "function",
 				"NVCT_TASK_ID":                   "task-123",
 				"NVCF_ZONE_NAME":                 "zone-1",
-				"BYOO_OTEL_COLLECTOR_CONFIG_B64": base64.StdEncoding.EncodeToString([]byte(`{"exporterHelper":{"timeout":"30s"}}`)),
+				"BYOO_OTEL_COLLECTOR_CONFIG_B64": base64.StdEncoding.EncodeToString([]byte(`{"exporterHelper":{"timeout":"30s"},"logSampling":{"samplingPercentage":10,"mode":"hash_seed","hashSeed":1234,"failClosed":false,"attributeSource":"record","fromAttribute":"log.id","samplingPriority":"sampling.priority"},"traceSampling":{"samplingPercentage":1,"mode":"hash_seed","hashSeed":1234,"failClosed":false}}`)),
 			},
 			expectErr: false,
 			expect: func(t *testing.T, cfg TemplateConfig) {
 				assert.Equal(t, "30s", cfg.OTelCollector.ExporterHelper.Timeout)
+				require.NotNil(t, cfg.OTelCollector.LogSampling.SamplingPercentage)
+				assert.Equal(t, 10.0, *cfg.OTelCollector.LogSampling.SamplingPercentage)
+				assert.Equal(t, "hash_seed", cfg.OTelCollector.LogSampling.Mode)
+				require.NotNil(t, cfg.OTelCollector.LogSampling.HashSeed)
+				assert.Equal(t, uint32(1234), *cfg.OTelCollector.LogSampling.HashSeed)
+				require.NotNil(t, cfg.OTelCollector.LogSampling.FailClosed)
+				assert.False(t, *cfg.OTelCollector.LogSampling.FailClosed)
+				assert.Equal(t, "record", cfg.OTelCollector.LogSampling.AttributeSource)
+				assert.Equal(t, "log.id", cfg.OTelCollector.LogSampling.FromAttribute)
+				assert.Equal(t, "sampling.priority", cfg.OTelCollector.LogSampling.SamplingPriority)
+				require.NotNil(t, cfg.OTelCollector.TraceSampling.SamplingPercentage)
+				assert.Equal(t, 1.0, *cfg.OTelCollector.TraceSampling.SamplingPercentage)
+				assert.Equal(t, "hash_seed", cfg.OTelCollector.TraceSampling.Mode)
+				require.NotNil(t, cfg.OTelCollector.TraceSampling.HashSeed)
+				assert.Equal(t, uint32(1234), *cfg.OTelCollector.TraceSampling.HashSeed)
+				require.NotNil(t, cfg.OTelCollector.TraceSampling.FailClosed)
+				assert.False(t, *cfg.OTelCollector.TraceSampling.FailClosed)
 			},
 		},
 		{
@@ -338,4 +357,88 @@ func TestGetTemplateConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOTelCollectorConfig_ValidateSampling(t *testing.T) {
+	tests := []struct {
+		name            string
+		samplingPercent float64
+		mode            string
+		attributeSource string
+		fromAttribute   string
+		wantErr         string
+	}{
+		{name: "accepts zero", samplingPercent: 0, mode: "hash_seed"},
+		{name: "rejects default hash seed below lower bound", samplingPercent: hashSeedMinSamplingPercentage / 2, wantErr: "at least"},
+		{name: "accepts hash seed lower bound", samplingPercent: hashSeedMinSamplingPercentage, mode: "hash_seed"},
+		{name: "rejects hash seed below lower bound", samplingPercent: hashSeedMinSamplingPercentage / 2, mode: "hash_seed", wantErr: "at least"},
+		{name: "accepts proportional lower bound", samplingPercent: consistentMinSamplingPercentage, mode: "proportional"},
+		{name: "rejects NaN", samplingPercent: math.NaN(), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects positive infinity", samplingPercent: math.Inf(1), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects negative infinity", samplingPercent: math.Inf(-1), mode: "hash_seed", wantErr: "finite"},
+		{name: "rejects negative", samplingPercent: -1, mode: "hash_seed", wantErr: "between"},
+		{name: "rejects exceeding float32", samplingPercent: float64(math.MaxFloat32) * 2, mode: "hash_seed", wantErr: "between"},
+		{name: "rejects record attributes outside hash seed", samplingPercent: 1, mode: "proportional", attributeSource: "record", fromAttribute: "log.id", wantErr: "require hash_seed"},
+		{name: "rejects unsupported mode", samplingPercent: 1, mode: "invalid", wantErr: "unsupported"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			samplingPercentage := tt.samplingPercent
+			config := OTelCollectorConfig{
+				LogSampling: LogSamplingConfig{
+					SamplingPercentage: &samplingPercentage,
+					Mode:               tt.mode,
+					AttributeSource:    tt.attributeSource,
+					FromAttribute:      tt.fromAttribute,
+				},
+				TraceSampling: SamplingConfig{SamplingPercentage: &samplingPercentage, Mode: tt.mode},
+			}
+
+			err := config.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestDecodeOTelCollectorConfigRejectsInvalidSampling(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(`{
+        "exporterHelper": {"timeout": "30s"},
+        "logSampling": {"samplingPercentage": -1, "mode": "hash_seed"},
+        "traceSampling": {"samplingPercentage": 0.000000000000001, "mode": "hash_seed"}
+    }`))
+
+	_, err := decodeOTelCollectorConfig(encoded)
+	require.ErrorContains(t, err, "validate config: log sampling")
+}
+
+func TestApplyOTelCollectorConfigRejectsInvalidSampling(t *testing.T) {
+	invalidSamplingPercentage := -1.0
+	config := OTelCollectorConfig{
+		LogSampling:   LogSamplingConfig{SamplingPercentage: &invalidSamplingPercentage},
+		TraceSampling: SamplingConfig{SamplingPercentage: &invalidSamplingPercentage},
+	}
+	otelConfig := &OpenTelemetryConfig{}
+	initializeConfigMaps(otelConfig)
+	otelConfig.Service.Pipelines["logs"] = struct {
+		Receivers  []string `yaml:"receivers"`
+		Exporters  []string `yaml:"exporters"`
+		Processors []string `yaml:"processors"`
+	}{Processors: []string{"batch/logs"}}
+	otelConfig.Service.Pipelines["traces"] = struct {
+		Receivers  []string `yaml:"receivers"`
+		Exporters  []string `yaml:"exporters"`
+		Processors []string `yaml:"processors"`
+	}{Processors: []string{"batch"}}
+
+	require.ErrorContains(t, applyOTelCollectorConfig(otelConfig, config), "log sampling")
+
+	assert.NotContains(t, otelConfig.Processors, "probabilistic_sampler/logs")
+	assert.NotContains(t, otelConfig.Processors, "probabilistic_sampler/traces")
+	assert.Equal(t, []string{"batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
+	assert.Equal(t, []string{"batch"}, otelConfig.Service.Pipelines["traces"].Processors)
 }

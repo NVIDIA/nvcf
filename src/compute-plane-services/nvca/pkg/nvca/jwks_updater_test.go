@@ -35,8 +35,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -766,4 +776,192 @@ func TestNewK8sHTTPClient_SecureClientConstruction(t *testing.T) {
 	assert.False(t, transport.TLSClientConfig.InsecureSkipVerify,
 		"should use secure TLS when CA cert is available")
 	assert.NotNil(t, transport.TLSClientConfig.RootCAs)
+}
+
+// TestJWKSUpdater_PushIsInstrumented pins the JWKS push into the OTel client
+// metrics. It is a fifth ICMS route on its own HTTP client rather than the
+// shared retryable client, so without an explicit transport wrapper it silently
+// produces no semconv series even though the legacy
+// nvca_upstream_request_total{operation="jwks-push"} counter still exists. That
+// asymmetry would lose JWKS coverage during the dashboard cutover.
+func TestJWKSUpdater_PushIsInstrumented(t *testing.T) {
+	ctx := context.Background()
+	publicJWKS := `{"keys":[{"kty":"RSA","kid":"public-rotated-key"}]}`
+
+	var issuerURL string
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"issuer":"` + issuerURL + `","jwks_uri":"/keys"}`))
+		case "/keys":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(publicJWKS))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuer.Close()
+	issuerURL = issuer.URL
+
+	tokenPath := filepath.Join(t.TempDir(), "psat")
+	require.NoError(t, os.WriteFile(tokenPath, []byte(unsignedJWTWithIssuer(t, issuer.URL)), 0o600))
+
+	icms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer icms.Close()
+
+	reg := prometheus.NewRegistry()
+	exporter, err := promexporter.New(promexporter.WithRegisterer(reg))
+	require.NoError(t, err)
+	rec, err := clientmetrics.NewRecorder(
+		sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter)), nil)
+	require.NoError(t, err)
+
+	updater := &JWKSUpdater{
+		icmsURL:   icms.URL,
+		clusterID: "cluster-123",
+		tokenPath: tokenPath,
+		k8sClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			t.Fatalf("internal JWKS should not be fetched when issuer JWKS is reachable")
+			return nil, nil
+		})},
+		icmsClient: &http.Client{
+			Transport: clientmetrics.NewTransport(http.DefaultTransport, rec, clientmetrics.PeerServiceICMS),
+		},
+	}
+
+	updater.checkAndPush(ctx)
+
+	srv := httptest.NewServer(promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	scrape := string(body)
+
+	assert.Contains(t, scrape, `peer_service="icms"`,
+		"JWKS push must be attributed to the icms dependency")
+	assert.Contains(t, scrape, `url_template="v1/nvca/clusters/{clusterId}/jwks"`,
+		"JWKS push must carry a low-cardinality url.template like the other ICMS routes")
+	assert.NotContains(t, scrape, "cluster-123",
+		"the raw cluster ID must never appear as a label value")
+}
+
+// TestNewJWKSUpdater_AppliesTransportWrapper verifies the option is honoured by
+// the constructor, which is how the agent injects the metrics wrapper.
+func TestNewJWKSUpdater_AppliesTransportWrapper(t *testing.T) {
+	issuer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer issuer.Close()
+
+	caCertPath := filepath.Join(t.TempDir(), "ca.crt")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Certificate().Raw})
+	require.NoError(t, os.WriteFile(caCertPath, caPEM, 0o600))
+
+	// Return a sentinel rather than the inner transport, so the assertion fails if
+	// the constructor calls the wrapper but discards its result.
+	var wrapped bool
+	sentinel := &sentinelJWKSTransport{}
+	updater, err := newJWKSUpdater(JWKSUpdaterOptions{
+		ICMSURL:   "https://icms.example.test",
+		ClusterID: "cluster-123",
+		TokenPath: filepath.Join(t.TempDir(), "psat"),
+		TransportWrapper: func(inner http.RoundTripper) http.RoundTripper {
+			wrapped = true
+			sentinel.inner = inner
+			return sentinel
+		},
+	}, caCertPath)
+	require.NoError(t, err)
+	assert.True(t, wrapped, "TransportWrapper must be applied to the ICMS push client")
+	assert.Same(t, http.RoundTripper(sentinel), updater.icmsClient.Transport,
+		"the wrapper's return value must be installed, not discarded")
+
+	plain, err := newJWKSUpdater(JWKSUpdaterOptions{
+		ICMSURL:   "https://icms.example.test",
+		ClusterID: "cluster-123",
+		TokenPath: filepath.Join(t.TempDir(), "psat"),
+	}, caCertPath)
+	require.NoError(t, err)
+	// Without a wrapper the chain is otelhttp over the default transport: tracing
+	// is unconditional, only the metrics wrapper is opt-in.
+	_, isOtelWrapped := plain.icmsClient.Transport.(*otelhttp.Transport)
+	assert.True(t, isOtelWrapped,
+		"otelhttp must wrap the transport even without a metrics wrapper")
+	if _, isSentinel := plain.icmsClient.Transport.(*sentinelJWKSTransport); isSentinel {
+		t.Fatal("no wrapper must not install the metrics wrapper")
+	}
+}
+
+type sentinelJWKSTransport struct{ inner http.RoundTripper }
+
+func (s *sentinelJWKSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return s.inner.RoundTrip(req)
+}
+
+// TestJWKSUpdater_PushPropagatesTraceContext pins client tracing on the JWKS
+// push. It does not use the shared retryable client, so otelhttp is wired into
+// its transport explicitly; without it this ICMS route would be the only one
+// invisible in traces while still reporting peer_service="icms" in metrics.
+func TestJWKSUpdater_PushPropagatesTraceContext(t *testing.T) {
+	prevTP, prevProp := otel.GetTracerProvider(), otel.GetTextMapPropagator()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample())))
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetTextMapPropagator(prevProp)
+	})
+
+	publicJWKS := `{"keys":[{"kty":"RSA","kid":"public-rotated-key"}]}`
+	var issuerURL string
+	issuer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"issuer":"` + issuerURL + `","jwks_uri":"/keys"}`))
+		case "/keys":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(publicJWKS))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer issuer.Close()
+	issuerURL = issuer.URL
+
+	tokenPath := filepath.Join(t.TempDir(), "psat")
+	require.NoError(t, os.WriteFile(tokenPath, []byte(unsignedJWTWithIssuer(t, issuer.URL)), 0o600))
+
+	var traceparent string
+	icms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		traceparent = r.Header.Get("traceparent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer icms.Close()
+
+	caCertPath := filepath.Join(t.TempDir(), "ca.crt")
+	require.NoError(t, os.WriteFile(caCertPath,
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Certificate().Raw}), 0o600))
+
+	updater, err := newJWKSUpdater(JWKSUpdaterOptions{
+		ICMSURL:   icms.URL,
+		ClusterID: "cluster-123",
+		TokenPath: tokenPath,
+		TransportWrapper: func(inner http.RoundTripper) http.RoundTripper {
+			return inner
+		},
+	}, caCertPath)
+	require.NoError(t, err)
+	updater.k8sClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("internal JWKS should not be fetched when the issuer JWKS is reachable")
+		return nil, nil
+	})}
+
+	updater.checkAndPush(context.Background())
+
+	assert.NotEmpty(t, traceparent,
+		"ICMS must receive W3C trace context on the JWKS push; otelhttp is missing from the transport chain")
 }

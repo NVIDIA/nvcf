@@ -448,18 +448,73 @@ func (b *PerCapturePVCBackend) setState(hash, state, pvcName string) error {
 	}
 	if err := b.Catalog.UpdatePVCPromoteState(hash, state, pvcName); err != nil {
 		if errors.Is(err, ErrCatalogHashNotFound) {
+			// The hash lands on the row shortly after, so dropping the
+			// write here loses it permanently unless someone else
+			// re-issues it. nvsnap-server does try, but only once at
+			// end-of-capture, which races this promote and loses for
+			// any capture large enough to matter -- a 14 GB cachedir
+			// capture promoted ~2min after that check had already run,
+			// leaving pvc_promote_state empty forever. Retry the
+			// terminal state in the background until the row catches
+			// up; intermediate states stay best-effort because a later
+			// write supersedes them anyway.
+			if state == pvcStateReady {
+				go b.retryTerminalState(hash, state, pvcName)
+				return nil
+			}
 			if b.Log != nil {
 				b.Log.WithFields(logrus.Fields{
 					"hash":     hash,
 					"state":    state,
 					"pvc_name": pvcName,
-				}).Debug("catalog row not yet populated with hash; skipping state write (will be set by nvsnap-server after final commit)")
+				}).Debug("catalog row not yet populated with hash; skipping intermediate state write")
 			}
 			return nil
 		}
 		return fmt.Errorf("set pvc_promote_state=%s: %w", state, err)
 	}
 	return nil
+}
+
+// stateRetryAttempts and stateRetryInterval bound the catch-up window for a
+// terminal state write. The gap being covered is "capture finished but the
+// server has not written the hash yet", which is seconds; the ceiling is
+// generous so a slow catalog does not silently drop the write, and bounded so
+// a genuinely absent row does not leak a goroutine.
+var (
+	stateRetryAttempts = 60
+	stateRetryInterval = 5 * time.Second
+)
+
+// retryTerminalState re-issues a state write until the catalog row carries the
+// hash. Consumers that gate on pvc_promote_state (NVCA warm-start) never
+// observe readiness if this write is lost, so it is worth chasing.
+func (b *PerCapturePVCBackend) retryTerminalState(hash, state, pvcName string) {
+	for i := 0; i < stateRetryAttempts; i++ {
+		time.Sleep(stateRetryInterval)
+		err := b.Catalog.UpdatePVCPromoteState(hash, state, pvcName)
+		if err == nil {
+			if b.Log != nil {
+				b.Log.WithFields(logrus.Fields{
+					"hash": hash, "state": state, "pvc_name": pvcName,
+					"attempts": i + 1,
+				}).Info("pvc_promote_state written after catalog row caught up")
+			}
+			return
+		}
+		if !errors.Is(err, ErrCatalogHashNotFound) {
+			if b.Log != nil {
+				b.Log.WithError(err).WithField("hash", hash).
+					Warn("pvc_promote_state retry failed; consumers gating on it will not see ready")
+			}
+			return
+		}
+	}
+	if b.Log != nil {
+		b.Log.WithFields(logrus.Fields{
+			"hash": hash, "state": state,
+		}).Warn("gave up writing pvc_promote_state: catalog row never carried the hash")
+	}
 }
 
 // acquireLease tries to take ownership of a hash-keyed Lease. Returns
