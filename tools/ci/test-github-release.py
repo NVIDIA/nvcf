@@ -387,6 +387,55 @@ class GithubReleaseTest(unittest.TestCase):
             "unknown",
         )
 
+    def test_stale_checkout_is_not_classified_as_no_release(self):
+        # Regression guard for the ess v0.4.10 miss: semantic-release printed
+        # "is behind the remote", the helper called that a no-release, and the
+        # run went green having tagged nothing.
+        behind = (
+            "[semantic-release] i The local branch main is behind the remote one, "
+            "therefore a new version won't be published.\n"
+        )
+        self.assertEqual(
+            self.github_release.resolve_release_outcome(0, behind), "stale-checkout"
+        )
+        self.assertFalse(self.github_release.no_release_output(behind))
+        self.assertTrue(self.github_release.stale_checkout_output(behind))
+        # A genuine no-release must stay a no-release.
+        self.assertEqual(
+            self.github_release.resolve_release_outcome(
+                0, "There are no relevant changes, so no new version is released."
+            ),
+            "no-release",
+        )
+        # A stale checkout that also died is still just untrustworthy.
+        self.assertEqual(self.github_release.resolve_release_outcome(1, behind), "unknown")
+
+    def test_stale_checkout_does_not_fan_out_a_dependency_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_java_repo(root)
+            self.commit_framework_change(root)
+            components = self.github_release.java_ci_components(root)
+            service_id, path, _version = self.JAVA_SERVICES[0]
+            service = self.java_service_metadata(service_id, path)
+            behind = (
+                "[semantic-release] i The local branch main is behind the remote one, "
+                "therefore a new version won't be published.\n"
+            )
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                outcome = self.github_release.finish_semantic_release(
+                    root, service, components, 0, behind, dry_run=True, draft=False
+                )
+
+            text = output.getvalue()
+            self.assertEqual(outcome, "stale-checkout")
+            # The no-release path fans out a dependency release; this one must not.
+            self.assertNotIn("would create", text)
+            self.assertNotIn("dependency-triggered", text)
+            self.assertIn("race, not a no-release", text)
+
     def test_failed_semantic_release_run_does_not_fan_out(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

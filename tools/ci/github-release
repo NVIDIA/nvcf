@@ -422,9 +422,25 @@ def no_release_output(output):
         for phrase in (
             "no relevant changes",
             "There are no commits",
-            "is behind the remote",
         )
     )
+
+
+def stale_checkout_output(output):
+    """True when semantic-release refused to publish because the checkout is behind main.
+
+    This is a race, not a verdict on the commits. The workflow checks out a
+    branch tip, but main can still move between checkout and the moment
+    semantic-release runs, which is minutes later once npm install has run.
+    semantic-release then reports "The local branch main is behind the remote
+    one" and publishes nothing.
+
+    Treating that as no-release loses the release silently: the run exits 0 and
+    goes green having tagged nothing. Worse, the concurrency group cancels
+    queued runs, so the superseded commit gets no second chance from its own
+    push. It is classified separately so it can be reported and retried.
+    """
+    return "is behind the remote" in output
 
 
 def validate_version_file(root, service):
@@ -674,6 +690,11 @@ def resolve_release_outcome(exit_code, output):
         return "unknown"
     if parse_next_version(output):
         return "released"
+    if stale_checkout_output(output):
+        # Checked before no_release_output: semantic-release prints the
+        # behind-the-remote notice instead of a verdict on the commits, so this
+        # must not be mistaken for "nothing to release".
+        return "stale-checkout"
     if no_release_output(output):
         return "no-release"
     return "unknown"
@@ -692,6 +713,14 @@ def finish_semantic_release(root, service, components, exit_code, output, dry_ru
             print(f"[github-release] {service['id']}: would create {tag_for_version(service, version)}")
         else:
             print(f"[github-release] {service['id']}: semantic-release created {tag_for_version(service, version)}")
+        return outcome
+    if outcome == "stale-checkout":
+        # No fan-out: semantic-release never judged the commits, so a dependency
+        # release here would invent a version the service may not be due.
+        print(
+            f"[github-release] {service['id']}: semantic-release saw a checkout behind main "
+            "and published nothing; this is a race, not a no-release"
+        )
         return outcome
     if outcome == "no-release":
         print(f"[github-release] {service['id']}: no release-worthy commits")
@@ -909,6 +938,11 @@ def auto_release(args):
     # must not fail the job; publish mode below still fails hard.
     dry_run_failures = []
 
+    # Services whose semantic-release run hit the behind-the-remote race. These
+    # fail the job in publish mode: the release was lost, and a green run would
+    # hide that.
+    stale_checkouts = []
+
     for service in metadata.get("services", []):
         if not should_process_auto_service(service, service_filter, branch, default_branch):
             continue
@@ -953,7 +987,11 @@ def auto_release(args):
                 outcome = finish_semantic_release(
                     root, service, java_components, code, output, dry_run=True, draft=draft
                 )
-                if outcome == "unknown":
+                if outcome == "stale-checkout":
+                    reason = "semantic-release dry-run saw a checkout behind main; preview is meaningless"
+                    print(f"[github-release] WARNING: {service['id']}: {reason}; continuing (dry-run preview)")
+                    dry_run_failures.append((service["id"], reason))
+                elif outcome == "unknown":
                     # Preview could not compute a version (for example the
                     # semantic-release child was killed on a large history).
                     # Do not fail the inert workflow on a preview; record it so
@@ -972,7 +1010,9 @@ def auto_release(args):
                 outcome = finish_semantic_release(
                     root, service, java_components, code, output, dry_run=False, draft=draft
                 )
-                if outcome == "unknown":
+                if outcome == "stale-checkout":
+                    stale_checkouts.append(service["id"])
+                elif outcome == "unknown":
                     print(
                         f"[github-release] WARNING: {service['id']}: semantic-release reported "
                         "neither a version nor a no-release result; not cutting a dependency release"
@@ -987,6 +1027,18 @@ def auto_release(args):
         )
         for sid, reason in dry_run_failures:
             print(f"[github-release]   - {sid}: {reason}")
+
+    if stale_checkouts:
+        # Fail rather than exit green. The release for these services was not
+        # cut and nothing else will retry it: the push that should have released
+        # them is already behind main, and the concurrency group cancels the
+        # queued runs that would otherwise pick it up.
+        raise SystemExit(
+            f"[github-release] ERROR: {len(stale_checkouts)} service(s) lost a release to a "
+            f"checkout behind {branch or 'the release branch'}: {', '.join(sorted(stale_checkouts))}. "
+            "Re-run this workflow on the current branch tip (workflow_dispatch, operation=auto) "
+            "to cut the missing tags."
+        )
 
 
 def parse_release_tag(tag, metadata):
