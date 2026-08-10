@@ -234,6 +234,40 @@ def remote_branch_sha(root, branch):
     return raw.split()[0]
 
 
+def commit_tree(root, ref):
+    return run(["git", "rev-parse", "--verify", f"{ref}^{{tree}}"], cwd=root, capture=True).strip()
+
+
+def linear_release_branch_base(root, base_sha):
+    merges = run(
+        ["git", "rev-list", "--topo-order", "--reverse", "--merges", base_sha],
+        cwd=root,
+        capture=True,
+    ).splitlines()
+    if not merges:
+        return base_sha
+
+    # Keep the selected tree but root the release branch before the first merge
+    # in its history so the release ruleset sees only a linear commit graph.
+    first_merge = merges[0]
+    linear_parent = run(
+        ["git", "rev-parse", "--verify", f"{first_merge}^1"], cwd=root, capture=True
+    ).strip()
+    return run(
+        [
+            "git",
+            "commit-tree",
+            commit_tree(root, base_sha),
+            "-p",
+            linear_parent,
+            "-m",
+            "chore(release): snapshot default branch for linear history",
+        ],
+        cwd=root,
+        capture=True,
+    ).strip()
+
+
 def open_pr_url(root, source_branch, target_branch):
     raw = run(
         [
@@ -779,7 +813,7 @@ def release_branch_pr_body(service, release_branch, base_sha, version_file_path,
             "",
             "## Additional Details",
             "",
-            f"- Created release branch `{release_branch}` from `{base_sha}`.",
+            f"- Created release branch `{release_branch}` from the selected default branch content at `{base_sha}`.",
             f"- Advances `{version_file_path}` from `{current_version}` to `{next_version}` on `{target_branch}`.",
             "- The release branch push runs release automation for the first stable tag from the branch VERSION file.",
             "",
@@ -820,6 +854,7 @@ def branch_cut(args):
     bump_branch = service_version_bump_branch(service, current_version)
     next_version = next_release_train_version(current_version)
     version_file_path = f"{service['path'].rstrip('/')}/{service['version_file']}"
+    base_tree = commit_tree(root, base_sha)
 
     print(
         f"[github-release] {service['id']}: branch-cut base={base_sha} "
@@ -828,19 +863,25 @@ def branch_cut(args):
     )
 
     if args.dry_run:
-        print(f"[github-release] dry-run: would create {release_branch} at {base_sha}")
+        print(f"[github-release] dry-run: would create {release_branch} from {base_sha}'s tree")
         print(f"[github-release] dry-run: would create {bump_branch} with {version_file_path}={next_version}")
         print(f"[github-release] dry-run: would open PR from {bump_branch} to {target_branch}")
         return
 
     existing_release_sha = remote_branch_sha(root, release_branch)
     if existing_release_sha:
-        if existing_release_sha != base_sha:
-            raise SystemExit(f"{release_branch} already exists at {existing_release_sha}, not selected base {base_sha}")
-        print(f"[github-release] {release_branch} already exists at {base_sha}")
+        existing_release_tree = commit_tree(root, existing_release_sha)
+        if existing_release_tree != base_tree:
+            raise SystemExit(
+                f"{release_branch} already exists with tree {existing_release_tree}, "
+                f"not selected base tree {base_tree}"
+            )
+        print(f"[github-release] {release_branch} already has the selected base tree")
     else:
-        run(["git", "push", "origin", f"{base_sha}:refs/heads/{release_branch}"], cwd=root)
-        print(f"[github-release] created {release_branch} at {base_sha}")
+        ensure_git_identity(root)
+        release_base = linear_release_branch_base(root, base_sha)
+        run(["git", "push", "origin", f"{release_base}:refs/heads/{release_branch}"], cwd=root)
+        print(f"[github-release] created {release_branch} from selected base {base_sha}")
 
     existing_pr = open_pr_url(root, bump_branch, target_branch)
     if existing_pr:
