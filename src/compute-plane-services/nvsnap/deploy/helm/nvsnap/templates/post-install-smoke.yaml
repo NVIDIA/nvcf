@@ -88,6 +88,12 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list"]
+  # StorageClasses are cluster-scoped; step 7 reads one to confirm the L2
+  # class an operator named actually exists. Without this the check would
+  # fail on RBAC rather than on the thing it is testing.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -202,6 +208,83 @@ spec:
               else
                 echo "  OK ($READY/$DESIRED agents ready)"
               fi
+
+              # Steps 1-5 above prove the components are alive. Everything
+              # below proves they are wired to each other and configured the
+              # way the operator asked. Liveness checks pass happily through
+              # a stale agent image, a silently disabled L2 tier, and a
+              # server that cannot authenticate to its own agents — all three
+              # shipped undetected and are what steps 6-9 exist to catch.
+
+              echo "--- [6/9] agent image matches this release ---"
+              # nvsnap#731: the chart pinned an agent 31 versions behind
+              # versions.sh and every liveness probe stayed green, because a
+              # stale agent is a perfectly healthy agent.
+              WANT="{{ include "nvsnap.agent.image" . }}"
+              GOT=$(kubectl get ds nvsnap-agent -n {{ .Release.Namespace }} -o jsonpath='{.spec.template.spec.containers[0].image}')
+              if [ "$GOT" != "$WANT" ]; then
+                echo "  FAIL: deployed $GOT, chart expects $WANT"
+                FAIL=1
+              else
+                echo "  OK ($GOT)"
+              fi
+
+              echo "--- [7/9] L2 fan-out configuration ---"
+              # An empty storageClass disables L2 and degrades restore to the
+              # L3 peer cascade. That is a legitimate configuration, but it
+              # must be a decision rather than an accident, so say which it is.
+              {{- if .Values.agent.l2.storageClass }}
+              if kubectl get storageclass {{ .Values.agent.l2.storageClass | quote }} >/dev/null 2>&1; then
+                echo "  OK (L2 enabled on StorageClass {{ .Values.agent.l2.storageClass }})"
+              else
+                echo "  FAIL: agent.l2.storageClass={{ .Values.agent.l2.storageClass }} does not exist"
+                FAIL=1
+              fi
+              {{- else }}
+              echo "  WARN: L2 disabled (agent.l2.storageClass unset) — restore falls back to the L3 peer cascade"
+              {{- end }}
+
+              {{- if (.Values.agent.auth).enabled }}
+              echo "--- [8/9] agent token reaches every client ---"
+              # nvsnap#736: nvsnap-server calls the agent API but had no
+              # notion of the token. Under --auth-mode=required its cascade
+              # delete 401'd, returned 204 anyway, dropped the catalog row and
+              # orphaned the dump. Nothing was unhealthy; the wiring was just
+              # incomplete. Assert every component that talks to the agent
+              # actually carries the credential.
+              if ! kubectl get secret nvsnap-agent-token -n {{ .Release.Namespace }} >/dev/null 2>&1; then
+                echo "  FAIL: Secret nvsnap-agent-token missing while auth is enabled"
+                FAIL=1
+              else
+                for pair in "ds/nvsnap-agent:agent"{{ if .Values.server.enabled }}" deploy/nvsnap-server:server"{{ end }}; do
+                  obj="${pair%%:*}"; who="${pair##*:}"
+                  if kubectl get "$obj" -n {{ .Release.Namespace }} \
+                       -o jsonpath='{.spec.template.spec.containers[0].env[*].name}' 2>/dev/null \
+                       | tr ' ' '\n' | grep -qx NVSNAP_AGENT_TOKEN; then
+                    echo "  OK ($who has NVSNAP_AGENT_TOKEN)"
+                  else
+                    echo "  FAIL: $who has no NVSNAP_AGENT_TOKEN — its agent calls will 401"
+                    FAIL=1
+                  fi
+                done
+              fi
+
+              echo "--- [9/9] auth is enforced, not merely configured ---"
+              # Prove the guard actually runs: a token-less API call must be
+              # rejected in required mode, and a token-bearing one accepted.
+              # Configuration that is present but not enforced looks identical
+              # to configuration that works.
+              AGENT_URL="http://nvsnap-agent.{{ .Release.Namespace }}.svc.cluster.local:8081"
+              TOK=$(kubectl get secret nvsnap-agent-token -n {{ .Release.Namespace }} -o jsonpath='{.data.token}' 2>/dev/null | base64 -d)
+              AUTHED=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $TOK" "$AGENT_URL/v1/checkpoints" || echo 000)
+              [ "$AUTHED" = "200" ] && echo "  OK (authenticated call accepted)" \
+                || { echo "  FAIL: authenticated call returned $AUTHED, want 200"; FAIL=1; }
+              {{- if eq ((.Values.agent.auth).mode | default "") "required" }}
+              ANON=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$AGENT_URL/v1/checkpoints" || echo 000)
+              [ "$ANON" = "401" ] && echo "  OK (anonymous call rejected)" \
+                || { echo "  FAIL: anonymous call returned $ANON, want 401 — required mode is not enforcing"; FAIL=1; }
+              {{- end }}
+              {{- end }}
 
               echo
               if [ "$FAIL" -ne 0 ]; then
