@@ -37,8 +37,11 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/deploy"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/k3d"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/loadgen"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/profile"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/validate"
 )
@@ -107,23 +110,32 @@ type runConfig struct {
 	profile        string
 	mode           string
 	collectorImage string
+	sinkImage      string
+	loadgenImage   string
 	namespace      string
 	kubeconfig     string
 	kubeContext    string
 	readyTimeout   time.Duration
 	retain         bool
+	skipLoad       bool
+	k3dCluster     string
+	importImages   bool
 }
 
 func newRunCmd() *cobra.Command {
 	var cfg runConfig
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Deploy the authentic collector to a cluster and wait until it is ready",
+		Short: "Deploy the collector + OTLP sink, drive load, and wait until it is ready",
 		Long: `run renders the production workload shape via icms-translate, validates it,
-deploys the authentic BYOO collector (fronted by a harness OTLP Service) to the
-target cluster, and waits for the collector pod to become ready. It cleans up
-afterward unless --retain is set. Load generation and measurement land in a
-later milestone.`,
+deploys an in-cluster OTLP sink, deploys the authentic BYOO collector pointed at
+that sink, waits for both to become ready, and drives telemetrygen load at the
+selected profile's rates. It cleans up afterward unless --retain is set.
+
+With --mode k3d (the default) it provisions a dedicated local k3d cluster, runs
+against it, and deletes it afterward (unless --retain). With --mode remote it
+uses the ambient kubeconfig (or --kubeconfig/--context). Measurement and
+reporting land in a later milestone.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRun(cmd.OutOrStdout(), cfg)
@@ -131,13 +143,18 @@ later milestone.`,
 	}
 	cmd.Flags().StringVar(&cfg.shape, "shape", "both", `deployment shape: "container", "helm", or "both"`)
 	cmd.Flags().StringVar(&cfg.profile, "profile", "dev", `execution profile: "dev" or "baseline"`)
-	cmd.Flags().StringVar(&cfg.mode, "mode", "k3d", `deployment mode: "k3d" or "remote"`)
+	cmd.Flags().StringVar(&cfg.mode, "mode", "k3d", `deployment mode: "k3d" (managed local cluster) or "remote" (ambient kubeconfig)`)
 	cmd.Flags().StringVar(&cfg.collectorImage, "collector-image", spec.DefaultCollectorImage, "BYOO collector image reference")
+	cmd.Flags().StringVar(&cfg.sinkImage, "sink-image", sink.DefaultImage, "OTLP sink (collector-contrib) image reference")
+	cmd.Flags().StringVar(&cfg.loadgenImage, "loadgen-image", loadgen.DefaultImage, "telemetrygen load generator image reference")
 	cmd.Flags().StringVar(&cfg.namespace, "namespace", "byoo-perf", "base namespace for deployed resources")
-	cmd.Flags().StringVar(&cfg.kubeconfig, "kubeconfig", "", "path to kubeconfig (defaults to in-cluster or $KUBECONFIG)")
-	cmd.Flags().StringVar(&cfg.kubeContext, "context", "", "kubeconfig context to use")
-	cmd.Flags().DurationVar(&cfg.readyTimeout, "ready-timeout", 3*time.Minute, "how long to wait for the collector to become ready")
-	cmd.Flags().BoolVar(&cfg.retain, "retain", false, "retain deployed resources instead of cleaning up after the run")
+	cmd.Flags().StringVar(&cfg.kubeconfig, "kubeconfig", "", "path to kubeconfig (remote mode; defaults to in-cluster or $KUBECONFIG)")
+	cmd.Flags().StringVar(&cfg.kubeContext, "context", "", "kubeconfig context to use (remote mode)")
+	cmd.Flags().DurationVar(&cfg.readyTimeout, "ready-timeout", 3*time.Minute, "how long to wait for the collector and sink to become ready")
+	cmd.Flags().BoolVar(&cfg.retain, "retain", false, "retain deployed resources (and the managed k3d cluster) instead of cleaning up")
+	cmd.Flags().BoolVar(&cfg.skipLoad, "skip-load", false, "deploy the collector and sink but do not drive load")
+	cmd.Flags().StringVar(&cfg.k3dCluster, "k3d-cluster", "byoo-perf", "name of the managed k3d cluster (k3d mode)")
+	cmd.Flags().BoolVar(&cfg.importImages, "import-images", false, "import the collector/sink/loadgen images from local Docker into the k3d cluster (k3d mode)")
 	return cmd
 }
 
@@ -181,69 +198,201 @@ func runRun(stdout io.Writer, cfg runConfig) error {
 		return err
 	}
 
-	opts := spec.DefaultOptions()
-	opts.CollectorImage = cfg.collectorImage
+	ctx := context.Background()
 
-	exp := validate.Expectations{
-		Image:     opts.CollectorImage,
-		Resources: common.GetDefaultContainerResourcesBYOO(),
+	// In managed k3d mode the suite owns the cluster lifecycle: provision it
+	// up front and tear it down at the end (unless --retain). In remote mode it
+	// uses the ambient kubeconfig/context.
+	kubeconfig, kubeContext := cfg.kubeconfig, cfg.kubeContext
+	if cfg.mode == "k3d" {
+		cluster, teardown, err := ensureK3dCluster(ctx, stdout, cfg)
+		if err != nil {
+			return err
+		}
+		defer teardown()
+		kubeconfig, kubeContext = "", cluster.Context
 	}
 
-	client, err := newDeployClient(cfg.kubeconfig, cfg.kubeContext)
+	client, err := newDeployClient(kubeconfig, kubeContext)
 	if err != nil {
 		return err
 	}
 
-	ctx := context.Background()
+	loadDuration := prof.Warmup + prof.MeasurementWindow
 	fmt.Fprintf(stdout, "mode=%s profile=%s warmup=%s window=%s reps=%d\n\n", cfg.mode, prof.Name, prof.Warmup, prof.MeasurementWindow, prof.Repetitions)
 
 	multi := len(shapes) > 1
 	for _, shape := range shapes {
-		ns := namespaceForShape(cfg.namespace, shape, multi)
-
-		res, err := render.Render(shape, opts)
-		if err != nil {
-			return fmt.Errorf("render %s: %w", shape, err)
-		}
-		if err := validate.Render(res, exp); err != nil {
+		if err := runShape(ctx, stdout, client, cfg, prof, shape, multi, loadDuration); err != nil {
 			return err
 		}
-
-		fmt.Fprintf(stdout, "[%s] deploying to namespace %q ...\n", shape, ns)
-		dep, err := client.Deploy(ctx, ns, res)
-		if err != nil {
-			// Deploy may fail after creating the pod (e.g. the service is
-			// rejected), so roll back before returning unless --retain is set.
-			return errors.Join(fmt.Errorf("deploy %s: %w", shape, err), cleanupOnFailure(ctx, client, ns, cfg.retain))
-		}
-
-		fmt.Fprintf(stdout, "[%s] waiting up to %s for collector pod %q to become ready ...\n", shape, cfg.readyTimeout, dep.PodName)
-		if err := client.WaitPodReady(ctx, ns, dep.PodName, cfg.readyTimeout); err != nil {
-			return errors.Join(fmt.Errorf("collector did not become ready for %s shape: %w", shape, err), cleanupOnFailure(ctx, client, ns, cfg.retain))
-		}
-
-		fmt.Fprintf(stdout, "[%s] READY\n", shape)
-		fmt.Fprintf(stdout, "  pod             : %s\n", dep.PodName)
-		fmt.Fprintf(stdout, "  otlp service    : %s\n", dep.ServiceName)
-		for _, name := range []string{"otlp-grpc", "otlp-http"} {
-			if ep, ok := dep.Endpoints[name]; ok {
-				fmt.Fprintf(stdout, "  %-15s : %s\n", name, ep)
-			}
-		}
-
-		if cfg.retain {
-			fmt.Fprintf(stdout, "[%s] retaining resources (--retain); clean up with: perf cleanup --namespace %s\n\n", shape, ns)
-			continue
-		}
-		fmt.Fprintf(stdout, "[%s] cleaning up namespace %q ...\n", shape, ns)
-		if err := client.Cleanup(ctx, ns); err != nil {
-			return fmt.Errorf("cleanup %s: %w", shape, err)
-		}
-		fmt.Fprintf(stdout, "[%s] done\n\n", shape)
 	}
 
-	fmt.Fprintln(stdout, "note: load generation and measurement land in a later milestone; this run deploys the authentic collector and verifies it starts.")
+	if cfg.skipLoad {
+		fmt.Fprintln(stdout, "note: --skip-load set; the collector and sink were deployed but no load was driven. Measurement and reporting land in a later milestone.")
+	} else {
+		fmt.Fprintln(stdout, "note: load was driven end-to-end through the collector to the in-cluster sink. Measurement and reporting land in a later milestone.")
+	}
 	return nil
+}
+
+// ensureK3dCluster provisions (or reuses) the managed k3d cluster and returns a
+// teardown function that deletes it after the run unless --retain is set.
+func ensureK3dCluster(ctx context.Context, stdout io.Writer, cfg runConfig) (*k3d.Cluster, func(), error) {
+	if err := k3d.EnsureInstalled(ctx); err != nil {
+		return nil, nil, err
+	}
+	fmt.Fprintf(stdout, "provisioning managed k3d cluster %q ...\n", cfg.k3dCluster)
+	cluster, err := k3d.Create(ctx, k3d.DefaultOptions(cfg.k3dCluster))
+	if err != nil {
+		return nil, nil, err
+	}
+	if cluster.Reused {
+		fmt.Fprintf(stdout, "reusing pre-existing k3d cluster %q; it will be left in place\n", cfg.k3dCluster)
+	}
+	if cfg.importImages {
+		images := []string{cfg.collectorImage, cfg.sinkImage, cfg.loadgenImage}
+		fmt.Fprintf(stdout, "importing images into k3d cluster %q: %s\n", cfg.k3dCluster, strings.Join(images, ", "))
+		if err := k3d.ImportImages(ctx, cluster.Name, images...); err != nil {
+			// Only delete a cluster this run created; never tear down a
+			// pre-existing one the developer owns.
+			if !cfg.retain && !cluster.Reused {
+				_ = k3d.Delete(ctx, cfg.k3dCluster)
+			}
+			return nil, nil, err
+		}
+	}
+	fmt.Fprintf(stdout, "using kube context %q\n\n", cluster.Context)
+
+	teardown := func() {
+		if cluster.Reused {
+			fmt.Fprintf(stdout, "reused pre-existing k3d cluster %q; leaving it in place\n", cfg.k3dCluster)
+			return
+		}
+		if cfg.retain {
+			fmt.Fprintf(stdout, "retaining managed k3d cluster %q (--retain); delete with: k3d cluster delete %s\n", cfg.k3dCluster, cfg.k3dCluster)
+			return
+		}
+		fmt.Fprintf(stdout, "deleting managed k3d cluster %q ...\n", cfg.k3dCluster)
+		if err := k3d.Delete(ctx, cfg.k3dCluster); err != nil {
+			fmt.Fprintf(stdout, "warning: failed to delete k3d cluster %q: %v\n", cfg.k3dCluster, err)
+		}
+	}
+	return cluster, teardown, nil
+}
+
+// runShape deploys the sink and collector for one shape, drives load, and cleans
+// up (unless --retain). The collector's export is redirected at the in-cluster
+// sink so telemetry drains during the run instead of backing up against the
+// unreachable placeholder endpoints used purely for rendering.
+func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg runConfig, prof profile.Profile, shape spec.Shape, multi bool, loadDuration time.Duration) error {
+	ns := namespaceForShape(cfg.namespace, shape, multi)
+
+	// 1. In-cluster OTLP sink the collector exports to.
+	fmt.Fprintf(stdout, "[%s] deploying OTLP sink to namespace %q ...\n", shape, ns)
+	sinkDep, err := client.DeploySink(ctx, ns, sink.Options{Image: cfg.sinkImage})
+	if err != nil {
+		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("deploy sink for %s: %w", shape, err))
+	}
+	if err := client.WaitPodReady(ctx, ns, sinkDep.PodName, cfg.readyTimeout); err != nil {
+		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("sink did not become ready for %s shape: %w", shape, err))
+	}
+
+	// 2. Authentic collector, rendered with its export pointed at the sink.
+	opts := spec.DefaultOptions()
+	opts.Namespace = ns
+	opts.CollectorImage = cfg.collectorImage
+	// OTEL_COLLECTOR uses a plain otlp_http exporter with a single bearer-token
+	// file per signal, which the sink accepts and ignores; this is the
+	// lowest-friction way to make the collector export succeed in-cluster.
+	opts.Provider = "OTEL_COLLECTOR"
+	opts.Protocol = "http"
+	opts.LogsEndpoint = sinkDep.HTTPEndpoint
+	opts.MetricsEndpoint = sinkDep.HTTPEndpoint
+
+	res, err := render.Render(shape, opts)
+	if err != nil {
+		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("render %s: %w", shape, err))
+	}
+	exp := validate.Expectations{
+		Image:     opts.CollectorImage,
+		Resources: common.GetDefaultContainerResourcesBYOO(),
+	}
+	if err := validate.Render(res, exp); err != nil {
+		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("validate %s: %w", shape, err))
+	}
+
+	fmt.Fprintf(stdout, "[%s] deploying collector to namespace %q ...\n", shape, ns)
+	dep, err := client.Deploy(ctx, ns, res, deploy.WithExportCredentials(exportCredentials()))
+	if err != nil {
+		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("deploy %s: %w", shape, err))
+	}
+
+	fmt.Fprintf(stdout, "[%s] waiting up to %s for collector pod %q to become ready ...\n", shape, cfg.readyTimeout, dep.PodName)
+	if err := client.WaitPodReady(ctx, ns, dep.PodName, cfg.readyTimeout); err != nil {
+		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("collector did not become ready for %s shape: %w", shape, err))
+	}
+
+	fmt.Fprintf(stdout, "[%s] READY\n", shape)
+	fmt.Fprintf(stdout, "  collector pod   : %s\n", dep.PodName)
+	fmt.Fprintf(stdout, "  otlp service    : %s\n", dep.ServiceName)
+	for _, name := range []string{"otlp-grpc", "otlp-http"} {
+		if ep, ok := dep.Endpoints[name]; ok {
+			fmt.Fprintf(stdout, "  %-15s : %s\n", name, ep)
+		}
+	}
+	fmt.Fprintf(stdout, "  sink metrics    : %s\n", sinkDep.MetricsEndpoint)
+
+	// 3. Drive load through the collector.
+	if !cfg.skipLoad {
+		grpcEndpoint := dep.Endpoints["otlp-grpc"]
+		if grpcEndpoint == "" {
+			return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("collector has no otlp-grpc endpoint for %s shape", shape))
+		}
+		lgOpts := loadgen.Options{
+			Image:         cfg.loadgenImage,
+			Endpoint:      grpcEndpoint,
+			Insecure:      true,
+			Duration:      loadDuration,
+			LogsPerSec:    prof.LogRecordsPerSec,
+			MetricsPerSec: prof.MetricDataPointsPerSec,
+		}
+		jobs := loadgen.Jobs(ns, dep.PodName, lgOpts)
+		fmt.Fprintf(stdout, "[%s] driving load for %s (logs=%d/s metrics=%d/s) ...\n", shape, loadDuration, lgOpts.LogsPerSec, lgOpts.MetricsPerSec)
+		if err := client.RunLoad(ctx, ns, jobs, loadDuration+cfg.readyTimeout); err != nil {
+			return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("load generation failed for %s shape: %w", shape, err))
+		}
+		fmt.Fprintf(stdout, "[%s] load complete\n", shape)
+	}
+
+	if cfg.retain {
+		fmt.Fprintf(stdout, "[%s] retaining resources (--retain); clean up with: perf cleanup --namespace %s\n\n", shape, ns)
+		return nil
+	}
+	fmt.Fprintf(stdout, "[%s] cleaning up namespace %q ...\n", shape, ns)
+	if err := client.Cleanup(ctx, ns); err != nil {
+		return fmt.Errorf("cleanup %s: %w", shape, err)
+	}
+	fmt.Fprintf(stdout, "[%s] done\n\n", shape)
+	return nil
+}
+
+// exportCredentials returns dummy bearer-token files for the OTEL_COLLECTOR
+// provider. The file names must match the launch-spec telemetry Names
+// ("perf-logs"/"perf-metrics") the collector config references via ${file:...};
+// the sink accepts any token, so the value is irrelevant.
+func exportCredentials() map[string]string {
+	return map[string]string{
+		"perf-logs":    "perf",
+		"perf-metrics": "perf",
+	}
+}
+
+// cleanupAfterErr cleans up the namespace (unless --retain) and returns the
+// original failure joined with any cleanup error, so a cleanup failure is
+// surfaced rather than silently discarded.
+func cleanupAfterErr(ctx context.Context, client *deploy.Client, cfg runConfig, ns string, cause error) error {
+	return errors.Join(cause, cleanupOnFailure(ctx, client, ns, cfg.retain))
 }
 
 func runCleanup(stdout io.Writer, cfg cleanupConfig) error {

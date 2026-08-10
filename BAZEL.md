@@ -14,6 +14,8 @@ Bazel currently builds, tests, and packages:
 - `src/libraries/java/nv-boot-parent` (Java framework libraries and tests)
 - `src/control-plane-services/cloud-tasks` (Java libraries, tests, and Spring
   Boot application)
+- `src/control-plane-services/cloud-functions` (Java libraries, tests, and
+  Spring Boot application)
 - `src/control-plane-services/notary` (Java libraries, tests, and Spring Boot
   application)
 - `src/control-plane-services/api-keys` (Java tests and Spring Boot
@@ -196,7 +198,7 @@ bazel-bin/src/control-plane-services/<service-directory>/<spring-boot-app-module
 Real Java test, JUnit, and JaCoCo outputs are under each target's
 `bazel-testlogs/<component>/<module>/tests/test.outputs` directory. The
 component guides provide commands for one module, class, or method and for
-NOTICE, OSRB, Docker, and Maven coexistence:
+NOTICE, OSRB, Docker, and component-specific validation:
 
 ```text
 src/libraries/java/nv-boot-parent/BAZEL.md
@@ -233,8 +235,9 @@ actually used by those runtime targets into root `dependencies.md`:
 go run ./tools/collect-dependencies
 ```
 
-This does not scan project POM files and does not list every artifact available
-in `maven_install.json`. The root lockfile keeps the complete shared Java graph;
+This derives Java dependencies from Bazel runtime inventories and does not
+require project POMs. It does not list every artifact available in
+`maven_install.json`. The root lockfile keeps the complete shared Java graph;
 component runtime inventories identify the used subset. See
 `tools/collect-dependencies/README.md` for the complete model and prerequisites.
 

@@ -254,6 +254,11 @@
       "service_name": "nvcf-cloud-tasks"
     },
     {
+      "id": "cloud-functions",
+      "path": "src/control-plane-services/cloud-functions",
+      "service_name": "nvcf-cloud-functions"
+    },
+    {
       "id": "notary",
       "path": "src/control-plane-services/notary",
       "service_name": "nvcf-notary"

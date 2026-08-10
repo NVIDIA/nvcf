@@ -164,6 +164,7 @@ logging:
     com.nvidia: DEBUG
     com.nvidia.nvct.configuration: INFO
     com.nvidia.nvct.util: INFO
+    com.nvidia.nvct.service.ratelimit.BucketRateLimiter: INFO
     # Default org.springframework.web: DEBUG would log full MethodArgumentNotValidException text
     # (including multi‑KB rejected values) from ExceptionHandlerExceptionResolver.
     org.springframework.web.servlet.mvc.method.annotation.ExceptionHandlerExceptionResolver: INFO
@@ -172,6 +173,7 @@ logging:
     # HttpLogging at DEBUG logs request/response bodies (same risk as RestTemplate for tests using testRestTemplate).
     org.springframework.web.HttpLogging: INFO
     org.springframework.web: DEBUG
+    org.springframework.web.reactive.function.client.ExchangeFunctions: INFO
     org.springframework.data.cassandra.core.cql.CqlTemplate: INFO
 
 nvct:

@@ -709,6 +709,8 @@ maven.install(
         "org.ow2.asm:asm-tree:9.9",
         "org.reflections:reflections:0.10.2",
         "software.amazon.awssdk:arns:2.40.1",
+        "software.amazon.awssdk:auth:2.40.1",
+        "software.amazon.awssdk:s3:2.40.1",
         "software.amazon.awssdk:sts:2.40.1",
         "org.springframework:spring-context-support",
         "org.springframework:spring-webflux",
