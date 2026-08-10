@@ -1,8 +1,9 @@
 # Bazel for Notary
 
 Notary is part of the root `nvcf` Bazel module. Run every Bazel command in this
-guide from the monorepo root. Maven commands still run from
-`src/control-plane-services/notary`.
+guide from the monorepo root. The monorepo copy is Bazel-only and does not
+contain project POMs. Any Maven build support remains in the independent source
+repository.
 
 ## Shared configuration
 
@@ -226,18 +227,6 @@ docker run --rm \
 ```
 
 Readiness is `http://localhost:8181/actuator/health/readiness`.
-
-## Maven coexistence
-
-Maven remains independent:
-
-```bash
-cd src/control-plane-services/notary
-mvn clean verify
-```
-
-Bazel uses direct source labels for co-located nv-boot code. Do not add a local
-source override or a nested dependency hub.
 
 ## GitHub CI
 
