@@ -33,6 +33,9 @@ import (
 	ktesting "k8s.io/client-go/testing"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/deploy"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/k3d"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/loadgen"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
 )
 
@@ -175,6 +178,11 @@ func TestRunCmdDefaults(t *testing.T) {
 		"namespace":     "byoo-perf",
 		"ready-timeout": "3m0s",
 		"retain":        "false",
+		"skip-load":     "false",
+		"sink-image":    sink.DefaultImage,
+		"loadgen-image": loadgen.DefaultImage,
+		"k3d-cluster":   "byoo-perf",
+		"import-images": "false",
 	}
 	for name, want := range defaults {
 		f := cmd.Flags().Lookup(name)
@@ -277,5 +285,37 @@ func TestNamespaceForShape(t *testing.T) {
 	}
 	if got := namespaceForShape("byoo-perf", spec.ShapeHelm, true); got != "byoo-perf-helm" {
 		t.Errorf("multi-shape namespace = %q, want %q", got, "byoo-perf-helm")
+	}
+}
+
+// TestEnsureK3dClusterDoesNotDeleteReusedCluster verifies the suite never tears
+// down a k3d cluster that already existed before the run.
+func TestEnsureK3dClusterDoesNotDeleteReusedCluster(t *testing.T) {
+	var calls [][]string
+	orig := k3d.Runner
+	k3d.Runner = func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		// Report that the target cluster already exists so Create reuses it.
+		if len(args) >= 2 && args[0] == "cluster" && args[1] == "list" {
+			return []byte("byoo-perf 1/1\n"), nil
+		}
+		return nil, nil
+	}
+	t.Cleanup(func() { k3d.Runner = orig })
+
+	cfg := runConfig{mode: "k3d", k3dCluster: "byoo-perf", retain: false}
+	cluster, teardown, err := ensureK3dCluster(context.Background(), io.Discard, cfg)
+	if err != nil {
+		t.Fatalf("ensureK3dCluster: %v", err)
+	}
+	if !cluster.Reused {
+		t.Fatal("expected the pre-existing cluster to be reported as reused")
+	}
+
+	teardown()
+	for _, c := range calls {
+		if len(c) >= 2 && c[0] == "cluster" && c[1] == "delete" {
+			t.Errorf("teardown deleted a reused cluster: calls=%v", calls)
+		}
 	}
 }

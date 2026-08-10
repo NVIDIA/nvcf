@@ -5,10 +5,11 @@ exercises the collector under controlled telemetry load using the same workload
 shape produced in production, by rendering through the shared translation
 library (`icms-translate`) rather than hand-written collector manifests.
 
-> Status: `render` (translate + validate, no cluster), `run` (deploy the
-> authentic collector to a cluster and wait until ready), and `cleanup` are
-> implemented. Load generation, the OTLP sink, measurements, and reporting land
-> in later milestones.
+> Status: `render` (translate + validate, no cluster), `run` (provision a
+> managed k3d cluster or use a remote one, deploy an in-cluster OTLP sink + the
+> authentic collector pointed at it, then drive telemetrygen load), and
+> `cleanup` are implemented. Measurement and reporting land in the next
+> milestone.
 
 ## Why translation-driven
 
@@ -30,8 +31,16 @@ what the suite measures.
 - `pkg/spec` — synthetic container/Helm launch specs and translate config.
 - `pkg/render` — runs `function.Translate` and extracts the collector.
 - `pkg/validate` — render-shape validation gate.
-- `pkg/deploy`: applies the rendered workload to a cluster (k3d or remote),
-  fronts it with a harness OTLP Service, waits for readiness, and tears it down.
+- `pkg/sink`: an in-cluster OTLP sink (stock collector-contrib) that accepts
+  OTLP, discards it, and exposes receiver counters on a Prometheus endpoint.
+- `pkg/loadgen`: telemetrygen Jobs that drive OTLP load into the collector at
+  the profile's rates.
+- `pkg/deploy`: applies the rendered workload and the sink to a cluster (k3d or
+  remote), fronts the collector with a harness OTLP Service, backs its secrets
+  volume with export credentials, waits for readiness, runs the load, and tears
+  everything down.
+- `pkg/labels`: the shared labels every object carries so cleanup is scoped.
+- `pkg/k3d`: provisions/tears down the managed local k3d cluster (`k3d` mode).
 - `pkg/profile` — `dev` and `baseline` execution profiles.
 
 This is a standalone Go module, deliberately kept out of the collector
@@ -84,32 +93,58 @@ multi-document stream (`---`-separated) and `json` emits an array, so
 
 ### `run`
 
-`run` renders and validates the workload, deploys the authentic collector to the
-target cluster (fronted by a harness ClusterIP OTLP Service so later milestones
-can drive load at it), and waits for the collector pod to become ready. It reads
-the ambient kubeconfig (or `--kubeconfig`/`--context`) and cleans up afterward
-unless `--retain` is set. When more than one shape is deployed, each gets its own
-suffixed namespace (e.g. `byoo-perf-container`) so their pods never collide.
+`run` renders and validates the workload, then for each shape it:
+
+1. deploys the in-cluster OTLP sink and waits for it to become ready;
+2. renders the authentic collector with its export redirected at the sink
+   (provider `OTEL_COLLECTOR`, endpoints pointed at the sink Service) and backs
+   its secrets volume with dummy export credentials so the exporter can start;
+3. deploys the collector (fronted by a harness ClusterIP OTLP Service) and waits
+   for it to become ready;
+4. drives telemetrygen load at the profile's rates for `warmup + window`;
+5. cleans up afterward unless `--retain` is set.
+
+The target cluster depends on `--mode`:
+
+- `--mode k3d` (default): the suite provisions a dedicated local k3d cluster
+  (`--k3d-cluster`, default `byoo-perf`), runs against it, and deletes it
+  afterward, unless `--retain`, which keeps both the resources and the cluster.
+  An existing cluster of the same name is reused and left in place. Requires the
+  `k3d` CLI (and Docker). Use `--import-images` to load the collector/sink/loadgen
+  images from local Docker into the cluster (for locally built or non-pullable
+  images).
+- `--mode remote`: uses the ambient kubeconfig (or `--kubeconfig`/`--context`).
+
+When more than one shape is deployed, each gets its own suffixed namespace (e.g.
+`byoo-perf-container`) so their resources never collide.
 
 ```bash
-# Deploy the container-shape collector, wait for ready, then clean up.
+# Managed k3d: provision a cluster, deploy sink + container collector, drive
+# dev-profile load, then delete the cluster.
 GOWORK=off go run ./cmd/perf run --shape container
 
-# Deploy both shapes and keep them for inspection.
-GOWORK=off go run ./cmd/perf run --shape both --retain
+# Managed k3d with locally built images imported into the cluster.
+GOWORK=off go run ./cmd/perf run --shape container --import-images
+
+# Remote cluster; keep resources for inspection (no load).
+GOWORK=off go run ./cmd/perf run --mode remote --shape both --skip-load --retain
 ```
 
 Flags: `--shape`, `--profile`, `--mode` (`k3d`/`remote`), `--collector-image`,
-`--namespace`, `--kubeconfig`, `--context`, `--ready-timeout` (`3m`), `--retain`.
+`--sink-image`, `--loadgen-image`, `--namespace`, `--kubeconfig`, `--context`,
+`--ready-timeout` (`3m`), `--retain`, `--skip-load`, `--k3d-cluster`,
+`--import-images`.
 
-> Load generation and measurement are not wired yet: `run` currently deploys the
-> authentic collector and verifies it starts.
+> Measurement is not wired yet: `run` drives load end-to-end but does not yet
+> collect or report throughput/resource metrics. The sink already exposes its
+> receiver counters at its `metrics` port for the next milestone to read.
 
 ### `cleanup`
 
-`cleanup` deletes every pod and service the suite created in a namespace, scoped
-by the suite's `app.kubernetes.io/part-of=byoo-perf` label so it never touches
-unrelated resources.
+`cleanup` deletes every pod, service, job, config map, and secret the suite
+created in a namespace, scoped by the suite's
+`app.kubernetes.io/part-of=byoo-perf` label so it never touches unrelated
+resources.
 
 ```bash
 GOWORK=off go run ./cmd/perf cleanup --namespace byoo-perf
@@ -123,4 +158,23 @@ Flags: `--shape`, `--namespace`, `--kubeconfig`, `--context`.
   iteration.
 - `baseline`: longer, repeatable run (60s warmup, 5m window, 3 repetitions).
 
-All profile values are documented defaults and will be overridable per run.
+Each profile also carries default load rates (`dev`: 1k logs/s + 1k metrics/s;
+`baseline`: 10k each). All profile values are documented defaults.
+
+## Cluster requirements
+
+In `k3d` mode the suite manages the cluster for you (requires the `k3d` CLI and
+Docker). In `remote` mode it deploys to whatever cluster the ambient kubeconfig
+points at.
+
+The collector, sink, and telemetrygen images must be reachable from the target
+cluster. Only the collector image ships from NVIDIA; the sink and load generator
+are stock upstream images (overridable via `--sink-image` / `--loadgen-image`).
+For a private or offline cluster, pre-load them. In managed k3d mode, pass
+`--import-images` to import them from local Docker.
+
+## Sub-packages `pkg/k3d`
+
+`pkg/k3d` wraps the `k3d` CLI (create/delete/list/image-import). Its command
+runner is injectable so the argument construction is unit-tested without a real
+k3d binary.
