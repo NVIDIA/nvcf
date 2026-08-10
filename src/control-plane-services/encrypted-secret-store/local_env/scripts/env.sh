@@ -33,5 +33,5 @@ SPRING_PROFILE="${SPRING_PROFILE:-local}"
 # Bazel target and default output location for the executable jar. Override the
 # jar by exporting ESS_APP_JAR (for example when you copied it out of a
 # container build).
-ESS_APP_TARGET="//src/control-plane-services/ess/ess-service:app"
-ESS_APP_JAR_DEFAULT="${REPO_ROOT}/bazel-bin/src/control-plane-services/ess/ess-service/app.jar"
+ESS_APP_TARGET="//src/control-plane-services/encrypted-secret-store/ess-service:app"
+ESS_APP_JAR_DEFAULT="${REPO_ROOT}/bazel-bin/src/control-plane-services/encrypted-secret-store/ess-service/app.jar"

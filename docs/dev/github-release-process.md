@@ -308,15 +308,13 @@ the notes ref can be merged manually.
 Release automation computes the next version by bumping the highest
 existing release tag for a service. A new service or chart has no tags
 yet, so there is nothing to bump from until you seed one. This section
-explains how to seed that first tag, and how to pin a new floor on a line
-that already has tags.
+explains how to seed that first tag, and how to pin a new floor on a
+service or chart that already has tags.
 
 ### 1. Register the service
 
-Register the service in the metadata that produces
-`tools/ci/github-release-subprojects.json`. The public snapshot is
-generated from the internal source; edit the source, not the generated
-file, when possible. Each entry provides:
+Add the service to the release metadata in
+`tools/ci/github-release-subprojects.json`. Each entry provides:
 
 - `id`: short service id
 - `path`: repo-relative subtree path, which also drives the tag format
@@ -328,8 +326,8 @@ file, when possible. Each entry provides:
   release-neutral commits produce no release. An empty string is
   rejected; either omit the field or give a valid SemVer.
 
-For example, the `ess-helm` chart is registered with an
-`initial_version` floor so it continues the upstream chart version line:
+For example, the `ess-helm` chart was first seeded with an
+`initial_version` floor so it continued the upstream chart version line:
 
 ```json
 {
@@ -339,6 +337,11 @@ For example, the `ess-helm` chart is registered with an
   "initial_version": "1.7.0"
 }
 ```
+
+After it published `1.7.1` and its directory was renamed to
+`deploy/helm/encrypted-secret-store`, the floor was replaced with a
+`legacy_tag_prefix` of `deploy/helm/ess/v` so the version line carried
+across the path change without a reset.
 
 Run the registry tests:
 

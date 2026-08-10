@@ -30,37 +30,37 @@ Use `clean --expunge` only when the cache is corrupted.
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //src/control-plane-services/ess/...
+  build //src/control-plane-services/encrypted-secret-store/...
 
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //src/control-plane-services/ess/ess-encryption:ess_encryption
+  build //src/control-plane-services/encrypted-secret-store/ess-encryption:ess_encryption
 
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //src/control-plane-services/ess/ess-core:ess_core
+  build //src/control-plane-services/encrypted-secret-store/ess-core:ess_core
 
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //src/control-plane-services/ess/ess-service:app
+  build //src/control-plane-services/encrypted-secret-store/ess-service:app
 ```
 
 The executable output is:
 
 ```text
-bazel-bin/src/control-plane-services/ess/ess-service/app.jar
+bazel-bin/src/control-plane-services/encrypted-secret-store/ess-service/app.jar
 ```
 
 Inspect its launcher and generated metadata:
 
 ```bash
 unzip -p \
-  bazel-bin/src/control-plane-services/ess/ess-service/app.jar \
+  bazel-bin/src/control-plane-services/encrypted-secret-store/ess-service/app.jar \
   META-INF/MANIFEST.MF
 
 unzip -p \
-  bazel-bin/src/control-plane-services/ess/ess-service/app.jar \
+  bazel-bin/src/control-plane-services/encrypted-secret-store/ess-service/app.jar \
   BOOT-INF/classes/git.properties
 
 unzip -p \
-  bazel-bin/src/control-plane-services/ess/ess-service/app.jar \
+  bazel-bin/src/control-plane-services/encrypted-secret-store/ess-service/app.jar \
   BOOT-INF/classes/maven.properties
 ```
 
@@ -70,7 +70,7 @@ Run all tests without cached results:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //src/control-plane-services/ess/... \
+  test //src/control-plane-services/encrypted-secret-store/... \
   --cache_test_results=no \
   --test_output=errors
 ```
@@ -79,8 +79,8 @@ Run unit tests without Docker:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" test \
-  //src/control-plane-services/ess/ess-encryption:unit_tests \
-  //src/control-plane-services/ess/ess-core:unit_tests \
+  //src/control-plane-services/encrypted-secret-store/ess-encryption:unit_tests \
+  //src/control-plane-services/encrypted-secret-store/ess-core:unit_tests \
   --cache_test_results=no \
   --test_output=errors
 ```
@@ -89,9 +89,9 @@ Run Docker-backed integration tests:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" test \
-  //src/control-plane-services/ess/ess-encryption:integration_tests \
-  //src/control-plane-services/ess/ess-core:integration_tests \
-  //src/control-plane-services/ess/ess-service:tests \
+  //src/control-plane-services/encrypted-secret-store/ess-encryption:integration_tests \
+  //src/control-plane-services/encrypted-secret-store/ess-core:integration_tests \
+  //src/control-plane-services/encrypted-secret-store/ess-service:tests \
   --cache_test_results=no \
   --test_output=errors
 ```
@@ -100,7 +100,7 @@ Run one class:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //src/control-plane-services/ess/ess-core:unit_tests \
+  test //src/control-plane-services/encrypted-secret-store/ess-core:unit_tests \
   --cache_test_results=no \
   --test_output=streamed \
   --test_arg=--exclude-classname='^(?!com.nvidia.ess.controller.SecretControllerTest$).*$'
@@ -110,7 +110,7 @@ Run one method:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //src/control-plane-services/ess/ess-core:unit_tests \
+  test //src/control-plane-services/encrypted-secret-store/ess-core:unit_tests \
   --cache_test_results=no \
   --test_output=streamed \
   --test_arg=--exclude-classname='^(?!com.nvidia.ess.controller.SecretControllerTest$).*$' \
@@ -122,11 +122,11 @@ Confirm the class and method names before using the focused examples.
 JUnit and JaCoCo outputs are under:
 
 ```text
-bazel-testlogs/src/control-plane-services/ess/<module>/<target>/test.log
-bazel-testlogs/src/control-plane-services/ess/<module>/<target>/test.outputs/junit/TEST-junit-jupiter.xml
-bazel-testlogs/src/control-plane-services/ess/<module>/<target>/test.outputs/jacoco.exec
-bazel-testlogs/src/control-plane-services/ess/<module>/<target>/test.outputs/jacoco.xml
-bazel-testlogs/src/control-plane-services/ess/<module>/<target>/test.outputs/index.html
+bazel-testlogs/src/control-plane-services/encrypted-secret-store/<module>/<target>/test.log
+bazel-testlogs/src/control-plane-services/encrypted-secret-store/<module>/<target>/test.outputs/junit/TEST-junit-jupiter.xml
+bazel-testlogs/src/control-plane-services/encrypted-secret-store/<module>/<target>/test.outputs/jacoco.exec
+bazel-testlogs/src/control-plane-services/encrypted-secret-store/<module>/<target>/test.outputs/jacoco.xml
+bazel-testlogs/src/control-plane-services/encrypted-secret-store/<module>/<target>/test.outputs/index.html
 ```
 
 The outer `test.xml` describes the Bazel shell wrapper. Use the JUnit file
@@ -136,22 +136,22 @@ under `test.outputs/junit` for Java test reporting.
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  run //src/control-plane-services/ess:generate_notice -- \
+  run //src/control-plane-services/encrypted-secret-store:generate_notice -- \
   --update-metadata --write
 
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  test //src/control-plane-services/ess:notice_check_test
+  test //src/control-plane-services/encrypted-secret-store:notice_check_test
 
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //src/control-plane-services/ess:osrb_dependency_delta
+  build //src/control-plane-services/encrypted-secret-store:osrb_dependency_delta
 ```
 
 Generated inventories and the license-grouped delta are under:
 
 ```text
-bazel-bin/src/control-plane-services/ess/runtime_inventory.json
-bazel-bin/src/control-plane-services/ess/osrb_dependency_delta.json
-bazel-bin/src/control-plane-services/ess/osrb_dependency_delta.md
+bazel-bin/src/control-plane-services/encrypted-secret-store/runtime_inventory.json
+bazel-bin/src/control-plane-services/encrypted-secret-store/osrb_dependency_delta.json
+bazel-bin/src/control-plane-services/encrypted-secret-store/osrb_dependency_delta.md
 ```
 
 After changing root dependency inputs, regenerate the shared lock:
@@ -188,24 +188,24 @@ Build the app and use the real Bazel output directory as the Docker context:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  build //src/control-plane-services/ess/ess-service:app
+  build //src/control-plane-services/encrypted-secret-store/ess-service:app
 
 BAZEL_BIN_DIR="$(
   bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" info bazel-bin
 )"
 
 docker build \
-  -f src/control-plane-services/ess/ess-service/Dockerfile \
+  -f src/control-plane-services/encrypted-secret-store/ess-service/Dockerfile \
   --build-arg APP_JAR=app.jar \
   -t ess:bazel \
-  "${BAZEL_BIN_DIR}/src/control-plane-services/ess/ess-service"
+  "${BAZEL_BIN_DIR}/src/control-plane-services/encrypted-secret-store/ess-service"
 ```
 
 For local Cassandra, use the checked-in Compose bundle:
 
 ```bash
 docker compose \
-  -f src/control-plane-services/ess/local_env/docker-compose.yaml \
+  -f src/control-plane-services/encrypted-secret-store/local_env/docker-compose.yaml \
   -p ess-local up -d
 ```
 
@@ -218,7 +218,7 @@ docker run --rm \
   -p 9464:9464 \
   -e SPRING_PROFILES_ACTIVE=local \
   -e SPRING_CASSANDRA_CONTACT_POINTS=host.docker.internal \
-  -v "$(pwd)/src/control-plane-services/ess/local_env:/workspace/local_env:ro" \
+  -v "$(pwd)/src/control-plane-services/encrypted-secret-store/local_env:/workspace/local_env:ro" \
   -w /workspace \
   ess:bazel
 ```
@@ -230,5 +230,5 @@ Health is available at `http://localhost:8080/health`. Metrics are available at
 
 `bazel-java-ci.json` registers ESS with the root GitHub workflow. The
 `docker-host` lane provides Docker for Testcontainers tests. The descriptor
-also registers `//src/control-plane-services/ess:runtime_inventory.json` with
+also registers `//src/control-plane-services/encrypted-secret-store:runtime_inventory.json` with
 the root dependency collector.

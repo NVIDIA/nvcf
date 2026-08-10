@@ -17,15 +17,15 @@ filegroup(
 nv_boot_workspace_runfiles(
     name = "test_local_env",
     srcs = [":local_env_files"],
-    strip_prefix = "src/control-plane-services/ess/",
-    visibility = ["//src/control-plane-services/ess:__subpackages__"],
+    strip_prefix = "src/control-plane-services/encrypted-secret-store/",
+    visibility = ["//src/control-plane-services/encrypted-secret-store:__subpackages__"],
 )
 
 java_library(
     name = "local_env_resources",
-    resource_strip_prefix = "src/control-plane-services/ess",
+    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store",
     resources = [":local_env_files"],
-    visibility = ["//src/control-plane-services/ess:__subpackages__"],
+    visibility = ["//src/control-plane-services/encrypted-secret-store:__subpackages__"],
 )
 
 exports_files([
@@ -38,7 +38,7 @@ nvcf_notice(
     first_party_groups = ["com.nvidia.ess"],
     inventory_name = "ess_runtime_inventory",
     metadata = ":notice_metadata.json",
-    runtime_target = "//src/control-plane-services/ess/ess-service:app",
+    runtime_target = "//src/control-plane-services/encrypted-secret-store/ess-service:app",
     shared_metadata = [
         "//src/libraries/java/nv-boot-parent:notice_metadata.json",
     ],

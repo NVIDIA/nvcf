@@ -465,7 +465,7 @@ class GithubReleaseTest(unittest.TestCase):
         self.init_repo(root)
         (root / "README.md").write_text("root\n")
         self.commit_all(root, "chore: init")
-        service_dir = root / "deploy/helm/ess"
+        service_dir = root / "deploy/helm/encrypted-secret-store"
         service_dir.mkdir(parents=True, exist_ok=True)
         (service_dir / "Chart.yaml").write_text("name: helm-nvcf-ess-api\n")
         self.commit_all(root, "feat: import ess chart")
@@ -482,18 +482,20 @@ class GithubReleaseTest(unittest.TestCase):
             self._make_service_repo(root)
             service = {
                 "id": "ess-helm",
-                "path": "deploy/helm/ess",
+                "path": "deploy/helm/encrypted-secret-store",
                 "service_name": "helm-nvcf-ess-api",
             }
             with chdir(root), contextlib.redirect_stdout(io.StringIO()):
                 self.github_release.synthesize_initial_version_anchor(root, service)
-            self.assertIn("deploy/helm/ess/v0.0.0", self._tags(root))
+            self.assertIn("deploy/helm/encrypted-secret-store/v0.0.0", self._tags(root))
 
     def test_initial_version_anchor_honors_metadata(self):
-        metadata = json.loads(
-            Path(__file__).with_name("github-release-subprojects.json").read_text()
-        )
-        service = self.github_release.find_service(metadata, "ess-helm")
+        service = {
+            "id": "ess-helm",
+            "path": "deploy/helm/encrypted-secret-store",
+            "service_name": "helm-nvcf-ess-api",
+            "initial_version": "1.7.0",
+        }
         expected_tag = self.github_release.tag_for_version(service, service["initial_version"])
         default_floor_tag = self.github_release.tag_for_version(
             service, self.github_release.INITIAL_RELEASE_FLOOR_VERSION
@@ -510,7 +512,7 @@ class GithubReleaseTest(unittest.TestCase):
     def test_initial_version_anchor_rejects_bad_semver(self):
         service = {
             "id": "ess-helm",
-            "path": "deploy/helm/ess",
+            "path": "deploy/helm/encrypted-secret-store",
             "service_name": "helm-nvcf-ess-api",
             "initial_version": "not-a-version",
         }
@@ -520,7 +522,7 @@ class GithubReleaseTest(unittest.TestCase):
     def test_initial_version_anchor_rejects_empty_string(self):
         service = {
             "id": "ess-helm",
-            "path": "deploy/helm/ess",
+            "path": "deploy/helm/encrypted-secret-store",
             "service_name": "helm-nvcf-ess-api",
             "initial_version": "",
         }
