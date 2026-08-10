@@ -1,8 +1,9 @@
 # Bazel for API Keys
 
 API Keys is a single-module application in the root `nvcf` Bazel module. Run
-every Bazel command in this guide from the monorepo root. Maven commands still
-run from `src/control-plane-services/api-keys`.
+every command in this guide from the monorepo root. The monorepo copy is
+Bazel-only and does not contain a project POM. Any Maven build support remains
+in the independent source repository.
 
 ## Shared configuration
 
@@ -248,17 +249,6 @@ docker compose \
   -f src/control-plane-services/api-keys/local_env/docker-compose.yml \
   down
 ```
-
-## Maven coexistence
-
-Maven remains independent:
-
-```bash
-cd src/control-plane-services/api-keys
-mvn clean package
-```
-
-Bazel does not install or publish Maven-shaped project artifacts.
 
 ## GitHub CI
 

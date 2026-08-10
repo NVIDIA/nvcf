@@ -5,9 +5,10 @@ Java service in the root `nvcf` Bazel module. It is not a nested Bazel module
 and does not own a `MODULE.bazel`, lockfile, `.bazelrc`, `.bazelversion`, or
 third-party dependency hub.
 
-Maven remains an independent coexistence path. Bazel consumes nv-boot through
-direct source labels and produces the executable application jar. Do not
-generate or publish Maven-shaped ICMS artifacts from Bazel.
+The monorepo copy is Bazel-only and contains no project POMs. Bazel consumes
+nv-boot through direct source labels and produces the executable application
+jar. Keep any Maven build support in the independent source repository. Do not
+restore project POMs or add Maven build instructions here.
 
 ## Layout
 
@@ -43,8 +44,7 @@ discover CLI plugins.
 `icms-core:test_fixtures` publishes the core test sources so
 `icms-service:tests` can reuse them. Update both when test fixtures change.
 
-See `BAZEL.md` for coverage output paths, the Docker image build, and the Maven
-coexistence commands.
+See `BAZEL.md` for coverage output paths and the Docker image build.
 
 ## Dependencies
 

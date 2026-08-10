@@ -3,14 +3,14 @@
 NV Spring Boot: Shared libraries and Bill of Materials (BOM). The libraries
 can be used by both internal/managed and self-hosted application deployments.
 
-**Baseline:** Spring Boot **4.0.7**, Spring Cloud **2025.1.2** (Oakwood), Java **25**.
+Baseline: Spring Boot 4.0.7, Spring Cloud 2025.1.2 (Oakwood), Java 25.
 
 ## Structure
 
 ```text
 nv-boot-parent  (extends spring-boot-starter-parent 4.0.7)
-├── nv-boot-bom        — BOM for nv-boot-starter-* versions
-└── nv-boot-starter-*  — shared libraries
+|-- nv-boot-bom         : BOM for nv-boot-starter-* versions
+`-- nv-boot-starter-*   : shared libraries
 ```
 
 ## Modules
@@ -30,10 +30,14 @@ nv-boot-parent  (extends spring-boot-starter-parent 4.0.7)
 | [nv-boot-starter-reloadable-properties](nv-boot-starter-reloadable-properties/README.md) | File-based property reloading with context refresh                             |
 | [nv-boot-starter-telemetry](nv-boot-starter-telemetry/README.md)                         | CloudEvents client for Telemetry servers (WebClient, OAuth2 bearer)            |
 
-## Using in External Projects
+## Using in External Maven Projects
 
-Spring Boot applications should extend `nv-boot-parent` as their Maven parent and import
-`nv-boot-bom` in `<dependencyManagement>`. This gives the application:
+The examples in this section are for external projects that consume artifacts
+published by the independent nv-boot source repository. Applications inside
+this monorepo use the Bazel source targets documented in [BAZEL.md](BAZEL.md).
+
+External Spring Boot applications can extend `nv-boot-parent` as their Maven
+parent and import `nv-boot-bom` in `<dependencyManagement>`. This gives the application:
 
 - All Spring Boot build conventions (compiler, surefire, jacoco, etc.)
 - Managed versions for all third-party dependencies (Bouncy Castle, Spring Cloud, etc.)
@@ -81,7 +85,7 @@ a version:
 
 If your project already has a corporate or framework parent POM and cannot extend
 `nv-boot-parent`, import `nv-boot-bom` in your `<dependencyManagement>` block instead.
-This gives managed versions for all `nv-boot-starter-*` libraries, but does **not** provide the
+This gives managed versions for all `nv-boot-starter-*` libraries, but does not provide the
 build conventions or third-party version management that come with the full parent:
 
 ```xml
@@ -99,8 +103,9 @@ build conventions or third-party version management that come with the full pare
 ```
 
 Third-party dependencies used by the nv-boot libraries (e.g. Bouncy Castle, etc.)
-will still be resolved transitively, but their versions will not be centrally managed — you will
-need to manage them explicitly if you use them directly in your own code.
+will still be resolved transitively, but their versions will not be centrally
+managed. You must manage them explicitly if you use them directly in your own
+code.
 
 ### Overriding a dependency version
 
@@ -116,14 +121,15 @@ version to address a CVE without waiting for an `nv-boot-parent` release:
 </properties>
 ```
 
-The overridden property takes effect for that dependency wherever it is used — both directly in
-the application and transitively through any nv-boot library on the classpath.
+The overridden property takes effect wherever that dependency is used. This
+includes direct application use and transitive use through any nv-boot library
+on the classpath.
 
 ### Available version properties
 
-- **`nv-boot-parent`** (this project) — properties listed in the table below
-- **`spring-boot-starter-parent`** — build and plugin version properties (e.g. `maven-compiler-plugin.version`)
-- **`spring-boot-dependencies`** — all Spring Boot managed dependency versions 
+- `nv-boot-parent` (this project): properties listed in the table below
+- `spring-boot-starter-parent`: build and plugin version properties (e.g. `maven-compiler-plugin.version`)
+- `spring-boot-dependencies` - all Spring Boot managed dependency versions
      (e.g. `spring-framework.version`, `jackson-bom.version`, `logback.version`). See the
      [Spring Boot dependency versions reference](https://docs.spring.io/spring-boot/appendix/dependency-versions/properties.html)
      for the full list
@@ -147,32 +153,36 @@ Properties defined in `nv-boot-parent`:
 ## Minimum Requirements
 
 * [Eclipse Temurin OpenJDK 25](https://adoptium.net/temurin/releases/)
-* [Maven 3.8.7](https://maven.apache.org/download.cgi) or higher
+* [Bazelisk](https://github.com/bazelbuild/bazelisk)
 * [Git 2.15.2](https://git-scm.com/downloads) or higher
 * [Docker](https://docs.docker.com/get-docker/)
 
 ## Building
 
 ```bash
-mvn clean verify
+export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  test //src/libraries/java/nv-boot-parent/... \
+  --cache_test_results=no \
+  --test_output=errors \
+  --test_tag_filters=-requires-docker
 ```
 
-Use `mvn clean install` when you only need artifacts locally without the full verify lifecycle.
-
-Bazel is available during migration. See [BAZEL.md](BAZEL.md) for build, test,
-coverage, NOTICE, and downstream source-consumption commands.
+See [BAZEL.md](BAZEL.md) for build, focused test, coverage, NOTICE, and
+downstream source-consumption commands.
 
 ## Third-party notices
 
-The repository root **`NOTICE`** file lists shipped third-party dependencies and
-their declared licenses. It is generated by the Bazel-native NOTICE tool from
-`tools/bazel/notice_roots.json`, `maven_install.json`, and checked-in metadata;
-it does not depend on project POM files or `license-maven-plugin`.
+The component `NOTICE` file lists shipped third-party dependencies and their
+declared licenses. It is generated by the Bazel-native NOTICE tool from
+`notice_roots.json`, the root `maven_install.json`, and checked-in metadata. It
+does not depend on project POM files or `license-maven-plugin`.
 
 ```bash
-export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nv-boot-parent-bazel-cache"
+export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
-  run //:generate_notice -- --update-metadata --write
+  run //src/libraries/java/nv-boot-parent:generate_notice -- \
+  --update-metadata --write
 ```
 
 License metadata is only as accurate as upstream artifact metadata; review with

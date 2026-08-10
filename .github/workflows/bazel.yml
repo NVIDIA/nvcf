@@ -80,7 +80,9 @@ jobs:
           fetch-depth: 0
 
       - name: Check Java import boundaries
-        run: bash tools/ci/check-java-import-boundaries
+        run: |
+          bash tools/scripts/test/test-check-java-import-boundaries
+          bash tools/ci/check-java-import-boundaries
 
       # Behavioral tests for the CI shell this workflow depends on. actionlint
       # covers syntax; these cover the decisions.
@@ -165,6 +167,10 @@ jobs:
                 exit 1
               fi
             done
+            while IFS= read -r project_pom; do
+              echo "::error file=${project_pom}::Java components are Bazel-only; remove imported project POM"
+              exit 1
+            done < <(find "${path}" -name pom.xml -print)
             id="$(jq -er '.id | select(test("^[a-z0-9][a-z0-9-]*$"))' "$manifest")"
             tests_skip="$(jq -er '.tests_skip | if type == "boolean" then tostring else error("tests_skip must be boolean") end' "$manifest")"
             component_kind="$(jq -er '.component_kind | select(. == "java-framework" or . == "java-service")' "$manifest")"
