@@ -31,13 +31,16 @@ import (
 )
 
 func TestInfoEndpoint_GET(t *testing.T) {
+	previousService := golibversion.Service
+	previousVersion := golibversion.Version
+	previousGitHash := golibversion.GitHash
 	golibversion.Service = "nvcf-nats-auth-callout-service"
 	golibversion.Version = "test-1.0.0"
 	golibversion.GitHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	t.Cleanup(func() {
-		golibversion.Service = ""
-		golibversion.Version = ""
-		golibversion.GitHash = ""
+		golibversion.Service = previousService
+		golibversion.Version = previousVersion
+		golibversion.GitHash = previousGitHash
 	})
 
 	gin.SetMode(gin.TestMode)
