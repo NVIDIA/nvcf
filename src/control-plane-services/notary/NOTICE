@@ -1,7 +1,7 @@
 
 Lists of 132 third-party dependencies.
-     (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.34 - http://logback.qos.ch)
-     (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.34 - http://logback.qos.ch)
+     (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.37 - http://logback.qos.ch)
+     (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.37 - http://logback.qos.ch)
      (The Apache Software License, Version 2.0) Jackson-annotations (com.fasterxml.jackson.core:jackson-annotations:2.21 - https://github.com/FasterXML/jackson)
      (The Apache Software License, Version 2.0) Jackson-core (com.fasterxml.jackson.core:jackson-core:2.21.4 - https://github.com/FasterXML/jackson-core)
      (The Apache Software License, Version 2.0) jackson-databind (com.fasterxml.jackson.core:jackson-databind:2.21.4 - https://github.com/FasterXML/jackson)
@@ -15,7 +15,7 @@ Lists of 132 third-party dependencies.
      (Apache License, Version 2.0) Guava: Google Core Libraries for Java (com.google.guava:guava:33.6.0-jre - https://github.com/google/guava)
      (The Apache Software License, Version 2.0) Guava ListenableFuture only (com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava - https://github.com/google/guava)
      (Apache License, Version 2.0) J2ObjC Annotations (com.google.j2objc:j2objc-annotations:3.1 - https://github.com/google/j2objc/)
-     (The Apache Software License, Version 2.0) Nimbus JOSE+JWT (com.nimbusds:nimbus-jose-jwt:10.4 - https://bitbucket.org/connect2id/nimbus-jose-jwt)
+     (The Apache Software License, Version 2.0) Nimbus JOSE+JWT (com.nimbusds:nimbus-jose-jwt:10.9.1 - https://bitbucket.org/connect2id/nimbus-jose-jwt)
      (The Apache Software License, Version 2.0) okhttp (com.squareup.okhttp3:okhttp-jvm:5.2.1 - https://square.github.io/okhttp/)
      (The Apache Software License, Version 2.0) okio (com.squareup.okio:okio-jvm:3.16.1 - https://github.com/square/okio/)
      (Apache-2.0) Apache Commons Logging (commons-logging:commons-logging:1.4.0 - https://commons.apache.org/proper/commons-logging/)

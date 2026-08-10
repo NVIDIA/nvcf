@@ -55,6 +55,7 @@ github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret
+github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version
 # github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op

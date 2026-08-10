@@ -65,6 +65,19 @@ agentConfig:
 Use `replicaCount: 1` for local or single-node test clusters. Increase
 replica counts for shared or production environments.
 
+When `addons.llm.enabled` is `true`, the stack defaults
+`global.workerEndpoints.llmRequestRouterAddress` to
+`llm-request-router.nvcf.svc.cluster.local:50071`. Colocated workers require no
+additional configuration. For a split control-plane and compute-plane
+deployment, override this value with a host and port that worker pods can
+reach.
+
+The stack maps the configured or default address to
+`api.remoteConfig.configData.nvcf.llm-request-router.worker-address`. The NVCF
+API then includes the address in LLM worker configuration. Do not configure
+the worker address under `api.env`. When the LLM addon is disabled, the stack
+does not pass a staged endpoint to the API chart.
+
 The request router uses `power-of-two` when no load-balancer configuration is
 set. Before a function selects a different routing method, configure the
 effective model algorithm or a request override.
@@ -179,6 +192,8 @@ mean the router knows the target but has no active eligible backend. Check:
 - `addons.llm.requestRouter.loadBalancer.config` includes the algorithm selected
   by the function's `models[].llmConfig.routingMethod`.
 - The `llm-worker` sidecar connected to `llm-request-router`.
+- The effective LLM request-router worker address is reachable from the worker
+  cluster.
 - Local clusters using plaintext transport include both `grpcInsecure` and
   `stargateQUICInsecure`.
 

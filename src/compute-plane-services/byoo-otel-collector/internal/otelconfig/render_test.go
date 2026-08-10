@@ -18,6 +18,7 @@ limitations under the License.
 package otelconfig
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"testing"
@@ -25,6 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
 )
+
+const metricSubsetExampleHeader = "# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n# SPDX-License-Identifier: Apache-2.0\n\n"
 
 func TestRenderOtelConfig(t *testing.T) {
 	tests := []struct {
@@ -214,7 +217,8 @@ func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
 
 	const examplePath = "../../examples/otelconfigs/k8s/config_function_container_metric_subset.yaml"
 	if os.Getenv("UPDATE_METRIC_SUBSET_EXAMPLE") == "true" {
-		if err := os.WriteFile(examplePath, gotCfg, 0o644); err != nil {
+		exampleConfig := append([]byte(metricSubsetExampleHeader), gotCfg...)
+		if err := os.WriteFile(examplePath, exampleConfig, 0o644); err != nil {
 			t.Fatalf("failed to update metric subset example config: %v", err)
 		}
 	}
@@ -222,6 +226,9 @@ func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
 	expectedCfg, err := os.ReadFile(examplePath)
 	if err != nil {
 		t.Fatalf("failed to read metric subset example config: %v", err)
+	}
+	if !bytes.HasPrefix(expectedCfg, []byte(metricSubsetExampleHeader)) {
+		t.Fatalf("metric subset example config must begin with the SPDX header")
 	}
 
 	assertYAMLConfigEqual(t, expectedCfg, gotCfg)

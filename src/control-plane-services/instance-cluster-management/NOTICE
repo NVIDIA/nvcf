@@ -1,8 +1,8 @@
 
 Lists of 293 third-party dependencies.
      (Apache License, Version 2.0) LZ4 Java Compression (at.yawk.lz4:lz4-java:1.10.3 - https://github.com/yawkat/lz4-java)
-     (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.34 - http://logback.qos.ch)
-     (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.34 - http://logback.qos.ch)
+     (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.37 - http://logback.qos.ch)
+     (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.37 - http://logback.qos.ch)
      (Apache License, Version 2.0) AWS SDK for Java - Core (com.amazonaws:aws-java-sdk-core:1.12.696 - https://aws.amazon.com/sdkforjava)
      (Apache License, Version 2.0) AWS Java SDK for Amazon SNS (com.amazonaws:aws-java-sdk-sns:1.12.696 - https://aws.amazon.com/sdkforjava)
      (Apache License, Version 2.0) AWS Java SDK for Amazon SQS (com.amazonaws:aws-java-sdk-sqs:1.12.696 - https://aws.amazon.com/sdkforjava)
@@ -39,7 +39,7 @@ Lists of 293 third-party dependencies.
      (BSD-3-Clause) Protocol Buffers [Core] (com.google.protobuf:protobuf-java:4.33.4 - https://developers.google.com/protocol-buffers/)
      (The Apache Software License, Version 2.0) Nimbus Content Type (com.nimbusds:content-type:2.3 - https://bitbucket.org/connect2id/nimbus-content-type)
      (The Apache Software License, Version 2.0) Nimbus LangTag (com.nimbusds:lang-tag:1.7 - https://bitbucket.org/connect2id/nimbus-language-tags)
-     (The Apache Software License, Version 2.0) Nimbus JOSE+JWT (com.nimbusds:nimbus-jose-jwt:10.4 - https://bitbucket.org/connect2id/nimbus-jose-jwt)
+     (The Apache Software License, Version 2.0) Nimbus JOSE+JWT (com.nimbusds:nimbus-jose-jwt:10.9.1 - https://bitbucket.org/connect2id/nimbus-jose-jwt)
      (Apache License, version 2.0) OAuth 2.0 SDK with OpenID Connect extensions (com.nimbusds:oauth2-oidc-sdk:11.26.1 - https://bitbucket.org/connect2id/oauth-2.0-sdk-with-openid-connect-extensions)
      (The Apache Software License, Version 2.0) okhttp-logging-interceptor (com.squareup.okhttp3:logging-interceptor:4.12.0 - https://square.github.io/okhttp/)
      (The Apache Software License, Version 2.0) okhttp (com.squareup.okhttp3:okhttp:4.12.0 - https://square.github.io/okhttp/)

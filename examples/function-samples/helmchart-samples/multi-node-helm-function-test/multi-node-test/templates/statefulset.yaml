@@ -22,7 +22,13 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   annotations:
-    # dra.nvcf.nvidia.io/required-nvlink-domain-index: "0" # force all nodes to use the same NVLink domain
+    # Gang scheduling on an NVLink-optimized cluster running KAI Scheduler. KAI
+    # reads these from the StatefulSet, not the pod template, and holds every
+    # replica until they all fit in one clique. Requires the cluster operator to
+    # have installed the nvcf-mnnvl-topology Topology resource.
+    #
+    # kai.scheduler/topology: "nvcf-mnnvl-topology"
+    # kai.scheduler/topology-required-placement: "nvidia.com/gpu.clique"
   name: {{ include "multi-node-test.name" . }}
   labels:
     {{- include "multi-node-test.labels" . | nindent 4 }}

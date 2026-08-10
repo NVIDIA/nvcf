@@ -32,6 +32,7 @@ go 1.26.5
 
 use (
 	./src/clis/nvcf-cli
+	./src/uis/nvcf-ui/backend
 	./src/libraries/go/lib
 	./src/libraries/go/worker
 	./src/compute-plane-services/nvsnap

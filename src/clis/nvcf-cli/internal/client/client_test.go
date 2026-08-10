@@ -1210,6 +1210,9 @@ func TestLoadConfigUsesStateForActiveConfigFile(t *testing.T) {
 	t.Setenv("NVCF_TOKEN", "")
 	t.Setenv("NVCF_API_KEY", "")
 	t.Setenv("HOME", t.TempDir())
+	// Rebuild the state manager so it points at the temp HOME above;
+	// it is otherwise built at package init and reads the real one.
+	state.ResetDefaultStateManager()
 
 	configPath := filepath.Join(t.TempDir(), "nvcf-cli-local.yaml")
 	configBody := []byte(`
@@ -1306,6 +1309,9 @@ func TestLoadConfigAuthCredentials(t *testing.T) {
 			viper.AutomaticEnv()
 			t.Cleanup(func() { viper.Reset() })
 			t.Setenv("HOME", t.TempDir())
+			// Rebuild the state manager so it points at the temp HOME above;
+			// it is otherwise built at package init and reads the real one.
+			state.ResetDefaultStateManager()
 			for _, key := range []string{"NVCF_API_KEY", "NVCF_TOKEN", "NVCF_OAUTH2_CLIENT_ID", "NVCF_OAUTH2_CLIENT_SECRET", "NVCF_OAUTH2_TOKEN_ENDPOINT"} {
 				t.Setenv(key, "")
 			}
